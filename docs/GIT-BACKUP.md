@@ -16,7 +16,7 @@
 git status
 git log --oneline --decorate -10
 git tag -a v0.x -m "说明"
-git push origin main --tags
+git push origin master --tags
 ```
 
 回滚前先停止交易进程，再执行：
@@ -28,7 +28,7 @@ git switch --detach <commit>
 恢复到最新版本：
 
 ```powershell
-git switch main
+git switch master
 git pull --ff-only
 ```
 
