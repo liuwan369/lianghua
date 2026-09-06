@@ -1,0 +1,6 @@
+[Unit]
+Description=Start a new daily Dublin evidence database
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart pm-r25-dublin-collector.service

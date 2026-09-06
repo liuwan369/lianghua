@@ -1,0 +1,26 @@
+[Unit]
+Description=Polymarket BTC 5m simple trading dashboard (Dublin, local only)
+After=network-online.target pm-r25-dublin-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pm-system
+Environment=PYTHONUNBUFFERED=1
+Environment=PM_NODE_LABEL=都柏林节点
+Environment=PM_LIVE_LOCAL=1
+Environment=PM_LIVE_DATA_DIR=/root/pm-system/data/pm-r25-live/days
+Environment=PM_EVIDENCE_GLOB=dublin-evidence-*.sqlite3
+Environment=PM_COLLECTOR_SERVICE=pm-r25-dublin-collector.service
+EnvironmentFile=-/root/pm-system/config/dashboard-secret.env
+ExecStart=/root/pm-system/.venv/bin/python /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/root/pm-system
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,69 @@
+{
+  "measured_at": "2026-09-06T14:09:12.344Z",
+  "hostname": "ip-172-26-8-197",
+  "samples": 10,
+  "dns": {
+    "clob.polymarket.com": [
+      "104.18.34.205",
+      "172.64.153.51"
+    ],
+    "ws-subscriptions-clob.polymarket.com": [
+      "172.64.153.51",
+      "104.18.34.205"
+    ]
+  },
+  "geoblock": {
+    "blocked": true,
+    "ip": "2406:da14:12e8:3c00:c4e7:f304:1e5b:fbe9",
+    "country": "JP",
+    "region": "13"
+  },
+  "clob_rest": {
+    "count": 10,
+    "min_ms": 238.88,
+    "p50_ms": 250.58,
+    "p95_ms": 300.86,
+    "p99_ms": 300.86,
+    "max_ms": 300.86,
+    "cloudflare_colos": [
+      "NRT"
+    ]
+  },
+  "websocket": {
+    "market": "btc-updown-5m-1788703500",
+    "connect": {
+      "count": 5,
+      "min_ms": 476.23,
+      "p50_ms": 498.48,
+      "p95_ms": 509.16,
+      "p99_ms": 509.16,
+      "max_ms": 509.16
+    },
+    "first_book": {
+      "count": 5,
+      "min_ms": 231.17,
+      "p50_ms": 241.67,
+      "p95_ms": 243.56,
+      "p99_ms": 243.56,
+      "max_ms": 243.56
+    },
+    "message_age": {
+      "count": 1026,
+      "min_ms": 115,
+      "p50_ms": 122,
+      "p95_ms": 166,
+      "p99_ms": 262,
+      "max_ms": 453
+    },
+    "steady_message_age": {
+      "count": 547,
+      "min_ms": 115,
+      "p50_ms": 118,
+      "p95_ms": 130,
+      "p99_ms": 133,
+      "max_ms": 142
+    },
+    "messages": 1021
+  },
+  "errors": []
+}

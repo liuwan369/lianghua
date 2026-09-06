@@ -1,0 +1,53 @@
+# ──────────────────────────────────────────────────────────────────────────
+# btc-5m-market-trading-bot — pure TypeScript Polymarket BTC 5m maker
+# ──────────────────────────────────────────────────────────────────────────
+
+# ── Secrets — NEVER commit a private key ─────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── TypeScript / Node ────────────────────────────────────────────────────────
+node_modules/
+dist/
+
+# ── Rust (legacy — remove after migration) ───────────────────────────────────
+/target/
+**/*.rs.bk
+*.pdb
+
+# ── Backtest / optimizer output ──────────────────────────────────────────────
+# results/ is intentionally TRACKED (committed) — not ignored.
+
+# ── Runtime output: logs, JSONL journals, crash-recovery / bot state ─────────
+# paper_log / live_test / traded_conditions / clob_recording / replay_log, etc.
+*.jsonl
+*_state.json
+logs/
+*.log
+*.out
+*.err
+# EXCEPTION: persisted real-time CLOB recordings (book/quote/fill/reconcile) are KEPT (tracked) —
+# every live/paper run writes results/track/clob-<unix>.jsonl; this is the durable track record.
+!results/track/
+!results/track/*.jsonl
+
+# ── OS / editor cruft ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Python guards (project is pure Rust — block accidental re-creation) ──────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+# node_modules listed above

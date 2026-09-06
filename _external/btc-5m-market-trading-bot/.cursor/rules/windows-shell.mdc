@@ -1,0 +1,28 @@
+---
+description: Windows shell/npm conventions for this repo
+alwaysApply: true
+---
+
+# Windows shell commands
+
+This project runs on Windows (PowerShell). Node.js installs three npm entry points: `npm`, `npm.cmd`, and `npm.ps1`.
+
+In PowerShell, bare `npm` resolves to `npm.ps1`. When script execution is restricted, `npm` fails with:
+
+> npm.ps1 cannot be loaded because running scripts is disabled on this system
+
+## Required convention
+
+On Windows, always run npm through the batch shim:
+
+- `npm.cmd install`
+- `npm.cmd run build`
+- `npm.cmd test`
+
+Do **not** use bash-style `&&` in PowerShell; chain with `;` instead:
+
+```powershell
+Set-Location "F:\path\to\repo"; npm.cmd run build; npm.cmd test
+```
+
+For project PowerShell scripts, use `scripts/invoke-npm.ps1` instead of bare `npm`.

@@ -1,0 +1,9 @@
+[project]
+name = "pm-btc5m-system"
+version = "0.1.0"
+description = "Polymarket BTC 5-minute paper trading and evidence system"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

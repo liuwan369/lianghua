@@ -1,0 +1,19 @@
+{
+  "version": "pm-r25-tokyo-evidence-v1",
+  "trade_authorization": false,
+  "target_address": "0x3048d65321be3497164cdfc2996f94f98a2e7537",
+  "gamma_events_url": "https://gamma-api.polymarket.com/events",
+  "activity_url": "https://data-api.polymarket.com/activity",
+  "clob_ws_url": "wss://ws-subscriptions-clob.polymarket.com/ws/market",
+  "binance_ws_url": "wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@bookTicker",
+  "polygon_rpc_url": "https://polygon.drpc.org",
+  "activity_poll_seconds": 20.0,
+  "activity_lookback_seconds": 900,
+  "polygon_poll_seconds": 2.0,
+  "polygon_confirmation_blocks": 12,
+  "polygon_overlap_blocks": 64,
+  "clob_book_min_interval_ms": 0,
+  "health_interval_seconds": 60,
+  "sqlite_path": "data/pm-r25-live/days/tokyo-evidence-{date}.sqlite3",
+  "sqlite_symlink": "data/pm-r25-live/tokyo-evidence.sqlite3"
+}

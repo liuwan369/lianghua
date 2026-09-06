@@ -1,0 +1,1184 @@
+{
+  "run_type": "pm-r32_verify_incentive_transfers",
+  "trade_authorization": false,
+  "address": "0x3048d65321be3497164cdfc2996f94f98a2e7537",
+  "source": "Polygon eth_getTransactionReceipt Transfer logs",
+  "activity_unique_transactions": 77,
+  "duplicate_rows": 0,
+  "verified_exact": 77,
+  "failed_or_mismatched": 0,
+  "by_type": {
+    "TAKER_REBATE": {
+      "count": 29,
+      "expected_usdc": 42740.1913,
+      "observed_usdc": 42740.1913
+    },
+    "REWARD": {
+      "count": 19,
+      "expected_usdc": 774.9322,
+      "observed_usdc": 774.9322
+    },
+    "MAKER_REBATE": {
+      "count": 29,
+      "expected_usdc": 6016.7037,
+      "observed_usdc": 6016.7037
+    }
+  },
+  "results": [
+    {
+      "tx": "0x2d5809760a1204aef3a4ae3b5dcf07a04aacff336038b5c082f1f57369ed540e",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 428.2169,
+      "observed_incoming_usdc": 428.2169,
+      "difference_usdc": 0.0,
+      "block": 91282926,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 428216900,
+          "amount_usdc_6dp": 428.2169
+        }
+      ]
+    },
+    {
+      "tx": "0x1d3186b0d7f47676ebaac9fa1b88f5cab3b58ba7be316069005c68203ee2dc55",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 214.2863,
+      "observed_incoming_usdc": 214.2863,
+      "difference_usdc": 0.0,
+      "block": 91226737,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 214286300,
+          "amount_usdc_6dp": 214.2863
+        }
+      ]
+    },
+    {
+      "tx": "0xce4b25f89491f2b22c4fa151aa8b0548bb2d54d7b065141c046d1ef9685ba3c2",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 172.4123,
+      "observed_incoming_usdc": 172.4123,
+      "difference_usdc": 0.0,
+      "block": 91341938,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 172412300,
+          "amount_usdc_6dp": 172.4123
+        }
+      ]
+    },
+    {
+      "tx": "0xf8d5a33f699b61bae2cb247b3ae08aa4978ea0eb9c8e7c0a39a5df55abf18af6",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1688.8163,
+      "observed_incoming_usdc": 1688.8163,
+      "difference_usdc": 0.0,
+      "block": 91225340,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1688816300,
+          "amount_usdc_6dp": 1688.8163
+        }
+      ]
+    },
+    {
+      "tx": "0x48134af173a258c049ec8f2c069875b6a6676b4bf1bb130858b2a7014aa107b7",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 109.447,
+      "observed_incoming_usdc": 109.447,
+      "difference_usdc": 0.0,
+      "block": 91284327,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 109447000,
+          "amount_usdc_6dp": 109.447
+        }
+      ]
+    },
+    {
+      "tx": "0x16ab927300dfcaeac34014da4387f9012a160d805dd3002499224221534a0fcb",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 696.9728,
+      "observed_incoming_usdc": 696.9728,
+      "difference_usdc": 0.0,
+      "block": 91340528,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 696972800,
+          "amount_usdc_6dp": 696.9728
+        }
+      ]
+    },
+    {
+      "tx": "0xcc077e531436f198a56473a634a7ecc7b1c095e75acac64c2ee62cec7427e39a",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 278.7524,
+      "observed_incoming_usdc": 278.7524,
+      "difference_usdc": 0.0,
+      "block": 91167724,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 278752400,
+          "amount_usdc_6dp": 278.7524
+        }
+      ]
+    },
+    {
+      "tx": "0xeb318015eef7238d3ea0dd1bf20c2cdc3260dd1b28e1751ad2d03dc2ed696594",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 34.2168,
+      "observed_incoming_usdc": 34.2168,
+      "difference_usdc": 0.0,
+      "block": 91169151,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 34216800,
+          "amount_usdc_6dp": 34.2168
+        }
+      ]
+    },
+    {
+      "tx": "0xd3373af9d2cde472e1c0447a8cab421f66ca317a053ba4db0f1442b6fa99a333",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1173.7666,
+      "observed_incoming_usdc": 1173.7666,
+      "difference_usdc": 0.0,
+      "block": 91398120,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1173766600,
+          "amount_usdc_6dp": 1173.7666
+        }
+      ]
+    },
+    {
+      "tx": "0x2fc700d750399093c84fc5a905c8096cab5607bd05ebfd5365c0ae3998564aab",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 213.1598,
+      "observed_incoming_usdc": 213.1598,
+      "difference_usdc": 0.0,
+      "block": 91399531,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 213159800,
+          "amount_usdc_6dp": 213.1598
+        }
+      ]
+    },
+    {
+      "tx": "0x68db1c5847e976ef45b8a615605ebec57ec66769de8bd102ddd7a0b440ec3c35",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1766.2057,
+      "observed_incoming_usdc": 1766.2057,
+      "difference_usdc": 0.0,
+      "block": 91570933,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1766205700,
+          "amount_usdc_6dp": 1766.2057
+        }
+      ]
+    },
+    {
+      "tx": "0x6bd94b2552ec1d1232a1cafb255cb358bb8bb6069ef521431e79f3a066ce8ecb",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1073.5854,
+      "observed_incoming_usdc": 1073.5854,
+      "difference_usdc": 0.0,
+      "block": 91513332,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1073585400,
+          "amount_usdc_6dp": 1073.5854
+        }
+      ]
+    },
+    {
+      "tx": "0x36f1b8b4d48ded2f6970522b6b256bfa157ea8967114950709f19b061e1488bf",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1120.2209,
+      "observed_incoming_usdc": 1120.2209,
+      "difference_usdc": 0.0,
+      "block": 91462017,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1120220900,
+          "amount_usdc_6dp": 1120.2209
+        }
+      ]
+    },
+    {
+      "tx": "0x07f679c6a18a8469759bd41d50b06f075e9380202dfdb85dfcd16220dd8e94db",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 245.7205,
+      "observed_incoming_usdc": 245.7205,
+      "difference_usdc": 0.0,
+      "block": 91514749,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 245720500,
+          "amount_usdc_6dp": 245.7205
+        }
+      ]
+    },
+    {
+      "tx": "0x0adc49d7851d1c5807815dd533c938572db04d257fefedbd142ab9d391db717b",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 172.6021,
+      "observed_incoming_usdc": 172.6021,
+      "difference_usdc": 0.0,
+      "block": 91457119,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 172602100,
+          "amount_usdc_6dp": 172.6021
+        }
+      ]
+    },
+    {
+      "tx": "0x353a054c95c5cf1fabbfad90bea9b5ca9217c975ba8e8018aa96c955d9eeb06a",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 249.1656,
+      "observed_incoming_usdc": 249.1656,
+      "difference_usdc": 0.0,
+      "block": 91572338,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 249165600,
+          "amount_usdc_6dp": 249.1656
+        }
+      ]
+    },
+    {
+      "tx": "0x403722e657fa7d04b6d6e49394717ab54057e67e1affb7661ca184e3760d6cc0",
+      "type": "REWARD",
+      "expected_usdc": 19.5735,
+      "observed_incoming_usdc": 19.5735,
+      "difference_usdc": 0.0,
+      "block": 91628124,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 19573500,
+          "amount_usdc_6dp": 19.5735
+        }
+      ]
+    },
+    {
+      "tx": "0xdeca98f8b0acf12368ff61e7b6d39fb245a8cf8ac4bc67cbeef8babff2679a6d",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1416.652,
+      "observed_incoming_usdc": 1416.652,
+      "difference_usdc": 0.0,
+      "block": 91628522,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1416652000,
+          "amount_usdc_6dp": 1416.652
+        }
+      ]
+    },
+    {
+      "tx": "0x7a3e96f595a6876ee643ad96caa11c4d3fc4f41de91496bd5b5641a37c2ad723",
+      "type": "REWARD",
+      "expected_usdc": 38.1387,
+      "observed_incoming_usdc": 38.1387,
+      "difference_usdc": 0.0,
+      "block": 91685722,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 38138700,
+          "amount_usdc_6dp": 38.1387
+        }
+      ]
+    },
+    {
+      "tx": "0x35ac9dc3b93ae0d9daa82a554e560c6a2e05ccb2ff71a5803de55147ace8c870",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 119.56,
+      "observed_incoming_usdc": 119.56,
+      "difference_usdc": 0.0,
+      "block": 91629922,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 119560000,
+          "amount_usdc_6dp": 119.56
+        }
+      ]
+    },
+    {
+      "tx": "0x9054ebff1d6a81823ad23b08d123833889031e7ae90087931a9d7ba3f3780ac9",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 585.8703,
+      "observed_incoming_usdc": 585.8703,
+      "difference_usdc": 0.0,
+      "block": 91686123,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 585870300,
+          "amount_usdc_6dp": 585.8703
+        }
+      ]
+    },
+    {
+      "tx": "0x699a7a3819beb3aca5d961d8692d3ac6f84c0a6ee008563cc5c80bf96cce94e9",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 143.5438,
+      "observed_incoming_usdc": 143.5438,
+      "difference_usdc": 0.0,
+      "block": 91687523,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 143543800,
+          "amount_usdc_6dp": 143.5438
+        }
+      ]
+    },
+    {
+      "tx": "0xcd31da8f0cc9ec86fb7ea38bc39e06c188067ca3c18bef978c525a1fa10996ce",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 364.304,
+      "observed_incoming_usdc": 364.304,
+      "difference_usdc": 0.0,
+      "block": 91743732,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 364304000,
+          "amount_usdc_6dp": 364.304
+        }
+      ]
+    },
+    {
+      "tx": "0x1de61e19605df0ca1bb984d55e6682723c82b5088684ddb1a411939f38027944",
+      "type": "REWARD",
+      "expected_usdc": 59.0679,
+      "observed_incoming_usdc": 59.0679,
+      "difference_usdc": 0.0,
+      "block": 91743323,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 59067900,
+          "amount_usdc_6dp": 59.0679
+        }
+      ]
+    },
+    {
+      "tx": "0x62c4c94a698f23d5dc49a07df24648b78b32de9c2020c07841085a8ce879b830",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 280.214,
+      "observed_incoming_usdc": 280.214,
+      "difference_usdc": 0.0,
+      "block": 91745118,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 280214000,
+          "amount_usdc_6dp": 280.214
+        }
+      ]
+    },
+    {
+      "tx": "0xb2a241fe26b47e8c042c8c9eaef55a1a7b2a0a5cf0106878fedcddb3eea14a83",
+      "type": "REWARD",
+      "expected_usdc": 9.7085,
+      "observed_incoming_usdc": 9.7085,
+      "difference_usdc": 0.0,
+      "block": 91800927,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 9708500,
+          "amount_usdc_6dp": 9.7085
+        }
+      ]
+    },
+    {
+      "tx": "0xf30cf7624b8bfc1b931072df39e0963ac57c8ad26253bc59bd377216132bc5bf",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 676.9876,
+      "observed_incoming_usdc": 676.9876,
+      "difference_usdc": 0.0,
+      "block": 91801331,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 676987600,
+          "amount_usdc_6dp": 676.9876
+        }
+      ]
+    },
+    {
+      "tx": "0xaf851635e7eb27ac1ed757d693125d6182e2c5190be069827b0d1b9e74c76126",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 103.9824,
+      "observed_incoming_usdc": 103.9824,
+      "difference_usdc": 0.0,
+      "block": 91802732,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 103982400,
+          "amount_usdc_6dp": 103.9824
+        }
+      ]
+    },
+    {
+      "tx": "0xadfed8033876f07d410d84798600fe873fdc668b80a46e6c1b39593332a7eb4f",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1064.5547,
+      "observed_incoming_usdc": 1064.5547,
+      "difference_usdc": 0.0,
+      "block": 91858923,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1064554700,
+          "amount_usdc_6dp": 1064.5547
+        }
+      ]
+    },
+    {
+      "tx": "0xb861c975bf8617d492a95c4c51a26922ecf86b3b59f84f69ac4a288913edbc7b",
+      "type": "REWARD",
+      "expected_usdc": 117.6237,
+      "observed_incoming_usdc": 117.6237,
+      "difference_usdc": 0.0,
+      "block": 91916119,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 117623700,
+          "amount_usdc_6dp": 117.6237
+        }
+      ]
+    },
+    {
+      "tx": "0xccbbf25fc42515dc0fb61d0fdf7cce4b188183fbd3967e48d3fc2aa8123d09e1",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 228.891,
+      "observed_incoming_usdc": 228.891,
+      "difference_usdc": 0.0,
+      "block": 91860329,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 228891000,
+          "amount_usdc_6dp": 228.891
+        }
+      ]
+    },
+    {
+      "tx": "0xca5f90d0ebc4c7814a0b002aea5dee7da14fdec503050c74d636a56ab555ae93",
+      "type": "REWARD",
+      "expected_usdc": 40.9572,
+      "observed_incoming_usdc": 40.9572,
+      "difference_usdc": 0.0,
+      "block": 91858518,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 40957200,
+          "amount_usdc_6dp": 40.9572
+        }
+      ]
+    },
+    {
+      "tx": "0x9d9b60b60552384406f46a5e77c353560a8c1e2e4c6533c8f5f0bc9cdfe86e8b",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1508.0159,
+      "observed_incoming_usdc": 1508.0159,
+      "difference_usdc": 0.0,
+      "block": 91916521,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1508015900,
+          "amount_usdc_6dp": 1508.0159
+        }
+      ]
+    },
+    {
+      "tx": "0x7c63fb8f20207c3988522a68134c1d5d2d3ebafae0ca2ab362bee273a0f27dc1",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 474.8749,
+      "observed_incoming_usdc": 474.8749,
+      "difference_usdc": 0.0,
+      "block": 91917924,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 474874900,
+          "amount_usdc_6dp": 474.8749
+        }
+      ]
+    },
+    {
+      "tx": "0x0379331402bf47332a2500239e02c653003bb2215f8dbf9971c68b5d70965c08",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 386.3889,
+      "observed_incoming_usdc": 386.3889,
+      "difference_usdc": 0.0,
+      "block": 91975525,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 386388900,
+          "amount_usdc_6dp": 386.3889
+        }
+      ]
+    },
+    {
+      "tx": "0xef515aa47b2ca4843461c7e83b1bc4bdfa3ce5bea666da821e0df432ac8a5620",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1407.599,
+      "observed_incoming_usdc": 1407.599,
+      "difference_usdc": 0.0,
+      "block": 91974129,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1407599000,
+          "amount_usdc_6dp": 1407.599
+        }
+      ]
+    },
+    {
+      "tx": "0x08a4203a8251c6867e6c56b1ba18961e1445d660c0b12120f40cb3873b52fdf8",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 319.4316,
+      "observed_incoming_usdc": 319.4316,
+      "difference_usdc": 0.0,
+      "block": 92033122,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 319431600,
+          "amount_usdc_6dp": 319.4316
+        }
+      ]
+    },
+    {
+      "tx": "0x96895412ce9aff2e08eab56710ae72bca1b8f82c7bca20f8414e773136780eb0",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1302.2766,
+      "observed_incoming_usdc": 1302.2766,
+      "difference_usdc": 0.0,
+      "block": 92031727,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1302276600,
+          "amount_usdc_6dp": 1302.2766
+        }
+      ]
+    },
+    {
+      "tx": "0x21df422f49483382e3986ccd4abe368e76406843ec7b78a80c3f8293c5ec18e4",
+      "type": "REWARD",
+      "expected_usdc": 6.9444,
+      "observed_incoming_usdc": 6.9444,
+      "difference_usdc": 0.0,
+      "block": 92088922,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 6944400,
+          "amount_usdc_6dp": 6.9444
+        }
+      ]
+    },
+    {
+      "tx": "0xb2489ae4ff69dd2d56b30c01702c86fa4ffe4adc29d6dbad62793b604c87aca1",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 504.0166,
+      "observed_incoming_usdc": 504.0166,
+      "difference_usdc": 0.0,
+      "block": 92089319,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 504016600,
+          "amount_usdc_6dp": 504.0166
+        }
+      ]
+    },
+    {
+      "tx": "0xdf1937cccb000d43488201fcb4fb44894370cb1708381dda1055331966a07e54",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 114.7315,
+      "observed_incoming_usdc": 114.7315,
+      "difference_usdc": 0.0,
+      "block": 92090737,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 114731500,
+          "amount_usdc_6dp": 114.7315
+        }
+      ]
+    },
+    {
+      "tx": "0xdd0546266cb45a81b35caefdd968eaf16a9b5d9f733377b77413d287c542153c",
+      "type": "REWARD",
+      "expected_usdc": 20.1389,
+      "observed_incoming_usdc": 20.1389,
+      "difference_usdc": 0.0,
+      "block": 92146521,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 20138900,
+          "amount_usdc_6dp": 20.1389
+        }
+      ]
+    },
+    {
+      "tx": "0x6e5f79714a21d02a166c64f03e62b786acebd6f4e383fa165c22f7c1eb34c963",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 364.2658,
+      "observed_incoming_usdc": 364.2658,
+      "difference_usdc": 0.0,
+      "block": 92171422,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 364265800,
+          "amount_usdc_6dp": 364.2658
+        }
+      ]
+    },
+    {
+      "tx": "0x83ce77d6ad435b1207c38551c72aa911124b786f72f8e4676f7d8c86f0ff295c",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 51.9383,
+      "observed_incoming_usdc": 51.9383,
+      "difference_usdc": 0.0,
+      "block": 92148322,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 51938300,
+          "amount_usdc_6dp": 51.9383
+        }
+      ]
+    },
+    {
+      "tx": "0x72a1382cba57207074d7ef8a204bc7b3cebde55479de08ba32e16f9bb58a0f17",
+      "type": "REWARD",
+      "expected_usdc": 49.2077,
+      "observed_incoming_usdc": 49.2077,
+      "difference_usdc": 0.0,
+      "block": 92204120,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 49207700,
+          "amount_usdc_6dp": 49.2077
+        }
+      ]
+    },
+    {
+      "tx": "0x86ea2fb07b1dbcc0ab6d1b36796c3f9c76aad83739bbaa3026130ed9ec22edf8",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1812.9662,
+      "observed_incoming_usdc": 1812.9662,
+      "difference_usdc": 0.0,
+      "block": 92204526,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1812966200,
+          "amount_usdc_6dp": 1812.9662
+        }
+      ]
+    },
+    {
+      "tx": "0x6d8847ffc07864828f05fc32e36420ec4f76efb18d7e1082cb604cddf370b4c3",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 186.4442,
+      "observed_incoming_usdc": 186.4442,
+      "difference_usdc": 0.0,
+      "block": 92205918,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 186444200,
+          "amount_usdc_6dp": 186.4442
+        }
+      ]
+    },
+    {
+      "tx": "0x8ce79f98eaf0dc0bfb7de2b574ec90889fd696207b4c43e499c85097fef96463",
+      "type": "REWARD",
+      "expected_usdc": 22.8764,
+      "observed_incoming_usdc": 22.8764,
+      "difference_usdc": 0.0,
+      "block": 92261720,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 22876400,
+          "amount_usdc_6dp": 22.8764
+        }
+      ]
+    },
+    {
+      "tx": "0x484d4e897ced6215add86e3f8c021d05a78b9128963576d99ba547084ac730af",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1086.3029,
+      "observed_incoming_usdc": 1086.3029,
+      "difference_usdc": 0.0,
+      "block": 92262128,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1086302900,
+          "amount_usdc_6dp": 1086.3029
+        }
+      ]
+    },
+    {
+      "tx": "0xc0460ea22f50ff919b17e4b12499d25a021cc96edd3b408862f217a8ff1a03d7",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 129.3413,
+      "observed_incoming_usdc": 129.3413,
+      "difference_usdc": 0.0,
+      "block": 92263521,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 129341300,
+          "amount_usdc_6dp": 129.3413
+        }
+      ]
+    },
+    {
+      "tx": "0xf869afbb32ca88a586183a717abd4303a443c8af5e6a148937ed354d0797e7f1",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 175.0043,
+      "observed_incoming_usdc": 175.0043,
+      "difference_usdc": 0.0,
+      "block": 92321145,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 175004300,
+          "amount_usdc_6dp": 175.0043
+        }
+      ]
+    },
+    {
+      "tx": "0xde6b0fcccf69e326050abf07fa75cd4a748520818599a3f804790cc064c369b1",
+      "type": "REWARD",
+      "expected_usdc": 14.9484,
+      "observed_incoming_usdc": 14.9484,
+      "difference_usdc": 0.0,
+      "block": 92319322,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 14948400,
+          "amount_usdc_6dp": 14.9484
+        }
+      ]
+    },
+    {
+      "tx": "0xe584cd0ad53767f8243532430f59a554b5bf3bb70ff6d80ffdcfc4bd6fa625eb",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2247.0662,
+      "observed_incoming_usdc": 2247.0662,
+      "difference_usdc": 0.0,
+      "block": 92356889,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2247066200,
+          "amount_usdc_6dp": 2247.0662
+        }
+      ]
+    },
+    {
+      "tx": "0x8f6239805ac20467ce757ba89461bfcfafe2a7dc193d7a7db4d0bd42df1f89e7",
+      "type": "REWARD",
+      "expected_usdc": 19.3711,
+      "observed_incoming_usdc": 19.3711,
+      "difference_usdc": 0.0,
+      "block": 92376918,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 19371100,
+          "amount_usdc_6dp": 19.3711
+        }
+      ]
+    },
+    {
+      "tx": "0x2d52d6a763c9da3b94e778b40c1433ef5de272cc5dc7c2b13d64eb5074e778e0",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2789.0415,
+      "observed_incoming_usdc": 2789.0415,
+      "difference_usdc": 0.0,
+      "block": 92377330,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2789041500,
+          "amount_usdc_6dp": 2789.0415
+        }
+      ]
+    },
+    {
+      "tx": "0x9cd1e9a464970c0315ceb1250afe0e4ba8f57537af8bcf352203d56249ec75a2",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 188.7279,
+      "observed_incoming_usdc": 188.7279,
+      "difference_usdc": 0.0,
+      "block": 92378737,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 188727900,
+          "amount_usdc_6dp": 188.7279
+        }
+      ]
+    },
+    {
+      "tx": "0xbe4d0acb39a131c33e3f8a5c7957562590d2d2d29ff79941fd1ac5b744efcbd6",
+      "type": "REWARD",
+      "expected_usdc": 15.5853,
+      "observed_incoming_usdc": 15.5853,
+      "difference_usdc": 0.0,
+      "block": 92434543,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 15585300,
+          "amount_usdc_6dp": 15.5853
+        }
+      ]
+    },
+    {
+      "tx": "0x779d772e7416360cdb50f46a61a55ff93fca41e5ca63e7e881cd19a63161f9fc",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 3060.8599,
+      "observed_incoming_usdc": 3060.8599,
+      "difference_usdc": 0.0,
+      "block": 92434944,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 3060859900,
+          "amount_usdc_6dp": 3060.8599
+        }
+      ]
+    },
+    {
+      "tx": "0x370804c40c7011f99834e2ee712a2ad7a31c2efe4dec5761a955acda2a182779",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 152.3132,
+      "observed_incoming_usdc": 152.3132,
+      "difference_usdc": 0.0,
+      "block": 92436334,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 152313200,
+          "amount_usdc_6dp": 152.3132
+        }
+      ]
+    },
+    {
+      "tx": "0x9cabd4931020336061ea6e6347747a277f3f66608ba795d7733c0f006e71f896",
+      "type": "REWARD",
+      "expected_usdc": 41.0548,
+      "observed_incoming_usdc": 41.0548,
+      "difference_usdc": 0.0,
+      "block": 92492123,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 41054800,
+          "amount_usdc_6dp": 41.0548
+        }
+      ]
+    },
+    {
+      "tx": "0x401fd35115bc69e2fe1a4b79a8db2a55a336d11aed9fe0cdbefed1841000a80a",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2576.9152,
+      "observed_incoming_usdc": 2576.9152,
+      "difference_usdc": 0.0,
+      "block": 92492522,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2576915200,
+          "amount_usdc_6dp": 2576.9152
+        }
+      ]
+    },
+    {
+      "tx": "0x0cb565ec410970afa406764934372bfb1670b9ed67fb65a87406ba9637829e7d",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 196.9512,
+      "observed_incoming_usdc": 196.9512,
+      "difference_usdc": 0.0,
+      "block": 92493929,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 196951200,
+          "amount_usdc_6dp": 196.9512
+        }
+      ]
+    },
+    {
+      "tx": "0xb8b84de5dcd69d1a2e2c937435bd9fc879f775eddcfbdf587207b39e23aff358",
+      "type": "REWARD",
+      "expected_usdc": 41.3893,
+      "observed_incoming_usdc": 41.3893,
+      "difference_usdc": 0.0,
+      "block": 92549720,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 41389300,
+          "amount_usdc_6dp": 41.3893
+        }
+      ]
+    },
+    {
+      "tx": "0x32994b7aa4d213839909b7b286a2b3a35033c76f313d596553f1af1e9f8d9e6a",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 177.1206,
+      "observed_incoming_usdc": 177.1206,
+      "difference_usdc": 0.0,
+      "block": 92551528,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 177120600,
+          "amount_usdc_6dp": 177.1206
+        }
+      ]
+    },
+    {
+      "tx": "0x9e9f4c73157fe8cfc560dc52062308ad1d350cbb18689f34f6c9aa82c53ae3e8",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2328.3341,
+      "observed_incoming_usdc": 2328.3341,
+      "difference_usdc": 0.0,
+      "block": 92580263,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2328334100,
+          "amount_usdc_6dp": 2328.3341
+        }
+      ]
+    },
+    {
+      "tx": "0x93a5e8ed6967522bb4738d16d76889ee11ea4bb85d10e0861844977d3fb69a1d",
+      "type": "REWARD",
+      "expected_usdc": 27.9619,
+      "observed_incoming_usdc": 27.9619,
+      "difference_usdc": 0.0,
+      "block": 92607332,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 27961900,
+          "amount_usdc_6dp": 27.9619
+        }
+      ]
+    },
+    {
+      "tx": "0x1462236423db5c8b1d8e6200356e8f20a72d8c267a911d83d999078b85b07021",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2471.1454,
+      "observed_incoming_usdc": 2471.1454,
+      "difference_usdc": 0.0,
+      "block": 92607728,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2471145400,
+          "amount_usdc_6dp": 2471.1454
+        }
+      ]
+    },
+    {
+      "tx": "0xa598453cc1762efeb1b67a044c765e05797b5384976575de9d85f6ac64127dd8",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 176.1015,
+      "observed_incoming_usdc": 176.1015,
+      "difference_usdc": 0.0,
+      "block": 92609118,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 176101500,
+          "amount_usdc_6dp": 176.1015
+        }
+      ]
+    },
+    {
+      "tx": "0x9a64e41fea559c5b1ae14d53e4d11e0317fd3a2be582c270a58976ade17bf822",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2104.4784,
+      "observed_incoming_usdc": 2104.4784,
+      "difference_usdc": 0.0,
+      "block": 92665329,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2104478400,
+          "amount_usdc_6dp": 2104.4784
+        }
+      ]
+    },
+    {
+      "tx": "0xa073e16809beed341e7a600745399317f8242bce87a134f5061d60423b336546",
+      "type": "REWARD",
+      "expected_usdc": 49.8343,
+      "observed_incoming_usdc": 49.8343,
+      "difference_usdc": 0.0,
+      "block": 92664922,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 49834300,
+          "amount_usdc_6dp": 49.8343
+        }
+      ]
+    },
+    {
+      "tx": "0x3389e34aff235c5a04678c65bb5e7f405c0d8b6fc52c08af6f06e5d48e403b3a",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 272.2974,
+      "observed_incoming_usdc": 272.2974,
+      "difference_usdc": 0.0,
+      "block": 92666723,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 272297400,
+          "amount_usdc_6dp": 272.2974
+        }
+      ]
+    },
+    {
+      "tx": "0x5e28055935e68b69d1dcb0c00a0d6b8a1e9b8c0a3c137541b24c7148add44720",
+      "type": "REWARD",
+      "expected_usdc": 78.1967,
+      "observed_incoming_usdc": 78.1967,
+      "difference_usdc": 0.0,
+      "block": 92722520,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 78196700,
+          "amount_usdc_6dp": 78.1967
+        }
+      ]
+    },
+    {
+      "tx": "0xd6ebe8bcd651a060b4fcdfcd3ff8cd2fbcb24a962b65496f7b42e083e84b15ca",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 1945.6479,
+      "observed_incoming_usdc": 1945.6479,
+      "difference_usdc": 0.0,
+      "block": 92722946,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 1945647900,
+          "amount_usdc_6dp": 1945.6479
+        }
+      ]
+    },
+    {
+      "tx": "0x46a11dc57a9ecae7edb7cc6c2dc3a6bd53bb9657d2d4c4be264856036b68224f",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 261.4637,
+      "observed_incoming_usdc": 261.4637,
+      "difference_usdc": 0.0,
+      "block": 92724339,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 261463700,
+          "amount_usdc_6dp": 261.4637
+        }
+      ]
+    },
+    {
+      "tx": "0x3624a5015d8b942f4081f83e736a4f2c28727a09380c5b7ae5a75b648d5cc55d",
+      "type": "TAKER_REBATE",
+      "expected_usdc": 2896.3541,
+      "observed_incoming_usdc": 2896.3541,
+      "difference_usdc": 0.0,
+      "block": 92780568,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 2896354100,
+          "amount_usdc_6dp": 2896.3541
+        }
+      ]
+    },
+    {
+      "tx": "0xd031a32b2743cdb3c53df16461e2707ebc2fca1fbee2867d5042414481c4c4a6",
+      "type": "MAKER_REBATE",
+      "expected_usdc": 466.3716,
+      "observed_incoming_usdc": 466.3716,
+      "difference_usdc": 0.0,
+      "block": 92781932,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 466371600,
+          "amount_usdc_6dp": 466.3716
+        }
+      ]
+    },
+    {
+      "tx": "0xf82630a3f16e664619dae7479ba4377fcff1bd33d1857b1b58340804623afcf1",
+      "type": "REWARD",
+      "expected_usdc": 102.3535,
+      "observed_incoming_usdc": 102.3535,
+      "difference_usdc": 0.0,
+      "block": 92785108,
+      "transfers": [
+        {
+          "token": "0xc011a7e12a19f7b1f670d46f03b03f3342e82dfb",
+          "amount_raw": 102353500,
+          "amount_usdc_6dp": 102.3535
+        }
+      ]
+    }
+  ]
+}

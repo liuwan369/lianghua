@@ -1,0 +1,105 @@
+{
+  "measured_at": "2026-09-06T15:19:32.496Z",
+  "hostname": "ip-172-26-8-197",
+  "samples": 3,
+  "ws_seconds": 3,
+  "dns": {
+    "clob.polymarket.com": [
+      "104.18.34.205",
+      "172.64.153.51"
+    ],
+    "ws-subscriptions-clob.polymarket.com": [
+      "172.64.153.51",
+      "104.18.34.205"
+    ]
+  },
+  "clock_sync": {
+    "source": "chrony",
+    "synchronized": true,
+    "local_minus_ntp_ms": -0.0009710000000000001,
+    "detail": "Normal"
+  },
+  "geoblock": {
+    "blocked": true,
+    "ip": "2406:da14:12e8:3c00:c4e7:f304:1e5b:fbe9",
+    "country": "JP",
+    "region": "13"
+  },
+  "clob_rest": {
+    "count": 3,
+    "min_ms": 239.52,
+    "p50_ms": 254.71,
+    "p95_ms": 267.85,
+    "p99_ms": 267.85,
+    "max_ms": 267.85,
+    "cloudflare_colos": [
+      "NRT"
+    ]
+  },
+  "websocket": {
+    "markets": [
+      "btc-updown-5m-1788707700"
+    ],
+    "connect": {
+      "count": 3,
+      "min_ms": 482.55,
+      "p50_ms": 488.65,
+      "p95_ms": 501.87,
+      "p99_ms": 501.87,
+      "max_ms": 501.87
+    },
+    "first_book": {
+      "count": 3,
+      "min_ms": 233.47,
+      "p50_ms": 238.79,
+      "p95_ms": 243.75,
+      "p99_ms": 243.75,
+      "max_ms": 243.75
+    },
+    "message_age": {
+      "count": 809,
+      "min_ms": 112,
+      "p50_ms": 120,
+      "p95_ms": 207,
+      "p99_ms": 283,
+      "max_ms": 342
+    },
+    "steady_message_age": {
+      "count": 442,
+      "min_ms": 112,
+      "p50_ms": 118,
+      "p95_ms": 195,
+      "p99_ms": 231,
+      "max_ms": 275
+    },
+    "adjusted_message_age": {
+      "count": 809,
+      "min_ms": 112,
+      "p50_ms": 120,
+      "p95_ms": 207,
+      "p99_ms": 283,
+      "max_ms": 342
+    },
+    "adjusted_steady_message_age": {
+      "count": 442,
+      "min_ms": 112,
+      "p50_ms": 118,
+      "p95_ms": 195,
+      "p99_ms": 231,
+      "max_ms": 275
+    },
+    "receive_gap": {
+      "count": 806,
+      "min_ms": 0.01,
+      "p50_ms": 4.87,
+      "p95_ms": 34.47,
+      "p99_ms": 75,
+      "max_ms": 764.16
+    },
+    "messages": 806,
+    "timestamped_events": 809,
+    "stale_events": 0,
+    "completed_samples": 3
+  },
+  "errors": []
+}

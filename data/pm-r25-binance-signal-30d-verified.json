@@ -1,0 +1,1079 @@
+{
+  "run_type": "pm_r25_binance_signal_analysis",
+  "trade_authorization": false,
+  "address": "0x3048d65321be3497164cdfc2996f94f98a2e7537",
+  "source": "Binance Vision official BTCUSDT spot 1-second klines + Polymarket public Activity",
+  "archive_dates": [
+    "2026-07-30",
+    "2026-07-31",
+    "2026-08-01",
+    "2026-08-02",
+    "2026-08-03",
+    "2026-08-04",
+    "2026-08-05",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-08",
+    "2026-08-09",
+    "2026-08-10",
+    "2026-08-11",
+    "2026-08-12",
+    "2026-08-13",
+    "2026-08-14",
+    "2026-08-15",
+    "2026-08-16",
+    "2026-08-17",
+    "2026-08-18",
+    "2026-08-19",
+    "2026-08-20",
+    "2026-08-21",
+    "2026-08-22",
+    "2026-08-23",
+    "2026-08-24",
+    "2026-08-25",
+    "2026-08-26",
+    "2026-08-27",
+    "2026-08-28"
+  ],
+  "missing_archive_dates": [],
+  "history_coverage": {
+    "complete": true,
+    "windows": 361,
+    "missing_files": [],
+    "gaps": [],
+    "pagination_incomplete": [],
+    "checksum_mismatches": [],
+    "request_metadata_valid": true,
+    "boundary_valid": true,
+    "indexed_files": [
+      "1785351545-1785358744.json.gz",
+      "1785358745-1785365944.json.gz",
+      "1785365945-1785373144.json.gz",
+      "1785373145-1785380344.json.gz",
+      "1785380345-1785387544.json.gz",
+      "1785387545-1785394744.json.gz",
+      "1785394745-1785401944.json.gz",
+      "1785401945-1785409144.json.gz",
+      "1785409145-1785416344.json.gz",
+      "1785416345-1785423544.json.gz",
+      "1785423545-1785430744.json.gz",
+      "1785430745-1785437944.json.gz",
+      "1785437945-1785445144.json.gz",
+      "1785445145-1785452344.json.gz",
+      "1785452345-1785459544.json.gz",
+      "1785459545-1785466744.json.gz",
+      "1785466745-1785473944.json.gz",
+      "1785473945-1785481144.json.gz",
+      "1785481145-1785488344.json.gz",
+      "1785488345-1785495544.json.gz",
+      "1785495545-1785502744.json.gz",
+      "1785502745-1785509944.json.gz",
+      "1785509945-1785517144.json.gz",
+      "1785517145-1785524344.json.gz",
+      "1785524345-1785531544.json.gz",
+      "1785531545-1785538744.json.gz",
+      "1785538745-1785545944.json.gz",
+      "1785545945-1785553144.json.gz",
+      "1785553145-1785560344.json.gz",
+      "1785560345-1785567544.json.gz",
+      "1785567545-1785574744.json.gz",
+      "1785574745-1785581944.json.gz",
+      "1785581945-1785589144.json.gz",
+      "1785589145-1785596344.json.gz",
+      "1785596345-1785603544.json.gz",
+      "1785603545-1785610744.json.gz",
+      "1785610745-1785617944.json.gz",
+      "1785617945-1785625144.json.gz",
+      "1785625145-1785632344.json.gz",
+      "1785632345-1785639544.json.gz",
+      "1785639545-1785646744.json.gz",
+      "1785646745-1785653944.json.gz",
+      "1785653945-1785661144.json.gz",
+      "1785661145-1785668344.json.gz",
+      "1785668345-1785675544.json.gz",
+      "1785675545-1785682744.json.gz",
+      "1785682745-1785689944.json.gz",
+      "1785689945-1785697144.json.gz",
+      "1785697145-1785704344.json.gz",
+      "1785704345-1785711544.json.gz",
+      "1785711545-1785718744.json.gz",
+      "1785718745-1785725944.json.gz",
+      "1785725945-1785733144.json.gz",
+      "1785733145-1785740344.json.gz",
+      "1785740345-1785747544.json.gz",
+      "1785747545-1785754744.json.gz",
+      "1785754745-1785761944.json.gz",
+      "1785761945-1785769144.json.gz",
+      "1785769145-1785776344.json.gz",
+      "1785776345-1785783544.json.gz",
+      "1785783545-1785790744.json.gz",
+      "1785790745-1785797944.json.gz",
+      "1785797945-1785805144.json.gz",
+      "1785805145-1785812344.json.gz",
+      "1785812345-1785819544.json.gz",
+      "1785819545-1785826744.json.gz",
+      "1785826745-1785833944.json.gz",
+      "1785833945-1785841144.json.gz",
+      "1785841145-1785848344.json.gz",
+      "1785848345-1785855544.json.gz",
+      "1785855545-1785862744.json.gz",
+      "1785862745-1785869944.json.gz",
+      "1785869945-1785877144.json.gz",
+      "1785877145-1785884344.json.gz",
+      "1785884345-1785891544.json.gz",
+      "1785891545-1785898744.json.gz",
+      "1785898745-1785905944.json.gz",
+      "1785905945-1785913144.json.gz",
+      "1785913145-1785920344.json.gz",
+      "1785920345-1785927544.json.gz",
+      "1785927545-1785934744.json.gz",
+      "1785934745-1785941944.json.gz",
+      "1785941945-1785949144.json.gz",
+      "1785949145-1785956344.json.gz",
+      "1785956345-1785963544.json.gz",
+      "1785963545-1785970744.json.gz",
+      "1785970745-1785977944.json.gz",
+      "1785977945-1785985144.json.gz",
+      "1785985145-1785992344.json.gz",
+      "1785992345-1785999544.json.gz",
+      "1785999545-1786006744.json.gz",
+      "1786006745-1786013944.json.gz",
+      "1786013945-1786021144.json.gz",
+      "1786021145-1786028344.json.gz",
+      "1786028345-1786035544.json.gz",
+      "1786035545-1786042744.json.gz",
+      "1786042745-1786049944.json.gz",
+      "1786049945-1786057144.json.gz",
+      "1786057145-1786064344.json.gz",
+      "1786064345-1786071544.json.gz",
+      "1786071545-1786078744.json.gz",
+      "1786078745-1786085944.json.gz",
+      "1786085945-1786093144.json.gz",
+      "1786093145-1786100344.json.gz",
+      "1786100345-1786107544.json.gz",
+      "1786107545-1786114744.json.gz",
+      "1786114745-1786121944.json.gz",
+      "1786121945-1786129144.json.gz",
+      "1786129145-1786136344.json.gz",
+      "1786136345-1786143544.json.gz",
+      "1786143545-1786150744.json.gz",
+      "1786150745-1786157944.json.gz",
+      "1786157945-1786165144.json.gz",
+      "1786165145-1786172344.json.gz",
+      "1786172345-1786179544.json.gz",
+      "1786179545-1786186744.json.gz",
+      "1786186745-1786193944.json.gz",
+      "1786193945-1786201144.json.gz",
+      "1786201145-1786208344.json.gz",
+      "1786208345-1786215544.json.gz",
+      "1786215545-1786222744.json.gz",
+      "1786222745-1786229944.json.gz",
+      "1786229945-1786237144.json.gz",
+      "1786237145-1786244344.json.gz",
+      "1786244345-1786251544.json.gz",
+      "1786251545-1786258744.json.gz",
+      "1786258745-1786265944.json.gz",
+      "1786265945-1786273144.json.gz",
+      "1786273145-1786280344.json.gz",
+      "1786280345-1786287544.json.gz",
+      "1786287545-1786294744.json.gz",
+      "1786294745-1786301944.json.gz",
+      "1786301945-1786309144.json.gz",
+      "1786309145-1786316344.json.gz",
+      "1786316345-1786323544.json.gz",
+      "1786323545-1786330744.json.gz",
+      "1786330745-1786337944.json.gz",
+      "1786337945-1786345144.json.gz",
+      "1786345145-1786352344.json.gz",
+      "1786352345-1786359544.json.gz",
+      "1786359545-1786366744.json.gz",
+      "1786366745-1786373944.json.gz",
+      "1786373945-1786381144.json.gz",
+      "1786381145-1786388344.json.gz",
+      "1786388345-1786395544.json.gz",
+      "1786395545-1786402744.json.gz",
+      "1786402745-1786409944.json.gz",
+      "1786409945-1786417144.json.gz",
+      "1786417145-1786424344.json.gz",
+      "1786424345-1786431544.json.gz",
+      "1786431545-1786438744.json.gz",
+      "1786438745-1786445944.json.gz",
+      "1786445945-1786453144.json.gz",
+      "1786453145-1786460344.json.gz",
+      "1786460345-1786467544.json.gz",
+      "1786467545-1786474744.json.gz",
+      "1786474745-1786481944.json.gz",
+      "1786481945-1786489144.json.gz",
+      "1786489145-1786496344.json.gz",
+      "1786496345-1786503544.json.gz",
+      "1786503545-1786510744.json.gz",
+      "1786510745-1786517944.json.gz",
+      "1786517945-1786525144.json.gz",
+      "1786525145-1786532344.json.gz",
+      "1786532345-1786539544.json.gz",
+      "1786539545-1786546744.json.gz",
+      "1786546745-1786553944.json.gz",
+      "1786553945-1786561144.json.gz",
+      "1786561145-1786568344.json.gz",
+      "1786568345-1786575544.json.gz",
+      "1786575545-1786582744.json.gz",
+      "1786582745-1786589944.json.gz",
+      "1786589945-1786597144.json.gz",
+      "1786597145-1786604344.json.gz",
+      "1786604345-1786611544.json.gz",
+      "1786611545-1786618744.json.gz",
+      "1786618745-1786625944.json.gz",
+      "1786625945-1786633144.json.gz",
+      "1786633145-1786640344.json.gz",
+      "1786640345-1786647544.json.gz",
+      "1786647545-1786654744.json.gz",
+      "1786654745-1786661944.json.gz",
+      "1786661945-1786669144.json.gz",
+      "1786669145-1786676344.json.gz",
+      "1786676345-1786683544.json.gz",
+      "1786683545-1786690744.json.gz",
+      "1786690745-1786697944.json.gz",
+      "1786697945-1786705144.json.gz",
+      "1786705145-1786712344.json.gz",
+      "1786712345-1786719544.json.gz",
+      "1786719545-1786726744.json.gz",
+      "1786726745-1786733944.json.gz",
+      "1786733945-1786741144.json.gz",
+      "1786741145-1786748344.json.gz",
+      "1786748345-1786755544.json.gz",
+      "1786755545-1786762744.json.gz",
+      "1786762745-1786769944.json.gz",
+      "1786769945-1786777144.json.gz",
+      "1786777145-1786784344.json.gz",
+      "1786784345-1786791544.json.gz",
+      "1786791545-1786798744.json.gz",
+      "1786798745-1786805944.json.gz",
+      "1786805945-1786813144.json.gz",
+      "1786813145-1786820344.json.gz",
+      "1786820345-1786827544.json.gz",
+      "1786827545-1786834744.json.gz",
+      "1786834745-1786841944.json.gz",
+      "1786841945-1786849144.json.gz",
+      "1786849145-1786856344.json.gz",
+      "1786856345-1786863544.json.gz",
+      "1786863545-1786870744.json.gz",
+      "1786870745-1786877944.json.gz",
+      "1786877945-1786885144.json.gz",
+      "1786885145-1786892344.json.gz",
+      "1786892345-1786899544.json.gz",
+      "1786899545-1786906744.json.gz",
+      "1786906745-1786913944.json.gz",
+      "1786913945-1786921144.json.gz",
+      "1786921145-1786928344.json.gz",
+      "1786928345-1786935544.json.gz",
+      "1786935545-1786942744.json.gz",
+      "1786942745-1786949944.json.gz",
+      "1786949945-1786957144.json.gz",
+      "1786957145-1786964344.json.gz",
+      "1786964345-1786971544.json.gz",
+      "1786971545-1786978744.json.gz",
+      "1786978745-1786985944.json.gz",
+      "1786985945-1786993144.json.gz",
+      "1786993145-1787000344.json.gz",
+      "1787000345-1787007544.json.gz",
+      "1787007545-1787014744.json.gz",
+      "1787014745-1787021944.json.gz",
+      "1787021945-1787029144.json.gz",
+      "1787029145-1787036344.json.gz",
+      "1787036345-1787043544.json.gz",
+      "1787043545-1787050744.json.gz",
+      "1787050745-1787057944.json.gz",
+      "1787057945-1787065144.json.gz",
+      "1787065145-1787072344.json.gz",
+      "1787072345-1787079544.json.gz",
+      "1787079545-1787086744.json.gz",
+      "1787086745-1787093944.json.gz",
+      "1787093945-1787101144.json.gz",
+      "1787101145-1787108344.json.gz",
+      "1787108345-1787115544.json.gz",
+      "1787115545-1787122744.json.gz",
+      "1787122745-1787129944.json.gz",
+      "1787129945-1787137144.json.gz",
+      "1787137145-1787144344.json.gz",
+      "1787144345-1787151544.json.gz",
+      "1787151545-1787158744.json.gz",
+      "1787158745-1787165944.json.gz",
+      "1787165945-1787173144.json.gz",
+      "1787173145-1787180344.json.gz",
+      "1787180345-1787187544.json.gz",
+      "1787187545-1787194744.json.gz",
+      "1787194745-1787201944.json.gz",
+      "1787201945-1787209144.json.gz",
+      "1787209145-1787216344.json.gz",
+      "1787216345-1787223544.json.gz",
+      "1787223545-1787230744.json.gz",
+      "1787230745-1787237944.json.gz",
+      "1787237945-1787245144.json.gz",
+      "1787245145-1787252344.json.gz",
+      "1787252345-1787259544.json.gz",
+      "1787259545-1787266744.json.gz",
+      "1787266745-1787273944.json.gz",
+      "1787273945-1787281144.json.gz",
+      "1787281145-1787288344.json.gz",
+      "1787288345-1787295544.json.gz",
+      "1787295545-1787302744.json.gz",
+      "1787302745-1787309944.json.gz",
+      "1787309945-1787317144.json.gz",
+      "1787317145-1787324344.json.gz",
+      "1787324345-1787331544.json.gz",
+      "1787331545-1787338744.json.gz",
+      "1787338745-1787345944.json.gz",
+      "1787345945-1787353144.json.gz",
+      "1787353145-1787360344.json.gz",
+      "1787360345-1787367544.json.gz",
+      "1787367545-1787374744.json.gz",
+      "1787374745-1787381944.json.gz",
+      "1787381945-1787389144.json.gz",
+      "1787389145-1787396344.json.gz",
+      "1787396345-1787403544.json.gz",
+      "1787403545-1787410744.json.gz",
+      "1787410745-1787417944.json.gz",
+      "1787417945-1787425144.json.gz",
+      "1787425145-1787432344.json.gz",
+      "1787432345-1787439544.json.gz",
+      "1787439545-1787446744.json.gz",
+      "1787446745-1787453944.json.gz",
+      "1787453945-1787461144.json.gz",
+      "1787461145-1787468344.json.gz",
+      "1787468345-1787475544.json.gz",
+      "1787475545-1787482744.json.gz",
+      "1787482745-1787489944.json.gz",
+      "1787489945-1787497144.json.gz",
+      "1787497145-1787504344.json.gz",
+      "1787504345-1787511544.json.gz",
+      "1787511545-1787518744.json.gz",
+      "1787518745-1787525944.json.gz",
+      "1787525945-1787533144.json.gz",
+      "1787533145-1787540344.json.gz",
+      "1787540345-1787547544.json.gz",
+      "1787547545-1787554744.json.gz",
+      "1787554745-1787561944.json.gz",
+      "1787561945-1787569144.json.gz",
+      "1787569145-1787576344.json.gz",
+      "1787576345-1787583544.json.gz",
+      "1787583545-1787590744.json.gz",
+      "1787590745-1787597944.json.gz",
+      "1787597945-1787605144.json.gz",
+      "1787605145-1787612344.json.gz",
+      "1787612345-1787619544.json.gz",
+      "1787619545-1787626744.json.gz",
+      "1787626745-1787633944.json.gz",
+      "1787633945-1787641144.json.gz",
+      "1787641145-1787648344.json.gz",
+      "1787648345-1787655544.json.gz",
+      "1787655545-1787662744.json.gz",
+      "1787662745-1787669944.json.gz",
+      "1787669945-1787677144.json.gz",
+      "1787677145-1787684344.json.gz",
+      "1787684345-1787691544.json.gz",
+      "1787691545-1787698744.json.gz",
+      "1787698745-1787705944.json.gz",
+      "1787705945-1787713144.json.gz",
+      "1787713145-1787720344.json.gz",
+      "1787720345-1787727544.json.gz",
+      "1787727545-1787734744.json.gz",
+      "1787734745-1787741944.json.gz",
+      "1787741945-1787749144.json.gz",
+      "1787749145-1787756344.json.gz",
+      "1787756345-1787763544.json.gz",
+      "1787763545-1787770744.json.gz",
+      "1787770745-1787777944.json.gz",
+      "1787777945-1787785144.json.gz",
+      "1787785145-1787792344.json.gz",
+      "1787792345-1787799544.json.gz",
+      "1787799545-1787806744.json.gz",
+      "1787806745-1787813944.json.gz",
+      "1787813945-1787821144.json.gz",
+      "1787821145-1787828344.json.gz",
+      "1787828345-1787835544.json.gz",
+      "1787835545-1787842744.json.gz",
+      "1787842745-1787849944.json.gz",
+      "1787849945-1787857144.json.gz",
+      "1787857145-1787864344.json.gz",
+      "1787864345-1787871544.json.gz",
+      "1787871545-1787878744.json.gz",
+      "1787878745-1787885944.json.gz",
+      "1787885945-1787893144.json.gz",
+      "1787893145-1787900344.json.gz",
+      "1787900345-1787907544.json.gz",
+      "1787907545-1787914744.json.gz",
+      "1787914745-1787921944.json.gz",
+      "1787921945-1787929144.json.gz",
+      "1787929145-1787936344.json.gz",
+      "1787936345-1787943544.json.gz",
+      "1787943545-1787943545.json.gz"
+    ],
+    "covered_duration_seconds": 2592000,
+    "expected_days": 30,
+    "start_epoch": 1785351545,
+    "end_epoch": 1787943545
+  },
+  "binance_coverage": {
+    "requested_price_seconds": 1338666,
+    "found_price_seconds": 1338666,
+    "coverage_pct": 100.0,
+    "missing_seconds_by_date": {}
+  },
+  "evidence_status": "complete",
+  "result": {
+    "decision_batches": 237359,
+    "one_sided_net_buy_batches": 233839,
+    "balanced_or_both_batches": 3520,
+    "price_points_loaded": 1338666,
+    "past_momentum_alignment": {
+      "1s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 29.3219,
+        "opposite_pct": 23.7578,
+        "flat_pct": 46.9203,
+        "aligned_pct_excluding_flat": 55.2413,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": 0.0,
+          "p75": 0.001294
+        }
+      },
+      "3s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 44.3181,
+        "opposite_pct": 27.8581,
+        "flat_pct": 27.8238,
+        "aligned_pct_excluding_flat": 61.4027,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": -0.001296,
+          "p75": 0.337023
+        }
+      },
+      "5s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 45.0036,
+        "opposite_pct": 34.2193,
+        "flat_pct": 20.7771,
+        "aligned_pct_excluding_flat": 56.8063,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -0.008716,
+          "p75": 0.569266
+        }
+      },
+      "15s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 45.5288,
+        "opposite_pct": 44.4263,
+        "flat_pct": 10.0449,
+        "aligned_pct_excluding_flat": 50.6128,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": -1.000456,
+          "p75": 1.07584
+        }
+      },
+      "30s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 46.5825,
+        "opposite_pct": 47.7055,
+        "flat_pct": 5.712,
+        "aligned_pct_excluding_flat": 49.4045,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -1.586258,
+          "p75": 1.530969
+        }
+      }
+    },
+    "past_momentum_alignment_end_lag_2s_sensitivity": {
+      "1s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 32.0729,
+        "opposite_pct": 22.2662,
+        "flat_pct": 45.6609,
+        "aligned_pct_excluding_flat": 59.0237,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": -0.0,
+          "p75": 0.001538
+        }
+      },
+      "3s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 43.6984,
+        "opposite_pct": 29.8941,
+        "flat_pct": 26.4075,
+        "aligned_pct_excluding_flat": 59.3789,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -0.001542,
+          "p75": 0.337551
+        }
+      },
+      "5s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 43.2768,
+        "opposite_pct": 36.334,
+        "flat_pct": 20.3892,
+        "aligned_pct_excluding_flat": 54.3605,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": -0.16384,
+          "p75": 0.505102
+        }
+      },
+      "15s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 44.9767,
+        "opposite_pct": 44.9784,
+        "flat_pct": 10.0449,
+        "aligned_pct_excluding_flat": 49.999,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": -1.031912,
+          "p75": 1.029195
+        }
+      },
+      "30s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 46.1553,
+        "opposite_pct": 48.1442,
+        "flat_pct": 5.7005,
+        "aligned_pct_excluding_flat": 48.9454,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -1.62115,
+          "p75": 1.490888
+        }
+      }
+    },
+    "five_second_clustered_evidence": {
+      "by_market": {
+        "clusters": 7605,
+        "equal_weight_alignment_pct": 56.6869,
+        "equal_weight_cluster_bootstrap_95pct": [
+          56.2884,
+          57.0643
+        ],
+        "net_shares_weighted_alignment_pct": 54.6684
+      },
+      "by_day": {
+        "clusters": 30,
+        "equal_weight_alignment_pct": 56.183,
+        "equal_weight_cluster_bootstrap_95pct": [
+          55.2775,
+          56.9305
+        ],
+        "net_shares_weighted_alignment_pct": 54.6684
+      }
+    },
+    "market_open_direction_alignment": {
+      "samples": 233839,
+      "aligned_with_buy_direction_pct": 47.5242,
+      "opposite_pct": 50.2376,
+      "flat_pct": 2.2383,
+      "aligned_pct_excluding_flat": 48.6122,
+      "direction_signed_return_bps": {
+        "median": -0.001536,
+        "p25": -2.208645,
+        "p75": 1.916809
+      }
+    },
+    "future_return_alignment_diagnostic_only": {
+      "1s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 27.7828,
+        "opposite_pct": 24.7944,
+        "flat_pct": 47.4228,
+        "aligned_pct_excluding_flat": 52.8419,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -0.0,
+          "p75": 0.001275
+        }
+      },
+      "3s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 36.8728,
+        "opposite_pct": 32.1901,
+        "flat_pct": 30.9371,
+        "aligned_pct_excluding_flat": 53.3902,
+        "direction_signed_return_bps": {
+          "median": 0.0,
+          "p25": -0.001551,
+          "p75": 0.001582
+        }
+      },
+      "5s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 40.1494,
+        "opposite_pct": 35.054,
+        "flat_pct": 24.7965,
+        "aligned_pct_excluding_flat": 53.3877,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -0.001586,
+          "p75": 0.24867
+        }
+      },
+      "15s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 46.3195,
+        "opposite_pct": 41.2912,
+        "flat_pct": 12.3893,
+        "aligned_pct_excluding_flat": 52.8697,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -0.743361,
+          "p75": 0.986108
+        }
+      },
+      "30s": {
+        "samples": 233839,
+        "aligned_with_buy_direction_pct": 48.6279,
+        "opposite_pct": 44.5743,
+        "flat_pct": 6.7978,
+        "aligned_pct_excluding_flat": 52.1747,
+        "direction_signed_return_bps": {
+          "median": -0.0,
+          "p25": -1.348263,
+          "p75": 1.584814
+        }
+      }
+    },
+    "final_market_result_alignment": {
+      "samples": 233839,
+      "aligned_with_buy_direction_pct": 49.8155,
+      "opposite_pct": 49.7308,
+      "flat_pct": 0.4537,
+      "aligned_pct_excluding_flat": 50.0425,
+      "direction_signed_return_bps": {
+        "median": 0.0,
+        "p25": -4.361194,
+        "p75": 4.368237
+      }
+    },
+    "past_momentum_by_inventory_action": {
+      "start": {
+        "1s": {
+          "samples": 8289,
+          "aligned_with_buy_direction_pct": 29.7865,
+          "opposite_pct": 20.7625,
+          "flat_pct": 49.4511,
+          "aligned_pct_excluding_flat": 58.926,
+          "direction_signed_return_bps": {
+            "median": 0.0,
+            "p25": 0.0,
+            "p75": 0.001533
+          }
+        },
+        "3s": {
+          "samples": 8289,
+          "aligned_with_buy_direction_pct": 47.9792,
+          "opposite_pct": 22.2584,
+          "flat_pct": 29.7623,
+          "aligned_pct_excluding_flat": 68.3099,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.0,
+            "p75": 0.44843
+          }
+        },
+        "5s": {
+          "samples": 8289,
+          "aligned_with_buy_direction_pct": 49.6441,
+          "opposite_pct": 25.7208,
+          "flat_pct": 24.6351,
+          "aligned_pct_excluding_flat": 65.8716,
+          "direction_signed_return_bps": {
+            "median": 0.0,
+            "p25": -0.001288,
+            "p75": 0.657224
+          }
+        },
+        "15s": {
+          "samples": 8289,
+          "aligned_with_buy_direction_pct": 47.7621,
+          "opposite_pct": 37.0129,
+          "flat_pct": 15.225,
+          "aligned_pct_excluding_flat": 56.3398,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.353933,
+            "p75": 0.981607
+          }
+        },
+        "30s": {
+          "samples": 8289,
+          "aligned_with_buy_direction_pct": 47.5932,
+          "opposite_pct": 41.9472,
+          "flat_pct": 10.4596,
+          "aligned_pct_excluding_flat": 53.1528,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.946069,
+            "p75": 1.253718
+          }
+        }
+      },
+      "repair": {
+        "1s": {
+          "samples": 108575,
+          "aligned_with_buy_direction_pct": 28.0976,
+          "opposite_pct": 23.9761,
+          "flat_pct": 47.9263,
+          "aligned_pct_excluding_flat": 53.9574,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": 0.0,
+            "p75": 0.001285
+          }
+        },
+        "3s": {
+          "samples": 108575,
+          "aligned_with_buy_direction_pct": 41.7407,
+          "opposite_pct": 28.607,
+          "flat_pct": 29.6523,
+          "aligned_pct_excluding_flat": 59.3349,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.001375,
+            "p75": 0.23142
+          }
+        },
+        "5s": {
+          "samples": 108575,
+          "aligned_with_buy_direction_pct": 41.0454,
+          "opposite_pct": 36.8326,
+          "flat_pct": 22.122,
+          "aligned_pct_excluding_flat": 52.7047,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.140756,
+            "p75": 0.345762
+          }
+        },
+        "15s": {
+          "samples": 108575,
+          "aligned_with_buy_direction_pct": 40.7147,
+          "opposite_pct": 48.5443,
+          "flat_pct": 10.741,
+          "aligned_pct_excluding_flat": 45.6141,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -1.170484,
+            "p75": 0.780489
+          }
+        },
+        "30s": {
+          "samples": 108575,
+          "aligned_with_buy_direction_pct": 42.7087,
+          "opposite_pct": 51.1481,
+          "flat_pct": 6.1432,
+          "aligned_pct_excluding_flat": 45.5041,
+          "direction_signed_return_bps": {
+            "median": -0.00155,
+            "p25": -1.758057,
+            "p75": 1.230873
+          }
+        }
+      },
+      "expand": {
+        "1s": {
+          "samples": 95449,
+          "aligned_with_buy_direction_pct": 30.7882,
+          "opposite_pct": 22.5534,
+          "flat_pct": 46.6584,
+          "aligned_pct_excluding_flat": 57.7189,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": 0.0,
+            "p75": 0.001333
+          }
+        },
+        "3s": {
+          "samples": 95449,
+          "aligned_with_buy_direction_pct": 48.341,
+          "opposite_pct": 24.5073,
+          "flat_pct": 27.1517,
+          "aligned_pct_excluding_flat": 66.3584,
+          "direction_signed_return_bps": {
+            "median": 0.0,
+            "p25": 0.0,
+            "p75": 0.49851
+          }
+        },
+        "5s": {
+          "samples": 95449,
+          "aligned_with_buy_direction_pct": 50.0278,
+          "opposite_pct": 29.335,
+          "flat_pct": 20.6372,
+          "aligned_pct_excluding_flat": 63.0368,
+          "direction_signed_return_bps": {
+            "median": 0.001239,
+            "p25": -0.001547,
+            "p75": 0.759052
+          }
+        },
+        "15s": {
+          "samples": 95449,
+          "aligned_with_buy_direction_pct": 50.8282,
+          "opposite_pct": 39.2974,
+          "flat_pct": 9.8744,
+          "aligned_pct_excluding_flat": 56.3971,
+          "direction_signed_return_bps": {
+            "median": 0.001297,
+            "p25": -0.713899,
+            "p75": 1.334042
+          }
+        },
+        "30s": {
+          "samples": 95449,
+          "aligned_with_buy_direction_pct": 50.802,
+          "opposite_pct": 43.7595,
+          "flat_pct": 5.4385,
+          "aligned_pct_excluding_flat": 53.7238,
+          "direction_signed_return_bps": {
+            "median": 0.00154,
+            "p25": -1.305666,
+            "p75": 1.804619
+          }
+        }
+      },
+      "both": {
+        "1s": {
+          "samples": 21526,
+          "aligned_with_buy_direction_pct": 28.8163,
+          "opposite_pct": 29.1508,
+          "flat_pct": 42.0329,
+          "aligned_pct_excluding_flat": 49.7115,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.001289,
+            "p75": 0.001284
+          }
+        },
+        "3s": {
+          "samples": 21526,
+          "aligned_with_buy_direction_pct": 38.0702,
+          "opposite_pct": 41.0945,
+          "flat_pct": 20.8353,
+          "aligned_pct_excluding_flat": 48.0899,
+          "direction_signed_return_bps": {
+            "median": -0.0,
+            "p25": -0.340114,
+            "p75": 0.240623
+          }
+        },
+        "5s": {
+          "samples": 21526,
+          "aligned_with_buy_direction_pct": 40.904,
+          "opposite_pct": 45.9677,
+          "flat_pct": 13.1283,
+          "aligned_pct_excluding_flat": 47.0856,
+          "direction_signed_return_bps": {
+            "median": 0.0,
+            "p25": -0.867363,
+            "p75": 0.608016
+          }
+        },
+        "15s": {
+          "samples": 21526,
+          "aligned_with_buy_direction_pct": 45.452,
+          "opposite_pct": 49.2521,
+          "flat_pct": 5.2959,
+          "aligned_pct_excluding_flat": 47.9937,
+          "direction_signed_return_bps": {
+            "median": 0.0,
+            "p25": -1.661497,
+            "p75": 1.34357
+          }
+        },
+        "30s": {
+          "samples": 21526,
+          "aligned_with_buy_direction_pct": 47.0222,
+          "opposite_pct": 50.0557,
+          "flat_pct": 2.922,
+          "aligned_pct_excluding_flat": 48.4376,
+          "direction_signed_return_bps": {
+            "median": -0.001255,
+            "p25": -2.20746,
+            "p75": 1.924684
+          }
+        }
+      }
+    },
+    "observed_policy_table": {
+      "imbalance_0-20__flat": {
+        "pretrade_abs_inventory_difference": "0-20",
+        "three_second_momentum_context": "flat",
+        "observed_fill_batches": 8506,
+        "expand_heavy_side_pct": 49.5885,
+        "repair_light_side_pct": 50.4115,
+        "net_direction_shares_median": 28.444443,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_0-20__toward_heavy_side": {
+        "pretrade_abs_inventory_difference": "0-20",
+        "three_second_momentum_context": "toward_heavy_side",
+        "observed_fill_batches": 10900,
+        "expand_heavy_side_pct": 63.7064,
+        "repair_light_side_pct": 36.2936,
+        "net_direction_shares_median": 28.1,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_0-20__toward_light_side": {
+        "pretrade_abs_inventory_difference": "0-20",
+        "three_second_momentum_context": "toward_light_side",
+        "observed_fill_batches": 10273,
+        "expand_heavy_side_pct": 35.8805,
+        "repair_light_side_pct": 64.1195,
+        "net_direction_shares_median": 28.0,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_100-200__flat": {
+        "pretrade_abs_inventory_difference": "100-200",
+        "three_second_momentum_context": "flat",
+        "observed_fill_batches": 14577,
+        "expand_heavy_side_pct": 42.1349,
+        "repair_light_side_pct": 57.8651,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 60.0
+      },
+      "imbalance_100-200__toward_heavy_side": {
+        "pretrade_abs_inventory_difference": "100-200",
+        "three_second_momentum_context": "toward_heavy_side",
+        "observed_fill_batches": 19589,
+        "expand_heavy_side_pct": 58.0377,
+        "repair_light_side_pct": 41.9623,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 56.951216
+      },
+      "imbalance_100-200__toward_light_side": {
+        "pretrade_abs_inventory_difference": "100-200",
+        "three_second_momentum_context": "toward_light_side",
+        "observed_fill_batches": 16964,
+        "expand_heavy_side_pct": 33.2528,
+        "repair_light_side_pct": 66.7472,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 58.63
+      },
+      "imbalance_20-50__flat": {
+        "pretrade_abs_inventory_difference": "20-50",
+        "three_second_momentum_context": "flat",
+        "observed_fill_batches": 11757,
+        "expand_heavy_side_pct": 46.6701,
+        "repair_light_side_pct": 53.3299,
+        "net_direction_shares_median": 29.56,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_20-50__toward_heavy_side": {
+        "pretrade_abs_inventory_difference": "20-50",
+        "three_second_momentum_context": "toward_heavy_side",
+        "observed_fill_batches": 15253,
+        "expand_heavy_side_pct": 61.837,
+        "repair_light_side_pct": 38.163,
+        "net_direction_shares_median": 29.26,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_20-50__toward_light_side": {
+        "pretrade_abs_inventory_difference": "20-50",
+        "three_second_momentum_context": "toward_light_side",
+        "observed_fill_batches": 13952,
+        "expand_heavy_side_pct": 35.2853,
+        "repair_light_side_pct": 64.7147,
+        "net_direction_shares_median": 28.96,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_200-500__flat": {
+        "pretrade_abs_inventory_difference": "200-500",
+        "three_second_momentum_context": "flat",
+        "observed_fill_batches": 7933,
+        "expand_heavy_side_pct": 41.6866,
+        "repair_light_side_pct": 58.3134,
+        "net_direction_shares_median": 33.33,
+        "net_direction_shares_p75": 60.0
+      },
+      "imbalance_200-500__toward_heavy_side": {
+        "pretrade_abs_inventory_difference": "200-500",
+        "three_second_momentum_context": "toward_heavy_side",
+        "observed_fill_batches": 11358,
+        "expand_heavy_side_pct": 55.7493,
+        "repair_light_side_pct": 44.2507,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 60.0
+      },
+      "imbalance_200-500__toward_light_side": {
+        "pretrade_abs_inventory_difference": "200-500",
+        "three_second_momentum_context": "toward_light_side",
+        "observed_fill_batches": 9719,
+        "expand_heavy_side_pct": 33.3471,
+        "repair_light_side_pct": 66.6529,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 60.0
+      },
+      "imbalance_50-100__flat": {
+        "pretrade_abs_inventory_difference": "50-100",
+        "three_second_momentum_context": "flat",
+        "observed_fill_batches": 14855,
+        "expand_heavy_side_pct": 43.9515,
+        "repair_light_side_pct": 56.0485,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 53.99
+      },
+      "imbalance_50-100__toward_heavy_side": {
+        "pretrade_abs_inventory_difference": "50-100",
+        "three_second_momentum_context": "toward_heavy_side",
+        "observed_fill_batches": 19331,
+        "expand_heavy_side_pct": 60.1986,
+        "repair_light_side_pct": 39.8014,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_50-100__toward_light_side": {
+        "pretrade_abs_inventory_difference": "50-100",
+        "three_second_momentum_context": "toward_light_side",
+        "observed_fill_batches": 17142,
+        "expand_heavy_side_pct": 33.1,
+        "repair_light_side_pct": 66.9,
+        "net_direction_shares_median": 30.0,
+        "net_direction_shares_p75": 50.0
+      },
+      "imbalance_500+__flat": {
+        "pretrade_abs_inventory_difference": "500+",
+        "three_second_momentum_context": "flat",
+        "observed_fill_batches": 483,
+        "expand_heavy_side_pct": 48.2402,
+        "repair_light_side_pct": 51.7598,
+        "net_direction_shares_median": 37.285713,
+        "net_direction_shares_p75": 66.66
+      },
+      "imbalance_500+__toward_heavy_side": {
+        "pretrade_abs_inventory_difference": "500+",
+        "three_second_momentum_context": "toward_heavy_side",
+        "observed_fill_batches": 770,
+        "expand_heavy_side_pct": 55.4545,
+        "repair_light_side_pct": 44.5455,
+        "net_direction_shares_median": 43.77,
+        "net_direction_shares_p75": 79.997646
+      },
+      "imbalance_500+__toward_light_side": {
+        "pretrade_abs_inventory_difference": "500+",
+        "three_second_momentum_context": "toward_light_side",
+        "observed_fill_batches": 662,
+        "expand_heavy_side_pct": 34.29,
+        "repair_light_side_pct": 65.71,
+        "net_direction_shares_median": 40.41,
+        "net_direction_shares_p75": 75.0
+      }
+    },
+    "interpretation": {
+      "strong_evidence_threshold": "方向一致率明显高于50%，并在多个向后看的窗口稳定；只能说明相关，不能证明对方使用Binance。",
+      "no_future_leakage": "主结果最晚使用成交时间戳前1秒已经结束的K线；另以提前2秒复核。future_*仅用于事后诊断，不允许进入策略输入。",
+      "timing_limit": "Polymarket Activity时间戳只有秒级，同一秒成交已合并，无法恢复毫秒级先后。",
+      "maker_decision_limit": "目标地址以maker成交为主时，成交由对手方触发；这里是成交状态相关性，不能直接当成目标地址的挂单决策时刻或下单信号。"
+    }
+  }
+}

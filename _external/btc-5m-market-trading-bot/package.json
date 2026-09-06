@@ -1,0 +1,42 @@
+{
+  "name": "btc-5m-market-trading-bot",
+  "version": "0.3.0",
+  "description": "Pure TypeScript Polymarket BTC 5m delta-neutral pair-cost MAKER bot",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "btc-5m-live": "./dist/cli/live.js",
+    "btc-5m-backtest": "./dist/cli/backtest.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/live.ts",
+    "start": "node dist/cli/live.js",
+    "preflight": "node dist/cli/live.js preflight",
+    "paper": "node dist/cli/live.js run --paper --duration-min 6 --log-file results/paper/session.jsonl",
+    "live": "node dist/cli/live.js run --live --duration-min 15 --log-file results/live/session.jsonl --traded-file results/live/traded.jsonl",
+    "test": "vitest run",
+    "latency:probe": "node scripts/latency-probe.mjs",
+    "latency:compare": "node scripts/compare-latency-reports.mjs",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "setup:win": "powershell -ExecutionPolicy Bypass -File scripts/setup-windows.ps1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@polymarket/clob-client-v2": "1.1.0",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "viem": "^2.23.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Rotate Tokyo evidence database after daily final analysis
+
+[Timer]
+OnCalendar=*-*-* 00:02:00 UTC
+Persistent=true
+Unit=pm-r25-daily-restart.service
+
+[Install]
+WantedBy=timers.target

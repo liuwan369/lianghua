@@ -1,0 +1,90 @@
+{
+  "measured_at": "2026-09-06",
+  "method": "Globalping public probes; fresh HTTPS connection to clob.polymarket.com plus polymarket.com/api/geoblock",
+  "purpose": "screening only; not websocket message age or real order acknowledgement latency",
+  "official_rules": {
+    "source": "https://docs.polymarket.com/api-reference/geoblock",
+    "primary_servers": "eu-west-2",
+    "closest_non_api_restricted_region": "eu-west-1",
+    "frontend_only_restricted_api_available": ["IE", "JP", "MT", "NL"],
+    "note": "MT frontend restriction is sports-only"
+  },
+  "candidate_results": [
+    {
+      "city": "Zurich",
+      "provider": "Oracle",
+      "country": "CH",
+      "geoblock_blocked": false,
+      "clob_time_samples_ms": [44, 45, 60, 45, 97, 50],
+      "clob_time_p50_ms": 45,
+      "clob_time_p95_ms": 97,
+      "cloudflare_colo": "ZRH",
+      "measurement_ids": [
+        "2U4MIivpwnTgyDizo000215Pf",
+        "2o7TMCnngL8dSwuNW000215Pi",
+        "2y29qbHpIcLcV7K26000215Pi",
+        "2deUE3bnifTzz5LIJ000215Ph",
+        "2Lip93wJeGubXUPZ7000215Ph",
+        "2ysJWT7UpE64yKAdd000215Ph",
+        "2H1sNhaUolYD7t0Z9000215Ph"
+      ]
+    },
+    {
+      "city": "Madrid",
+      "country": "ES",
+      "geoblock_blocked": false,
+      "fresh_https_samples_ms": [54, 57, 72],
+      "fresh_https_p50_ms": 57,
+      "measurement_ids": [
+        "2d2eF4tlaziUpETQ3000215Pa",
+        "2zXBtSoJBLLIZi3HQ000215Pb"
+      ]
+    },
+    {
+      "city": "Prague",
+      "country": "CZ",
+      "geoblock_blocked": false,
+      "fresh_https_samples_ms": [65, 67, 117],
+      "fresh_https_p50_ms": 67,
+      "measurement_ids": [
+        "259L0N1679QvjWOeY000215Pf",
+        "2ZVDYztUk5SEKhb6i000215Pf"
+      ]
+    },
+    {
+      "city": "Dublin",
+      "country": "IE",
+      "geoblock_blocked": true,
+      "fresh_https_samples_ms": [39, 61, 66],
+      "fresh_https_p50_ms": 61,
+      "measurement_ids": [
+        "2ORhExRU4DTzixFyy000215Pa",
+        "2eHXLmPHOUgh5ZjIi000215Pb"
+      ]
+    },
+    {
+      "city": "Frankfurt",
+      "country": "DE",
+      "geoblock_blocked": true,
+      "fresh_https_samples_ms": [45, 60, 80],
+      "fresh_https_p50_ms": 60,
+      "measurement_ids": [
+        "2cZc47QyFpbkKCE1e000215Pa",
+        "2h4482WF5UpQyhjBb000215Pe"
+      ]
+    },
+    {
+      "city": "Amsterdam",
+      "country": "NL",
+      "geoblock_blocked": true,
+      "fresh_https_samples_ms": [44, 67, 89],
+      "fresh_https_p50_ms": 67,
+      "measurement_ids": [
+        "25D60r1AD9EXzraTF000215Pa",
+        "2Cf8SLSAKD18F8J9V000215Pb"
+      ]
+    }
+  ],
+  "decision": "AWS eu-west-1 is the first VPS candidate because the official documentation identifies it as the closest non-API-restricted region to the eu-west-2 primary servers. Zurich is a comparison candidate. Both require the same 30-minute clock-calibrated websocket probe before any real-order test.",
+  "compliance_note": "A server location result does not override the user's jurisdiction, account eligibility, or platform terms. Do not use infrastructure to evade restrictions."
+}

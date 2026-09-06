@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Dublin Polymarket evidence analysis hourly
+
+[Timer]
+OnCalendar=*-*-* *:00:00 UTC
+Persistent=true
+RandomizedDelaySec=30
+Unit=pm-r25-dublin-live-analyzer.service
+
+[Install]
+WantedBy=timers.target

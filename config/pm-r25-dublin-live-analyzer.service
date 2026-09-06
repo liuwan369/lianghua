@@ -1,0 +1,16 @@
+[Unit]
+Description=Analyze rolling Dublin Polymarket evidence
+After=pm-r25-dublin-collector.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/pm-system
+ExecStart=/root/pm-system/.venv/bin/python /root/pm-system/scripts/pm-r25-live-evidence-analysis.py --db /root/pm-system/data/pm-r25-live/dublin-evidence.sqlite3 --hours 24 --out /root/pm-system/data/pm-r25-live/dublin-live-analysis.json
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/root/pm-system/data
+MemoryMax=512M
+CPUQuota=100%

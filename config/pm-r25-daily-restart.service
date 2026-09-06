@@ -1,0 +1,6 @@
+[Unit]
+Description=Start a new daily Tokyo evidence database
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart pm-r25-tokyo-collector.service
