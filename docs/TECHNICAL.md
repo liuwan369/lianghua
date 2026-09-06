@@ -1,5 +1,7 @@
 # 技术说明
 
+更新时间：2026-09-07
+
 ## 本地页面
 
 ```powershell
@@ -8,21 +10,25 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 
 本地开发页面默认监听 `127.0.0.1:8765`；当前主节点迁移到 AWS 都柏林后，正式服务默认只监听服务器本机，先通过 SSH 隧道查看，避免未认证交易接口暴露公网。
 
-## 采集服务
+## 当前都柏林服务
 
-- 采集器：`pm-r25-tokyo-collector.service`
-- 页面服务：`pm-system-dashboard-tokyo.service`
-- 东京采集接口：`http://127.0.0.1:18766/api/live`
+- 采集器：`pm-r25-dublin-collector.service`
+- 页面服务：`pm-system-dashboard-dublin.service`
+- 小时分析：`pm-r25-dublin-live-analyzer.timer`
+- 每日轮换：`pm-r25-dublin-daily-restart.timer`
+- 服务器内部接口：`http://127.0.0.1:18766/api/live`
+- 用户隧道入口：`http://127.0.0.1:18765/system-dashboard.html`
 - 旧东京主机：`13.115.254.211`（历史对照）
 - 当前主节点：`34.242.206.196`，AWS `eu-west-1a`，`t3.small`；公网入口尚未开放，使用 SSH 隧道。
 
-页面服务通过只读接口获取东京聚合状态，不把完整数据库暴露给浏览器。
+页面服务读取都柏林本机采集数据，不把完整数据库暴露给浏览器。
 
 ## 当前部署核对
 
-- `http://127.0.0.1:8765/api/trading/status` 当前可返回 `mode=paper`、`live_unlocked=false`、`account_configured=false`。
-- 东京页面域名可访问；东京主机 SSH 已复核，可直接维护远程服务。
-- 东京访问 `https://polymarket.com/api/geoblock` 当前返回 `country=JP, blocked=true`。官方地理文档把日本列为“仅网页端 close-only，API 本身不限制”，所以不能用这个布尔值单独否定 API；但账户资格和真实 CLOB 接单仍需分别验证。
+- 2026-09-07 服务器复核：采集器、页面、小时分析和每日轮换均为 `active/enabled`。
+- 服务器 `/api/trading/status` 返回 `running=false`、`live_unlocked=false`、`account_configured=false`。
+- 服务器 `/api/live` 返回 `collector_online=true`，CLOB 与 Binance WebSocket 在线，队列深度为 0；这只是检查时快照。
+- 本机 `127.0.0.1:18765` 是否可访问取决于 SSH 隧道是否在线；隧道断开不代表服务器服务离线。
 
 ## 网络入口与延迟
 
@@ -42,14 +48,15 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 - 测速器长测会在每个 BTC 5 分钟市场结束前关闭旧订阅并自动切换新市场，WebSocket 每 10 秒发送心跳，且把测试结束前的静默时间计入收包间隔。只有 `chrony` 提供了有限的具体时钟偏差时，盘口消息年龄才允许参加机房排名；`timedatectl=yes` 只能展示原始值。
 - 东京统一基线（2026-09-06，10 次 REST、5 次 WS）：REST `p50=250.58ms / p95=300.86ms`；WS 建连 `p50=498.48ms`；订阅后两边完整盘口 `p50=241.67ms`；稳定阶段消息年龄 `p50=118ms / p95=130ms`；Cloudflare 节点 `NRT`；官方地理结果 `JP / blocked=true`。原始报告：`data/latency-tokyo-2026-09-06.json`。
 - 修正测速器后的东京冒烟复核：时钟偏差约 `-0.001ms`，REST `p50=254.71ms / p95=267.85ms`，WS 建连 `p50=488.65ms`，首盘口 `p50=238.79ms`，稳定消息年龄 `p50=118ms / p95=195ms`，仍为 `JP / blocked=true`。报告：`data/latency-tokyo-smoke-final.json`。
-- 最终机房尚未定案。下一台实测机器应选 AWS 都柏林 `eu-west-1`；安装 `chrony` 后连续运行统一测速器至少 30 分钟。准入条件是官方 API 地区规则允许、时钟偏差可量化、WebSocket 零断线且消息年龄/REST 的 p95、p99 明显优于东京。`blocked=true` 对爱尔兰、日本、荷兰只表示网页端限制，不能当作 API 淘汰条件。
+- 当前主机房已选 AWS 都柏林 `eu-west-1`，其 30 分钟公开链路基线明显优于东京。这个结论只适用于公开 REST/WS，不代表真实下单 ACK 已验收。
+- 内核短时 A/B 已结束：16MB TCP 缓冲区两轮完整短测的消息年龄 P95 聚合值约 `52.50ms`，默认三轮约 `63ms`，改善约 `16.7%`；但 REST P95 与收包间隔没有同步改善，且未完成长测，所以原始内核参数已恢复，候选参数尚未投入生产。
 - 下单热路径已改为本地签名后直接调用 `/order`，开启 `deferExec`，使用连接复用和 3 秒硬超时；日志分开记录签名、HTTP ACK 和总耗时。请求超时、连接重置或 5xx 被视为“平台状态不明”，程序停止，不能自动重复下单。
 - 实盘只允许 Polymarket 主 WebSocket 驱动策略。Up/Down 两边盘口必须完整且新鲜，任一侧盘口年龄超过 `250ms` 就禁止下单；用户订单/成交 WebSocket 必须在线。用户频道或主行情频道掉线会立即进入最高优先级撤单和停止流程。CLOB REST 和东京 REST 只用于纸面后备，东京报价保留原始时间且超过 2 秒即丢弃。
 - 用户成交推送可能先于 HTTP ACK。程序会把未知订单事件缓存 10 秒，HTTP 返回订单 ID 后重放，避免极快成交漏记仓位。
 - HTTP ACK 返回的成交编号会保留，并由只读成交查询在后台核对，避免只依赖单一回报来源。WebSocket 完整盘口建立后，时间戳更旧的增量会直接丢弃，防止乱序消息把本地盘口倒退。
 - ACK 超时或网络中断导致订单状态未知时，程序会冻结新单但保持用户回报通道在线，先撤销全部订单，再用至少 5 秒的账户查询窗口取得稳定的本市场完整成交并重建仓位，最后连续两次确认未成交订单为空；无论核对是否成功，本次运行都不会自动继续交易。
 - maker 与 taker 成交统一以平台成交事件记账，普通订单更新只更新状态，不再重复增加仓位。未使用的逐交易所 BTC 明细不会进入策略队列，降低 HTTP ACK 等待期间的排队压力。
-- 已移除被 GitHub 安全公告 `GHSA-v6qq-cv3g-3jjq` 标记为恶意包的 `poly-price-node@1.1.2`；启动健康检查改为直接请求官方 CLOB。东京项目目录不存在 `.env`，当前也未配置交易账户。生产依赖审计仍有 1 个来自官方 CLOB SDK 的传递性 `ws` 高危告警，不能用审计建议的破坏性降级自动修复，真实放行前需继续跟踪官方 SDK 更新。
+- 已移除被 GitHub 安全公告 `GHSA-v6qq-cv3g-3jjq` 标记为恶意包的 `poly-price-node@1.1.2`；启动健康检查改为直接请求官方 CLOB。都柏林当前未配置交易账户。生产依赖审计仍有 1 个来自官方 CLOB SDK 的传递性 `ws` 高危告警，不能用审计建议的破坏性降级自动修复，真实放行前需继续跟踪官方 SDK 更新。
 
 ## 交易引擎
 
@@ -68,8 +75,8 @@ node dist/cli/live.js preflight
 
 - Python 语法和单元测试必须通过。
 - TypeScript 必须构建成功并通过 Vitest。
-- 最新低延迟链路验证：TypeScript 类型检查、构建和 Vitest `82/82` 通过；地区检查失败时强制停止。
-- `/api/trading/status` 和 `/api/live` 当前返回 200；最近事件约数秒内。分析定时任务已恢复并成功生成报告，报告会如实标记历史断线、队列满或行情序号缺口。
+- 最新低延迟链路验证：TypeScript 类型检查、构建和 Vitest `82/82` 通过；Python `79 passed`；地区检查失败时强制停止。
+- 2026-09-07 从都柏林服务器本机检查 `/api/trading/status` 和 `/api/live` 均成功；采集器最新事件持续更新。分析报告会如实标记历史断线、队列满或行情序号缺口。
 - 模拟启动后日志必须出现挂单/成交/撤单或明确的无成交原因。
 - 停止后不应继续产生本地成交记录。
 - 没有官方结算价时必须保持“未结算”，不能用盘口猜赢家。
