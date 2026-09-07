@@ -50,6 +50,7 @@ describe("Executor fill tracking", () => {
     const executor = new Executor(true, 10, 10, 100);
     (executor as unknown as { clob: Record<string, unknown> }).clob = {
       tickSize: vi.fn().mockResolvedValue(0.01),
+      minOrderSize: vi.fn().mockReturnValue(5),
       submitOrder: vi.fn().mockResolvedValue({
         success: false,
         stateUnknown: true,
@@ -61,5 +62,19 @@ describe("Executor fill tracking", () => {
       .rejects.toBeInstanceOf(UnknownOrderStateError);
     expect(executor.sent).toBe(1);
     expect(executor.spentUsd).toBeCloseTo(2);
+  });
+
+  it("refuses live submission when market minimum size was not loaded", async () => {
+    const executor = new Executor(true, 10, 10, 100);
+    const submitOrder = vi.fn();
+    (executor as unknown as { clob: Record<string, unknown> }).clob = {
+      tickSize: vi.fn().mockResolvedValue(0.01),
+      minOrderSize: vi.fn().mockReturnValue(undefined),
+      submitOrder,
+    };
+    const result = await executor.submit(Side.Up, "token-up", 0.4, 5);
+    expect(result.ok).toBe(false);
+    expect(result.size).toBe(0);
+    expect(submitOrder).not.toHaveBeenCalled();
   });
 });

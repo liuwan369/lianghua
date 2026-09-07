@@ -56,6 +56,12 @@ interface RestingQuote {
   btcAtPost: number;
 }
 
+export interface PendingQuote {
+  side: Side;
+  price: number;
+  shares: number;
+}
+
 /** Streaming MAKER session for live/paper. */
 export class MakerSession {
   strat: PairCostMarketMaker;
@@ -298,6 +304,11 @@ export class MakerSession {
     } else {
       this.pending = [];
     }
+  }
+
+  /** Snapshot of quotes still represented in the local strategy state. */
+  pendingQuotes(): PendingQuote[] {
+    return this.pending.map(({ side, price, shares }) => ({ side, price, shares }));
   }
 
   resizePendingQuote(side: Side, shares: number, price?: number): void {

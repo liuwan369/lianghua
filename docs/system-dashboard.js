@@ -84,13 +84,18 @@
 
   function renderTrading(status) {
     const stats = status.stats || {};
+    const account = status.account || {};
     const running = status.running === true;
     runningParams = running && status.params ? status.params : {};
     const fills = Number(stats.fills || 0), quotes = Number(stats.quotes || 0), cancels = Number(stats.cancels || 0);
     const spent = Number(stats.fill_notional || 0), pnl = stats.pnl == null ? null : Number(stats.pnl);
     const settled = Number(stats.settled_markets || 0), observed = Number(stats.markets || 0), traded = Number(stats.traded_markets || 0);
     set('systemBadge', running ? (status.mode === 'live' ? '实盘运行中' : '模拟运行中') : '安全模式');
-    set('overviewAccount', status.account_configured ? '已配置' : '未配置');
+    let accountLabel = '未配置资金账户';
+    if (account.execution_credentials_ready) accountLabel = 'Owner 签名已配置（实盘仍锁定）';
+    else if (account.session_signer_configured) accountLabel = 'Session Key 已配置（交易接入未放行）';
+    else if (account.wallet_configured) accountLabel = '资金地址已核对（当前只能只读）';
+    set('overviewAccount', accountLabel);
     set('overviewParams', running ? '$' + Number(runningParams.pair_cost_max || 0.99).toFixed(3) + ' 配对上限 · $' + Number(runningParams.order_usd || 0).toFixed(2) + ' 每笔 · $' + Number(runningParams.max_total_usd || 0).toFixed(2) + ' 总上限' : '尚未启动，可在“配置”中修改');
     if ($('overviewStart')) $('overviewStart').disabled = running;
     if ($('overviewStop')) $('overviewStop').disabled = !running;

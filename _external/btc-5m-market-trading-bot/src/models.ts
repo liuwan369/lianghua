@@ -29,9 +29,16 @@ export interface BookQuote {
   bid?: number;
   ask?: number;
   bidSize?: number;
+  /** Visible bid levels used to estimate how many shares are ahead of us. */
+  bidLevels?: BookLevel[];
   sellTradeRateSharesPerSec?: number;
   tickSize?: number;
   tsUnix: number;
+}
+
+export interface BookLevel {
+  price: number;
+  size: number;
 }
 
 export function bookMid(q: BookQuote): number | undefined {
@@ -117,6 +124,42 @@ export function estimateMakerFillProbability(input: MakerFillProbabilityInput): 
   const distancePenalty = Math.exp(-0.7 * ticksBehind);
   const volatilityPenalty = 1 / (1 + volatilityBps / 25);
   return Math.min(1, Math.max(0, queueProbability * distancePenalty * volatilityPenalty));
+}
+
+/** Visible shares with equal or better priority than a passive BUY. */
+export function visibleBuyQueueAhead(
+  quote: BookQuote,
+  orderPrice: number,
+): number | undefined {
+  if (!Number.isFinite(orderPrice) || orderPrice <= 0 || orderPrice >= 1) return undefined;
+  const tickSize = quote.tickSize != null && quote.tickSize > 0 ? quote.tickSize : 0.01;
+  const tolerance = tickSize / 10;
+  if (quote.bidLevels != null) {
+    if (quote.bidLevels.length === 0) return undefined;
+    let total = 0;
+    let hasBest = false;
+    for (const level of quote.bidLevels) {
+      if (
+        !Number.isFinite(level.price) ||
+        !Number.isFinite(level.size) ||
+        level.price <= 0 ||
+        level.price >= 1 ||
+        level.size < 0
+      ) return undefined;
+      if (quote.bid != null && Math.abs(level.price - quote.bid) <= tolerance) hasBest = true;
+      if (level.price + tolerance >= orderPrice) total += level.size;
+    }
+    if (quote.bid != null && !hasBest) return undefined;
+    return total;
+  }
+  if (quote.bid == null || !Number.isFinite(quote.bid)) return undefined;
+  if (orderPrice > quote.bid + tolerance) return 0;
+  if (Math.abs(orderPrice - quote.bid) <= tolerance) {
+    return quote.bidSize != null && Number.isFinite(quote.bidSize) && quote.bidSize >= 0
+      ? quote.bidSize
+      : undefined;
+  }
+  return undefined;
 }
 
 export interface Fill {

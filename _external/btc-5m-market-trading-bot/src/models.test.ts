@@ -3,6 +3,7 @@ import {
   decisionBucketTs,
   estimateMakerFillProbability,
   polymarketFillFee,
+  visibleBuyQueueAhead,
 } from "./models.js";
 
 describe("decisionBucketTs", () => {
@@ -65,5 +66,52 @@ describe("maker fill probability", () => {
     const normal = estimateMakerFillProbability({ ...baseline, queueConservatism: 1 });
     const conservative = estimateMakerFillProbability({ ...baseline, queueConservatism: 3 });
     expect(conservative).toBeLessThan(normal);
+  });
+});
+
+describe("visible maker BUY queue", () => {
+  it("sums every visible bid with equal or better priority", () => {
+    expect(visibleBuyQueueAhead({
+      bid: 0.48,
+      ask: 0.5,
+      bidLevels: [
+        { price: 0.48, size: 30 },
+        { price: 0.47, size: 20 },
+        { price: 0.46, size: 10 },
+      ],
+      tickSize: 0.01,
+      tsUnix: 1,
+    }, 0.47)).toBe(50);
+  });
+
+  it("uses touch size at best bid and refuses to guess below it", () => {
+    const quote = { bid: 0.48, ask: 0.5, bidSize: 30, tickSize: 0.01, tsUnix: 1 };
+    expect(visibleBuyQueueAhead(quote, 0.48)).toBe(30);
+    expect(visibleBuyQueueAhead(quote, 0.49)).toBe(0);
+    expect(visibleBuyQueueAhead(quote, 0.47)).toBeUndefined();
+  });
+
+  it("rejects malformed depth instead of understating the queue", () => {
+    expect(visibleBuyQueueAhead({
+      bid: 0.48,
+      ask: 0.5,
+      bidLevels: [{ price: 0.48, size: -1 }],
+      tsUnix: 1,
+    }, 0.48)).toBeUndefined();
+  });
+
+  it("does not treat empty or inconsistent depth as an empty queue", () => {
+    expect(visibleBuyQueueAhead({
+      bid: 0.48,
+      ask: 0.5,
+      bidLevels: [],
+      tsUnix: 1,
+    }, 0.48)).toBeUndefined();
+    expect(visibleBuyQueueAhead({
+      bid: 0.48,
+      ask: 0.5,
+      bidLevels: [{ price: 0.47, size: 30 }],
+      tsUnix: 1,
+    }, 0.48)).toBeUndefined();
   });
 });

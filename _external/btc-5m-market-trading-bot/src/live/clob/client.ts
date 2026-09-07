@@ -54,7 +54,6 @@ export interface SubmitOrderArgs {
   tokenId: string;
   price: number;
   size: number;
-  expiration: number;
   tickSize: number;
 }
 
@@ -152,6 +151,7 @@ export class ClobWrapper {
   private heartbeatId?: string;
   private orderVersion: 1 | 2 | 3 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
+  private marketMinOrderSizes = new Map<string, number>();
 
   private constructor(
     client: ClobClient,
@@ -358,12 +358,19 @@ export class ClobWrapper {
             const tokenId = market.t?.find((token) => token?.t)?.t;
             if (!tokenId) throw new Error(`market ${conditionId} has no tradable token`);
             const tickSize = sdkTickSize(Number(market.mts));
+            const minOrderSize = Number(market.mos);
+            if (!Number.isFinite(minOrderSize) || minOrderSize <= 0) {
+              throw new Error(`market ${conditionId} has no valid minimum order size`);
+            }
+            for (const token of market.t) {
+              if (token?.t) this.marketMinOrderSizes.set(token.t, minOrderSize);
+            }
             this.orderVersion = version;
             await this.client.createOrder(
               {
                 tokenID: tokenId,
                 price: 0.5,
-                size: MIN_ORDER_SHARES,
+                size: minOrderSize,
                 side: ClobSide.BUY,
               },
               { tickSize, negRisk: market.nr ?? false, version },
@@ -390,6 +397,10 @@ export class ClobWrapper {
     }
   }
 
+  minOrderSize(tokenId: string): number | undefined {
+    return this.marketMinOrderSizes.get(tokenId);
+  }
+
   updateTickSize(tokenId: string, tickSize: number): void {
     if (!Number.isFinite(tickSize) || tickSize <= 0) return;
     this.client.tickSizes[tokenId] = sdkTickSize(tickSize);
@@ -410,7 +421,6 @@ export class ClobWrapper {
             price: args.price,
             size: args.size,
             side: ClobSide.BUY,
-            expiration: args.expiration,
           },
           {
             tickSize: sdkTickSize(args.tickSize),
@@ -421,7 +431,7 @@ export class ClobWrapper {
         signLatencyMs += performance.now() - signStarted;
 
         const ackStarted = performance.now();
-        const resp = await this.postSignedOrder(order, OrderType.GTD, true);
+        const resp = await this.postSignedOrder(order, OrderType.GTC, true);
         ackLatencyMs += performance.now() - ackStarted;
         const orderId = resp?.orderID;
         const apiError = responseError(resp);

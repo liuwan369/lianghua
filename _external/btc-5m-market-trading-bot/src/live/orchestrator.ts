@@ -38,6 +38,7 @@ import {
 
 import { Journal, r2, r4, recordTraded } from "./journal.js";
 import { preflight } from "./onchain.js";
+import { ownerSignerPrivateKey } from "./account.js";
 
 export const LIVE_BOOK_MAX_AGE_MS = 250;
 const OFFICIAL_CLOB_HEALTH = "https://clob.polymarket.com/";
@@ -413,6 +414,17 @@ async function runOneMarket(
 
       b.downAsk,
 
+      {
+        upBidSize: b.upBidSz,
+        downBidSize: b.downBidSz,
+        upBidLevels: b.upBidLevels?.map(([price, size]) => ({ price, size })),
+        downBidLevels: b.downBidLevels?.map(([price, size]) => ({ price, size })),
+        upSellTradeRateSharesPerSec: b.upSellTradeRate,
+        downSellTradeRateSharesPerSec: b.downSellTradeRate,
+        upTickSize: b.tickSize,
+        downTickSize: b.tickSize,
+      },
+
     );
 
     // Health can change while the strategy computes. Never submit a real
@@ -537,6 +549,14 @@ async function runOneMarket(
 
         console.info(`CLOB tick size updated …${msg.token.slice(-6)} -> ${msg.tickSize}`);
 
+        break;
+
+      case "marketTrade":
+        if (msg.token === mkt.upToken) {
+          engine.onMarketTrade(Side.Up, msg.takerSide, msg.shares, msg.tsUnix);
+        } else if (msg.token === mkt.downToken) {
+          engine.onMarketTrade(Side.Down, msg.takerSide, msg.shares, msg.tsUnix);
+        }
         break;
 
       case "user":
@@ -765,9 +785,11 @@ export async function run(cfg: RunConfig): Promise<void> {
   process.once("SIGTERM", onSigterm);
 
   if (cfg.live) {
-    const key = process.env.POLYMARKET_PRIVATE_KEY;
+    const key = ownerSignerPrivateKey();
     if (!key) {
-      throw new Error("--live but POLYMARKET_PRIVATE_KEY not set — refusing");
+      throw new Error(
+        "实盘已拒绝：未配置 Owner 签名私钥；Session Key 接入完成前不能提交订单",
+      );
     }
     if (cfg.preflight !== false) {
       console.info("running wallet preflight…");
@@ -842,8 +864,6 @@ export async function run(cfg: RunConfig): Promise<void> {
       }
 
       engine.reset(mkt.start, mkt.end);
-
-      executor.setWindowEnd(mkt.end);
 
       try {
         await executor.prepareMarket(mkt.conditionId);

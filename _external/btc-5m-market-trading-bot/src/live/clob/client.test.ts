@@ -105,7 +105,7 @@ describe("ClobWrapper low-latency order path", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ version: 2 }));
     vi.stubGlobal("fetch", fetchMock);
     const client = {
-      getClobMarketInfo: vi.fn().mockResolvedValue({ t: [{ t: "token" }], mts: "0.01", nr: false }),
+      getClobMarketInfo: vi.fn().mockResolvedValue({ t: [{ t: "token" }], mts: "0.01", mos: 5, nr: false }),
       createOrder: vi.fn().mockResolvedValue({ signed: true }),
     };
     const wrapper = wrapperWith(client);
@@ -113,8 +113,20 @@ describe("ClobWrapper low-latency order path", () => {
     await wrapper.warmMarket("condition", 100, 1);
 
     expect(client.createOrder).toHaveBeenCalledOnce();
+    expect(wrapper.minOrderSize("token")).toBe(5);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(String(fetchMock.mock.calls[0]?.[0])).toMatch(/\/version$/);
+  });
+
+  it("fails closed when market metadata omits the minimum order size", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ version: 2 })));
+    const client = {
+      getClobMarketInfo: vi.fn().mockResolvedValue({ t: [{ t: "token" }], mts: "0.01", nr: false }),
+      createOrder: vi.fn(),
+    };
+    const wrapper = wrapperWith(client);
+    await expect(wrapper.warmMarket("condition", 100, 1)).rejects.toThrow(/minimum order size/i);
+    expect(client.createOrder).not.toHaveBeenCalled();
   });
 
   it("posts a maker order with deferred execution and records ACK latency", async () => {
@@ -132,7 +144,6 @@ describe("ClobWrapper low-latency order path", () => {
       tokenId: "token",
       price: 0.48,
       size: 5,
-      expiration: 2_000_000_000,
       tickSize: 0.01,
     });
 
@@ -141,7 +152,7 @@ describe("ClobWrapper low-latency order path", () => {
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toMatchObject({
-      orderType: OrderType.GTD,
+      orderType: OrderType.GTC,
       postOnly: true,
       deferExec: true,
     });
@@ -186,7 +197,6 @@ describe("ClobWrapper low-latency order path", () => {
       tokenId: "token",
       price: 0.48,
       size: 5,
-      expiration: 2_000_000_000,
       tickSize: 0.01,
     });
 
@@ -216,7 +226,6 @@ describe("ClobWrapper low-latency order path", () => {
       tokenId: "token",
       price: 0.48,
       size: 5,
-      expiration: 2_000_000_000,
       tickSize: 0.01,
     });
 
@@ -238,7 +247,6 @@ describe("ClobWrapper low-latency order path", () => {
       tokenId: "token",
       price: 0.48,
       size: 5,
-      expiration: 2_000_000_000,
       tickSize: 0.01,
     });
 
@@ -258,7 +266,6 @@ describe("ClobWrapper low-latency order path", () => {
       tokenId: "token",
       price: 0.48,
       size: 5,
-      expiration: 2_000_000_000,
       tickSize: 0.01,
     });
 

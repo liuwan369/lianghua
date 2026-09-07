@@ -1,6 +1,10 @@
 import { passiveBudgetClone, targetClone } from "../config.js";
 import { MakerSession, type MakerEvent } from "../live-maker.js";
 import { Side, type Fill } from "../models.js";
+import {
+  MakerMicrostructureGate,
+  type EngineBookMicrostructure,
+} from "./microstructure.js";
 export interface EngineConfig {
   passiveBudget?: boolean;
   pairCostMax?: number;
@@ -8,6 +12,11 @@ export interface EngineConfig {
   decisionIntervalMs?: number;
   defensiveCancelBps?: number;
   liveMode?: boolean;
+  minMakerFillProbability?: number;
+  fullMakerSizeProbability?: number;
+  makerQueueConservatism?: number;
+  minimumMakerShares?: number;
+  tradeRateWindowSec?: number;
 }
 
 export interface ResolveResult {
@@ -28,6 +37,7 @@ export class Engine {
   session: MakerSession;
   preset: string;
   private lastBookTs = Number.NEGATIVE_INFINITY;
+  private microstructure: MakerMicrostructureGate;
 
   constructor(c: EngineConfig = {}) {
     const cfg = c.passiveBudget ? passiveBudgetClone() : targetClone();
@@ -36,19 +46,36 @@ export class Engine {
       cfg.pairAddCostMax = c.pairCostMax;
     }
     const preset = c.passiveBudget ? "passive_budget_clone" : "target_clone";
+    const makerLifeSec = c.makerLifeSec ?? 15;
+    const liveMode = c.liveMode ?? false;
     this.session = new MakerSession(
       cfg,
-      c.makerLifeSec ?? 15,
+      makerLifeSec,
       (c.decisionIntervalMs ?? 0) / 1000,
       c.defensiveCancelBps ?? 0,
-      c.liveMode ?? false,
+      liveMode,
     );
+    const minimumProbability = clamp01(
+      c.minMakerFillProbability ?? (liveMode ? 0.05 : 0),
+    );
+    this.microstructure = new MakerMicrostructureGate({
+      minimumProbability,
+      fullSizeProbability: Math.max(
+        minimumProbability,
+        clamp01(c.fullMakerSizeProbability ?? 0.5),
+      ),
+      queueConservatism: Math.max(1, c.makerQueueConservatism ?? 1.5),
+      minimumShares: Math.max(1, c.minimumMakerShares ?? 5),
+      tradeRateWindowSec: Math.max(1, c.tradeRateWindowSec ?? 10),
+      expectedRestingSeconds: Math.max(0.1, makerLifeSec),
+    });
     this.preset = preset;
   }
 
   reset(start: number, end: number): void {
     this.session.reset(start, end);
     this.lastBookTs = Number.NEGATIVE_INFINITY;
+    this.microstructure.reset();
   }
 
   onBtc(ts: number, price: number): void {
@@ -57,17 +84,44 @@ export class Engine {
     }
   }
 
+  onMarketTrade(side: Side, takerSide: string, shares: number, tsUnix: number): void {
+    this.microstructure.recordTrade(side, takerSide, shares, tsUnix);
+  }
+
   onBook(
     ts: number,
     upBid?: number,
     upAsk?: number,
     downBid?: number,
     downAsk?: number,
-  ) {
+    microstructure: EngineBookMicrostructure = {},
+  ): MakerEvent[] {
     if (!Number.isFinite(ts) || ts + 1e-9 < this.lastBookTs) return [];
     if (!bookOk(upBid, upAsk, downBid, downAsk)) return [];
     this.lastBookTs = ts;
-    return this.session.onBook(ts, upBid, upAsk, downBid, downAsk);
+    const books = this.microstructure.books(
+      ts,
+      upBid,
+      upAsk,
+      downBid,
+      downAsk,
+      microstructure,
+    );
+    const events = this.session.onBook(ts, upBid, upAsk, downBid, downAsk);
+    const filtered = this.microstructure.filterQuotes(
+      events,
+      books,
+      (side) => this.session.onOrderCancelled(side),
+      (side, shares, price) => this.session.resizePendingQuote(side, shares, price),
+    );
+    return [
+      ...filtered,
+      ...this.microstructure.filterPending(
+        this.session.pendingQuotes(),
+        books,
+        (side) => this.session.onOrderCancelled(side),
+      ),
+    ];
   }
 
   resolve(winner: Side): ResolveResult {
@@ -112,6 +166,11 @@ export class Engine {
   resizePendingQuote(side: Side, shares: number, price?: number): void {
     this.session.resizePendingQuote(side, shares, price);
   }
+}
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
 }
 
 export function bookOk(

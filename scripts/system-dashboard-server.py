@@ -195,15 +195,16 @@ def _tail_lines(path: Path | None, count: int = 100, max_bytes: int = 131_072) -
         return []
 
 
-def private_key_configured() -> bool:
-    """Check for a non-empty key without exposing its value in the API."""
-    def meaningful(value: str) -> bool:
-        # Treat quoted whitespace as empty; this avoids showing a false
-        # "account configured" state when a placeholder was copied to .env.
-        return bool(value.strip().strip("'\"").strip())
-
-    if meaningful(os.environ.get("POLYMARKET_PRIVATE_KEY", "")):
-        return True
+def _account_values() -> dict[str, str]:
+    """Load only supported account fields; never return them through the API."""
+    names = {
+        "POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER",
+        "POLYMARKET_OWNER_PRIVATE_KEY", "POLYMARKET_PRIVATE_KEY",
+        "POLYMARKET_SESSION_PRIVATE_KEY", "RELAYER_API_KEY",
+        "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY",
+        "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE",
+    }
+    result = {name: os.environ.get(name, "") for name in names}
     env_path = TRADING_ROOT / ".env"
     try:
         for raw in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -211,11 +212,54 @@ def private_key_configured() -> bool:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             name, value = line.split("=", 1)
-            if name.strip() == "POLYMARKET_PRIVATE_KEY" and meaningful(value):
-                return True
+            name = name.strip()
+            if name in names and not result.get(name):
+                result[name] = value
     except OSError:
         pass
-    return False
+    return result
+
+
+def _meaningful_account_value(value: str) -> bool:
+    clean = value.strip().strip("'\"").strip()
+    if not clean or (clean.startswith("<") and clean.endswith(">")):
+        return False
+    lowered = clean.lower()
+    return "your_" not in lowered and "真实值" not in clean and "已隐藏" not in clean
+
+
+def account_config_status() -> dict:
+    """Describe credential roles without exposing credential values."""
+    values = _account_values()
+    present = lambda name: _meaningful_account_value(values.get(name, ""))
+    wallet_value = values.get("POLYMARKET_WALLET_ADDRESS") or values.get("POLY_FUNDER", "")
+    wallet_clean = wallet_value.strip().strip("'\"").strip()
+    wallet_valid = bool(
+        len(wallet_clean) == 42
+        and wallet_clean.startswith("0x")
+        and all(char in "0123456789abcdefABCDEF" for char in wallet_clean[2:])
+    )
+    owner_signer = present("POLYMARKET_OWNER_PRIVATE_KEY") or present("POLYMARKET_PRIVATE_KEY")
+    session_signer = present("POLYMARKET_SESSION_PRIVATE_KEY")
+    builder = all(present(name) for name in (
+        "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"
+    ))
+    return {
+        "wallet_configured": wallet_valid,
+        "owner_signer_configured": owner_signer,
+        "session_signer_configured": session_signer,
+        "relayer_api_configured": present("RELAYER_API_KEY") and present("RELAYER_API_KEY_ADDRESS"),
+        "builder_api_configured": builder,
+        # The current execution adapter still requires the Owner signer. The
+        # Session Key path remains separately locked until it is implemented.
+        "execution_credentials_ready": wallet_valid and owner_signer,
+        "read_only_only": wallet_valid and not owner_signer and not session_signer,
+    }
+
+
+def private_key_configured() -> bool:
+    """Backward-compatible live gate for the current Owner-signer adapter."""
+    return bool(account_config_status()["execution_credentials_ready"])
 
 
 def _control_request_error(headers, mode: str | None) -> tuple[int, str] | None:
@@ -444,6 +488,7 @@ def trading_status() -> dict:
                 _trading_pid = None
                 _persist_trading_state()
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
+        account = account_config_status()
         return {
             "available": (TRADING_ROOT / "dist" / "cli" / "live.js").is_file(),
             "running": running,
@@ -456,7 +501,8 @@ def trading_status() -> dict:
             "live_unlocked": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
             # A present .env is not enough: report configured only when the key
             # exists and is non-empty after dotenv loading by the child process.
-            "account_configured": private_key_configured(),
+            "account_configured": account["execution_credentials_ready"],
+            "account": account,
             "log": str(_trading_log).replace("\\", "/") if _trading_log else None,
             "stats": trade_log_stats(),
         }

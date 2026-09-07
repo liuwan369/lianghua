@@ -48,6 +48,12 @@ export class OrderBook {
     return [untick(best), this.asks.get(best)!];
   }
 
+  bidLevels(): [number, number][] {
+    return [...this.bids.entries()]
+      .sort((a, b) => b[0] - a[0])
+      .map(([p, s]) => [untick(p), s]);
+  }
+
   microprice(): number | undefined {
     const bb = this.bestBid();
     const ba = this.bestAsk();

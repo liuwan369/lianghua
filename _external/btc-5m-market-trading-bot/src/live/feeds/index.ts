@@ -16,6 +16,8 @@ export interface BookSnapshot {
   upAskSz?: number;
   downBidSz?: number;
   downAskSz?: number;
+  upBidLevels?: [number, number][];
+  downBidLevels?: [number, number][];
   upSellTradeRate?: number;
   downSellTradeRate?: number;
   tickSize?: number;

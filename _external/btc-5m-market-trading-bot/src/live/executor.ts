@@ -70,10 +70,6 @@ class RestingIds {
   }
 }
 
-function nowSecs(): number {
-  return Math.floor(Date.now() / 1000);
-}
-
 function tail(s: string, n: number): string {
   return s.slice(Math.max(0, s.length - n));
 }
@@ -96,7 +92,6 @@ export class Executor {
   private clob?: ClobWrapper;
   private stopClobHeartbeat?: () => void;
   private tickCache = new Map<string, number>();
-  private windowEnd = 0;
 
   constructor(
     live: boolean,
@@ -152,10 +147,6 @@ export class Executor {
     return this.allOrderIds.has(orderId) || this.resting.has(orderId);
   }
 
-  setWindowEnd(end: number): void {
-    this.windowEnd = end;
-  }
-
   async prepareMarket(conditionId: string): Promise<void> {
     if (!this.clob) return;
     const latencyMs = await this.clob.warmMarket(conditionId);
@@ -182,15 +173,15 @@ export class Executor {
     this.clob?.updateTickSize(token, tickSize);
   }
 
-  private prepSize(px: number, shares: number): number {
+  private prepSize(px: number, shares: number, minOrderShares: number): number {
     let size = Math.floor((this.capSize(px, shares) + 1e-9) * 100) / 100;
-    if (size > 0 && size < MIN_ORDER_SHARES) {
-      const minNotional = px * MIN_ORDER_SHARES;
+    if (size > 0 && size < minOrderShares) {
+      const minNotional = px * minOrderShares;
       if (minNotional <= this.maxOrderUsd + 1e-9) {
-        size = MIN_ORDER_SHARES;
+        size = minOrderShares;
       } else {
         console.warn(
-          `skip: ${size.toFixed(2)} shares below min ${MIN_ORDER_SHARES} and bump would exceed cap`,
+          `skip: ${size.toFixed(2)} shares below min ${minOrderShares} and bump would exceed cap`,
         );
         size = 0;
       }
@@ -221,7 +212,12 @@ export class Executor {
   ): Promise<SubmitResult> {
     const tick = await this.tick(token);
     const px = tickRoundDown(price, tick);
-    const size = this.prepSize(px, shares);
+    const marketMinimum = this.clob?.minOrderSize(token);
+    if (this.clob && marketMinimum == null) {
+      console.error("skip live order: market minimum order size was not loaded");
+      return { ok: false, price: px, size: 0, notional: 0 };
+    }
+    const size = this.prepSize(px, shares, marketMinimum ?? MIN_ORDER_SHARES);
     const notional = px * size;
     const none: SubmitResult = { ok: false, price: px, size, notional };
 
@@ -242,23 +238,9 @@ export class Executor {
       this.allOrderIds.add(id);
       this.restingRemaining.set(id, size);
       console.info(
-        `PAPER GTD BUY ${Side.asStr(side)} …${tail(token, 6)} ${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)}) id=${id}`,
+        `PAPER GTC BUY ${Side.asStr(side)} …${tail(token, 6)} ${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)}) id=${id}`,
       );
       return { ok: true, orderId: id, price: px, size, notional };
-    }
-
-    const now = nowSecs();
-    let expiration: number;
-    if (this.windowEnd > 0) {
-      if (this.windowEnd < now + 62) {
-        console.warn(
-          "skip submit: <62s to window end — cannot rest a valid GTD this close to resolution",
-        );
-        return none;
-      }
-      expiration = Math.min(now + 120, this.windowEnd);
-    } else {
-      expiration = now + 120;
     }
 
     const submittedAtUnix = Date.now() / 1000;
@@ -266,7 +248,6 @@ export class Executor {
       tokenId: token,
       price: px,
       size,
-      expiration,
       tickSize: tick,
     });
 
@@ -279,7 +260,7 @@ export class Executor {
         this.restingRemaining.set(resp.orderId, size);
       }
       console.info(
-        `LIVE GTD BUY ${Side.asStr(side)} …${tail(token, 6)} ${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)}) id=…${tail(resp.orderId ?? "", 8)} sign=${resp.signLatencyMs?.toFixed(1) ?? "?"}ms ack=${resp.ackLatencyMs?.toFixed(1) ?? "?"}ms total=${resp.latencyMs?.toFixed(1) ?? "?"}ms`,
+        `LIVE GTC BUY ${Side.asStr(side)} …${tail(token, 6)} ${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)}) id=…${tail(resp.orderId ?? "", 8)} sign=${resp.signLatencyMs?.toFixed(1) ?? "?"}ms ack=${resp.ackLatencyMs?.toFixed(1) ?? "?"}ms total=${resp.latencyMs?.toFixed(1) ?? "?"}ms`,
       );
       return {
         ok: true,
@@ -313,7 +294,12 @@ export class Executor {
   ): Promise<SubmitResult> {
     const tick = await this.tick(token);
     const px = tickRoundDown(price, tick);
-    const size = this.prepSize(px, shares);
+    const marketMinimum = this.clob?.minOrderSize(token);
+    if (this.clob && marketMinimum == null) {
+      console.error("skip live taker: market minimum order size was not loaded");
+      return { ok: false, price: px, size: 0, notional: 0 };
+    }
+    const size = this.prepSize(px, shares, marketMinimum ?? MIN_ORDER_SHARES);
     const notional = px * size;
     const none: SubmitResult = { ok: false, price: px, size, notional };
 

@@ -1,9 +1,7 @@
 import { SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import {
   createPublicClient,
-  encodeFunctionData,
   http,
-  parseAbi,
   type Address,
   type PublicClient,
 } from "viem";
@@ -16,7 +14,6 @@ const DEFAULT_RPC = "https://polygon-bor-rpc.publicnode.com";
 const GET_OWNERS_SELECTOR = "0xa0e67e2b" as const;
 /** OpenZeppelin `owner()` selector. */
 const OWNER_SELECTOR = "0x8da5cb5b" as const;
-const ERC1271_INTERFACE_ID = "0x1626ba7e" as const;
 
 export interface ResolvedWallet {
   signer: Address;
@@ -121,26 +118,6 @@ async function isGnosisSafe(
   }
 }
 
-async function supportsErc1271(
-  client: PublicClient,
-  address: Address,
-): Promise<boolean> {
-  try {
-    const data = encodeFunctionData({
-      abi: parseAbi([
-        "function supportsInterface(bytes4) view returns (bool)",
-      ]),
-      functionName: "supportsInterface",
-      args: [ERC1271_INTERFACE_ID],
-    });
-    const result = await client.call({ to: address, data });
-    if (!result.data || result.data.length < 66) return false;
-    return BigInt(result.data) === 1n;
-  } catch {
-    return false;
-  }
-}
-
 async function readOwner(
   client: PublicClient,
   address: Address,
@@ -154,11 +131,40 @@ async function readOwner(
   }
 }
 
+export interface PublicWalletInspection {
+  address: Address;
+  isContract: boolean;
+  owner?: Address;
+  walletKind: "EOA" | "DEPOSIT_WALLET" | "CONTRACT_UNKNOWN";
+}
+
+/** Inspect a funder without assuming that the funder itself is the signer. */
+export async function inspectWalletAddress(
+  address: Address,
+  rpc?: string,
+): Promise<PublicWalletInspection> {
+  const client = createPublicClient({
+    chain: polygon,
+    transport: http(rpcUrl(rpc)),
+  });
+  const isContract = await hasContractCode(client, address);
+  if (!isContract) {
+    return { address, isContract: false, walletKind: "EOA" };
+  }
+  const owner = await readOwner(client, address);
+  return {
+    address,
+    isContract: true,
+    owner,
+    walletKind: owner ? "DEPOSIT_WALLET" : "CONTRACT_UNKNOWN",
+  };
+}
+
 /**
  * On-chain signature type detection (Polymarket clob-client PR #333):
  * - funder == signer → EOA
  * - getOwners() succeeds → Gnosis Safe (2)
- * - ERC-1271 + owner == signer → deposit wallet POLY_1271 (3)
+ * - owner() == signer → deposit wallet POLY_1271 (3)
  * - else → Magic/proxy (1)
  */
 export async function detectSignatureType(
@@ -181,11 +187,12 @@ export async function detectSignatureType(
     return SignatureTypeV2.POLY_GNOSIS_SAFE;
   }
 
-  if (await supportsErc1271(client, funder)) {
-    const owner = await readOwner(client, funder);
-    if (owner && addrEq(owner, signer)) {
-      return SignatureTypeV2.POLY_1271;
-    }
+  // Current Deposit Wallet clones expose owner() but do not necessarily
+  // advertise ERC-165 support for ERC-1271. Requiring supportsInterface()
+  // misclassifies real Deposit Wallets as legacy proxies.
+  const owner = await readOwner(client, funder);
+  if (owner && addrEq(owner, signer)) {
+    return SignatureTypeV2.POLY_1271;
   }
 
   return SignatureTypeV2.POLY_PROXY;

@@ -162,7 +162,7 @@ function researchBaselineFields(): StrategyConfig {
 
     backtestAlwaysTaker: false,
 
-    takerFeeRate: 0.072,
+    takerFeeRate: 0.07,
     makerFeeRate: 0.0,
     feeExponent: 1.0,
     feeAware: false,
@@ -221,7 +221,7 @@ export function targetTrader(): StrategyConfig {
 export function stable(): StrategyConfig {
   return merge(targetTrader(), {
     stableMode: true,
-    takerFeeRate: 0.072,
+    takerFeeRate: 0.07,
     makerFeeRate: 0.0,
     feeExponent: 1.0,
     feeAware: true,

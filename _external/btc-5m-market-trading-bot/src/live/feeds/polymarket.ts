@@ -159,6 +159,45 @@ function tickSizeChanges(v: unknown): Array<{ token: string; tickSize: number }>
   return out;
 }
 
+function marketTrades(v: unknown): Array<{
+  token: string;
+  price: number;
+  shares: number;
+  takerSide: string;
+  tsUnix: number;
+}> {
+  const out: Array<{
+    token: string;
+    price: number;
+    shares: number;
+    takerSide: string;
+    tsUnix: number;
+  }> = [];
+  const events = Array.isArray(v) ? v : [v];
+  for (const raw of events) {
+    if (!raw || typeof raw !== "object") continue;
+    const event = raw as Record<string, unknown>;
+    if (String(event.event_type ?? "").toLowerCase() !== "last_trade_price") continue;
+    const token = typeof event.asset_id === "string" ? event.asset_id : undefined;
+    const price = num(event.price);
+    const shares = num(event.size);
+    const takerSide = String(event.side ?? "").toUpperCase();
+    const timestampMs = exchangeTimeMs(event);
+    if (
+      !token || price == null || shares == null || shares <= 0 ||
+      (takerSide !== "BUY" && takerSide !== "SELL")
+    ) continue;
+    out.push({
+      token,
+      price,
+      shares,
+      takerSide,
+      tsUnix: timestampMs != null ? timestampMs / 1000 : nowUnix(),
+    });
+  }
+  return out;
+}
+
 function connectWs(url: string, timeoutMs = 10_000): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
@@ -218,6 +257,7 @@ export function runPolymarketFeed(
         const up = new OrderBook();
         const dn = new OrderBook();
         const applied: AppliedBookTimes = { upMs: 0, downMs: 0 };
+        const tickSizes: { up?: number; down?: number } = {};
         let fastUp: { bid: number; ask: number; atMs: number } | undefined;
         let fastDown: { bid: number; ask: number; atMs: number } | undefined;
         let lastSent: Array<number | undefined> | undefined;
@@ -236,6 +276,11 @@ export function runPolymarketFeed(
               const v = JSON.parse(t) as unknown;
               for (const change of tickSizeChanges(v)) {
                 sink({ kind: "tickSize", ...change, tsUnix: nowUnix() });
+                if (change.token === upToken) tickSizes.up = change.tickSize;
+                if (change.token === downToken) tickSizes.down = change.tickSize;
+              }
+              for (const trade of marketTrades(v)) {
+                sink({ kind: "marketTrade", ...trade });
               }
               // Fast top-of-book updates (requires custom_feature_enabled).
               if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -321,6 +366,9 @@ export function runPolymarketFeed(
                 upAskSz,
                 downBidSz,
                 downAskSz,
+                upBidLevels: up.bidLevels(),
+                downBidLevels: dn.bidLevels(),
+                tickSize: tickSizes.up ?? tickSizes.down,
               };
               sink({ kind: "book", snapshot: snap });
             } catch {
@@ -372,4 +420,4 @@ export function runPolymarketFeed(
   };
 }
 
-export { applyMessage, sideOf, levelList, tickSizeChanges };
+export { applyMessage, sideOf, levelList, marketTrades, tickSizeChanges };

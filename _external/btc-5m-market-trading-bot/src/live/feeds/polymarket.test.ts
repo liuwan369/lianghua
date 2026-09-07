@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OrderBook } from "../orderbook.js";
-import { applyMessage, bookFeedHealthy, tickSizeChanges } from "./polymarket.js";
+import { applyMessage, bookFeedHealthy, marketTrades, tickSizeChanges } from "./polymarket.js";
 
 describe("Polymarket market feed metadata", () => {
   it("parses tick-size changes used by live order rounding", () => {
@@ -17,6 +17,29 @@ describe("Polymarket market feed metadata", () => {
   it("ignores unrelated or malformed events", () => {
     expect(tickSizeChanges({ event_type: "price_change", asset_id: "token-1" })).toEqual([]);
     expect(tickSizeChanges({ event_type: "tick_size_change", asset_id: "token-1" })).toEqual([]);
+  });
+});
+
+describe("Polymarket public trade flow", () => {
+  it("parses sell flow that can consume our passive bid queue", () => {
+    expect(marketTrades({
+      event_type: "last_trade_price",
+      asset_id: "up-token",
+      price: "0.42",
+      size: "12.5",
+      side: "SELL",
+      timestamp: "2000",
+    })).toEqual([{
+      token: "up-token",
+      price: 0.42,
+      shares: 12.5,
+      takerSide: "SELL",
+      tsUnix: 2000,
+    }]);
+  });
+
+  it("rejects malformed trade flow", () => {
+    expect(marketTrades({ event_type: "last_trade_price", asset_id: "x", side: "SELL" })).toEqual([]);
   });
 });
 

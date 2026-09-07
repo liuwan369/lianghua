@@ -13,6 +13,11 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
+import {
+  checkPublicAccount,
+  loadAccountConfig,
+  ownerSignerPrivateKey,
+} from "./account.js";
 import { ClobWrapper } from "./clob/client.js";
 import {
   COLLATERAL_ONRAMP,
@@ -58,20 +63,17 @@ function rpcUrl(): string {
 }
 
 function keyAddress(): Address | undefined {
-  const key = process.env.POLYMARKET_PRIVATE_KEY;
+  const key = ownerSignerPrivateKey();
   if (!key) return undefined;
-  const s = key.startsWith("0x") ? key : `0x${key}`;
   try {
-    return privateKeyToAccount(s as Hex).address;
+    return privateKeyToAccount(key).address;
   } catch {
     return undefined;
   }
 }
 
 function privateKeyHex(): Hex | undefined {
-  const key = process.env.POLYMARKET_PRIVATE_KEY;
-  if (!key) return undefined;
-  return (key.startsWith("0x") ? key : `0x${key}`) as Hex;
+  return ownerSignerPrivateKey();
 }
 
 function sel(cd: Hex): string {
@@ -100,9 +102,17 @@ export interface PreflightOptions {
 export interface PreflightReport {
   ready: boolean;
   collateralWallet: Address;
-  signatureType: number;
+  signatureType: number | null;
   walletSource: string;
   gasWallet: Address;
+  walletOwner: Address | null;
+  ownerSignerPresent: boolean;
+  ownerMatchesSigner: boolean | null;
+  approvalsFullyReady: boolean | null;
+  missingErc20Approvals: number;
+  missingErc1155Approvals: number;
+  approvalsError: string | null;
+  configErrors: string[];
   clobUsd: number | null;
   pusdOnChain: number;
   usdcOnChain: number;
@@ -119,7 +129,7 @@ export async function preflight(
   printPreflight(report);
   if (opts?.strict && !report.ready) {
     throw new Error(
-      "preflight failed — fund Polymarket (pUSD), ensure POL gas, or run `wrap --broadcast` if USDC.e is unwrapped",
+      "账户预检未通过：需核对 Owner/Session 签名、资金和官方 SDK 交易授权",
     );
   }
   return report.ready;
@@ -134,11 +144,12 @@ export async function preflightReport(
   });
 
   const eoa = keyAddress();
+  const accountConfig = loadAccountConfig();
   const overrides = envWalletOverrides();
 
   let collat: Address;
-  let sigType = SignatureTypeV2.EOA;
-  let walletSource = "EOA";
+  let sigType: number | null = null;
+  let walletSource = "资金地址待核对";
 
   if (address) {
     collat = address as Address;
@@ -151,13 +162,15 @@ export async function preflightReport(
         });
         sigType = resolved.signatureType;
         walletSource = resolved.source;
-      } catch {
-        /* use defaults */
+      } catch (error) {
+        walletSource = `资金地址已提供，签名关系核对失败：${error instanceof Error ? error.message : String(error)}`;
       }
     }
+  } else if (accountConfig.depositWallet) {
+    collat = accountConfig.depositWallet;
   } else if (!eoa) {
     throw new Error(
-      "no --address and no POLYMARKET_PRIVATE_KEY in env",
+      "未提供 --address，也没有 POLYMARKET_WALLET_ADDRESS",
     );
   } else {
     const resolved = await resolveWallet(eoa, {
@@ -170,7 +183,24 @@ export async function preflightReport(
     walletSource = resolved.source;
   }
 
-  const gasAddr = eoa ?? collat;
+  const publicCheck = await checkPublicAccount(collat);
+  if (sigType == null) {
+    if (publicCheck.walletKind === "DEPOSIT_WALLET") {
+      sigType = SignatureTypeV2.POLY_1271;
+      walletSource = "链上 owner()：Deposit Wallet（只读识别）";
+    } else if (publicCheck.walletKind === "EOA") {
+      sigType = SignatureTypeV2.EOA;
+      walletSource = "链上无合约代码：EOA（只读识别）";
+    } else {
+      walletSource = "合约钱包类型未知（只读识别）";
+    }
+  }
+  const ownerMatchesSigner = publicCheck.owner && eoa
+    ? publicCheck.owner.toLowerCase() === eoa.toLowerCase()
+    : sigType === SignatureTypeV2.EOA && eoa
+      ? collat.toLowerCase() === eoa.toLowerCase()
+      : null;
+  const gasAddr = eoa ?? publicCheck.owner ?? collat;
 
   const [pusdBal, usdcBal, pUsdAllow, pol] = await Promise.all([
     client.readContract({
@@ -198,24 +228,21 @@ export async function preflightReport(
   const usdcF = toF64(usdcBal, 6);
   const polF = toF64(pol, 18);
   const allowF = toF64(pUsdAllow, 6);
-  const pUsdApproved = pUsdAllow > 0n;
-
-  let clobUsd: number | null = null;
-  const pk = privateKeyHex();
-  if (pk && !address) {
-    try {
-      clobUsd = await fetchClobCollateralUsd(process.env.POLYMARKET_PRIVATE_KEY!);
-    } catch (e) {
-      console.warn(`CLOB balance check failed (${e}) — using on-chain pUSD only`);
-    }
-  }
+  // Do not authenticate or derive CLOB credentials in a command advertised as
+  // read-only. Authenticated balance is checked later by the live connector.
+  const clobUsd: number | null = null;
 
   const tradableUsd = Math.max(clobUsd ?? 0, pusdF);
   const hasFunds = tradableUsd >= 2;
-  const allowanceOk = pUsdApproved || sigType !== SignatureTypeV2.EOA;
+  const allowanceOk = publicCheck.approvalsFullyReady === true;
   const polRequired = sigType === SignatureTypeV2.EOA;
   const polOk = !polRequired || polF >= 0.05;
-  const ready = hasFunds && polOk && allowanceOk;
+  const signerOk = sigType === SignatureTypeV2.EOA
+    ? Boolean(eoa) && collat.toLowerCase() === eoa?.toLowerCase()
+    : sigType === SignatureTypeV2.POLY_1271
+      ? ownerMatchesSigner === true
+      : false;
+  const ready = hasFunds && polOk && allowanceOk && signerOk && accountConfig.errors.length === 0;
 
   return {
     ready,
@@ -223,6 +250,14 @@ export async function preflightReport(
     signatureType: sigType,
     walletSource,
     gasWallet: gasAddr,
+    walletOwner: publicCheck.owner ?? null,
+    ownerSignerPresent: Boolean(eoa),
+    ownerMatchesSigner,
+    approvalsFullyReady: publicCheck.approvalsFullyReady,
+    missingErc20Approvals: publicCheck.missingErc20Approvals,
+    missingErc1155Approvals: publicCheck.missingErc1155Approvals,
+    approvalsError: publicCheck.approvalsError ?? null,
+    configErrors: accountConfig.errors,
     clobUsd,
     pusdOnChain: pusdF,
     usdcOnChain: usdcF,
@@ -237,11 +272,14 @@ function printPreflight(r: PreflightReport): void {
       ? `  CLOB tradable (pUSD):          $${r.clobUsd.toFixed(2)}   ${r.clobUsd >= 2 ? "✅" : "❌"}`
       : "  CLOB tradable (pUSD):          (skipped — no key or check failed)";
 
-  console.log("================ LIVE PRE-FLIGHT (CLOB V2 / pUSD) ================");
-  console.log(`  collateral wallet: ${r.collateralWallet}`);
-  console.log(`  signature type:    ${signatureTypeLabel(r.signatureType)}`);
-  console.log(`  detection:         ${r.walletSource}`);
-  console.log(`  gas wallet (EOA):  ${r.gasWallet}`);
+  console.log("================ 交易账户只读预检 ================");
+  console.log(`  资金钱包:         ${r.collateralWallet}`);
+  console.log(`  钱包类型:         ${r.signatureType == null ? "未知" : signatureTypeLabel(r.signatureType)}`);
+  console.log(`  识别依据:         ${r.walletSource}`);
+  console.log(`  Owner:            ${r.walletOwner ?? "未识别"}`);
+  console.log(`  Owner 签名凭据:   ${r.ownerSignerPresent ? "已配置" : "未配置（只能只读）"}`);
+  console.log(`  签名关系:         ${r.ownerMatchesSigner == null ? "尚未核对" : r.ownerMatchesSigner ? "匹配" : "不匹配"}`);
+  console.log(`  Gas 地址:         ${r.gasWallet}`);
   console.log(clobLine);
   console.log(
     `  pUSD on-chain:                 $${r.pusdOnChain.toFixed(2)}   ${r.pusdOnChain >= 2 ? "✅" : "—"}`,
@@ -255,13 +293,19 @@ function printPreflight(r: PreflightReport): void {
   console.log(
     `  pUSD→Exchange allowance: ${r.pUsdAllowance > 1e12 ? "unlimited" : r.pUsdAllowance.toFixed(2)}   ${r.pUsdAllowance > 0 ? "✅" : r.signatureType !== SignatureTypeV2.EOA ? "(proxy-managed)" : "❌ run approve --broadcast"}`,
   );
+  console.log(
+    `  官方 SDK 完整授权: ${r.approvalsFullyReady === true ? "是" : r.approvalsFullyReady === false ? "否" : "查询失败"}` +
+      `（缺 ERC20 ${r.missingErc20Approvals} 项，ERC1155 ${r.missingErc1155Approvals} 项）`,
+  );
+  if (r.approvalsError) console.log(`  授权查询错误:      ${r.approvalsError}`);
+  if (r.configErrors.length > 0) console.log(`  配置错误:          ${r.configErrors.join("；")}`);
   if (r.pusdOnChain >= 2 && (r.clobUsd ?? 0) < 2) {
     console.log(
       "  ℹ pUSD on-chain but CLOB ledger low — live connect syncs balance; if orders reject, refresh deposit on polymarket.com",
     );
   }
-  console.log(`\n${r.ready ? "✅ READY" : "❌ NOT READY (see above)"}`);
-  console.log("(read-only unless you run approve/wrap with --broadcast.)");
+  console.log(`\n${r.ready ? "✅ 已满足旧执行器预检" : "❌ 尚不能实盘（见上方缺项）"}`);
+  console.log("（本命令只读，不签名、不下单。）");
 }
 
 /** Approve pUSD for CTF Exchange V2 (EOA wallets). Proxy wallets are UI-managed. */

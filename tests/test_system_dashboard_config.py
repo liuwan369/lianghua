@@ -154,6 +154,35 @@ def test_control_request_requires_json_same_origin_and_live_password(monkeypatch
     assert MODULE._control_request_error(authorized, "live") is None
 
 
+def test_account_roles_are_reported_separately_without_exposing_values(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(MODULE, "TRADING_ROOT", tmp_path)
+    names = (
+        "POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER", "POLYMARKET_OWNER_PRIVATE_KEY",
+        "POLYMARKET_PRIVATE_KEY", "POLYMARKET_SESSION_PRIVATE_KEY", "RELAYER_API_KEY",
+        "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET",
+        "POLY_BUILDER_PASSPHRASE",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("POLYMARKET_WALLET_ADDRESS", "0x0000000000000000000000000000000000000001")
+    monkeypatch.setenv("RELAYER_API_KEY", "relayer-secret")
+    monkeypatch.setenv("RELAYER_API_KEY_ADDRESS", "0x0000000000000000000000000000000000000002")
+    status = MODULE.account_config_status()
+    assert status["wallet_configured"] is True
+    assert status["relayer_api_configured"] is True
+    assert status["execution_credentials_ready"] is False
+    assert status["read_only_only"] is True
+    assert "relayer-secret" not in json.dumps(status)
+
+
+def test_account_placeholders_do_not_enable_live_trading(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(MODULE, "TRADING_ROOT", tmp_path)
+    monkeypatch.setenv("POLYMARKET_WALLET_ADDRESS", "<已隐藏>")
+    monkeypatch.setenv("POLYMARKET_OWNER_PRIVATE_KEY", "真实值")
+    assert MODULE.account_config_status()["execution_credentials_ready"] is False
+    assert MODULE.private_key_configured() is False
+
+
 def test_dublin_service_bundle_is_consistent() -> None:
     collector_text = (ROOT / "config" / "pm-r25-dublin-collector.json").read_text(encoding="utf-8")
     collector = json.loads(collector_text)
