@@ -4,13 +4,15 @@
 
 ## 打开页面
 
-当前主页面通过都柏林 SSH 隧道访问：
+当前公网页面（需要登录）：
 
 ```text
-http://127.0.0.1:18765/system-dashboard.html
+https://34-242-206-196.sslip.io:80/system-dashboard.html
 ```
 
-页面打不开时先恢复 SSH 隧道。都柏林服务监听 `127.0.0.1:18766`，没有直接暴露公网。
+备用地址：先运行 `scripts/start-dublin-dashboard-tunnel.ps1`，再打开 `http://127.0.0.1:18765/system-dashboard.html`。
+
+公网已启用有效 HTTPS 证书、登录保护和请求限速。Lightsail 当前未开放 443，所以临时使用 HTTPS 的 `:80` 端口。
 
 ## 交易
 

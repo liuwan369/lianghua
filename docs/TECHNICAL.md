@@ -17,9 +17,10 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 - 小时分析：`pm-r25-dublin-live-analyzer.timer`
 - 每日轮换：`pm-r25-dublin-daily-restart.timer`
 - 服务器内部接口：`http://127.0.0.1:18766/api/live`
+- 公网入口：`https://34-242-206-196.sslip.io:80/system-dashboard.html`（HTTPS Basic Auth）
 - 用户隧道入口：`http://127.0.0.1:18765/system-dashboard.html`
 - 旧东京主机：`13.115.254.211`（历史对照）
-- 当前主节点：`34.242.206.196`，AWS `eu-west-1a`，`t3.small`；公网入口尚未开放，使用 SSH 隧道。
+- 当前主节点：`34.242.206.196`，AWS Lightsail 都柏林；公网防火墙当前开放 22/80，HTTPS 临时监听 80，SSH 隧道作为备用。
 
 页面服务读取都柏林本机采集数据，不把完整数据库暴露给浏览器。
 
@@ -29,6 +30,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 - 服务器 `/api/trading/status` 返回 `running=false`、`live_unlocked=false`、`account_configured=false`。
 - 服务器 `/api/live` 返回 `collector_online=true`，CLOB 与 Binance WebSocket 在线，队列深度为 0；这只是检查时快照。
 - 本机 `127.0.0.1:18765` 是否可访问取决于 SSH 隧道是否在线；隧道断开不代表服务器服务离线。
+- Nginx 公网入口已验证：未认证返回 401；认证后页面、`/api/live` 和 `/api/trading/status` 返回 200。证书自动续期 dry-run 已通过。
 
 ## 网络入口与延迟
 

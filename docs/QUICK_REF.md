@@ -13,7 +13,9 @@
 | 决策间隔 | `0ms` | 两次计算至少间隔多久 |
 | 反向撤单 | `0` 基点 | 价格反向多少后撤单 |
 
-页面：`http://127.0.0.1:18765/system-dashboard.html`（都柏林 SSH 隧道）。
+公网页面：`https://34-242-206-196.sslip.io:80/system-dashboard.html`（需要登录）。
+
+备用页面：`http://127.0.0.1:18765/system-dashboard.html`（都柏林 SSH 隧道）。
 
 ## 状态词
 

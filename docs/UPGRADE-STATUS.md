@@ -27,9 +27,9 @@
 
 ## 当前运行方式
 
-页面：都柏林节点监听服务器 `127.0.0.1:18766`，通过 SSH 隧道映射到本机 `127.0.0.1:18765`；公网 HTTPS 尚未配置。
+页面：都柏林节点监听服务器 `127.0.0.1:18766`；已通过 Nginx 提供带登录保护的公网 HTTPS，SSH 隧道 `127.0.0.1:18765` 作为备用。
 
-访问地址：`http://127.0.0.1:18765/system-dashboard.html`。页面打不开时先恢复隧道；当前 `trade_authorization=false`，不会下真钱。
+公网地址：`https://34-242-206-196.sslip.io:80/system-dashboard.html`。Lightsail 开放 443 后再迁移到标准 HTTPS 端口。当前 `trade_authorization=false`，不会下真钱。
 
 ## 现在能看到什么
 

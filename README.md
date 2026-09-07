@@ -13,7 +13,13 @@
 
 ## 打开页面
 
-都柏林页面只监听服务器本机，先建立 SSH 隧道，再访问：
+公网入口（需要登录）：
+
+```text
+https://34-242-206-196.sslip.io:80/system-dashboard.html
+```
+
+备用 SSH 隧道入口：
 
 ```text
 http://127.0.0.1:18765/system-dashboard.html
