@@ -18,7 +18,8 @@
 
 - 最近一次只读网页核对：API/公开地址 `0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd`，该地址不能用于充值。
 - 最近一次页面记录的现金/组合约 `$17.13`、无持仓；这只是当时页面状态，不是实时账户余额。
-- Relayer 签名地址：`0xDa6F73818Af63191633D8c8025508CD703780CD0`。
+- Deposit Wallet 的链上 Owner/Relayer 地址：`0xDa6F73818Af63191633D8c8025508CD703780CD0`；Relayer API Key 只用于官方 Relayer API，不是订单签名。
+- 自建 bot 不需要 Builder Key；Session Key 目前只对官方选定合作方 Beta 开放。
 - 系统当前没有私钥或交易凭据，`account_configured=false`。
 - 系统当前没有实盘解锁，`live_unlocked=false`、`trade_authorization=false`。
 
@@ -31,7 +32,7 @@
 3. 用极小额 post-only 挂单、撤单验证真实订单回报。
 4. 验证部分成交、断线撤单、状态不明后的仓位重建和单边止损。
 5. 逐笔对账真实手续费、做市返佣、流动性奖励和结算。
-6. 修复或升级官方 SDK 带入的 `ws` 高危依赖告警。
+6. 处理剩余低危依赖并完成官方新版交易路径迁移。
 
 完成上述验收前，状态保持 `NOT_READY_FOR_LIVE_TRADING`。
 
