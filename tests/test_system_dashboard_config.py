@@ -132,6 +132,12 @@ def test_dashboard_uses_node_label_from_api() -> None:
     assert "东京" not in javascript
 
 
+def test_static_javascript_uses_executable_mime_type() -> None:
+    assert MODULE._static_content_type(Path("system-dashboard.js")) == "application/javascript; charset=utf-8"
+    assert MODULE._static_content_type(Path("system-dashboard.html")) == "text/html; charset=utf-8"
+    assert MODULE._static_content_type(Path("unknown.bin")) == "application/octet-stream"
+
+
 def test_control_request_requires_json_same_origin_and_live_password(monkeypatch) -> None:
     monkeypatch.delenv("PM_DASHBOARD_CONTROL_TOKEN", raising=False)
     monkeypatch.delenv("PM_TRADING_LIVE_UNLOCK", raising=False)

@@ -34,6 +34,19 @@ _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 
+_STATIC_CONTENT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+}
+
+
+def _static_content_type(path: Path) -> str:
+    return _STATIC_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
 
 def _environment(primary: str, legacy: str | None, default: str) -> str:
     """Read a generic setting while retaining compatibility with Tokyo deployments."""
@@ -816,7 +829,7 @@ def main() -> int:
                 self.send_error(404)
                 return
             body = candidate.read_bytes()
-            content_type = "text/html; charset=utf-8" if candidate.suffix == ".html" else "text/plain; charset=utf-8"
+            content_type = _static_content_type(candidate)
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
