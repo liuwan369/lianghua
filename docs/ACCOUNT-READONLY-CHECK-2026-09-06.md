@@ -17,6 +17,8 @@
 | Relayer API 密钥 | 暂无；服务器也未配置 CLOB 签名凭据 |
 | 真实订单 | 无 |
 
+2026-09-07 本地文件 `C:\Users\Administrator\Desktop\量化密钥\Relayer API 密钥已创建.txt` 只读核对：`RELAYER_API_KEY` 字段仍是 `<已隐藏>` 占位符，不是可用密钥；`RELAYER_API_KEY_ADDRESS` 字段为真实地址，但不能代替 Deposit Wallet 地址或 Session Key。原文件未复制到仓库、未上传服务器、未在日志中输出。
+
 ## 未完成
 
 - 资金归属、funder 地址和最终交易钱包需通过受支持的账户预检接口确认，不能用页面公开/API 地址代替。
