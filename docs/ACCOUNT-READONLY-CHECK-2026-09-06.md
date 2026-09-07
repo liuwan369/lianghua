@@ -22,16 +22,18 @@
 
 2026-09-08 本地文件 `C:\Users\Administrator\Desktop\量化密钥\Relayer API 密钥已创建.txt` 仅检查字段名、是否占位和长度：资金地址、Relayer Key、Relayer Key Address 存在；Owner 和 Session Key 不存在；严格环境变量格式尚未识别 Builder 三个字段。原文件未复制到仓库、未上传服务器、未在日志中输出。
 
+2026-09-08 官方 Builder 团队邮件回复：自建 bot/交易系统/MM bot 应使用 Relayer API Key，不应使用 Builder Key；Session Key 管理目前处于 Beta，仅向选定合作方开放。因此此前“联系 Builder 开通 Session Key”不是通用可执行步骤，已从操作要求中删除。
+
 ## 未完成
 
 - Deposit Wallet 与 Owner 的链上关系已确认，但没有 Owner 或 Session 签名凭据，不能做认证账户查询。
 - 都柏林只配置公开资金地址；本地 Relayer/Builder 凭据未复制到服务器。
-- 缘由不是“缺 API 地址”：订单必须由 Owner 或获授权 Session Key 签名，Relayer Key 只负责免 Gas 钱包操作。
+- Relayer API Key 用于官方 Relayer API 访问；它不替代订单签名。订单仍必须由 Owner 或获授权 Session Key 签名。
 - 真实 maker/taker 费用、返佣、奖励、订单回报和排队位置尚未产生账户证据。
 
 ## 放行顺序
 
-1. 官方批准 Session Key 管理权限后，在服务器本地生成/授权 Session Key；Owner 私钥不长期留在服务器。
+1. 只有收到官方 Beta 邀请时才走 Session Key 流程；否则使用 Owner 签名方案，并将 Relayer API Key 仅配置到需要 Relayer API 的受控服务。
 2. 用认证账户查询补齐缺失授权并复核余额、空挂单和空仓位。
 3. 使用 post-only 极小额限价单，人工确认已挂出后立即撤单。
 4. 核对订单回报、撤单回报、费用和账户余额变化；全部通过后仍保持低额观察。

@@ -22,7 +22,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 - 旧东京主机：`13.115.254.211`（历史对照）
 - 当前主节点：`34.242.206.196`，AWS Lightsail 都柏林；Node.js `24.13.0`；公网防火墙当前开放 22/80，HTTPS 临时监听 80，SSH 隧道作为备用。
 
-账户接入使用官方 `@polymarket/client 0.9.0` 做公开只读预检。真实订单热路径暂时仍由旧 CLOB V2 适配器承担并保持锁定；只有 Session Key 认证、授权补齐和小额验收完成后才迁移放行。Relayer Key、Builder Key 都不能代替订单签名。
+账户接入使用官方 `@polymarket/client 0.9.0` 做公开只读预检。真实订单热路径暂时仍由旧 CLOB V2 适配器承担并保持锁定；只有 Owner/官方 Beta Session Key 认证、授权补齐和小额验收完成后才迁移放行。自建 bot 使用 Relayer API Key 访问 Relayer 接口；Builder Key 仅用于获批准的 Builder 集成，二者都不能代替订单签名。
 
 页面服务读取都柏林本机采集数据，不把完整数据库暴露给浏览器。
 

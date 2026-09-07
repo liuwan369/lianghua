@@ -41,7 +41,7 @@ Session Key ─> 官方 SDK 认证与下单（等待官方权限，尚未接通�
 
 实盘额外要求：主行情 WS 和用户订单 WS 都在线、两边盘口完整且不超过 `250ms`、账户预检通过。任一关键通道断开或订单状态不明，系统进入撤单、核对、重建仓位并停止，不自动恢复交易。
 
-账户身份固定分层：Deposit Wallet 持有资金；Owner 只用于授权；Session Key 才是服务器长期交易签名者；Relayer Key 只处理免 Gas 钱包操作；Builder 凭据只管理 Session Key。五者不得互相替代。
+账户身份固定分层：Deposit Wallet 持有资金；Owner 或获官方授权的 Session Key 负责订单签名；Relayer API Key 负责官方 Relayer API 访问和免 Gas 钱包操作；Builder 凭据只用于获批准的 Builder 集成。五者不得互相替代。Session Key 当前为 Beta 受邀功能，不是自建 bot 的默认依赖。
 
 ## 部署
 
