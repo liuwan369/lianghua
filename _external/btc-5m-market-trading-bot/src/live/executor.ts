@@ -183,7 +183,7 @@ export class Executor {
   }
 
   private prepSize(px: number, shares: number): number {
-    let size = Math.round(this.capSize(px, shares) * 100) / 100;
+    let size = Math.floor((this.capSize(px, shares) + 1e-9) * 100) / 100;
     if (size > 0 && size < MIN_ORDER_SHARES) {
       const minNotional = px * MIN_ORDER_SHARES;
       if (minNotional <= this.maxOrderUsd + 1e-9) {
@@ -195,6 +195,7 @@ export class Executor {
         size = 0;
       }
     }
+    if (px * size > this.maxOrderUsd + 1e-9) size = 0;
     return size;
   }
 

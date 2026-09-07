@@ -108,6 +108,10 @@ export class Engine {
   onOrderCancelled(side?: Side): void {
     this.session.onOrderCancelled(side);
   }
+
+  resizePendingQuote(side: Side, shares: number, price?: number): void {
+    this.session.resizePendingQuote(side, shares, price);
+  }
 }
 
 export function bookOk(

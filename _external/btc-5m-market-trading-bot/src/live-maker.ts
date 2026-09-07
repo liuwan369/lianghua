@@ -300,6 +300,21 @@ export class MakerSession {
     }
   }
 
+  resizePendingQuote(side: Side, shares: number, price?: number): void {
+    if (!Number.isFinite(shares) || shares <= 0) {
+      this.onOrderCancelled(side);
+      return;
+    }
+    for (const quote of this.pending) {
+      if (quote.side === side) {
+        quote.shares = shares;
+        if (price != null && Number.isFinite(price) && price > 0 && price < 1) {
+          quote.price = price;
+        }
+      }
+    }
+  }
+
   resolve(winner: Side): [number, number, number, number, number, number] {
     const payout = this.inv.payoutIfWinner(winner);
     const cost = this.inv.totalCost();

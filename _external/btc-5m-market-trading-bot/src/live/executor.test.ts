@@ -3,6 +3,16 @@ import { Side } from "../models.js";
 import { Executor, UnknownOrderStateError } from "./executor.js";
 
 describe("Executor fill tracking", () => {
+  it("enforces the USD cap on the actual submitted size", async () => {
+    const executor = new Executor(false, 1, 10, 10);
+
+    expect((await executor.submit(Side.Up, "token-up", 0.36, 20)).ok).toBe(false);
+    expect((await executor.submit(Side.Up, "token-up", 0.2001, 20)).size).toBe(5);
+    expect((await executor.submit(Side.Up, "token-up", 0.19, 20)).size).toBe(5.26);
+    expect((await executor.submit(Side.Up, "token-up", 0.18, 20)).size).toBe(5.55);
+    expect((await executor.submit(Side.Up, "token-up", 0.04, 20)).size).toBe(20);
+  });
+
   it("keeps a partially filled maker order tracked until its remaining size fills", async () => {
     const executor = new Executor(false, 10, 10, 100);
     const submitted = await executor.submit(Side.Up, "token-up", 0.4, 5);

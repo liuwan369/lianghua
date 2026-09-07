@@ -13,6 +13,7 @@ Environment=PM_LIVE_LOCAL=1
 Environment=PM_LIVE_DATA_DIR=/root/pm-system/data/pm-r25-live/days
 Environment=PM_EVIDENCE_GLOB=dublin-evidence-*.sqlite3
 Environment=PM_COLLECTOR_SERVICE=pm-r25-dublin-collector.service
+Environment=PM_LIVE_URL=http://127.0.0.1:18766/api/live
 EnvironmentFile=-/root/pm-system/config/dashboard-secret.env
 ExecStart=/root/pm-system/.venv/bin/python /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
 Restart=always

@@ -33,4 +33,21 @@ describe("MakerSession liveMode", () => {
     expect(ev.kind).toBe("fill");
     expect(s.fills()).toBe(1);
   });
+
+  it("resizes a pending paper quote before its simulated fill", () => {
+    const s = new MakerSession(targetClone(), 15, 0, 0, false);
+    s.reset(1000, 1300);
+    (s as unknown as { pending: unknown[] }).pending = [{
+      side: Side.Up,
+      price: 0.5,
+      shares: 20,
+      lifeEnd: 1020,
+      btcAtPost: 0,
+    }];
+
+    s.resizePendingQuote(Side.Up, 5.25, 0.48);
+    const fills = s.onBook(1006, 0.46, 0.47, 0.52, 0.53)
+      .filter((event) => event.kind === "fill");
+    expect(fills.some((fill) => fill.shares === 5.25 && fill.price === 0.48)).toBe(true);
+  });
 });

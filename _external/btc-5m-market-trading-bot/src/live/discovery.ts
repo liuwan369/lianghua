@@ -145,7 +145,7 @@ async function fetchBySlug(slug: string): Promise<Candidate | undefined> {
  * collector is available. This endpoint never places orders; it only supplies
  * the current market identifiers collected from Gamma in Tokyo. */
 async function fetchFromTokyo(): Promise<Candidate | undefined> {
-  const base = process.env.TOKYO_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
+  const base = process.env.PM_LIVE_URL ?? process.env.TOKYO_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
   try {
     // The Tokyo collector is the low-latency source on the trading host. Keep
     // this probe short so a stale/unavailable dashboard cannot delay discovery.

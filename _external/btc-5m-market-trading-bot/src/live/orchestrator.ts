@@ -129,7 +129,6 @@ async function applyEvents(
   canSubmit?: () => boolean,
 ): Promise<void> {
   for (const ev of events) {
-    journal.logEvent(ev, mkt, ts);
     switch (ev.kind) {
       case "quote": {
         if (live && !canSubmit?.()) {
@@ -142,9 +141,13 @@ async function applyEvents(
           ev.shares,
         );
         if (res.orderId) user?.registerOrder(res.orderId, res.tradeIds);
-        if (live && !res.ok) {
-          console.warn(`quote submit failed ${Side.asStr(ev.side)} — clearing pending`);
+        if (!res.ok) {
+          if (live) console.warn(`quote submit failed ${Side.asStr(ev.side)} — clearing pending`);
+          else console.info(`paper quote skipped ${Side.asStr(ev.side)} — configured limit reached`);
           engine.onOrderCancelled(ev.side);
+        } else {
+          engine.resizePendingQuote(ev.side, res.size, res.price);
+          journal.logEvent({ ...ev, price: res.price, shares: res.size }, mkt, ts);
         }
         break;
       }
@@ -170,7 +173,12 @@ async function applyEvents(
 
         if (!res.ok) {
 
-          console.warn(`taker submit failed ${Side.asStr(ev.side)}`);
+          if (live) console.warn(`taker submit failed ${Side.asStr(ev.side)}`);
+          else console.info(`paper taker skipped ${Side.asStr(ev.side)} — configured limit reached`);
+
+        } else {
+
+          journal.logEvent({ ...ev, price: res.price, shares: res.size }, mkt, ts);
 
         }
 
@@ -179,6 +187,8 @@ async function applyEvents(
       }
 
       case "fill":
+
+        journal.logEvent(ev, mkt, ts);
 
         if (!live) {
 
@@ -189,6 +199,8 @@ async function applyEvents(
         break;
 
       case "cancel":
+
+        journal.logEvent(ev, mkt, ts);
 
         await executor.cancelSide(ev.side);
 

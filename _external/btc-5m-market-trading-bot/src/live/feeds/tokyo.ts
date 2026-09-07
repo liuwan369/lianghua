@@ -3,7 +3,7 @@ import { type BookSnapshot, type FeedSink, nowUnix, sleep } from "./index.js";
 export function runTokyoBookFeed(sink: FeedSink, upToken: string, downToken: string, deadline: number, hz = 2): { stop: () => void } {
   let alive = true;
   let activeController: AbortController | undefined;
-  const base = process.env.TOKYO_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
+  const base = process.env.PM_LIVE_URL ?? process.env.TOKYO_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
   const periodMs = Math.min(Math.max(1000 / Math.max(hz, 0.2), 250), 5000);
   const loop = async () => {
     let last: string | undefined;

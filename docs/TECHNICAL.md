@@ -27,7 +27,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 ## 当前部署核对
 
 - 2026-09-07 服务器复核：采集器、页面、小时分析和每日轮换均为 `active/enabled`。
-- 服务器 `/api/trading/status` 返回 `running=false`、`live_unlocked=false`、`account_configured=false`。
+- 服务器 `/api/trading/status` 返回 `running=false`、`live_unlocked=false`、`account_configured=false`。2026-09-07 网页只读核对确认账户 `0xA693...D7cd` 有 `$15.71` 可用现金，但服务器没有该账户的签名或会话授权，二者不能混同。
 - 服务器 `/api/live` 返回 `collector_online=true`，CLOB 与 Binance WebSocket 在线，队列深度为 0；这只是检查时快照。
 - 本机 `127.0.0.1:18765` 是否可访问取决于 SSH 隧道是否在线；隧道断开不代表服务器服务离线。
 - Nginx 公网入口已验证：未认证返回 401；认证后页面、`/api/live` 和 `/api/trading/status` 返回 200。证书自动续期 dry-run 已通过。
@@ -71,13 +71,15 @@ node dist/cli/live.js preflight
 
 入口：`dist/cli/live.js`。页面启动时调用 `run --paper`；真实模式需要额外的服务器环境解锁，不由页面自行开启，当前没有账户签名配置。
 
+都柏林页面服务在 `127.0.0.1:18766`，交易子进程通过 `PM_LIVE_URL=http://127.0.0.1:18766/api/live` 读取本机实时聚合。单笔美元值是严格上限：执行器先按市场 tick 向下调整价格，再把份数向下取整到两位，并把最终价格和份数同步回策略仓位与日志。公开 BTC 5 分钟市场当前最小挂单为 5 份，因此 `$1` 限价单只在最终价格不高于约 `$0.20` 时可下；网页的 `$1` 立即买入属于另一条主动成交路径。
+
 核心回放脚本：`pm-r26-historical-shadow-replay.py`、`pm-r27-parameter-sweep.py`、`pm-r28-risk-sweep.py`。它们只读历史数据，不提交订单。
 
 ## 验证原则
 
 - Python 语法和单元测试必须通过。
 - TypeScript 必须构建成功并通过 Vitest。
-- 最新低延迟链路验证：TypeScript 类型检查、构建和 Vitest `82/82` 通过；Python `79 passed`；地区检查失败时强制停止。
+- 最新低延迟链路验证：TypeScript 类型检查、构建和 Vitest `84/84` 通过；Python `79 passed`；地区检查失败时强制停止。
 - 2026-09-07 从都柏林服务器本机检查 `/api/trading/status` 和 `/api/live` 均成功；采集器最新事件持续更新。分析报告会如实标记历史断线、队列满或行情序号缺口。
 - 模拟启动后日志必须出现挂单/成交/撤单或明确的无成交原因。
 - 停止后不应继续产生本地成交记录。
