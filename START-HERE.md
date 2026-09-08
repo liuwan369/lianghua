@@ -17,7 +17,7 @@
 ## 账户与真钱状态
 
 - 最近一次只读网页核对：API/公开地址 `0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd`，该地址不能用于充值。
-- 最近一次页面记录的现金/组合约 `$17.13`、无持仓；这只是当时页面状态，不是实时账户余额。
+- 最近一次只读核对的现金/组合约约 `$15.71`、无持仓（2026-09-07 快照）；这不是实时账户余额。
 - Deposit Wallet 的链上 Owner/Relayer 地址：`0xDa6F73818Af63191633D8c8025508CD703780CD0`；Relayer API Key 只用于官方 Relayer API，不是订单签名。
 - 自建 bot 不需要 Builder Key；Session Key 目前只对官方选定合作方 Beta 开放。
 - 系统当前没有 Owner 签名私钥；Relayer Key 不能代替订单签名，`account_configured=false`。Session Key 不是必需项。
