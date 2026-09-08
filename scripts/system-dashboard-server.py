@@ -250,8 +250,8 @@ def account_config_status() -> dict:
         "session_signer_configured": session_signer,
         "relayer_api_configured": present("RELAYER_API_KEY") and present("RELAYER_API_KEY_ADDRESS"),
         "builder_api_configured": builder,
-        # The current execution adapter still requires the Owner signer. The
-        # Session Key path remains separately locked until it is implemented.
+        # The current execution adapter uses the Owner signer. Session Key is
+        # an optional delegated signer and is not required for this route.
         "execution_credentials_ready": wallet_valid and owner_signer,
         "read_only_only": wallet_valid and not owner_signer and not session_signer,
     }

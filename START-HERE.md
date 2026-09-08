@@ -20,14 +20,14 @@
 - 最近一次页面记录的现金/组合约 `$17.13`、无持仓；这只是当时页面状态，不是实时账户余额。
 - Deposit Wallet 的链上 Owner/Relayer 地址：`0xDa6F73818Af63191633D8c8025508CD703780CD0`；Relayer API Key 只用于官方 Relayer API，不是订单签名。
 - 自建 bot 不需要 Builder Key；Session Key 目前只对官方选定合作方 Beta 开放。
-- 系统当前没有私钥或交易凭据，`account_configured=false`。
+- 系统当前没有 Owner 签名私钥；Relayer Key 不能代替订单签名，`account_configured=false`。Session Key 不是必需项。
 - 系统当前没有实盘解锁，`live_unlocked=false`、`trade_authorization=false`。
 
 所以现在不能点击页面就进行真钱交易。
 
 ## 真钱前还差什么
 
-1. 在服务器本地安全配置受支持的账户签名方式，不在网页或聊天中传私钥。
+1. 在服务器本地安全配置 Owner 签名方式，不在网页或聊天中传私钥；没有 Session Key 也可以走这条路径。
 2. 完成只读账户预检和地区/API 接单核验。
 3. 用极小额 post-only 挂单、撤单验证真实订单回报。
 4. 验证部分成交、断线撤单、状态不明后的仓位重建和单边止损。

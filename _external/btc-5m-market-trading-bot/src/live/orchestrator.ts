@@ -788,7 +788,7 @@ export async function run(cfg: RunConfig): Promise<void> {
     const key = ownerSignerPrivateKey();
     if (!key) {
       throw new Error(
-        "实盘已拒绝：未配置 Owner 签名私钥；Session Key 接入完成前不能提交订单",
+        "实盘已拒绝：未配置 Owner 签名私钥。Session Key 是可选的 Beta 委托方案，不是必需项",
       );
     }
     if (cfg.preflight !== false) {
