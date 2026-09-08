@@ -30,7 +30,8 @@ Session Key ─> 可选 Beta 委托路径（不等待、不作为上线前提）
 | 公开数据采集 | `scripts/pm-r25-tokyo-evidence-collector.py` | 采集盘口、成交、BTC、Polygon；文件名是历史名称 | 都柏林持续运行 |
 | 分析服务 | `scripts/pm-r25-live-evidence-analysis.py` | 生成最近窗口的完整性和行为报告 | 每小时运行 |
 | 页面后端 | `scripts/system-dashboard-server.py` | 页面静态文件、实时状态、模拟启停与日志汇总 | 都柏林运行 |
-| 页面前端 | `docs/system-dashboard.html/js` | 交易、配置、订单三个用户入口 | 可用 |
+| 页面前端 | `docs/system-dashboard.html/js` | 交易、账户、配置、订单四个用户入口 | 已部署，公网浏览器登录验收待用户完成 |
+| 账户接入 | `scripts/dashboard_account.py`、`src/cli/account-check.ts` | 用户配置、只读预检、原子保存 | Linux 权限测试通过 |
 
 ## 交易状态机
 
@@ -56,7 +57,11 @@ Session Key ─> 可选 Beta 委托路径（不等待、不作为上线前提）
 
 ## 安全边界
 
-- 页面不接收或保存钱包私钥。
+- 单管理员账户页面通过已登录 HTTPS 提交密钥；Nginx 覆盖认证头并保留 Host 端口，后端校验来源、认证及 HTTPS。不是多用户托管平台。
+- `GET /api/account/status` 仅返回状态；`POST /api/account/check` 只读检查；`POST /api/account/save` 检查后保存。检查子进程不返回原始错误或秘密。
+- 新配置存于 `/root/.config/pm-system/account.json`，目录 700、文件 600，原子替换。密码不回填，不进入浏览器 localStorage 或 Git。
+- 管理配置一旦存在就覆盖旧环境配置；文件损坏或权限不符时拒绝读取，不回退旧密钥。更换资金地址清除旧密钥；保存与启动互斥，保存撤销当前进程实盘解锁。
+- 策略参数目前仍保存在各浏览器 localStorage；账户配置由服务器保存。不同浏览器的策略参数不会自动同步。
 - 默认 `trade_authorization=false`。
 - 真实执行必须同时具备服务器账户配置、显式实盘解锁和代码预检。
-- 当前三个条件均未满足，不会提交真实订单。
+- 当前未解锁，旧 Owner 凭据命中暴露记录，链上授权仍缺项，不会提交真实订单。只读通过也不等于真实交易验收通过。

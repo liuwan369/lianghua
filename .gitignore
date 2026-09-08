@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+*-secret.env
+**/account.json
 *.log
 *.tmp
 data/tmp-*/

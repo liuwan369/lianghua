@@ -7,7 +7,7 @@
 - 主节点：AWS 都柏林 `eu-west-1`；东京仅保留历史数据和线路对照。
 - 都柏林采集器、页面服务、小时分析和每日轮换均已部署并启用。
 - 页面可运行真实行情驱动的纸面模拟；纸面订单、成交和盈亏不是账户真实结果。
-- 真钱交易仍锁定：`trade_authorization=false`、`live_unlocked=false`；账户签名已配置，但授权验收尚未完成。
+- 真钱交易仍锁定：`trade_authorization=false`、`live_unlocked=false`；旧签名凭据有暴露记录，需更换，链上授权和真实订单验收尚未完成。
 - 当前裁决：`NOT_READY_FOR_LIVE_TRADING`。
 - 云仓库：[liuwan369/lianghua](https://github.com/liuwan369/lianghua)，只保存源码、配置模板、测试和文档。
 
@@ -38,6 +38,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 1. **交易**：查看实时盘口、模拟挂单、成交、撤单、成交额和结算盈亏。
 2. **配置**：设置配对成本上限、单笔金额、资金上限、订单上限和运行时间。
 3. **订单**：按市场查看成交额、持仓和结算结果。
+4. **账户**：用户填写、只读检查并保存账户配置；密钥只在受保护服务器保存，不返回浏览器。保存不等于授权下单。
 
 ## 策略白话版
 

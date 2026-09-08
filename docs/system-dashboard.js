@@ -4,7 +4,7 @@
   const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
   const esc = value => String(value ?? '--').replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
   const money = value => value == null ? '--' : (Number(value) >= 0 ? '+$' : '-$') + Math.abs(Number(value)).toFixed(2);
-  const price = value => Number.isFinite(Number(value)) ? Number(value).toFixed(4) : '--';
+  const price = value => value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(4) : '--';
   const age = iso => {
     const time = Date.parse(iso || '');
     if (!Number.isFinite(time)) return '--';
@@ -20,6 +20,11 @@
   let latestLive = null;
   let runningParams = {};
   let liveLoading = false;
+  let tradingLoading = false;
+  let actionBusy = false;
+  let actionError = null;
+  let lastStatus = null;
+  const request = (url, options = {}) => fetch(url, { ...options, signal: AbortSignal.timeout(55000) });
 
   function currentMarket(data) {
     return (data?.current_markets || []).slice().sort((a, b) => Number(a.end || Infinity) - Number(b.end || Infinity))[0];
@@ -38,15 +43,15 @@
     set('downBook', price(market.down_bid) + ' / ' + price(market.down_ask));
     set('askSum', market.ask_sum == null ? '--' : price(market.ask_sum));
     const cap = Number(runningParams.pair_cost_max ?? $('pairCostMax')?.value ?? 0.99);
-    const eligible = market.ask_sum != null && Number(market.ask_sum) <= cap;
-    set('strategyGate', eligible ? '符合本次成本上限 $' + cap.toFixed(3) : '超过本次成本上限 $' + cap.toFixed(3));
+    // Ask sum describes immediate buying, not maker eligibility or inventory cost.
+    set('strategyGate', '补仓成本上限 $' + cap.toFixed(3) + ' · 挂单由库存和盘口共同决定');
   }
 
   async function loadLive() {
     if (liveLoading) return;
     liveLoading = true;
     try {
-      const response = await fetch('api/live', { cache: 'no-store' });
+      const response = await request('api/live', { cache: 'no-store' });
       if (!response.ok) throw new Error(String(response.status));
       const data = await response.json();
       latestLive = data;
@@ -59,13 +64,14 @@
       renderBook(data);
     } catch (_) {
       latestLive = null;
+      renderBook(null);
       ['clob', 'binance', 'dataAge'].forEach(id => set(id, '不可用'));
       set('liveNote', '实时数据已断开，页面已清空旧价格。');
     } finally { liveLoading = false; }
   }
 
   function renderEvents(events) {
-    const labels = { quote: '挂单尝试', fill: '成交', taker: '吃单', cancel: '撤单', resolved: '结算', resolved_empty: '结算（无成交）' };
+    const labels = { quote: '挂单尝试', fill: '成交', taker: '吃单', cancel: '撤单', stopped: '已停止', resolved: '结算', resolved_empty: '结算（无成交）' };
     const rows = (events || []).filter(event => event.event !== 'reset').slice(-12).reverse();
     const html = rows.length ? rows.map(event => {
       const time = event.time ? new Date(Number(event.time) * 1000).toLocaleTimeString('zh-CN') : '--';
@@ -83,6 +89,7 @@
   }
 
   function renderTrading(status) {
+    lastStatus = status;
     const stats = status.stats || {};
     const account = status.account || {};
     const running = status.running === true;
@@ -92,13 +99,16 @@
     const settled = Number(stats.settled_markets || 0), observed = Number(stats.markets || 0), traded = Number(stats.traded_markets || 0);
     set('systemBadge', running ? (status.mode === 'live' ? '实盘运行中' : '模拟运行中') : '安全模式');
     let accountLabel = '未配置资金账户';
-    if (account.execution_credentials_ready) accountLabel = 'Owner 签名已配置（实盘仍锁定）';
+    if (account.execution_credentials_ready) accountLabel = '签名已填写，请在“账户”完成检查';
     else if (account.session_signer_configured) accountLabel = 'Session Key 已配置（交易接入未放行）';
     else if (account.wallet_configured) accountLabel = '资金地址已核对（当前只能只读）';
+    if (account.config_error) accountLabel = account.config_error;
+    if (account.last_check?.compromised) accountLabel = '需更换安全账户（模拟可用）';
+    else if (account.last_check?.account_ready) accountLabel = '账户检查通过 · 真钱成交待验收';
     set('overviewAccount', accountLabel);
     set('overviewParams', running ? '$' + Number(runningParams.pair_cost_max || 0.99).toFixed(3) + ' 配对上限 · $' + Number(runningParams.order_usd || 0).toFixed(2) + ' 每笔 · $' + Number(runningParams.max_total_usd || 0).toFixed(2) + ' 总上限' : '尚未启动，可在“配置”中修改');
-    if ($('overviewStart')) $('overviewStart').disabled = running;
-    if ($('overviewStop')) $('overviewStop').disabled = !running;
+    updateStartButton();
+    if ($('overviewStop')) $('overviewStop').disabled = !running || actionBusy;
     set('statFills', fills);
     set('statFillNote', fills ? '已有成交 · 观察 ' + observed + ' 场 · 实际成交 ' + traded + ' 场' : '观察 ' + observed + ' 场 · 实际成交 0 场');
     set('statTurnover', '$' + spent.toFixed(2));
@@ -113,26 +123,38 @@
     if (!reason) {
       if (running && fills) reason = '已产生成交，继续观察结算。';
       else if (running && quotes) reason = '已尝试挂单 ' + quotes + ' 次，撤单 ' + cancels + ' 次，暂未成交。';
-      else if (running) reason = '模拟已启动，正在等待满足配对成本上限的盘口。';
-      else if (fills) reason = '本次已产生成交，结算收益已记录。';
+      else if (running) reason = '已启动，正在等待策略允许的挂单机会。';
+      else if (fills) reason = settled ? '本次已成交，已结算部分见收益。' : '本次已成交但未结算，尚不能确认收益。';
       else if (quotes) reason = '本次有 ' + quotes + ' 次挂单尝试，但没有成交。';
-      else reason = '本次没有成交：没有出现满足成本上限的盘口。';
+      else reason = '尚无成交记录。启动后会显示挂单和成交；没有记录不能推断具体原因。';
     }
-    set('actionResult', reason);
+    if (stats.error) reason = '运行异常，请检查：' + stats.error;
+    if (!actionBusy) set('actionResult', actionError || reason);
+  }
+
+  function updateStartButton() {
+    const live = $('mode')?.value === 'live';
+    set('overviewStart', live ? '开始真实交易' : '开始模拟');
+    if ($('overviewStart')) $('overviewStart').disabled = actionBusy || !lastStatus || lastStatus.running || (live && !lastStatus.live_unlocked);
   }
 
   async function loadTrading() {
+    if (tradingLoading) return;
+    tradingLoading = true;
     try {
-      const response = await fetch('api/trading/status', { cache: 'no-store' });
+      const response = await request('api/trading/status', { cache: 'no-store' });
       if (!response.ok) throw new Error(String(response.status));
       renderTrading(await response.json());
     } catch (_) {
+      lastStatus = null;
+      updateStartButton();
       set('systemBadge', '状态不可用');
-      set('actionResult', '交易状态暂时不可用，请稍后重试。');
-    }
+      if (!actionBusy && !actionError) set('actionResult', '无法确认后台是否运行，请恢复连接后检查，勿重复启动。');
+    } finally { tradingLoading = false; }
   }
 
   async function tradingAction(path) {
+    if (actionBusy) return;
     const isStop = path.endsWith('/stop');
     const body = isStop ? {} : {
       mode: $('mode')?.value || 'paper',
@@ -146,17 +168,70 @@
       defensive_cancel_bps: Number($('defensiveCancel')?.value || 0),
       confirm_live: false
     };
-    set('actionResult', isStop ? '正在停止并撤单…' : '正在启动模拟…');
+    if (!isStop && body.mode === 'live') {
+      if (!lastStatus?.live_unlocked) { set('actionResult', '真实交易尚未解锁，请先完成账户检查和小额验收。'); return; }
+      if (!window.confirm('将使用真钱交易：每笔最多 $' + body.order_usd + '，累计提交上限 $' + body.max_total_usd + '。确认启动？')) return;
+      body.confirm_live = true;
+    }
+    actionBusy = true;
+    actionError = null;
+    updateStartButton();
+    if ($('overviewStop')) $('overviewStop').disabled = true;
+    set('actionResult', isStop ? '正在停止并核对撤单…' : '正在启动，请稍候…');
     try {
       const headers = { 'Content-Type': 'application/json' };
       const controlToken = $('controlToken')?.value.trim();
-      if (controlToken) headers.Authorization = 'Bearer ' + controlToken;
-      const response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (controlToken) headers['X-PM-Control-Token'] = controlToken;
+      const response = await request(path, { method: 'POST', headers, body: JSON.stringify(body) });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error(data.error || String(response.status));
-      set('actionResult', isStop ? '已停止，撤单已确认。' : '模拟交易已启动。');
+      actionBusy = false;
+      renderTrading(data.status);
+    } catch (error) {
+      actionError = '操作未确认：' + error.message + '。请先查看后台状态，勿重复点击。';
+      set('actionResult', actionError);
+    } finally { actionBusy = false; updateStartButton(); await loadTrading(); }
+  }
+
+  function showAccountReport(report) {
+    const rows = report?.checks || [];
+    $('accountChecks').innerHTML = rows.map(item => '<div class="row"><span>' + esc(item.name) + '</span><b class="' + (item.ok ? 'good' : 'warn') + '">' + esc(item.detail) + '</b></div>').join('');
+    if (report?.checked_at) set('accountResult', '检查时间：' + new Date(report.checked_at).toLocaleString('zh-CN') + '。' + (report.account_ready ? '账户条件通过；仍需实盘验收。' : '请处理下方未通过项。'));
+  }
+
+  async function loadAccount() {
+    try {
+      const response = await request('api/account/status', { cache: 'no-store' });
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      if (!$('accountWallet').value) $('accountWallet').value = data.wallet || '';
+      if (data.last_check) showAccountReport(data.last_check);
+      else set('accountResult', data.config_error || '已读取账户配置，请点击“检查已保存账户”获取最新结果。');
+    } catch (_) { set('accountResult', '账户状态不可用，请恢复连接后重试。'); }
+  }
+
+  async function accountAction(save) {
+    if ($('accountSave').disabled) return;
+    if (save && !window.isSecureContext) { set('accountResult', '请使用带登录保护的 HTTPS 页面。'); return; }
+    if (save && !$('accountForm').reportValidity()) return;
+    const body = save ? { wallet: $('accountWallet').value.trim(), owner_key: $('accountOwner').value.trim(), relayer_key: $('accountRelayer').value.trim(), relayer_address: $('accountRelayerAddress').value.trim() } : {};
+    // Secrets are never placed in storage, URLs, or error messages.
+    $('accountOwner').value = '';
+    $('accountRelayer').value = '';
+    $('accountSave').disabled = $('accountCheck').disabled = true;
+    set('accountResult', '正在核对账户、余额和授权，请稍候…');
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      const token = $('controlToken')?.value.trim();
+      if (token) headers['X-PM-Control-Token'] = token;
+      const response = await request('api/account/' + (save ? 'save' : 'check'), { method: 'POST', headers, body: JSON.stringify(body) });
+      const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || '检查失败');
+      showAccountReport(data.report);
+      if (save) set('accountResult', $('accountResult').textContent + ' 账户已保存；没有下单或广播授权。');
       await loadTrading();
-    } catch (error) { set('actionResult', '操作失败：' + error.message); }
+    } catch (error) { set('accountResult', error.message + '；密码字段已清空。'); }
+    finally { body.owner_key = body.relayer_key = ''; $('accountSave').disabled = $('accountCheck').disabled = false; }
   }
 
   const configKey = 'pm-dashboard-config-v1';
@@ -182,10 +257,13 @@
   $('overviewStart')?.addEventListener('click', () => tradingAction('api/trading/start'));
   $('overviewStop')?.addEventListener('click', () => tradingAction('api/trading/stop'));
   $('saveSettings')?.addEventListener('click', saveConfig);
-  $('mode')?.addEventListener('change', () => set('actionResult', $('mode').value === 'live' ? '真实交易需要服务器解锁和人工授权。' : '尚未启动。'));
+  $('mode')?.addEventListener('change', () => { updateStartButton(); set('actionResult', $('mode').value === 'live' ? '真实交易需账户检查通过并完成小额验收；未解锁时不能启动。' : '尚未启动。'); });
+  $('accountForm')?.addEventListener('submit', event => { event.preventDefault(); accountAction(true); });
+  $('accountCheck')?.addEventListener('click', () => accountAction(false));
   loadConfig();
   loadLive();
   loadTrading();
+  loadAccount();
   setInterval(loadLive, 5000);
   setInterval(loadTrading, 3000);
 })();

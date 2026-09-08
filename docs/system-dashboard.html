@@ -13,11 +13,29 @@
 </head>
 <body>
 <div id="app">
-  <aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><span>POLYMARKET</span></div><nav class="nav"><button class="active" data-view="overview">交易</button><button data-view="settings">配置</button><button data-view="history">订单</button></nav><div class="side-foot"><span id="nodeLabel">本地节点</span> · 默认模拟<br>v0.5</div></aside>
+  <aside class="sidebar"><div class="brand"><span class="brand-mark">P</span><span>POLYMARKET</span></div><nav class="nav"><button class="active" data-view="overview">交易</button><button data-view="account">账户</button><button data-view="settings">配置</button><button data-view="history">订单</button></nav><div class="side-foot"><span id="nodeLabel">本地节点</span> · 默认模拟<br>v0.6</div></aside>
   <main class="content">
-    <nav class="mobile-nav"><button class="active" data-view="overview">交易</button><button data-view="settings">配置</button><button data-view="history">订单</button></nav>
+    <nav class="mobile-nav"><button class="active" data-view="overview">交易</button><button data-view="account">账户</button><button data-view="settings">配置</button><button data-view="history">订单</button></nav>
     <header class="topbar"><div><div class="eyebrow">POLYMARKET</div><h1>BTC 5分钟交易</h1><p>实时行情、成交和收益</p></div><div class="top-actions"><span class="status-chip" id="systemBadge">安全模式</span></div></header>
 
+    <section class="view" id="view-account">
+      <section class="panel"><h2>连接交易账户</h2>
+        <div class="notice">先填写账户并检查，再设置资金和策略。模拟无需填写私钥。保存账户不等于授权或启动交易。</div>
+        <form id="accountForm" autocomplete="off">
+          <div class="form-grid">
+            <div class="field"><label for="accountWallet">资金钱包地址</label><input id="accountWallet" maxlength="42" placeholder="0x…" spellcheck="false" required><small class="field-help">平台显示的资金账户 / API 地址，不是充值地址。</small></div>
+            <div class="field"><label for="accountOwner">订单签名私钥</label><input id="accountOwner" type="password" autocomplete="new-password" maxlength="66" spellcheck="false"><small class="field-help">首次接入实盘时填写。同一账户留空保留；更换账户需重新填写。</small></div>
+            <div class="field"><label for="accountRelayer">Relayer API 密钥（选填）</label><input id="accountRelayer" type="password" autocomplete="new-password" maxlength="256"><small class="field-help">用于免 Gas 钱包授权操作，与订单签名不同。</small></div>
+            <div class="field"><label for="accountRelayerAddress">Relayer 对应地址（配套填写）</label><input id="accountRelayerAddress" maxlength="42" placeholder="0x…" spellcheck="false"></div>
+          </div>
+          <p class="field-help">密钥只通过已登录的 HTTPS 入口提交，保存于服务器受保护文件；不会回填、写入浏览器存储或返回到页面。无需 Builder / Session Key。</p>
+          <div class="run-controls"><button id="accountSave" class="btn primary" type="submit">检查并保存账户</button><button id="accountCheck" class="btn" type="button">检查已保存账户</button><a class="btn" href="https://polymarket.com/" target="_blank" rel="noopener noreferrer">打开平台账户</a></div>
+        </form>
+        <div id="accountResult" class="result" role="status" aria-live="polite">尚未检查账户。</div>
+        <div id="accountChecks" class="rows"></div>
+        <p class="field-help">授权不足时，请在平台完成交易授权后重新检查。系统内一键链上授权和真钱成交仍待验收；精确排队位置不由公开接口提供。</p>
+      </section>
+    </section>
     <section class="view active" id="view-overview">
       <div class="stats"><div class="stat"><label>本次总成交</label><strong id="statFills">0</strong><small id="statFillNote">等待运行</small></div><div class="stat"><label>本次总成交额</label><strong id="statTurnover">$0.00</strong><small>所有成交金额合计</small></div><div class="stat"><label>本次挂单 / 撤单</label><strong id="statOrders">0 / 0</strong><small>从启动开始累计</small></div><div class="stat"><label>本次已结算收益</label><strong id="statPnl">未结算</strong><small id="statPnlNote">结算后显示</small></div></div>
       <div class="overview-grid"><section class="panel"><h2>交易控制</h2><div class="rows"><div class="row"><span class="muted">账户状态</span><b id="overviewAccount">未配置</b></div><div class="row"><span class="muted">当前运行参数</span><b id="overviewParams">尚未启动</b></div></div><div class="run-controls" style="margin-top:14px"><button class="btn primary" id="overviewStart" type="button">开始模拟</button><button class="btn stop" id="overviewStop" type="button" disabled>停止并撤单</button></div><div class="result" id="actionResult">尚未启动。</div></section><section class="panel"><h2>行情连接</h2><div class="rows"><div class="row"><span class="muted">Polymarket 盘口</span><b id="clob">检查中</b></div><div class="row"><span class="muted">BTC 参考价</span><b id="binance">检查中</b></div><div class="row"><span class="muted">数据延迟</span><b id="dataAge">检查中</b></div></div><div class="result" id="liveNote">正在读取行情节点。</div></section></div>
@@ -31,7 +49,7 @@
   </main>
 </div>
 <!-- 页面逻辑只由 system-dashboard.js 提供。 -->
-<script src="system-dashboard.js?v=20260908-1"></script>
+<script src="system-dashboard.js?v=20260908-2"></script>
 </body>
 </html>
 

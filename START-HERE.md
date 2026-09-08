@@ -20,14 +20,15 @@
 - 最近一次只读核对的现金/组合约约 `$15.71`、无持仓（2026-09-07 快照）；这不是实时账户余额。
 - Deposit Wallet 的链上 Owner/Relayer 地址：`0xDa6F73818Af63191633D8c8025508CD703780CD0`；Relayer API Key 只用于官方 Relayer API，不是订单签名。
 - 自建 bot 不需要 Builder Key；Session Key 目前只对官方选定合作方 Beta 开放。
-- 都柏林服务器已安全配置并核对 Owner 签名；Relayer Key 不能代替订单签名，`account_configured=true`。Session Key 不是必需项。
+- “账户”页面已支持用户填写资金地址、Owner 签名私钥和可选 Relayer 配置，检查后保存在服务器。Session Key 不是必需项。
+- 旧 Owner/Relayer 凭据有暴露记录，已阻止该 Owner 通过新账户检查；已有配置不代表可以安全交易，见 [事件记录](docs/CREDENTIAL-INCIDENT-2026-09-08.md)。
 - 系统当前没有实盘解锁，`live_unlocked=false`、`trade_authorization=false`。
 
 所以现在不能点击页面就进行真钱交易。
 
 ## 真钱前还差什么
 
-1. 在服务器本地安全配置 Owner 签名方式，不在网页或聊天中传私钥；没有 Session Key 也可以走这条路径。
+1. 用户更换安全签名账户及 Relayer Key，再在已登录的 HTTPS “账户”页自行填写；不要在聊天中发私钥。Owner 变更是否被平台支持尚未验证，不能只修改页面地址。
 2. 完成只读账户预检和地区/API 接单核验。
 3. 用极小额 post-only 挂单、撤单验证真实订单回报。
 4. 验证部分成交、断线撤单、状态不明后的仓位重建和单边止损。
@@ -35,6 +36,8 @@
 6. 处理剩余低危依赖并完成官方新版交易路径迁移。
 
 完成上述验收前，状态保持 `NOT_READY_FOR_LIVE_TRADING`。
+
+本轮软件验收与待办见 [2026-09-08 验收记录](docs/ACCEPTANCE-2026-09-08.md)。保存账户不会自动进行链上授权或开启真钱交易；系统内一键链上授权尚未接入。
 
 ## 维护规则
 

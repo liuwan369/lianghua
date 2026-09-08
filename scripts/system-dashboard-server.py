@@ -15,6 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dashboard_account as account_store
+
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
 _trading_lock = threading.RLock()
@@ -33,6 +36,7 @@ _live_lock = threading.RLock()
 _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
+_account_report: dict | None = None
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -204,6 +208,9 @@ def _account_values() -> dict[str, str]:
         "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY",
         "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE",
     }
+    profile = account_store.load_profile()
+    if profile is not None:
+        return {name: profile.get(name, "") for name in names}
     result = {name: os.environ.get(name, "") for name in names}
     env_path = TRADING_ROOT / ".env"
     try:
@@ -230,7 +237,12 @@ def _meaningful_account_value(value: str) -> bool:
 
 def account_config_status() -> dict:
     """Describe credential roles without exposing credential values."""
-    values = _account_values()
+    try:
+        values = _account_values()
+        config_error = None
+    except RuntimeError as exc:
+        values = {}
+        config_error = str(exc)
     present = lambda name: _meaningful_account_value(values.get(name, ""))
     wallet_value = values.get("POLYMARKET_WALLET_ADDRESS") or values.get("POLY_FUNDER", "")
     wallet_clean = wallet_value.strip().strip("'\"").strip()
@@ -239,12 +251,17 @@ def account_config_status() -> dict:
         and wallet_clean.startswith("0x")
         and all(char in "0123456789abcdefABCDEF" for char in wallet_clean[2:])
     )
-    owner_signer = present("POLYMARKET_OWNER_PRIVATE_KEY") or present("POLYMARKET_PRIVATE_KEY")
+    # An explicitly invalid new key must not fall back to a legacy private key.
+    owner_raw = values.get("POLYMARKET_OWNER_PRIVATE_KEY", "") or values.get("POLYMARKET_PRIVATE_KEY", "")
+    owner_signer = bool(account_store.KEY.fullmatch(owner_raw.strip().strip("'\"")))
     session_signer = present("POLYMARKET_SESSION_PRIVATE_KEY")
     builder = all(present(name) for name in (
         "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"
     ))
     return {
+        "wallet": wallet_clean if wallet_valid else "",
+        "config_error": config_error,
+        "last_check": _account_report,
         "wallet_configured": wallet_valid,
         "owner_signer_configured": owner_signer,
         "session_signer_configured": session_signer,
@@ -255,6 +272,50 @@ def account_config_status() -> dict:
         "execution_credentials_ready": wallet_valid and owner_signer,
         "read_only_only": wallet_valid and not owner_signer and not session_signer,
     }
+
+
+def account_action(payload: dict, save: bool = False) -> dict:
+    global _account_report
+    # Serialise account changes with start/stop, including the chain check.
+    with _trading_lock:
+        if trading_status()["running"]:
+            raise ValueError("请先停止交易，再检查或更换账户")
+        values = _account_values()
+        if save or payload:
+            values = account_store.candidate_profile(payload, values)
+        if not values.get("POLYMARKET_WALLET_ADDRESS"):
+            raise ValueError("请先填写资金钱包地址")
+        report = account_store.check_account(TRADING_ROOT, values)
+        if save:
+            if values.get("POLYMARKET_OWNER_PRIVATE_KEY") and not report.get("signer_matches"):
+                raise ValueError("签名私钥与资金账户不匹配，未保存")
+            if report.get("compromised"):
+                raise ValueError("此签名账户有凭据暴露记录，请使用新的安全账户；未保存")
+            account_store.save_profile(values)
+            # A changed account can never inherit a running process's unlock.
+            os.environ.pop("PM_TRADING_LIVE_UNLOCK", None)
+        # Candidate checks are not reported as checks of the saved account.
+        if save or not payload:
+            _account_report = report
+        return report
+
+
+def _account_request_error(headers) -> tuple[int, str] | None:
+    origin, host = headers.get("Origin", ""), headers.get("Host", "")
+    parsed = urlsplit(origin)
+    if not origin or parsed.netloc != host or parsed.scheme not in {"http", "https"}:
+        return 403, "账户操作必须从当前页面发起"
+    if headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+        return 415, "请求格式必须是 JSON"
+    # Backend listens only on loopback. Nginx overwrites these identity headers.
+    trusted_https = (os.environ.get("PM_TRUST_ACCOUNT_PROXY") == "1"
+                     and headers.get("X-Forwarded-Proto") == "https"
+                     and bool(headers.get("X-PM-Authenticated")) and parsed.scheme == "https")
+    if trusted_https:
+        return None
+    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        return 403, "请使用带登录保护的 HTTPS 页面接入账户"
+    return _control_request_error(headers, "live")
 
 
 def private_key_configured() -> bool:
@@ -282,7 +343,7 @@ def _control_request_error(headers, mode: str | None) -> tuple[int, str] | None:
     if not configured_token:
         return 503, "服务器尚未配置交易控制密码"
     authorization = headers.get("Authorization") or ""
-    supplied_token = authorization[7:].strip() if authorization.startswith("Bearer ") else ""
+    supplied_token = headers.get("X-PM-Control-Token", "") or (authorization[7:].strip() if authorization.startswith("Bearer ") else "")
     if not supplied_token or not hmac.compare_digest(supplied_token, configured_token):
         return 401, "交易控制密码错误"
     return None
@@ -710,6 +771,12 @@ def start_trading(payload: dict) -> dict:
             raise RuntimeError("已有交易进程运行中")
         if _trading_process is not None and _trading_process.poll() is None:
             raise RuntimeError("已有交易进程运行中")
+        if mode == "live":
+            if os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1" or not private_key_configured():
+                raise PermissionError("账户配置或实盘授权已变化，请重新检查")
+            report = account_action({})
+            if not report.get("account_ready"):
+                raise PermissionError("账户检查未通过，请在“账户”查看未完成项")
         log_dir = TRADING_ROOT / "results" / ("live" if mode == "live" else "paper")
         log_dir.mkdir(parents=True, exist_ok=True)
         run_id = time.strftime("%Y%m%d-%H%M%S")
@@ -728,7 +795,7 @@ def start_trading(payload: dict) -> dict:
             "--defensive-cancel-bps", str(defensive_cancel_bps),
             "--log-file", str(_trading_log), "--traded-file", str(log_dir / "traded.jsonl"),
         ]
-        env = os.environ.copy()
+        env = _trading_environment()
         env["LIVE"] = "false" if mode == "paper" else "true"
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         try:
@@ -755,6 +822,15 @@ def start_trading(payload: dict) -> dict:
         _trading_stop_result = None
         _persist_trading_state()
         return trading_status()
+
+
+def _trading_environment() -> dict:
+    env = os.environ.copy()
+    env.update(_account_values())
+    # Pin the exact checked wallet; blank also prevents dotenv restoring overrides.
+    env["POLY_FUNDER"] = env.get("POLYMARKET_WALLET_ADDRESS") or env.get("POLY_FUNDER", "")
+    env["POLY_SIGNATURE_TYPE"] = ""
+    return env
 
 
 def stop_trading() -> dict:
@@ -848,6 +924,9 @@ def main() -> int:
                 body = json.dumps(trading_status(), ensure_ascii=False).encode("utf-8")
                 self._send_json(body)
                 return
+            if path == "/api/account/status":
+                self._send_json(json.dumps(account_config_status(), ensure_ascii=False).encode("utf-8"))
+                return
             if path == "/api/trading/log":
                 status = trading_status()
                 log_path = Path(status["log"]) if status.get("log") else None
@@ -893,15 +972,26 @@ def main() -> int:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path not in {"/api/trading/start", "/api/trading/stop"}:
+            if path not in {"/api/trading/start", "/api/trading/stop", "/api/account/check", "/api/account/save"}:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(max(0, min(length, 32_000)))
+                if length <= 0 or length > 32_000:
+                    raise ValueError("请求内容为空或过大")
+                raw = self.rfile.read(length)
                 payload = json.loads(raw.decode("utf-8") or "{}") if raw else {}
                 if not isinstance(payload, dict):
                     raise ValueError("request body must be an object")
+                if path.startswith("/api/account/"):
+                    auth_error = _account_request_error(self.headers)
+                    if auth_error:
+                        code, message = auth_error
+                        self._send_json(json.dumps({"ok": False, "error": message}, ensure_ascii=False).encode("utf-8"), code)
+                        return
+                    report = account_action(payload, save=path.endswith("/save"))
+                    self._send_json(json.dumps({"ok": True, "report": report}, ensure_ascii=False).encode("utf-8"))
+                    return
                 mode = trading_status().get("mode") if path.endswith("/stop") else payload.get("mode")
                 auth_error = _control_request_error(self.headers, mode)
                 if auth_error:
