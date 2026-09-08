@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
 ## 当前部署核对
 
 - 2026-09-07 服务器复核：采集器、页面、小时分析和每日轮换均为 `active/enabled`。
-- 服务器 `/api/trading/status` 返回 `running=false`、`live_unlocked=false`、`account_configured=false`。2026-09-07 网页只读核对确认账户 `0xA693...D7cd` 有 `$15.71` 可用现金，但服务器没有该账户的签名或会话授权，二者不能混同。
+- 服务器 `/api/trading/status` 当前返回 `running=false`、`live_unlocked=false`、`account_configured=true`。Owner 私钥已配置并与链上 Owner 匹配；2026-09-07 网页只读核对的 `$15.71` 只是历史余额快照，不代表当前实时余额。
 - 服务器 `/api/live` 返回 `collector_online=true`，CLOB 与 Binance WebSocket 在线，队列深度为 0；这只是检查时快照。
 - 本机 `127.0.0.1:18765` 是否可访问取决于 SSH 隧道是否在线；隧道断开不代表服务器服务离线。
 - Nginx 公网入口已验证：未认证返回 401；认证后页面、`/api/live` 和 `/api/trading/status` 返回 200。证书自动续期 dry-run 已通过。

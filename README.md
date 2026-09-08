@@ -7,7 +7,7 @@
 - 主节点：AWS 都柏林 `eu-west-1`；东京仅保留历史数据和线路对照。
 - 都柏林采集器、页面服务、小时分析和每日轮换均已部署并启用。
 - 页面可运行真实行情驱动的纸面模拟；纸面订单、成交和盈亏不是账户真实结果。
-- 真钱交易仍锁定：`trade_authorization=false`、`live_unlocked=false`、`account_configured=false`。
+- 真钱交易仍锁定：`trade_authorization=false`、`live_unlocked=false`；账户签名已配置，但授权验收尚未完成。
 - 当前裁决：`NOT_READY_FOR_LIVE_TRADING`。
 - 云仓库：[liuwan369/lianghua](https://github.com/liuwan369/lianghua)，只保存源码、配置模板、测试和文档。
 

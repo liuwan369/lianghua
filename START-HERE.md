@@ -20,7 +20,7 @@
 - 最近一次只读核对的现金/组合约约 `$15.71`、无持仓（2026-09-07 快照）；这不是实时账户余额。
 - Deposit Wallet 的链上 Owner/Relayer 地址：`0xDa6F73818Af63191633D8c8025508CD703780CD0`；Relayer API Key 只用于官方 Relayer API，不是订单签名。
 - 自建 bot 不需要 Builder Key；Session Key 目前只对官方选定合作方 Beta 开放。
-- 系统当前没有 Owner 签名私钥；Relayer Key 不能代替订单签名，`account_configured=false`。Session Key 不是必需项。
+- 都柏林服务器已安全配置并核对 Owner 签名；Relayer Key 不能代替订单签名，`account_configured=true`。Session Key 不是必需项。
 - 系统当前没有实盘解锁，`live_unlocked=false`、`trade_authorization=false`。
 
 所以现在不能点击页面就进行真钱交易。
