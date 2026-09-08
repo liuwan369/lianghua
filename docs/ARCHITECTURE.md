@@ -14,7 +14,8 @@ Polymarket 主 WS ─> TypeScript 策略 ─> 风控 ─> 纸面执行器
                                            └─> 真实执行器（当前锁定）
 
 公开资金地址 ─> 官方 SDK/Polygon 只读预检 ─> 钱包类型、Owner、余额、授权缺项
-Session Key ─> 官方 SDK 认证与下单（等待官方权限，尚未接通）
+Owner 钱包签名 ─> 官方 SDK 认证与下单（当前主路径）
+Session Key ─> 可选 Beta 委托路径（不等待、不作为上线前提）
 
 浏览器 ─HTTPS+登录保护─> Nginx ─> 都柏林页面 API ─> 启停纸面引擎 / 读取汇总
 ```

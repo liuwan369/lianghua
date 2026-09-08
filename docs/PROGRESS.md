@@ -29,6 +29,7 @@
 - 当前加密市场费率参数由 `0.072` 修正为平台参数 `0.07`。
 - 将旧下单依赖内部存在高危告警的 `ws 8.18.0` 强制升级至 `8.21.3`；高危/中危告警已清除，旧 ethers 链仍有低危告警。
 - 官方 Builder 团队已明确：自建 bot/MM bot 使用 Relayer API Key，不使用 Builder Key；Session Key 目前仅向选定合作方 Beta 开放。项目已删除“必须申请 Builder 才能交易”的错误前提。
+- 已只读验证本地 Relayer API Key：官方认证接口返回 HTTP 200 和有效 nonce；Deposit Wallet 返回 `WALLET deployed=true`。验证未签名、未授权、未广播，也未将 Key 写入都柏林磁盘。
 - 微观结构门槛现在会在每次新盘口到达时重新检查已有挂单；当可见排队量、主动卖单速度或盘口数据不再支持安全成交概率时，自动发出撤单，避免旧挂单继续暴露。
 - 行情 WS 的 `tick_size_change` 会同步到盘口快照，策略估算价格与执行器价格舍入使用同一市场 tick；新增动态撤单回归测试。
 - 本轮回归：Vitest `101/101`、Python `82/82`、TypeScript build/typecheck 均通过；密钥扫描未发现私钥或 Session Key 内容。
@@ -50,7 +51,7 @@
 
 1. 在都柏林用更长的相同负载复核 16MB TCP 缓冲区；未通过前不修改默认内核。
 2. 旧 ethers 依赖仍有低危密码学告警；待下单路径完全迁移到新版官方 SDK 后删除旧 CLOB SDK。
-3. 仅在收到官方 Beta 邀请时接通 Session Key；否则准备 Owner 签名方案，并用认证账户查询补齐 1 项 ERC-20、2 项 ERC-1155 授权。
+3. 不等待 Session Key；使用与链上 Owner `0xDa6F...0CD0` 匹配的钱包签名方案，再通过已验证的 Relayer Key 补齐 1 项 ERC-20、2 项 ERC-1155 授权。
 4. Owner 签名方案完成（或收到官方 Session Key Beta 邀请）后，做极小额 post-only 挂单/撤单，测真实 ACK、排队、部分成交和 maker/taker 身份。
 5. 演练 WebSocket 断线、订单状态不明、撤单失败、仓位重建和单边库存止损。
 6. 逐笔闭环真实手续费、做市返佣、流动性奖励和最终结算。
