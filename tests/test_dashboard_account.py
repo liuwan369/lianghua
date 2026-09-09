@@ -116,7 +116,7 @@ def test_account_http_requires_verified_https_login_or_local_control(monkeypatch
 
 
 def test_failed_or_compromised_identity_never_saved(monkeypatch):
-    monkeypatch.setattr(SERVER, "trading_status", lambda: {"running": False})
+    monkeypatch.setattr(SERVER, "trading_status", lambda **kw: {"running": False})
     monkeypatch.setattr(SERVER, "_account_values", lambda: {})
     called = []
     monkeypatch.setattr(STORE, "save_profile", lambda v: called.append(v))
@@ -128,13 +128,13 @@ def test_failed_or_compromised_identity_never_saved(monkeypatch):
 
 
 def test_changing_account_is_blocked_during_run(monkeypatch):
-    monkeypatch.setattr(SERVER, "trading_status", lambda: {"running": True})
+    monkeypatch.setattr(SERVER, "trading_status", lambda **kw: {"running": True})
     with pytest.raises(ValueError, match="先停止"):
         SERVER.account_action({"wallet": A}, save=True)
 
 
 def test_saving_account_removes_current_unlock(monkeypatch):
-    monkeypatch.setattr(SERVER, "trading_status", lambda: {"running": False})
+    monkeypatch.setattr(SERVER, "trading_status", lambda **kw: {"running": False})
     monkeypatch.setattr(SERVER, "_account_values", lambda: {})
     monkeypatch.setattr(STORE, "check_account", lambda *a: {"signer_matches": True})
     monkeypatch.setattr(STORE, "save_profile", lambda *a: None)
@@ -144,7 +144,7 @@ def test_saving_account_removes_current_unlock(monkeypatch):
 
 
 def test_empty_save_rejected(monkeypatch):
-    monkeypatch.setattr(SERVER, "trading_status", lambda: {"running": False})
+    monkeypatch.setattr(SERVER, "trading_status", lambda **kw: {"running": False})
     monkeypatch.setattr(SERVER, "_account_values", lambda: {"POLYMARKET_WALLET_ADDRESS": A})
     with pytest.raises(ValueError, match="完整"):
         SERVER.account_action({}, save=True)

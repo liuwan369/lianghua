@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import hmac
+import hashlib
 import json
 import math
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_account as account_store
+from dashboard.config import ConfigStore, ConfigConflictError
+from dashboard.ledger import Ledger
+from dashboard.read_model import ReadModel
 
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
@@ -37,6 +44,15 @@ _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 _account_report: dict | None = None
+_read_model: ReadModel | None = None
+_config_store: ConfigStore | None = None
+_config_control_lock = threading.RLock()
+_read_model_init_lock = threading.Lock()
+_trading_run_id: str | None = None
+_trading_config_revision: int | None = None
+_trading_account_id: str | None = None
+_trading_request_id: str | None = None
+_projection_pending: deque = deque()
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -114,6 +130,10 @@ def _persist_trading_state() -> None:
         "console_log": str(_trading_console_log) if _trading_console_log else None,
         "exit_code": _trading_exit_code,
         "stop_result": _trading_stop_result,
+        "run_id": _trading_run_id,
+        "config_revision": _trading_config_revision,
+        "account_id": _trading_account_id,
+        "request_id": _trading_request_id,
     }
     path = _state_path()
     try:
@@ -161,9 +181,15 @@ def _process_matches(pid: int | None, log_path: Path | None) -> bool:
 
 
 def _restore_trading_state() -> None:
+    with _trading_lock:
+        _restore_trading_state_locked()
+
+
+def _restore_trading_state_locked() -> None:
     global _trading_pid, _trading_started_at, _trading_mode, _trading_params
     global _trading_log, _trading_console_log, _trading_exit_code
     global _trading_stop_result, _trading_state_loaded
+    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
     if _trading_state_loaded:
         return
     _trading_state_loaded = True
@@ -182,6 +208,10 @@ def _restore_trading_state() -> None:
     _trading_params = state.get("params") if isinstance(state.get("params"), dict) else None
     _trading_exit_code = state.get("exit_code") if isinstance(state.get("exit_code"), int) else None
     _trading_stop_result = state.get("stop_result") if isinstance(state.get("stop_result"), dict) else None
+    _trading_run_id = state.get("run_id") if isinstance(state.get("run_id"), str) else None
+    _trading_config_revision = state.get("config_revision") if type(state.get("config_revision")) is int else None
+    _trading_account_id = state.get("account_id") if isinstance(state.get("account_id"), str) else None
+    _trading_request_id = state.get("request_id") if isinstance(state.get("request_id"), str) else None
     candidate_pid = state.get("pid") if isinstance(state.get("pid"), int) else None
     _trading_pid = candidate_pid if _process_matches(candidate_pid, _trading_log) else None
 
@@ -278,7 +308,7 @@ def account_action(payload: dict, save: bool = False) -> dict:
     global _account_report
     # Serialise account changes with start/stop, including the chain check.
     with _trading_lock:
-        if trading_status()["running"]:
+        if trading_status(include_stats=False)["running"]:
             raise ValueError("请先停止交易，再检查或更换账户")
         values = _account_values()
         if save or payload:
@@ -362,6 +392,34 @@ def live_status() -> dict:
         return _live_status_fetch()
     finally:
         _live_fetch_lock.release()
+
+
+def cached_live_status() -> dict:
+    """HTTP/feed clients only read the last background collector snapshot."""
+    with _live_lock:
+        value = dict(_live_cache)
+        age = time.monotonic() - _live_cache_at if _live_cache_at else None
+    value.update(node_label=_live_config()["node_label"], cache_age_seconds=age,
+                 refreshing=age is None or age >= 5)
+    if age is None or age > 15:
+        value["collector_online"] = False
+        value["current_markets"] = []
+        value["stale_reason"] = "行情汇总尚未更新"
+    return value
+
+
+def refresh_live_background(stop: threading.Event) -> None:
+    while not stop.is_set():
+        live_status()
+        stop.wait(1)
+
+
+def supervise_projection(stop: threading.Event) -> None:
+    while not stop.wait(1):
+        try:
+            _activate_projection()
+        except (OSError, sqlite3.Error, ValueError):
+            pass
 
 
 def _live_status_fetch() -> dict:
@@ -537,7 +595,7 @@ print(json.dumps(result, ensure_ascii=True))
         return dict(value)
 
 
-def trading_status() -> dict:
+def trading_status(include_stats: bool = True) -> dict:
     global _trading_process, _trading_pid, _trading_exit_code
     _restore_trading_state()
     with _trading_lock:
@@ -550,7 +608,7 @@ def trading_status() -> dict:
                 _persist_trading_state()
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
         account = account_config_status()
-        return {
+        status = {
             "available": (TRADING_ROOT / "dist" / "cli" / "live.js").is_file(),
             "running": running,
             "mode": _trading_mode,
@@ -565,8 +623,15 @@ def trading_status() -> dict:
             "account_configured": account["execution_credentials_ready"],
             "account": account,
             "log": str(_trading_log).replace("\\", "/") if _trading_log else None,
-            "stats": trade_log_stats(),
+            "run_id": _trading_run_id,
+            "config_revision": _trading_config_revision,
+            "account_id": _trading_account_id,
         }
+    # No journal parsing, database aggregation or console scans in this lock.
+        selection = (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision)
+    if include_stats:
+        status["stats"] = trade_log_stats(selection)
+    return status
 
 
 def _new_trade_cache(path: Path) -> dict:
@@ -581,155 +646,103 @@ def _new_trade_cache(path: Path) -> dict:
     }
 
 
-def _apply_trade_record(cache: dict, rec: dict) -> None:
-    stats = cache["stats"]
-    market_map = cache["markets"]
-    event = rec.get("event")
-    stats["last_event"] = event or stats["last_event"]
-    market = str(rec.get("market_slug") or "未标记市场")
-    summary = None
-    if event in {"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped"}:
-        summary = market_map.setdefault(
-            market,
-            {"market": market, "fills": 0, "turnover": 0.0, "pnl": None, "status": "运行中", "last_time": 0},
-        )
-        event_time = rec.get("recv_ts")
-        if isinstance(event_time, (int, float)):
-            summary["last_time"] = max(float(event_time), float(summary["last_time"]))
-        amount = None
-        if rec.get("price") is not None and rec.get("shares") is not None:
-            try:
-                amount = float(rec["price"]) * float(rec["shares"])
-            except (TypeError, ValueError):
-                pass
-        event_label = event
-        if event == "resolved" and summary is not None and summary["fills"] == 0:
-            event_label = "resolved_empty"
-        stats["events"].append({
-            "time": event_time, "event": event_label, "side": rec.get("side") or rec.get("winner"),
-            "price": rec.get("price"), "shares": rec.get("shares"), "amount": amount,
-            "pnl": None if event_label == "resolved_empty" else rec.get("pnl"),
-            "market": rec.get("market_slug"),
-        })
-        stats["events"] = stats["events"][-20:]
-    if event == "quote":
-        stats["quotes"] += 1
-    elif event == "fill" and summary is not None:
-        stats["fills"] += 1
-        if market not in cache["traded_market_keys"]:
-            cache["traded_market_keys"].add(market)
-            stats["traded_markets"] = len(cache["traded_market_keys"])
-        try:
-            amount = float(rec.get("price") or 0) * float(rec.get("shares") or 0)
-            stats["fill_notional"] += amount
-            stats["fees"] += float(rec.get("fee") or 0)
-            summary["turnover"] += amount
-        except (TypeError, ValueError):
-            stats["error"] = "交易日志含无效数字"
-        summary["fills"] += 1
-        if rec.get("is_maker") is False:
-            stats["takers"] += 1
-    elif event == "taker":
-        # A live taker is counted when its confirmed non-maker fill arrives.
-        pass
-    elif event == "cancel":
-        stats["cancels"] += 1
-    elif event == "reset":
-        stats["markets"] += 1
-    elif event == "resolved" and summary is not None:
-        if summary["fills"] == 0:
-            summary["status"] = "无成交"
-            return
-        stats["settled_markets"] += 1
-        summary["status"] = "已结算"
-        if isinstance(rec.get("pnl"), (int, float)):
-            value = float(rec["pnl"])
-            stats["pnl"] = float(stats["pnl"] or 0) + value
-            summary["pnl"] = value
-    elif event == "stopped" and summary is not None:
-        # The market did not reach its official resolution. Keep it visible,
-        # but never count it as settled or include it in PnL.
-        summary["status"] = "未结算（已停止）"
-    elif event == "error":
-        stats["error"] = str(rec.get("message") or rec.get("error") or "引擎错误")
 
 
-def trade_log_stats() -> dict:
-    """Incrementally summarize one journal, keeping long-running totals correct."""
-    path = _trading_log
-    # During startup the child process may not have created its journal yet.
-    # Keep reporting the selected new journal instead of falling back to an
-    # older run, which otherwise makes the first status response look stale.
-    if path is not None and not path.is_file():
-        empty = _new_trade_cache(path)["stats"]
-        empty["market_summaries"] = []
-        return empty
-    if path is None:
-        candidates = sorted(
-            list((TRADING_ROOT / "results" / "paper").glob("dashboard-*.jsonl"))
-            + list((TRADING_ROOT / "results" / "live").glob("dashboard-*.jsonl")),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        path = candidates[0] if candidates else None
-    if not path or not path.is_file():
-        return {**_new_trade_cache(Path(""))["stats"], "available": False, "file": None, "market_summaries": []}
+def _run_identity() -> str | None:
+    if _trading_run_id:
+        return _trading_run_id
+    if _trading_log:
+        # Legacy journals have no trustworthy account/config metadata.
+        return "legacy-" + hashlib.sha256(str(_trading_log.resolve()).encode()).hexdigest()[:24]
+    return None
 
-    global _trade_cache
+
+def _projection_snapshot(selection: tuple | None = None) -> dict:
+    # Snapshot the selection once so a concurrent new run cannot mix fields.
+    if selection is None:
+        with _trading_lock:
+            selection = (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision)
+    run_id, path, mode, account, revision = selection
+    if not path or not run_id or mode not in {"paper", "live"}:
+        return {"state": "idle", "run_id": None, "stale": True}
     try:
-        size = path.stat().st_size
-        reset_cache = _trade_cache.get("path") != str(path) or size < int(_trade_cache.get("offset", 0))
-        if reset_cache:
-            _trade_cache = _new_trade_cache(path)
-        if reset_cache:
-            # Rebuild totals from the complete journal once. Subsequent polls use
-            # offsets, so a long-running dashboard stays cheap without losing the
-            # beginning of a session after a dashboard restart.
-            chunk = path.read_bytes()
-            _trade_cache["offset"] = size
-        else:
-            with path.open("rb") as handle:
-                handle.seek(int(_trade_cache["offset"]))
-                chunk = handle.read()
-                _trade_cache["offset"] = handle.tell()
-        if chunk:
-            pieces = (_trade_cache["fragment"] + chunk).split(b"\n")
-            _trade_cache["fragment"] = pieces.pop()
-            for raw in pieces:
-                if not raw.strip():
-                    continue
-                try:
-                    rec = json.loads(raw.decode("utf-8", "replace"))
-                except ValueError:
-                    continue
-                if isinstance(rec, dict):
-                    _apply_trade_record(_trade_cache, rec)
-    except OSError as exc:
-        _trade_cache = _new_trade_cache(path)
-        _trade_cache["stats"]["error"] = str(exc)
-
-    stats = json.loads(json.dumps(_trade_cache["stats"]))
-    if not stats["error"]:
-        error_lines = [
-            line.strip() for line in _tail_lines(path.with_suffix(".console.log"), count=100)
-            if any(token in line for token in ("Error", "error", "Timeout", "failed"))
-        ]
-        if error_lines:
-            stats["error"] = error_lines[-1][:300]
-    if stats["pnl"] is not None:
-        stats["pnl"] = round(float(stats["pnl"]), 6)
-    stats["fill_notional"] = round(float(stats["fill_notional"]), 6)
-    stats["fees"] = round(float(stats["fees"]), 6)
-    stats["market_summaries"] = [
-        {**item, "turnover": round(float(item["turnover"]), 6)}
-        for item in sorted(_trade_cache["markets"].values(), key=lambda item: item["last_time"], reverse=True)[:50]
-    ]
-    return stats
+        with _read_model_init_lock:
+            return _read_model.snapshot(run_id) if _read_model else {"state": "waiting", "run_id": run_id, "stale": True}
+    except (OSError, ValueError):
+        return {"state": "unavailable", "run_id": run_id, "stale": True}
 
 
-def start_trading(payload: dict) -> dict:
+def _activate_projection() -> None:
+    """Single supervisor owns analytics selection; requests cannot rewind it."""
+    global _read_model
+    with _trading_lock:
+        selection = (_projection_pending[0] if _projection_pending else
+                     (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision))
+    run_id, path, mode, account, revision = selection
+    if not path or mode not in {"paper", "live"}:
+        return
+    with _read_model_init_lock:
+        if _read_model is None:
+            _read_model = ReadModel(TRADING_ROOT / "results" / "dashboard")
+        _read_model.select(run_id, mode, account, path, revision)
+    with _trading_lock:
+        if _projection_pending and _projection_pending[0] == selection:
+            _projection_pending.popleft()
+
+
+def trade_log_stats(selection: tuple | None = None) -> dict:
+    view = _projection_snapshot(selection)
+    stats = view.get("stats")
+    if not isinstance(stats, dict):
+        stats = {**_new_trade_cache(Path(""))["stats"], "available": False,
+                 "file": None, "pnl": None, "fees": None, "market_summaries": []}
+    return {**stats, "projection": {k: view.get(k) for k in
+             ("state", "run_id", "as_of", "age_seconds", "stale", "worker_alive", "projection_ms")},
+            "pending": bool(stats.get("pending") or view.get("ingestion", {}).get("pending"))}
+
+
+def config_store() -> ConfigStore:
+    global _config_store
+    if _config_store is None:
+        _config_store = ConfigStore(TRADING_ROOT / "results" / "dashboard" / "config.json")
+    return _config_store
+
+
+def save_config(payload: dict) -> dict:
+    if set(payload) != {"params", "expected_revision"}:
+        raise ValueError("请提交参数与预期配置版本")
+    with _config_control_lock:
+        return config_store().save(payload["params"], payload["expected_revision"])
+
+
+def start_configured_paper(payload: dict) -> dict:
+    global _trading_config_revision, _trading_request_id
+    if set(payload) != {"revision", "request_id"} or type(payload["revision"]) is not int:
+        raise ValueError("启动需要配置版本与唯一请求编号")
+    try:
+        request_id = str(uuid.UUID(payload["request_id"]))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("请求编号必须是 UUID") from None
+    with _config_control_lock, _trading_lock:
+        _restore_trading_state()
+        if request_id == _trading_request_id:
+            if payload["revision"] != _trading_config_revision:
+                raise ValueError("同一启动请求不能改变配置版本")
+            return trading_status(include_stats=False)
+        saved = config_store().get()
+        if payload["revision"] != saved["revision"]:
+            raise ConfigConflictError(saved["revision"])
+        if saved["revision"] == 0:
+            raise ValueError("请先保存配置")
+        if saved["params"]["mode"] != "paper":
+            raise PermissionError("新版配置启动目前仅验收模拟模式")
+        return start_trading(saved["params"], config_revision=saved["revision"], request_id=request_id)
+
+
+def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None) -> dict:
     global _trading_process, _trading_pid, _trading_started_at, _trading_mode, _trading_params
     global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
+    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
     mode = str(payload.get("mode") or "paper").lower()
     if mode not in {"paper", "live"}:
         raise ValueError("mode must be paper or live")
@@ -779,23 +792,24 @@ def start_trading(payload: dict) -> dict:
                 raise PermissionError("账户检查未通过，请在“账户”查看未完成项")
         log_dir = TRADING_ROOT / "results" / ("live" if mode == "live" else "paper")
         log_dir.mkdir(parents=True, exist_ok=True)
-        run_id = time.strftime("%Y%m%d-%H%M%S")
-        _trading_log = log_dir / f"dashboard-{run_id}.jsonl"
-        _trading_console_log = log_dir / f"dashboard-{run_id}.console.log"
+        run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
+        candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
+        candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
         # Create the selected journal before returning the start response.
         # The status endpoint must never fall back to a previous run while the
         # child process is still starting.
-        _trading_log.touch()
-        console_handle = _trading_console_log.open("a", encoding="utf-8")
+        candidate_log.touch()
+        console_handle = candidate_console_log.open("a", encoding="utf-8")
         args = [
             "node", "dist/cli/live.js", "run", "--paper" if mode == "paper" else "--live",
             "--order-usd", str(order_usd), "--max-orders", str(max_orders), "--pair-cost-max", str(pair_cost_max),
             "--max-total-usd", str(max_total_usd), "--duration-min", str(duration_min),
             "--maker-life-sec", str(maker_life_sec), "--decision-interval-ms", str(decision_interval_ms),
             "--defensive-cancel-bps", str(defensive_cancel_bps),
-            "--log-file", str(_trading_log), "--traded-file", str(log_dir / "traded.jsonl"),
+            "--log-file", str(candidate_log), "--traded-file", str(log_dir / "traded.jsonl"),
         ]
         env = _trading_environment()
+        account_id = account_config_status().get("wallet") or None
         env["LIVE"] = "false" if mode == "paper" else "true"
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         try:
@@ -808,9 +822,15 @@ def start_trading(payload: dict) -> dict:
             console_handle.close()
             raise
         console_handle.close()
+        _trading_log = candidate_log
+        _trading_console_log = candidate_console_log
         _trading_pid = _trading_process.pid
         _trading_started_at = time.time()
         _trading_mode = mode
+        _trading_run_id = run_id
+        _trading_config_revision = config_revision
+        _trading_request_id = request_id
+        _trading_account_id = account_id
         _trading_params = {
             "mode": mode, "pair_cost_max": pair_cost_max, "order_usd": order_usd,
             "max_total_usd": max_total_usd, "max_orders": max_orders,
@@ -821,7 +841,8 @@ def start_trading(payload: dict) -> dict:
         _trading_exit_code = None
         _trading_stop_result = None
         _persist_trading_state()
-        return trading_status()
+        _projection_pending.append((_trading_run_id, _trading_log, _trading_mode, _trading_account_id, _trading_config_revision))
+        return trading_status(include_stats=False)
 
 
 def _trading_environment() -> dict:
@@ -847,7 +868,7 @@ def stop_trading() -> dict:
                 "message": "当前没有正在运行的交易任务。",
             }
             _persist_trading_state()
-            return trading_status()
+            return trading_status(include_stats=False)
         if process is None and restored_pid and _process_matches(restored_pid, _trading_log):
             try:
                 if os.name == "nt":
@@ -894,23 +915,18 @@ def stop_trading() -> dict:
             _trading_process = None
             _trading_pid = None
         _persist_trading_state()
-        return trading_status()
+        return trading_status(include_stats=False)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Local read-only strategy dashboard server")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
-    args = parser.parse_args()
-    root = Path(args.root).resolve()
+def make_handler(root: Path):
     docs = root / "docs"
-    if args.host not in {"127.0.0.1", "localhost", "::1"}:
-        parser.error("交易控制台只允许监听本机地址")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path.startswith("/api/v1/"):
+                self._get_v1(path)
+                return
             # There is one user-facing trading page. Keep the former advanced
             # dashboard URL as a compatibility redirect so stale bookmarks do
             # not open a second, disconnected control surface.
@@ -933,20 +949,14 @@ def main() -> int:
                 console_path = _trading_console_log
                 lines: list[str] = []
                 if log_path and log_path.is_file():
-                    try:
-                        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
-                    except OSError:
-                        lines = []
+                    lines = _tail_lines(log_path)
                 console_lines: list[str] = []
                 if console_path and console_path.is_file():
-                    try:
-                        console_lines = console_path.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
-                    except OSError:
-                        console_lines = []
+                    console_lines = _tail_lines(console_path)
                 self._send_json(json.dumps({"log": lines, "console": console_lines, "status": status}, ensure_ascii=False).encode("utf-8"))
                 return
             if path == "/api/live":
-                self._send_json(json.dumps(live_status(), ensure_ascii=False).encode("utf-8"))
+                self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
                 return
             relative = "system-dashboard.html" if path in {"/", "/system-dashboard.html"} else path.lstrip("/")
             candidate = (docs / relative).resolve()
@@ -962,6 +972,47 @@ def main() -> int:
             self.end_headers()
             self.wfile.write(body)
 
+        def _get_v1(self, path: str) -> None:
+            try:
+                if path == "/api/v1/config":
+                    with _config_control_lock:
+                        value = config_store().get()
+                elif path == "/api/v1/status":
+                    status = trading_status()
+                    value = {"schemaVersion": 1, "asOf": time.time(),
+                             **{k: status[k] for k in ("running", "mode", "run_id", "config_revision",
+                                   "account_id", "params", "stop_result", "live_unlocked")},
+                             "projection": status["stats"].get("projection"),
+                             "stats": status["stats"]}
+                elif path == "/api/v1/markets":
+                    value = {"schemaVersion": 1, **cached_live_status()}
+                elif path in {"/api/v1/runs", "/api/v1/events", "/api/v1/summary"}:
+                    ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+                    query = parse_qs(urlsplit(self.path).query)
+                    if path.endswith("/runs"):
+                        value = {"schemaVersion": 1, "runs": ledger.list_runs()}
+                    else:
+                        run_id = query.get("run_id", [None])[0]
+                        if not run_id or len(run_id) > 200:
+                            raise ValueError("请指定运行编号")
+                        if path.endswith("/summary"):
+                            value = {"schemaVersion": 1, "summary": ledger.summary(run_id)}
+                        else:
+                            cursor = query.get("before_id", [None])[0]
+                            value = {"schemaVersion": 1, **ledger.events(run_id,
+                                     before_id=int(cursor) if cursor else None,
+                                     limit=int(query.get("limit", ["50"])[0]))}
+                else:
+                    self._send_json(b'{"error":"not found"}', 404)
+                    return
+                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            except KeyError:
+                self._send_json(b'{"error":"run not found"}', 404)
+            except (ValueError, TypeError):
+                self._send_json('{"error":"请求参数不正确"}'.encode(), 400)
+            except (OSError, sqlite3.Error, RuntimeError):
+                self._send_json('{"error":"数据暂不可用，请稍后重试"}'.encode(), 503)
+
         def _send_json(self, body: bytes, status: int = 200) -> None:
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -972,7 +1023,8 @@ def main() -> int:
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
-            if path not in {"/api/trading/start", "/api/trading/stop", "/api/account/check", "/api/account/save"}:
+            if path not in {"/api/trading/start", "/api/trading/stop", "/api/account/check", "/api/account/save",
+                            "/api/v1/config", "/api/v1/trading/start", "/api/v1/trading/stop"}:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
@@ -992,7 +1044,7 @@ def main() -> int:
                     report = account_action(payload, save=path.endswith("/save"))
                     self._send_json(json.dumps({"ok": True, "report": report}, ensure_ascii=False).encode("utf-8"))
                     return
-                mode = trading_status().get("mode") if path.endswith("/stop") else payload.get("mode")
+                mode = trading_status(include_stats=False).get("mode") if path.endswith("/stop") else payload.get("mode", "paper")
                 auth_error = _control_request_error(self.headers, mode)
                 if auth_error:
                     status, message = auth_error
@@ -1001,8 +1053,15 @@ def main() -> int:
                         status,
                     )
                     return
-                result = stop_trading() if path.endswith("/stop") else start_trading(payload)
+                if path == "/api/v1/config":
+                    result = save_config(payload)
+                elif path == "/api/v1/trading/start":
+                    result = start_configured_paper(payload)
+                else:
+                    result = stop_trading() if path.endswith("/stop") else start_trading(payload)
                 self._send_json(json.dumps({"ok": True, "status": result}, ensure_ascii=False).encode("utf-8"))
+            except ConfigConflictError as exc:
+                self._send_json(json.dumps({"ok": False, "error": str(exc), "current_revision": exc.current_revision}, ensure_ascii=False).encode(), 409)
             except PermissionError as exc:
                 self._send_json(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8"), 403)
             except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
@@ -1011,7 +1070,29 @@ def main() -> int:
         def log_message(self, *_: object) -> None:
             return
 
-    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+    return Handler
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Trading dashboard and isolated analytics")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
+    args = parser.parse_args()
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        parser.error("交易控制台只允许监听本机地址")
+    server = ThreadingHTTPServer((args.host, args.port), make_handler(Path(args.root).resolve()))
+    stop = threading.Event()
+    collector = threading.Thread(target=refresh_live_background, args=(stop,), daemon=True)
+    collector.start()
+    threading.Thread(target=supervise_projection, args=(stop,), daemon=True).start()
+    try:
+        server.serve_forever()
+    finally:
+        stop.set()
+        server.server_close()
+        if _read_model:
+            _read_model.close()
     return 0
 
 
