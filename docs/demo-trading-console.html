@@ -19,4 +19,57 @@
 </main></div>
 <script>
 let running=false,orders=0;const q=s=>document.querySelector(s),set=(s,v)=>{const e=q(s);if(e)e.textContent=v};document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+b.dataset.view));document.querySelectorAll('[data-view]').forEach(x=>x.classList.toggle('active',x===b))});document.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>{running=true;orders++;set('#status','模拟运行中 · 已启动');set('#homeOrders',orders);set('#homeVolume',orders+' / $4.90');set('#homeStrategy','已成交一边，正在计算补仓');set('#homeLog','刚刚：UP 挂单 → 成交 10 份 × $0.49；等待补 DOWN。');set('#tradeLog','刚刚：UP 成交，正在计算 DOWN 补仓价格。')});document.querySelectorAll('[data-stop]').forEach(b=>b.onclick=()=>{running=false;set('#status','安全模式 · 已停止');set('#homeStrategy','已停止，未结算');set('#homeLog','刚刚：已撤销剩余模拟挂单，等待市场结算。');set('#tradeLog','刚刚：停止并撤销剩余模拟订单。')});document.querySelectorAll('[data-refresh]').forEach(b=>b.onclick=()=>set('#homeLog','刚刚：状态已刷新，当前没有新的真实账户账单。'));document.querySelectorAll('[data-setting]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-setting]').forEach(x=>x.classList.toggle('active',x===b));['strategy','run','account','system'].forEach(n=>{const e=q('#settings-'+n);if(e)e.style.display=n===b.dataset.setting?'block':'none'})});q('[data-save]').onclick=()=>{set('#homeLog','刚刚：演示设置已保存。正式页面会先检查参数，再保存到用户配置。');alert('演示：设置已保存。')};q('[data-exit]').onclick=()=>{running=false;set('#status','安全模式 · 已退出');set('#homeStrategy','未启动')};
-</script></body></html>
+</script>
+<style>
+.latency-panel{margin-bottom:14px}.latency-panel button{font:inherit;color:#bcdcff;background:#173553;border:1px solid #396595;border-radius:6px;padding:6px 12px;cursor:pointer}.latency-cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.latency-card{background:#0b1829;border:1px solid #263e5a;border-radius:7px;padding:13px}.latency-card span,.latency-card small{display:block;color:var(--muted)}.latency-card strong{display:block;font-size:23px;margin:5px 0}.latency-card small{font-size:12px}.latency-caption{color:var(--muted);font-size:12px;margin:12px 0 0}.latency-table{min-width:900px}.latency-table td:nth-child(2){white-space:normal;min-width:260px}.latency-table caption{text-align:left;color:var(--muted);padding:0 0 12px}.latency-table th{white-space:nowrap}.latency-state{font-size:12px;color:var(--amber)}
+@media(max-width:820px){.latency-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.latency-panel .section-title{flex-wrap:wrap}}
+</style>
+<template id="latency-summary-template">
+  <div class="panel latency-panel">
+    <div class="section-title"><h2>交易速度 <span class="latency-state">未接入测量</span></h2><button type="button" id="open-latency-details">查看全部延迟 →</button></div>
+    <div class="latency-cards">
+      <div class="latency-card"><span>行情到达</span><strong>-- <small>ms</small></strong><small>平台消息到达策略服务器</small></div>
+      <div class="latency-card"><span>下单确认</span><strong>-- <small>ms</small></strong><small>发出订单到收到平台确认</small></div>
+      <div class="latency-card"><span>撤单确认</span><strong>-- <small>ms</small></strong><small>发出撤单到确认成功</small></div>
+      <div class="latency-card"><span>整轮反应</span><strong>-- <small>ms</small></strong><small>行情收到到订单确认</small></div>
+    </div>
+    <p class="latency-caption">当前为界面演示，没有实测样本。正式接入后显示最近 5 分钟的常见耗时及慢速情况；确认接单不代表成交。</p>
+  </div>
+</template>
+<template id="latency-details-template">
+  <div class="latency-panel" style="margin-top:20px">
+    <div class="section-title"><h2>延迟明细 · 8 个测量环节</h2><span class="latency-state">样本 0 · 更新时间 --</span></div>
+    <div class="table-wrap"><table class="table latency-table">
+      <caption>计划统计窗口：最近 5 分钟。常见值为中位数；慢速值表示 95% 的样本不超过它。无样本显示 --，不显示 0。</caption>
+      <thead><tr><th>环节</th><th>从哪里算到哪里</th><th>最新 ms</th><th>常见 ms</th><th>慢速 ms</th><th>样本</th><th>当前状态</th></tr></thead>
+      <tbody>
+        <tr><td>1 · 行情到达</td><td>平台行情消息时间 → 服务器收到。属于消息年龄，包含时钟误差。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>等待行情测量</td></tr>
+        <tr><td>2 · 盘口处理</td><td>服务器收到消息 → 解析并更新本地订单簿，包括本地等待时间。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>等待引擎测量</td></tr>
+        <tr><td>3 · 策略决策</td><td>本地盘口更新 → 本次策略判断完成；不下单的决策也统计。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>等待引擎测量</td></tr>
+        <tr><td>4 · 订单签名</td><td>本地开始签名 → 签名完成。不包含联网请求。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>等待签名测量</td></tr>
+        <tr><td>5 · 下单确认</td><td>HTTP 提交调用开始 → 收到平台明确接单确认；拒绝、超时另计。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>需要真实订单</td></tr>
+        <tr><td>6 · 撤单确认</td><td>请求撤单 → 明确确认已取消；未知状态不能算成功。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>需要真实撤单</td></tr>
+        <tr><td>7 · 成交回报</td><td>可对应的官方成交事件时间 → 收到用户频道回报。缺少可靠时间戳则不可测。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>需要真实回报</td></tr>
+        <tr><td>8 · 页面刷新</td><td>浏览器请求状态 → 本次界面更新完成；另显示数据更新时间。</td><td>--</td><td>--</td><td>--</td><td>0</td><td>未接入测量</td></tr>
+      </tbody>
+    </table></div>
+    <div class="row"><span>整轮反应（单独测量）</span><b>-- ms · 样本 0</b></div>
+    <p class="latency-caption">同一笔订单：触发行情收到 → 明确接单确认，包含内部等待、风控、签名和发送准备。不能把各环节的中位数直接相加。撤单、成交回报和页面刷新不计入这一轮。</p>
+    <div class="row"><span>时钟同步误差</span><b>未检查</b></div>
+    <div class="row"><span>下单拒绝 / 超时次数</span><b>-- / -- · 尚未采集</b></div>
+    <div class="note">挂单等多久才成交，要单独显示为“等待成交时间”，不属于网络延迟。真实排队位置不能从公开盘口直接确定。跨机器的消息年龄须校验时间戳和时钟同步；时钟异常或消息过期应独立提示。</div>
+  </div>
+</template>
+<script>
+// Standalone UI proposal only: no timing samples or external requests are invented.
+const latencyHome = document.getElementById('view-home');
+const latencyAnchor = document.getElementById('homeLog').closest('.panel');
+latencyHome.insertBefore(document.getElementById('latency-summary-template').content.cloneNode(true), latencyAnchor);
+document.getElementById('settings-system').append(document.getElementById('latency-details-template').content.cloneNode(true));
+document.getElementById('open-latency-details').addEventListener('click', () => {
+  document.querySelector('[data-view="settings"]').click();
+  document.querySelector('[data-setting="system"]').click();
+  document.getElementById('settings-system').scrollIntoView({behavior:'smooth', block:'start'});
+});
+</script>
+</body></html>
