@@ -1,14 +1,17 @@
 import type { StrategyConfig } from "./config.js";
-import { Inventory } from "./inventory.js";
+import { Inventory, SideInventory } from "./inventory.js";
 import {
   Side,
   bookMid,
   btcProxyChangePct,
   combinedAskSum,
   polymarketFillFee,
+  MIN_ORDER_SHARES,
+  quantizeMakerBuyPrice,
   type BookQuote,
   type Fill,
   type MarketBooks,
+  type PendingExposure,
 } from "./models.js";
 import {
   MarketMode,
@@ -42,6 +45,15 @@ export interface DynamicHedgeClipInput {
   price: number;
   baseClip: number;
   targetPairCost: number;
+}
+
+export interface DecisionRejection {
+  code: "maker_tick_missing_or_invalid" | "maker_price_invalid" | "hedge_pair_cost" |
+    "order_limits_or_minimum" | "risk_blocked" | "entry_pair_cost";
+  side?: Side;
+  price?: number;
+  pairCost?: number;
+  limit?: number;
 }
 
 /**
@@ -94,6 +106,16 @@ export class PairCostMarketMaker {
   private pendingUrgent = false;
   private pendingHardImb = 0.12;
   private pendingBudgetPx?: number;
+  private rejection: DecisionRejection | null = null;
+
+  lastDecisionRejection(): DecisionRejection | null {
+    return this.rejection ? { ...this.rejection } : null;
+  }
+
+  private reject(code: DecisionRejection["code"], details: Omit<DecisionRejection, "code"> = {}): undefined {
+    this.rejection = { code, ...details };
+    return undefined;
+  }
 
   constructor(config: StrategyConfig) {
     this.config = config;
@@ -109,6 +131,7 @@ export class PairCostMarketMaker {
 
     const budget = (
       myBid: number | undefined,
+      myTick: number | undefined,
       otherBid: number | undefined,
       otherAsk: number | undefined,
     ): number | undefined => {
@@ -117,13 +140,13 @@ export class PairCostMarketMaker {
       const hedgeCost = ob + aggr * (otherAsk - ob);
       const cap = ceiling - hedgeCost - aggr * this.takerFeePerShare(otherAsk);
       if (myBid == null || !(myBid > 0.0 && myBid < 1.0)) return undefined;
-      const px = Math.min(cap, myBid);
-      if (px >= floor && px > 0.0 && px < 1.0) return px;
+      const px = quantizeMakerBuyPrice(Math.min(cap, myBid), myTick);
+      if (px != null && px >= floor) return px;
       return undefined;
     };
 
-    const up = budget(books.up.bid, books.down.bid, books.down.ask);
-    const dn = budget(books.down.bid, books.up.bid, books.up.ask);
+    const up = budget(books.up.bid, books.up.tickSize, books.down.bid, books.down.ask);
+    const dn = budget(books.down.bid, books.down.tickSize, books.up.bid, books.up.ask);
 
     if (up != null && dn != null) {
       const ug = (books.up.bid ?? up) - up;
@@ -184,11 +207,17 @@ export class PairCostMarketMaker {
     const ask = q.ask;
     if (bid == null || ask == null || !(ask > bid && ask > 0.0 && ask < 1.0)) return false;
     if (ask - bid > this.config.activeCrossMaxSpread + 1e-9) return false;
+    if (inv.up.shares === 0 && inv.down.shares === 0) {
+      const hedge = this.stableMakerPrice(side === Side.Up ? books.down : books.up);
+      if (hedge == null) return false;
+      return ask + this.takerFeePerShare(ask) + hedge + this.fillFee(1, hedge, true) <= ceiling + 1e-9;
+    }
     const projT = inv.projectedPairCostIfBuy(side, clip, ask);
     return projT + this.takerFeePerShare(ask) <= ceiling + 1e-9;
   }
 
   onMarketStart(marketStartUnix: number): void {
+    this.rejection = null;
     this.risk.onMarketStart(marketStartUnix, this.config);
     this.pendingClipMult = 1.0;
     this.pendingUrgent = false;
@@ -201,7 +230,50 @@ export class PairCostMarketMaker {
   }
 
   recordFill(inv: Inventory): void {
-    this.risk.onFill(inv, this.config);
+    this.risk.onFill(this.withFees(inv), this.config);
+  }
+
+  /** Risk decisions include incurred fees; rebates are never assumed income. */
+  private withFees(inv: Inventory): Inventory {
+    const accounting = new Inventory();
+    Object.assign(accounting, inv);
+    accounting.up = Object.assign(new SideInventory(), inv.up);
+    accounting.down = Object.assign(new SideInventory(), inv.down);
+    for (const fill of inv.fills) {
+      const fee = this.fillFee(fill.shares, fill.price, fill.isMaker);
+      (fill.side === Side.Up ? accounting.up : accounting.down).cost += fee;
+    }
+    return accounting;
+  }
+
+  private fillFee(shares: number, price: number, isMaker: boolean): number {
+    return polymarketFillFee(shares, price, isMaker, this.config.takerFeeRate,
+      this.config.makerFeeRate, this.config.feeExponent);
+  }
+
+  private boundedClip(inv: Inventory, side: Side, requested: number, unitCost: number,
+    pending: PendingExposure): number {
+    const thisShares = side === Side.Up ? inv.up.shares : inv.down.shares;
+    const otherShares = side === Side.Up ? inv.down.shares : inv.up.shares;
+    const reservedShares = side === Side.Up ? pending.upShares : pending.downShares;
+    const committed = inv.totalCost() + pending.cost;
+    if (![requested, unitCost, committed, thisShares, otherShares, reservedShares,
+      pending.orders, this.config.maxTotalCost, this.config.maxSharesPerSide,
+      this.config.maxMarketLossUsd, this.config.maxFillsPerMarket].every(Number.isFinite) ||
+      requested <= 0 || unitCost <= 0 || pending.cost < 0 || reservedShares < 0 ||
+      inv.fills.length + pending.orders >= this.config.maxFillsPerMarket) return 0;
+    let clip = Math.min(requested, (this.config.maxTotalCost - committed) / unitCost,
+      this.config.maxSharesPerSide - thisShares - reservedShares);
+    if (this.config.maxMarketLossUsd > 0) {
+      // Pending orders can fill unilaterally: reserve their cost without credit
+      // for a complementary payout that has not actually been acquired.
+      const deficit = Math.max(0, otherShares - thisShares);
+      const currentLoss = committed - Math.min(thisShares, otherShares);
+      clip = Math.min(clip, (this.config.maxMarketLossUsd - currentLoss + deficit) / unitCost);
+      const projectedLoss = currentLoss + clip * unitCost - Math.min(clip, deficit);
+      if (projectedLoss > this.config.maxMarketLossUsd + 1e-9) return 0;
+    }
+    return clip >= MIN_ORDER_SHARES ? clip : 0;
   }
 
   private effectiveClip(multiplier: number): number {
@@ -224,12 +296,12 @@ export class PairCostMarketMaker {
       if (this.config.backtestAlwaysTaker) return [ask, false];
       const spread = ask - bid;
       if (this.rng() < this.config.makerFillRatio) {
-        return [bid + spread * 0.2, true];
+        return [quantizeMakerBuyPrice(bid + spread * 0.2, quote.tickSize) ?? 0, true];
       }
       return [ask, false];
     }
     if (bid == null && ask != null) return [ask, false];
-    if (bid != null && ask == null) return [bid, true];
+    if (bid != null && ask == null) return [quantizeMakerBuyPrice(bid, quote.tickSize) ?? 0, true];
     return [0.0, false];
   }
 
@@ -279,17 +351,19 @@ export class PairCostMarketMaker {
   }
 
   private stableMakerPrice(quote: BookQuote): number | undefined {
+    if (quote.tickSize == null || !Number.isFinite(quote.tickSize) ||
+      quote.tickSize <= 0 || quote.tickSize >= 1) return this.reject("maker_tick_missing_or_invalid");
     const f = Math.min(Math.max(this.config.makerSpreadFrac, 0.0), 1.0);
     let px: number | undefined;
     if (quote.bid != null && quote.ask != null && quote.bid > 0.0 && quote.bid < 1.0) {
-      px = Math.min(quote.bid + (quote.ask - quote.bid) * f, quote.ask);
+      px = Math.min(quote.bid + (quote.ask - quote.bid) * f, quote.ask - quote.tickSize);
     } else if (quote.bid != null && quote.bid > 0.0 && quote.bid < 1.0) {
       px = quote.bid;
     } else {
       return undefined;
     }
-    if (px > 0.0 && px < 1.0) return px;
-    return undefined;
+    const executable = quantizeMakerBuyPrice(px, quote.tickSize);
+    return executable ?? this.reject("maker_price_invalid");
   }
 
   private chooseSideStable(
@@ -319,7 +393,7 @@ export class PairCostMarketMaker {
     const base = evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd);
     if (!base.allow) {
       if (base.haltMarket) this.risk.marketMode = MarketMode.Halted;
-      return undefined;
+      return this.reject("risk_blocked");
     }
 
     const flatten = secsLeft <= this.config.forceFlattenSec;
@@ -426,9 +500,11 @@ export class PairCostMarketMaker {
               return need;
             }
           }
-          return undefined;
+          return this.reject("hedge_pair_cost", { side: need, price: needAsk,
+            pairCost: needAsk == null ? proj : inv.projectedPairCostIfBuy(need, clip, needAsk) + this.takerFeePerShare(needAsk),
+            limit: this.config.pairCostEmergencyStop });
         }
-        return undefined;
+        return this.reject("hedge_pair_cost", { side: need, price: needPx, pairCost: proj, limit: relaxed });
       }
 
       if (forced) {
@@ -557,6 +633,8 @@ export class PairCostMarketMaker {
     marketEnd: number,
     btcChangePct?: number,
   ): Side | undefined {
+    this.rejection = null;
+    inv = this.withFees(inv);
     if (this.config.stableMode) {
       return this.chooseSideStable(inv, books, tsUnix, marketStart, marketEnd, btcChangePct);
     }
@@ -780,7 +858,9 @@ export class PairCostMarketMaker {
     isMaker: boolean,
     tsUnix: number,
     marketEnd: number,
+    pending: PendingExposure,
   ): Fill | undefined {
+    const unitCost = price + this.fillFee(1, price, isMaker);
     const base = evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd);
     let clip = this.effectiveClip(base.clipMultiplier) * Math.max(this.pendingClipMult, 1.0);
 
@@ -796,11 +876,13 @@ export class PairCostMarketMaker {
           thisCost: side === Side.Up ? inv.up.cost : inv.down.cost,
           otherShares: otherS,
           otherCost: side === Side.Up ? inv.down.cost : inv.up.cost,
-          price,
+          price: unitCost,
           baseClip: clip,
           targetPairCost: this.config.hedgePairCostCeiling,
         });
-        if (clip <= 0) return undefined;
+        if (clip <= 0) return this.reject("hedge_pair_cost", { side, price,
+          pairCost: unitCost + (otherS > 0 ? (side === Side.Up ? inv.down.cost : inv.up.cost) / otherS : 0),
+          limit: this.config.hedgePairCostCeiling });
       } else {
         clip = Math.min(clip, otherS - thisS);
       }
@@ -822,20 +904,24 @@ export class PairCostMarketMaker {
     ) {
       clip = Math.min(clip, this.config.passiveNakedLegMaxUsd / price);
     }
-    if (clip < 1.0) return undefined;
+    clip = this.boundedClip(inv, side, clip, unitCost, pending);
+    if (clip < MIN_ORDER_SHARES) return this.reject("order_limits_or_minimum", { side, price });
 
-    const proj = inv.projectedPairCostIfBuy(side, clip, price);
+    const proj = inv.projectedPairCostIfBuy(side, clip, unitCost);
+    if (otherS > thisS && this.config.dynamicHedgeSizing &&
+      proj > this.config.hedgePairCostCeiling + 1e-9) return this.reject("hedge_pair_cost", {
+        side, price, pairCost: proj, limit: this.config.hedgePairCostCeiling });
     const risk = evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd, proj);
     if (risk.haltMarket) {
       this.risk.marketMode = MarketMode.Halted;
       return undefined;
     }
-    if (!risk.allow) return undefined;
+    if (!risk.allow) return this.reject("risk_blocked", { side, price });
 
     const newUp = upS + (side === Side.Up ? clip : 0.0);
     const newDn = dnS + (side === Side.Down ? clip : 0.0);
     if (newUp > 0.0 && newDn > 0.0) {
-      const newCost = inv.totalCost() + clip * price;
+      const newCost = inv.totalCost() + pending.cost + clip * unitCost;
       const worst = newCost - Math.min(newUp, newDn);
       if (this.config.maxMarketLossUsd > 0.0 && worst > this.config.maxMarketLossUsd) {
         return undefined;
@@ -857,7 +943,12 @@ export class PairCostMarketMaker {
     books: MarketBooks,
     tsUnix: number,
     marketEnd: number,
+    pending: PendingExposure = { cost: 0, upShares: 0, downShares: 0, orders: 0 },
   ): Fill | undefined {
+    this.rejection = null;
+    if (!Number.isFinite(tsUnix) || !Number.isFinite(marketEnd) ||
+      tsUnix >= marketEnd - this.config.stopBeforeEndSec) return undefined;
+    inv = this.withFees(inv);
     const quote = side === Side.Up ? books.up : books.down;
 
     if (this.config.stableMode) {
@@ -869,34 +960,38 @@ export class PairCostMarketMaker {
         px = a;
         isMaker = false;
       } else if (this.pendingBudgetPx != null) {
-        px = this.pendingBudgetPx;
+        const budgetPrice = quantizeMakerBuyPrice(this.pendingBudgetPx, quote.tickSize);
+        if (budgetPrice == null) return this.reject("maker_tick_missing_or_invalid", { side });
+        px = budgetPrice;
         isMaker = true;
       } else {
-        const f = Math.min(Math.max(this.config.makerSpreadFrac, 0.0), 1.0);
-        if (quote.bid != null && quote.ask != null && quote.bid > 0.0 && quote.bid < 1.0) {
-          px = Math.min(quote.bid + (quote.ask - quote.bid) * f, quote.ask);
-          isMaker = true;
-        } else if (quote.bid != null && quote.bid > 0.0 && quote.bid < 1.0) {
-          px = quote.bid;
-          isMaker = true;
-        } else {
-          return undefined;
-        }
+        const makerPrice = this.stableMakerPrice(quote);
+        if (makerPrice == null) return undefined;
+        px = makerPrice;
+        isMaker = true;
       }
-      if (px <= 0.0 || px >= 1.0) return undefined;
-      return this.buildFillStable(side, inv, px, isMaker, tsUnix, marketEnd);
+      if (!Number.isFinite(px) || px <= 0.0 || px >= 1.0) return undefined;
+      if (inv.up.shares === 0 && inv.down.shares === 0) {
+        const hedge = this.stableMakerPrice(side === Side.Up ? books.down : books.up);
+        const ceiling = this.pendingBudgetPx != null ? this.config.passivePairCeiling : this.config.pairAddCostMax;
+        if (hedge == null || px + this.fillFee(1, px, isMaker) + hedge +
+          this.fillFee(1, hedge, true) > ceiling + 1e-9) return this.reject("entry_pair_cost", { side, price: px, limit: ceiling });
+      }
+      return this.buildFillStable(side, inv, px, isMaker, tsUnix, marketEnd, pending);
     }
 
     const [price, isMaker] = this.fillPrice(quote);
-    if (price <= 0.0 || price >= 1.0) return undefined;
+    if (!Number.isFinite(price) || price <= 0.0 || price >= 1.0) return undefined;
 
     let clip = this.effectiveClip(
       evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd).clipMultiplier,
     );
     clip = this.balanceClip(inv, side, clip);
-    if (clip < 1.0) return undefined;
+    const unitCost = price + this.fillFee(1, price, isMaker);
+    clip = this.boundedClip(inv, side, clip, unitCost, pending);
+    if (clip < MIN_ORDER_SHARES) return undefined;
 
-    const proj = inv.projectedPairCostIfBuy(side, clip, price);
+    const proj = inv.projectedPairCostIfBuy(side, clip, unitCost);
     const risk = evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd, proj);
     if (risk.haltMarket) {
       this.risk.marketMode = MarketMode.Halted;

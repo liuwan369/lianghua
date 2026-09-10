@@ -1,7 +1,11 @@
-import { createPublicClient as createPolymarketPublicClient } from "@polymarket/client";
+import {
+  createPublicClient as createPolymarketPublicClient,
+  forkEnvironmentConfig,
+} from "@polymarket/client";
 import { getAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { inspectWalletAddress } from "./clob/wallet.js";
+import { CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD } from "./contracts.js";
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const PRIVATE_KEY_RE = /^(?:0x)?[0-9a-fA-F]{64}$/;
@@ -100,6 +104,8 @@ export interface PublicAccountCheck {
   missingErc20Approvals: number;
   missingErc1155Approvals: number;
   approvalsError?: string;
+  /** SDK requirements for other products, outside this engine's CLOB V2 route. */
+  otherApprovalsMissing?: number;
 }
 
 /** Official-SDK + Polygon read-only checks. Never signs or submits anything. */
@@ -110,14 +116,43 @@ export async function checkPublicAccount(wallet: Address): Promise<PublicAccount
   let missingErc20Approvals = 0;
   let missingErc1155Approvals = 0;
   let approvalsError: string | undefined;
+  let otherApprovalsMissing = 0;
   try {
-    const client = createPolymarketPublicClient();
+    const response = await fetch(`${process.env.CLOB_HOST ?? "https://clob.polymarket.com"}/version`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok || (await response.json() as {version?: unknown}).version !== 2) {
+      throw new Error("CLOB V2 approval scope cannot be verified");
+    }
+    // Keep production contracts/endpoints while using the same Polygon node as
+    // wallet inspection and balance queries (including retry-selected nodes).
+    const client = createPolymarketPublicClient({
+      environment: forkEnvironmentConfig({
+        name: "production-account-check",
+        ...(process.env.POLYGON_RPC?.trim() ? {rpc: process.env.POLYGON_RPC.trim()} : {}),
+      }),
+    });
     const state = await client.fetchTradingApprovalsState({ user: wallet });
-    approvalsFullyReady = state.isFullyApproved;
-    missingErc20Approvals = state.missing.erc20.length;
-    missingErc1155Approvals = state.missing.erc1155.length;
-  } catch (error) {
-    approvalsError = error instanceof Error ? error.message : String(error);
+    const { erc20, erc1155 } = state.missing;
+    if (!Array.isArray(erc20) || !Array.isArray(erc1155)
+      || erc20.some(a => !ADDRESS_RE.test(a.tokenAddress) || !ADDRESS_RE.test(a.spenderAddress))
+      || erc1155.some(a => !ADDRESS_RE.test(a.tokenAddress) || !ADDRESS_RE.test(a.operatorAddress))
+      || state.isFullyApproved !== (erc20.length + erc1155.length === 0)) {
+      throw new Error("invalid approval response");
+    }
+    // The SDK's global setup also includes Perps deposits and protocol V3
+    // modules. Only the two CLOB V2 exchange routes are used by this engine.
+    // The order adapter independently rejects any server version other than 2.
+    const exchanges = new Set([CTF_EXCHANGE.toLowerCase(), NEG_RISK_CTF_EXCHANGE.toLowerCase()]);
+    missingErc20Approvals = erc20.filter(a => a.tokenAddress.toLowerCase() === PUSD.toLowerCase()
+      && exchanges.has(a.spenderAddress.toLowerCase())).length;
+    missingErc1155Approvals = erc1155.filter(a => a.tokenAddress.toLowerCase() === CTF.toLowerCase()
+      && exchanges.has(a.operatorAddress.toLowerCase())).length;
+    otherApprovalsMissing = erc20.length + erc1155.length - missingErc20Approvals - missingErc1155Approvals;
+    approvalsFullyReady = missingErc20Approvals + missingErc1155Approvals === 0;
+  } catch {
+    // Provider errors may contain credential-bearing RPC URLs.
+    approvalsError = "交易授权查询失败，请检查 Polygon RPC 和 CLOB V2 服务后重试。";
   }
 
   return {
@@ -132,5 +167,6 @@ export async function checkPublicAccount(wallet: Address): Promise<PublicAccount
     missingErc20Approvals,
     missingErc1155Approvals,
     approvalsError,
+    otherApprovalsMissing,
   };
 }

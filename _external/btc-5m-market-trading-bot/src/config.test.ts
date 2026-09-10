@@ -31,3 +31,17 @@ describe("locked config", () => {
     expect(act.closeToParity).toBe(true);
   });
 });
+
+
+describe("locked preset validation", () => {
+  it("rejects non-finite spending limits instead of treating NaN as equal", () => {
+    const invalid = { ...stableLive(), maxTotalCost: Number.NaN };
+    expect(isLockedProduction(invalid)).toBe(false);
+    expect(() => assertLockedProduction(invalid)).toThrow();
+  });
+  it("uses the same urgent pacing check for inspection and assertion", () => {
+    const invalid = { ...stableLive(), burstIntervalSec: 30 };
+    expect(isLockedProduction(invalid)).toBe(false);
+    expect(() => assertLockedProduction(invalid)).toThrow();
+  });
+});

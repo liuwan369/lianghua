@@ -18,6 +18,24 @@ ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 KEY = re.compile(r"(?:0x)?[0-9a-fA-F]{64}\Z")
 
 
+class AccountCheckError(RuntimeError):
+    """Safe diagnostic categories; never include child output or submitted keys."""
+
+    def __init__(self, code: str):
+        errors = {
+            "invalid_account_config": (400, False, "钱包地址或签名私钥不可用，请核对填写内容；没有保存账户。"),
+            "account_rpc_timeout": (504, True, "链上查询超时，未能完成账户检查；没有保存账户，请稍后重试。"),
+            "account_rpc_failed": (503, True, "链上查询节点暂时不可用；没有保存账户，请稍后重试。"),
+            "account_check_failed": (503, True, "账户检查服务暂时未能完成查询；没有保存账户，请稍后重试。"),
+            "account_checker_unavailable": (503, False, "服务器账户检查程序不可用；没有保存账户，请联系管理员。"),
+            "account_response_invalid": (502, False, "账户检查返回数据不完整；没有保存账户，请重试。"),
+            "account_check_busy": (429, True, "已有账户检查或保存正在进行，请等待完成后重试。"),
+        }
+        self.code = code
+        self.http_status, self.retryable, message = errors[code]
+        super().__init__(message)
+
+
 def profile_path() -> Path:
     return Path(os.environ.get("PM_ACCOUNT_PROFILE", str(Path.home() / ".config" / "pm-system" / "account.json")))
 
@@ -77,19 +95,59 @@ def check_account(engine: Path, values: dict) -> dict:
     for name in ("POLYMARKET_PRIVATE_KEY", "POLYMARKET_SESSION_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIGNATURE_TYPE"):
         env.pop(name, None)
     env.update({name: values.get(name, "") for name in FIELDS.values()})
-    try:
-        result = subprocess.run(["node", "dist/cli/account-check.js"], cwd=engine, env=env,
-                                capture_output=True, text=True, encoding="utf-8", timeout=45)
-        if result.returncode != 0:
-            raise ValueError()
-        report = json.loads(result.stdout)
-        allowed = {"wallet", "owner", "signer_matches", "compromised", "balance", "approvals_ready", "account_ready", "checks", "checked_at", "read_only"}
-        if not isinstance(report, dict) or set(report) - allowed or not isinstance(report.get("checks"), list):
-            raise ValueError()
-        return report
-    except (subprocess.SubprocessError, OSError, ValueError):
-        # Never include stderr/stdout: upstream libraries may log request data.
-        raise RuntimeError("账户检查未完成，请检查地址、网络或稍后重试；没有修改账户。") from None
+    # Reuse compiled modules, never account results or submitted credentials.
+    # Keep this performance setting scoped to the read-only checker process.
+    compile_cache = os.environ.get("PM_ACCOUNT_NODE_COMPILE_CACHE", "").strip()
+    if compile_cache:
+        env["NODE_COMPILE_CACHE"] = compile_cache
+    # Account diagnostics can use a separate RPC without changing the engine's
+    # trading environment. The child never receives it from a browser payload.
+    account_rpc = os.environ.get("PM_ACCOUNT_RPC_URL", "").strip()
+    if account_rpc:
+        env["POLYGON_RPC"] = account_rpc
+    rpcs = [env.get("POLYGON_RPC", "")]
+    fallback = os.environ.get("PM_ACCOUNT_RPC_FALLBACK_URL", "").strip()
+    if fallback and fallback not in rpcs:
+        rpcs.append(fallback)
+    # Bound both attempts inside the browser/proxy deadline. Only the read-only
+    # checker is retried; persistence runs once after a successful check.
+    for index, rpc in enumerate(rpcs):
+        child_env = dict(env)
+        if rpc:
+            child_env["POLYGON_RPC"] = rpc
+        timeout = (25 if index == 0 else 20) if len(rpcs) > 1 else 45
+        try:
+            result = subprocess.run(["node", "dist/cli/account-check.js"], cwd=engine, env=child_env,
+                                    capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            failure = AccountCheckError("account_rpc_timeout")
+        except UnicodeError:
+            raise AccountCheckError("account_response_invalid") from None
+        except (OSError, subprocess.SubprocessError):
+            raise AccountCheckError("account_checker_unavailable") from None
+        else:
+            try:
+                report = json.loads(result.stdout)
+            except (ValueError, UnicodeError):
+                report = None
+            if result.returncode != 0:
+                code = report.get("error_code") if isinstance(report, dict) else None
+                if code == "invalid_account_config":
+                    raise AccountCheckError(code)
+                failure = AccountCheckError("account_rpc_failed" if code == "account_rpc_failed" else "account_check_failed")
+            else:
+                allowed = {"wallet", "owner", "signer_matches", "compromised", "balance", "approvals_ready", "account_ready", "checks", "checked_at", "read_only"}
+                if not isinstance(report, dict) or set(report) - allowed or not isinstance(report.get("checks"), list):
+                    raise AccountCheckError("account_response_invalid")
+                if report.get("approvals_ready", False) is None:
+                    # Unknown means an RPC query failed, unlike False which
+                    # is a completed query confirming missing approvals.
+                    failure = AccountCheckError("account_rpc_failed")
+                else:
+                    return report
+        if index == len(rpcs) - 1:
+            raise failure from None
+    raise AccountCheckError("account_check_failed")
 
 
 def save_profile(values: dict) -> None:

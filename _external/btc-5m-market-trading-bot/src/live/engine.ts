@@ -107,7 +107,10 @@ export class Engine {
       downAsk,
       microstructure,
     );
-    const events = this.session.onBook(ts, upBid, upAsk, downBid, downAsk);
+    const events = this.session.onBook(ts, upBid, upAsk, downBid, downAsk, {
+      upTickSize: books.up.tickSize,
+      downTickSize: books.down.tickSize,
+    });
     const filtered = this.microstructure.filterQuotes(
       events,
       books,
@@ -117,9 +120,9 @@ export class Engine {
     return [
       ...filtered,
       ...this.microstructure.filterPending(
-        this.session.pendingQuotes(),
+        this.session.pendingQuotes(false),
         books,
-        (side) => this.session.onOrderCancelled(side),
+        (side) => this.session.requestOrderCancellation(side),
       ),
     ];
   }
@@ -150,8 +153,8 @@ export class Engine {
     return this.session.fills();
   }
 
-  confirmExchangeFill(fill: Fill): MakerEvent {
-    return this.session.confirmExchangeFill(fill);
+  confirmExchangeFill(fill: Fill, pendingFillShares = fill.shares): MakerEvent {
+    return this.session.confirmExchangeFill(fill, pendingFillShares);
   }
 
   replaceCurrentMarketFills(fills: Fill[]): void {

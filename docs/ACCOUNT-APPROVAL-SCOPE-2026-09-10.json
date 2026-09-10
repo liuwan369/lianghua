@@ -1,0 +1,35 @@
+{
+  "checked_at": "2026-09-10T05:52:33.054Z",
+  "chain_id": 137,
+  "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+  "read_only": true,
+  "clob_version": 2,
+  "required_route": "CLOB V2 standard and negative-risk exchange orders",
+  "required_missing_count": 0,
+  "required_approvals": [
+    {
+      "exchange": "0xE111180000d2663C0091e4f400237545B87B996B",
+      "pusd_allowance": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "ctf_operator_approved": true
+    },
+    {
+      "exchange": "0xe2222d279d744050d28e00520010520000310F59",
+      "pusd_allowance": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "ctf_operator_approved": true
+    }
+  ],
+  "sdk_global_missing_outside_current_route": [
+    {"role": "perpsDepositContract", "address": "0xDCa4af75705dbB50f62437045afF9921947917d2", "kind": "ERC20"},
+    {"role": "binaryModule", "address": "0x1000008dD9001B968442c1000017eaE6E0dA00Ba", "kind": "ERC1155"},
+    {"role": "negRiskModule", "address": "0x200000900045e3B6259600682756002200028933", "kind": "ERC1155"}
+  ],
+  "evidence": [
+    "Direct Polygon allowance/isApprovedForAll reads for both V2 exchanges",
+    "Public GET https://clob.polymarket.com/version returned numeric version 2",
+    "Installed official @polymarket/client 0.9.0 source map src/actions/approvals.ts includes Perps and V3 modules in global setup",
+    "Official SDK production environment and local V2 exchange/token constants match"
+  ],
+  "transactions_signed": 0,
+  "transactions_broadcast": 0,
+  "note": "This proves only current V2 on-chain allowance state, not balance sufficiency, platform authentication, order execution, or strategy profitability. Other-product missing approvals must not be requested just to bypass the prior incorrect gate."
+}

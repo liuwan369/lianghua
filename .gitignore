@@ -1,4 +1,6 @@
 __pycache__/
+.venv/
+venv/
 *.py[cod]
 .pytest_cache/
 .env
@@ -45,3 +47,6 @@ data/**/*.json.gz
 data/pm-r25-live/
 data/binance-btcusdt-1s/
 .deploy/*.tar.gz
+docs/console/
+web/coverage/
+.planning/tmp/

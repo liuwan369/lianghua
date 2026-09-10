@@ -1,105 +1,49 @@
-# Tiny Live Fill-Rate Test — close the realistic gap to the target wallet
+# 成交、对冲与退出验收
 
-**Why:** the backtest can't measure the real maker fill rate (queue priority + liquidity rewards aren't
-in top-of-book contingent fills). The target's logged profile is **33.6 fills/mkt, 56% maker / 44%
-taker, 82% win, +$5.42/mkt, pair 0.969**. Our realistic backtest caps at ~12–14 fills / ~50% win on
-the sparse recorded book. The only ground truth is a live test. This runbook measures it and A/Bs the
-**verified queue-priority / rewards lever** (`--requote-min-rest-sec 3.5`).
+本说明用于分层验证行情、策略、模拟执行与真实交易所执行。paper 成交率不是真实成交率，单次配对成功也不等于策略盈利。当前真实资金端到端尚未验收完成。
 
-> Run during the **active-hours overlap (13:30–16:00 UTC)** — that's when the target gets its ~33
-> fills/mkt. Calm hours have thin books and few fills (the known ~5% problem).
+## 纸面验收
 
-## 0. Build
-```bash
-cargo build --release --bin btc-5m-live
+先在本目录完成 `npm ci`、`npm test`、`npm run build`，再为每轮指定独立日志路径：
+
+```powershell
+node dist/cli/live.js run --paper --duration-min 6 --order-usd 5 --pair-cost-max 0.99 --max-total-usd 150 --max-orders 30 --maker-life-sec 15 --log-file results/paper/fill-acceptance.jsonl
+node dist/cli/live.js analyze results/paper/fill-acceptance.jsonl
 ```
 
-## 1. PAPER A/B — does the lever lift fill rate? ($0 risk)
-Run both legs of the A/B during the overlap (the paper queue model approximates fill timing):
-```bash
-# Baseline (lever OFF):
-REST=0   WINDOWS=12 ./pm2-clone-fillrate.sh        # -> results/live/fillrate-paper-rest0.jsonl
-# Lever ON (queue priority + rewards eligibility):
-REST=3.5 WINDOWS=12 ./pm2-clone-fillrate.sh        # -> results/live/fillrate-paper-rest3.5.jsonl
-```
-Then compare:
-```bash
-./target/release/btc-5m-live replay-clob results/live/fillrate-paper-rest0.jsonl
-./target/release/btc-5m-live replay-clob results/live/fillrate-paper-rest3.5.jsonl
-# (replay-clob reports the REAL fill rate, fill-dwell, hedge-completion, and realized P&L)
-```
-**Capture per run:** fills/market, maker %, taker %, re-quotes, fill-dwell, win %, PnL.
-**Expected:** REST=3.5 holds orders in the queue longer → fewer re-quotes, **higher maker fill rate**.
+保留实际命令、代码版本、UTC 起止时间、完整日志和摘要。记录启动耗时与策略持续时长，不能把两者混为同一个指标。显式 `--paper` 必须保留；本步骤不提交真实订单。
 
-## 2. TINY LIVE — measure the REAL fill rate (≤ $10 at risk)
-Needs `.env` (POLYMARKET_PRIVATE_KEY, POLY_SIGNATURE_TYPE=3, POLY_FUNDER). Bust-capped at $10 / $8.
-```bash
-# Pre-flight (read-only): balances + CTF allowance
-./target/release/btc-5m-live preflight
-# Tiny live, lever ON, during the overlap:
-PAPER=0 REST=3.5 USD=2 CAP=10 LOSS=8 WINDOWS=12 ./pm2-clone-fillrate.sh
-```
-Monitor in another shell:
-```bash
-./target/release/btc-5m-live monitor results/live/fillrate-LIVE-rest3.5.jsonl
-```
-After it finishes, analyze + reconcile actual on-chain fills:
-```bash
-./target/release/btc-5m-live analyze     results/live/fillrate-LIVE-rest3.5.jsonl
-./target/release/btc-5m-live replay-clob  results/live/fillrate-LIVE-rest3.5.jsonl
-```
+逐项核对：
 
-## 3. Metrics to record (the gap, every aspect)
-| Metric | Target | Our paper | Our LIVE | Gap |
-|---|---|---|---|---|
-| Fills / market | 33.6 | | | |
-| Maker % / Taker % | 56 / 44 | | | |
-| Avg pair cost | 0.969 | | | |
-| Win rate | 82% | | | |
-| PnL / market ($) | +5.42 | | | |
-| **+ Liquidity rebate / day** | (extra) | n/a | from on-chain PUSD at 00:00 UTC | |
+1. 市场名称、condition/token ID、双边 tick 与时间戳一致，切换时不混用市场；缺失或过期报价得到明确拒绝。
+2. 每次候选、量化后的价格、最终数量、预算占用、费用模型和拒绝原因可以追溯。实际最小数量不能由执行层扩大订单来满足。
+3. 单边成交后检查补仓候选与最终门槛。当前动态修复仍受最终 0.99 限制；候选 1.05 不能当成允许按 1.05 提交或必然平仓。
+4. 部分成交后剩余挂单量和负债一致；撤单请求未确认前不释放预算；替换后的迟到事件不能影响新订单。
+5. 结束时区分已结算盈亏、未结算库存成本和挂单负债。缺少真实费用保持未知，未结算投入不能写为已实现亏损。
+6. 退出无失联提交，记录迟到成交和最终核对状态。页面或服务返回 pending 不等于引擎已退出。
 
-> **Rebate accrual** is *separate* from the binary PnL above — check the wallet's daily PUSD/USDC
-> liquidity-reward payout (midnight UTC, $1 min). Per the docs it can dwarf the thin binary edge and is
-> likely a large part of the target's real take. Resting tight, two-sided, ≥3.5s near mid maximizes it.
+## 指标定义
 
-## 4. GO / NO-GO to scale `--max-total-usd` toward the target's ~$300/mkt
-- **GO** if LIVE: maker fill rate ≥ ~40% AND fills/mkt ≥ ~20 AND PnL/mkt ≥ 0 (binary) AND pair < 1.0
-  AND a non-trivial daily rebate accrues. Raise CAP in steps (10 → 30 → 100 → 300), re-measuring each.
-- **NO-GO / re-tune** if fills stay < ~15 or PnL < 0: the queue isn't filling us — try a longer
-  `--requote-min-rest-sec` (5–7), a tighter `--requote-move-ticks`, or accept it's a thin-hours regime
-  and only run the overlap. Do **not** scale a losing fill rate (scaling multiplies the loss).
+| 指标 | 记录要求 |
+|---|---|
+| 挂单/成交 | 同时记录订单数、份数、金额及部分成交，明确分母 |
+| 对冲完成率 | 按市场和持仓配对，区分部分修复、完全配对、残余 |
+| 裸露时间 | 从单边净成交到补齐或观察结束；未补齐单独列出 |
+| 撤单延迟 | 从请求到交易所/模拟器确认，不能只测发送耗时 |
+| 退出时长 | 包含在途提交、撤单确认、最终成交核对 |
+| PnL | 说明结算依据、费用来源、是否真实资金，保留未结算项 |
+| 拒绝 | 按原因归类，保留决策层和最终执行层的阈值区别 |
 
-## 5. Dense full-window CLOB recording (offline, $0) — unblocks the realistic backtest
-The old recording covered only ~53% of each window and stopped ~40s early. `record-feeds` now streams
-the book to each window's **true end** + logs **top-of-book sizes**. Record during the overlap, then
-convert + backtest the *actual clone* on the full book:
-```bash
-SECONDS_RUN=9000 ./pm2-recorder-dense.sh         # 2.5h, $0, read-only -> results/track/dense-feeds.jsonl
-#   (or: pm2 start pm2-recorder-dense.sh --name btc-recorder-dense)
-python3 ../btc-5m-target-trader/build_clone_md_from_feeds.py results/track/dense-feeds.jsonl
-./target/release/btc-5m-backtest --mode realistic-trader --target-clone-active \
-  --fill-model bid --maker-life-sec 20 \
-  --market-data ../btc-5m-target-trader/clone_md_feeds.json --trader-json ../btc-5m-target-trader/clone_md_feeds.json
-```
-With full-window coverage the realistic fills/win/PnL become trustworthy (the current ~12 fills / 54%
-is capped by the sparse sample, not the strategy).
+## 2026-09-10 证据
 
-## 6. Value the LIQUIDITY REWARDS (the likely hidden edge)
-The realistic-trader backtest now reports a **reward score** (resting-maker score `((v−s)/v)²·size`,
-quadratic in closeness to mid). Add `--reward-rate` to turn it into an estimated $ rebate so you see
-**binary PnL + rebate** together:
-```bash
-./target/release/btc-5m-backtest --mode realistic-trader --target-clone-active --fill-model bid \
-  --reward-max-spread 0.035 --reward-rate 0.01 --market-data ... --trader-json ...
-# -> "Reward score: N | Est. rebate: $X | Binary+rebate: $Y"
-```
-The pool/competition split is market-specific (fetch `max_incentive_spread` from the CLOB API per
-market); `--reward-rate` is your $/score·min assumption. This is how you test whether the target's edge
-(and near-mid quoting) is really rewards-driven — and the live test's true rebate is the wallet's daily
-PUSD payout at 00:00 UTC.
+[六分钟 paper](../../docs/evidence/2026-09-10/paper-audit-summary.json) 观察到三个窗口，其中一轮 UP 20 份、成本 4.60，缺少 DOWN 补仓，按 oracle 推导 DOWN 获胜模拟结算 -4.60；最后窗口退出时未结算。没有真实资金损失，该样本没有足够的全程 tick 拒绝记录确定单边原因。
 
-## Notes
-- All orders are **postOnly (maker)**; forced crosses only to complete a pair near resolution.
-- The locked production preset (`btc-live-a`) is **unchanged**; this is a separate, capped test.
-- This test is the real-world counterpart to the faithful clone (`target_clone_active`) validated offline.
+[tick paper](../../docs/evidence/2026-09-10/paper-tick-final-summary.json) 使用 90 秒配置，包含启动实际运行 106.72 秒并正常退出；两边 tick 为 0.01，DOWN 模拟 20 份、成本 3.60，35 次 hedge_pair_cost 拒绝。结束时市场未结算，不能把 3.60 称为已实现损失。该轮证明 tick 传递和拒绝诊断有效，没有证明成功对冲或盈利。
+
+## 真实资金验收门槛
+
+2026-09-10 V2 授权及私有只读查询通过，仅覆盖账户前提。真实验收仍须单独确认账户、操作范围与金额，并依次保留小额 post-only 下单/撤单、部分成交、替换、断线恢复、状态不明核对、迟到成交、退出及结算的交易所证据。不得将查询 API 成功作为这些步骤已通过的依据。
+
+最终逐笔核对真实手续费、结算兑付、返佣、奖励到账及钱包现金变化。返佣/奖励规则和模型估算不是到账凭证。前端交易按钮仍禁用，完整真实账单、资产、八项遥测及高级参数联动仍未接入。
+
+验收应在可代表实际部署的负载下进行。都柏林 2026-09-10 出现高 CPU steal，paper 负载下账户检查仍可 504；先处理并复测资源与数据新鲜度，不能通过漏采行情或缩减原六页功能换取通过。详见 [CPU 诊断](../../docs/CPU-DIAGNOSIS-2026-09-10.md)。

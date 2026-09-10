@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   decisionBucketTs,
+  quantizeMakerBuyPrice,
   estimateMakerFillProbability,
   polymarketFillFee,
   visibleBuyQueueAhead,
@@ -113,5 +114,18 @@ describe("visible maker BUY queue", () => {
       bidLevels: [{ price: 0.47, size: 30 }],
       tsUnix: 1,
     }, 0.48)).toBeUndefined();
+  });
+});
+
+
+describe("maker tick quantization", () => {
+  it.each([[0.7615,0.01,0.76],[0.7615,0.001,0.761],[0.761,0.001,0.761],[0.29,0.01,0.29]])
+    ("quantizes %s with token tick %s to %s",(price,tick,expected)=>{
+      expect(quantizeMakerBuyPrice(price,tick)).toBe(expected);
+    });
+  it("never raises a sub-tick bid or guesses missing metadata",()=>{
+    expect(quantizeMakerBuyPrice(0.005,0.01)).toBeUndefined();
+    expect(quantizeMakerBuyPrice(0.7615,undefined)).toBeUndefined();
+    expect(quantizeMakerBuyPrice(0.7615,Number.NaN)).toBeUndefined();
   });
 });

@@ -1,0 +1,56 @@
+{
+  "recorded_at_utc": "2026-09-10T07:12:45.919892+00:00",
+  "deployed_files": 358,
+  "retired_file_entries": 28,
+  "hash_verified": true,
+  "account_file_unchanged": true,
+  "checks": [
+    {
+      "path": "/console/",
+      "http": 200,
+      "seconds": 0.79
+    },
+    {
+      "path": "/api/v1/status",
+      "http": 200,
+      "seconds": 0.79,
+      "state": {
+        "running": false,
+        "mode": "paper",
+        "live_unlocked": false
+      }
+    },
+    {
+      "path": "/api/v1/config",
+      "http": 200,
+      "seconds": 0.95
+    },
+    {
+      "path": "/api/v1/markets",
+      "http": 200,
+      "seconds": 0.77,
+      "collector": {
+        "collector_online": true,
+        "node_label": "都柏林节点",
+        "cache_age_seconds": 0.6296022429596633
+      },
+      "market_count": 1
+    },
+    {
+      "path": "/api/v1/runs",
+      "http": 200,
+      "seconds": 0.72
+    },
+    {
+      "path": "/api/account/status",
+      "http": 200,
+      "seconds": 0.83,
+      "account": {
+        "wallet_configured": true,
+        "owner_signer_configured": true,
+        "execution_credentials_ready": true,
+        "config_error": null
+      }
+    }
+  ]
+}

@@ -1,61 +1,47 @@
-# BTC 5 分钟交易系统
+# BTC 5 分钟对冲量化系统
 
-这是当前唯一维护的主线：Polymarket BTC Up/Down 5 分钟市场的真实公开数据采集、历史回放、纸面模拟和受保护交易引擎。
+本项目用于 Polymarket BTC Up/Down 5 分钟市场的公开行情采集、证据回放、纸面模拟及受控交易执行。主节点位于 AWS 都柏林 `eu-west-1`，公网控制台为：
 
-## 当前状态
+**https://34-242-206-196.sslip.io/console/**
 
-- 主节点：AWS 都柏林 `eu-west-1`；东京仅保留历史数据和线路对照。
-- 都柏林采集器、页面服务、小时分析和每日轮换均已部署并启用。
-- 页面可运行真实行情驱动的纸面模拟；纸面订单、成交和盈亏不是账户真实结果。
-- 真钱交易仍锁定：`trade_authorization=false`、`live_unlocked=false`；旧签名凭据有暴露记录，需更换，链上授权和真实订单验收尚未完成。
-- 当前裁决：`NOT_READY_FOR_LIVE_TRADING`。
-- 云仓库：[liuwan369/lianghua](https://github.com/liuwan369/lianghua)，只保存源码、配置模板、测试和文档。
+公网页面登录认证已按用户要求关闭。账户保存、配置保存与真实交易解锁是不同操作；保存账户或选择 live 模式不会启动真钱交易。
 
-## 打开页面
+## 当前能力
 
-公网入口（需要登录）：
+- 正式控制台保留总览、自动交易、市场、订单、收益、设置六页设计；行情、运行状态、模拟账本及账户检查接口已连接。
+- 六个页面设置项可保存并在下次启动时生效：单笔金额、挂单寿命、运行模式、运行时长、累计提交金额上限、订单数上限。其他高级输入目前仅为页面草稿。
+- TypeScript 引擎支持真实行情驱动的 paper、V2 CLOB 执行适配、真实 tick 校验、挂单负债管理、动态补仓和退出核对。Python `pm_maker` 是只读影子/回放组件。
+- 2026-09-10 账户只读验证通过实际 V2 所需授权、签名地址匹配及私有订单、成交、可交易余额查询。该结果不等于真钱下单或完整前端接入完成。
 
-```text
-https://34-242-206-196.sslip.io:80/system-dashboard.html
-```
+## 尚未完成
 
-备用 SSH 隧道入口：
+页面交易启停/退出按钮仍禁用；账户余额与持仓总览、完整真实订单账单、手续费/返佣/奖励到账凭证、八项延迟遥测、筛选导出及高级参数联动尚未完成。真实下单、部分成交、撤单、断线恢复和资金对账仍需真钱端到端验收。
 
-```text
-http://127.0.0.1:18765/system-dashboard.html
-```
+2026-09-10 都柏林负载诊断发现高 CPU steal，账户检查在 paper 负载下仍出现超时；CPU 积分及实例 credit mode 因 IAM 权限不足未核实。系统仍为 **NOT_READY_FOR_LIVE_TRADING**。模拟成交和结算不代表真实账户收益，也没有已验证的盈利保证。
 
-本地开发页面可运行：
+## 开发验证
+
+需要 Python 3.11+、Node.js 24+。在仓库根目录运行：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
+python -m pip install pytest requests websocket-client
+python -m pytest
+npm --prefix web ci
+npm --prefix web test
+npm --prefix web run build
+npm --prefix _external/btc-5m-market-trading-bot ci
+npm --prefix _external/btc-5m-market-trading-bot test
+npm --prefix _external/btc-5m-market-trading-bot run build
 ```
 
-本地地址：`http://127.0.0.1:8765/system-dashboard.html`。
+前端构建产物位于 `docs/console/`。本地预览仅用于开发，运行方式见 [START-HERE.md](START-HERE.md)；都柏林运行状态以公网服务和带时间戳的服务器证据为准。
 
-## 用户功能
+## 文档入口
 
-1. **交易**：查看实时盘口、模拟挂单、成交、撤单、成交额和结算盈亏。
-2. **配置**：设置配对成本上限、单笔金额、资金上限、订单上限和运行时间。
-3. **订单**：按市场查看成交额、持仓和结算结果。
-4. **账户**：用户填写、只读检查并保存账户配置；密钥只在受保护服务器保存，不返回浏览器。保存不等于授权下单。
+- [使用入口](START-HERE.md) · [六页操作说明](docs/WEB_GUIDE.md)
+- [系统架构](docs/ARCHITECTURE.md) · [参数与接口](docs/TECHNICAL.md)
+- [项目范围与进度](docs/PROJECT.md) · [验收交付状态](docs/DELIVERY.md)
+- [运维速查](docs/QUICK_REF.md) · [引擎说明](_external/btc-5m-market-trading-bot/README.md)
+- [2026-09-10 实盘就绪审计](docs/LIVE-READINESS-AUDIT-2026-09-10.md) · [CPU 诊断](docs/CPU-DIAGNOSIS-2026-09-10.md)
 
-## 策略白话版
-
-系统在 Up/Down 两边寻找合适买价。一边成交后，按当前赔率计算另一边需要补多少；只有预计配对成本不超过上限、资金和库存风险允许时才继续。价格无法修复、数据过期、临近结束或风险超限时停止或撤单。
-
-这不是保证盈利的无风险套利。纸面模拟不知道真实排队位置，返佣、奖励和真实手续费在没有账户证据时按 0 处理。
-
-## 代码结构
-
-```text
-_external/btc-5m-market-trading-bot/  TypeScript 主交易引擎
-pm_maker/                              Python 动态补仓与影子回放
-scripts/                               采集、分析、页面服务和回测
-config/                                都柏林/东京服务配置模板
-docs/                                  当前说明和历史证据
-tests/                                 Python 回归测试
-data/                                  小型核验报告；原始数据库不进 Git
-```
-
-完整入口见 [START-HERE.md](START-HERE.md)，架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，进度见 [docs/PROGRESS.md](docs/PROGRESS.md)。
+源码、配置模板、测试和脱敏证据可以纳入版本控制。账户密钥、密码、原始运行数据库、依赖目录及敏感运行日志不得提交。

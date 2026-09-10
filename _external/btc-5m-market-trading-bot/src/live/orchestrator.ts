@@ -15,7 +15,7 @@ import { runClobPollFeed } from "./feeds/clob-poll.js";
 import { runPolymarketFeed } from "./feeds/polymarket.js";
 
 import { runRtdsFeed } from "./feeds/rtds.js";
-import { runTokyoBookFeed } from "./feeds/tokyo.js";
+import { runCollectorBookFeed } from "./feeds/collector.js";
 
 import { runUserFeed } from "./feeds/user.js";
 import type { UserFeedControl } from "./feeds/user.js";
@@ -118,7 +118,7 @@ const PAPER_MIN_WINDOW_REMAINING_SEC = 15;
 
 
 
-async function applyEvents(
+export async function applyEvents(
   events: MakerEvent[],
   executor: Executor,
   engine: Engine,
@@ -204,6 +204,7 @@ async function applyEvents(
         journal.logEvent(ev, mkt, ts);
 
         await executor.cancelSide(ev.side);
+        if (live) engine.onOrderCancelled(ev.side);
 
         break;
 
@@ -215,7 +216,7 @@ async function applyEvents(
 
 
 
-async function handleUserEvent(
+export async function handleUserEvent(
 
   engine: Engine,
 
@@ -228,18 +229,35 @@ async function handleUserEvent(
   ts: number,
 
   event: Extract<FeedEvent, { kind: "user" }>["event"],
+  journaledFills: Set<string> = new Set(),
 
 ): Promise<void> {
 
   switch (event.kind) {
 
     case "exchangeFill": {
+      if (!event.tradeId || !event.orderId) throw new Error("fill identity is incomplete; account reconciliation required");
+      const eventId = JSON.stringify([event.tradeId, event.orderId, event.fill.side]);
+      if (journaledFills.has(eventId)) return;
 
-      const fillEv = engine.confirmExchangeFill(event.fill);
+      const pendingFillShares = event.orderId != null &&
+        executor.restingId(event.fill.side) === event.orderId ? event.fill.shares : 0;
+      const fillEv = engine.confirmExchangeFill(event.fill, pendingFillShares);
 
       executor.noteFill(event.fill.side, event.orderId, event.fill.shares);
 
-      journal.logEvent(fillEv, mkt, ts);
+      if (fillEv.kind !== "fill") throw new Error("exchange fill did not produce a fill journal record");
+      journal.log("fill", mkt, ts, {
+        event_id: eventId,
+        trade_id: event.tradeId,
+        order_id: event.orderId,
+        side: Side.asStr(fillEv.side),
+        price: r4(fillEv.price),
+        shares: r2(fillEv.shares),
+        is_maker: fillEv.isMaker,
+        fee: r4(fillEv.fee),
+      });
+      journaledFills.add(eventId);
 
       journal.log("exchange_fill", mkt, ts, {
 
@@ -269,9 +287,8 @@ async function handleUserEvent(
 
     case "orderCancelled": {
 
-      executor.onOrderCancelled(event.orderId, event.side);
-
-      engine.onOrderCancelled(event.side);
+      const cancelledSide = executor.onOrderCancelled(event.orderId, event.side);
+      if (cancelledSide != null) engine.onOrderCancelled(cancelledSide);
 
       journal.log("exchange_cancel", mkt, ts, {
 
@@ -291,6 +308,40 @@ async function handleUserEvent(
 
 
 
+export async function finalizeMarketAccount(
+  executor: Executor, engine: Engine, market: Market, user: UserFeedControl,
+  journalFinalFill?: (event: Extract<FeedEvent, { kind: "user" }>["event"]) => Promise<void>,
+  journaledFillIds: ReadonlySet<string> = new Set(),
+): Promise<void> {
+  await executor.pauseSubmissions();
+  await executor.cancelAll();
+  let emptyReads = 0;
+  for (let attempt = 0; attempt < 3 && emptyReads < 2; attempt += 1) {
+    const orders = await executor.getOpenOrders(market.conditionId);
+    if (orders.length === 0) emptyReads += 1;
+    else { emptyReads = 0; await executor.cancelAll(); }
+    if (emptyReads < 2) await sleep(250);
+  }
+  if (emptyReads < 2) throw new Error("market stop could not confirm all orders cancelled");
+  // Keep the authenticated feed alive while settlement-time fills are read.
+  const snapshot = await user.reconcileRecentTrades(market.start - 5);
+  if (!user.isHealthy()) throw new Error("user feed unhealthy during final account reconciliation");
+  const recovered = snapshot.filter(event => {
+    if (event.kind !== "exchangeFill") return false;
+    if (!event.orderId || !event.tradeId) throw new Error("final trade snapshot has incomplete fill identity");
+    return executor.isOurOrder(event.orderId);
+  });
+  const recoveredIds = new Set(recovered.flatMap(event => event.kind === "exchangeFill"
+    ? [JSON.stringify([event.tradeId, event.orderId, event.fill.side])] : []));
+  if ([...journaledFillIds].some(id => !recoveredIds.has(id))) {
+    throw new Error("final trade snapshot omits previously journaled fills; account remains unreconciled");
+  }
+  for (const event of recovered) await journalFinalFill?.(event);
+  engine.replaceCurrentMarketFills(recovered.flatMap(event => event.kind === "exchangeFill" ? [event.fill] : []));
+  engine.onOrderCancelled();
+  executor.confirmAccountReconciled();
+}
+
 async function runOneMarket(
 
   mkt: Market,
@@ -306,8 +357,12 @@ async function runOneMarket(
   cfg: RunConfig,
 
   stopAt?: number,
+  shouldStop: () => boolean = () => false,
 
 ): Promise<void> {
+  // Previous-market fills/status notices must never enter the next market.
+  while (queue.tryPop() != null) { /* drained after old feeds have stopped */ }
+  executor.resumeSubmissions();
 
   // A duration limit may interrupt a market before its official end. Do not
   // resolve from a partial book/oracle snapshot, or the dashboard shows fake PnL.
@@ -345,8 +400,8 @@ async function runOneMarket(
 
   ) : undefined;
 
-  const tokyo = !cfg.live
-    ? runTokyoBookFeed(pushFallback, mkt.upToken, mkt.downToken, deadline, Math.max(cfg.bookPollHz, 2))
+  const collector = !cfg.live
+    ? runCollectorBookFeed(pushFallback, mkt.upToken, mkt.downToken, deadline, Math.max(cfg.bookPollHz, 2))
     : undefined;
 
 
@@ -388,6 +443,8 @@ async function runOneMarket(
 
 
   let latest: BookSnapshot | undefined;
+  const journaledFills = new Set<string>();
+  let lastDecisionRejection: string | undefined;
 
   let lastTrig: number | undefined;
 
@@ -421,11 +478,19 @@ async function runOneMarket(
         downBidLevels: b.downBidLevels?.map(([price, size]) => ({ price, size })),
         upSellTradeRateSharesPerSec: b.upSellTradeRate,
         downSellTradeRateSharesPerSec: b.downSellTradeRate,
-        upTickSize: b.tickSize,
-        downTickSize: b.tickSize,
+        upTickSize: executor.knownTickSize(mkt.upToken),
+        downTickSize: executor.knownTickSize(mkt.downToken),
       },
 
     );
+
+    const rejection = engine.session.lastDecisionRejection();
+    const rejectionKey = rejection ? JSON.stringify(rejection) : undefined;
+    if (rejectionKey !== lastDecisionRejection) {
+      lastDecisionRejection = rejectionKey;
+      if (rejection) journal.log("decision_rejected", mkt, ts, { ...rejection,
+        side: rejection.side != null ? Side.asStr(rejection.side) : null });
+    }
 
     // Health can change while the strategy computes. Never submit a real
     // order unless both authenticated events and both book sides are fresh.
@@ -449,6 +514,7 @@ async function runOneMarket(
 
 
   let nextHb = Date.now() + cfg.heartbeatMs;
+  let reachedMarketEnd = false;
 
 
 
@@ -465,7 +531,7 @@ async function runOneMarket(
       console.info("authenticated order/fill feed ready — live decisions enabled");
     }
 
-  while (nowUnix() < deadline) {
+  while (nowUnix() < deadline && !shouldStop()) {
 
     if (cfg.live && !user?.isHealthy()) {
       console.error("authenticated order/fill feed stale — cancelling and stopping");
@@ -545,7 +611,7 @@ async function runOneMarket(
 
       case "tickSize":
 
-        executor.updateTickSize(msg.token, msg.tickSize);
+        executor.updateTickSize(msg.token, msg.tickSize, msg.tsUnix);
 
         console.info(`CLOB tick size updated …${msg.token.slice(-6)} -> ${msg.tickSize}`);
 
@@ -574,6 +640,7 @@ async function runOneMarket(
           nowUnix(),
 
           msg.event,
+          journaledFills,
 
         );
 
@@ -602,6 +669,10 @@ async function runOneMarket(
     }
 
   }
+    reachedMarketEnd = nowUnix() >= mkt.end;
+    if (cfg.live && user) await finalizeMarketAccount(executor, engine, mkt, user,
+      event => handleUserEvent(engine, executor, mkt, journal, event.kind === "exchangeFill" ? event.fill.tsUnix : nowUnix(), event, journaledFills), journaledFills);
+    else await executor.cancelAll();
   } catch (error) {
     if (cfg.live && error instanceof UnknownOrderStateError && user) {
       console.error("order ACK state unknown — freezing submissions and reconciling account");
@@ -654,14 +725,12 @@ async function runOneMarket(
   } finally {
     pm.stop();
     poll?.stop();
-    tokyo?.stop();
+    collector?.stop();
     user?.stop();
   }
 
 
 
-  const reachedMarketEnd = nowUnix() >= mkt.end;
-  await executor.cancelAll();
   if (!reachedMarketEnd) {
     journal.log("stopped", mkt, undefined, {
       reason: "运行时间到达，市场尚未结束，未结算",
@@ -742,7 +811,7 @@ export async function run(cfg: RunConfig): Promise<void> {
   } catch (error) {
     if (cfg.live) throw error;
     console.warn(
-      `paper mode: official CLOB health unavailable (${error instanceof Error ? error.message : String(error)}); continuing with Tokyo/Polymarket feeds`,
+      `paper mode: official CLOB health unavailable (${error instanceof Error ? error.message : String(error)}); continuing with collector/Polymarket feeds`,
     );
   }
 
@@ -764,20 +833,11 @@ export async function run(cfg: RunConfig): Promise<void> {
 
   let executor: Executor | undefined;
   let stopping = false;
-  const gracefulStop = async () => {
+  const gracefulStop = () => {
     if (stopping) return;
     stopping = true;
-    console.warn("stop requested — cancelling open orders");
-    try {
-      await executor?.shutdown();
-      console.info("open orders cancelled — stopping");
-      process.exitCode = 0;
-    } catch (error) {
-      console.error("cancel-all failed during stop", error);
-      process.exitCode = 1;
-    } finally {
-      process.exit();
-    }
+    console.warn("stop requested — pausing submissions, then cancelling and reconciling account");
+    void executor?.pauseSubmissions();
   };
   const onSigint = () => void gracefulStop();
   const onSigterm = () => void gracefulStop();
@@ -839,6 +899,7 @@ export async function run(cfg: RunConfig): Promise<void> {
   try {
 
     while (true) {
+      if (stopping) return;
 
       if (stopAt != null && nowUnix() >= stopAt) {
         await executor.shutdown();
@@ -866,7 +927,7 @@ export async function run(cfg: RunConfig): Promise<void> {
       engine.reset(mkt.start, mkt.end);
 
       try {
-        await executor.prepareMarket(mkt.conditionId);
+        await executor.prepareMarket(mkt.conditionId, [mkt.upToken, mkt.downToken]);
       } catch (error) {
         console.error(`CLOB market warmup failed; skipping ${mkt.slug}: ${error}`);
         await sleep(Math.max(1000, (remaining + 3) * 1000));
@@ -883,7 +944,8 @@ export async function run(cfg: RunConfig): Promise<void> {
 
 
 
-      await runOneMarket(mkt, engine, executor, journal, queue, cfg, stopAt);
+      if (stopping) return;
+      await runOneMarket(mkt, engine, executor, journal, queue, cfg, stopAt, () => stopping);
 
       recordTraded(cfg.tradedPath, mkt.conditionId);
 

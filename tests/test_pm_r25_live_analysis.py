@@ -95,7 +95,7 @@ def test_polygon_role_matching_keeps_taker_rows_for_activity_buy() -> None:
 def test_daily_database_discovery_requires_every_utc_day(tmp_path: Path) -> None:
     days = tmp_path / "days"
     days.mkdir()
-    first = days / "tokyo-evidence-2026-08-27.sqlite3"
+    first = days / "dublin-evidence-2026-08-27.sqlite3"
     first.touch()
     start = int(datetime(2026, 8, 27, 23, 59, tzinfo=timezone.utc).timestamp() * 1_000_000_000)
     end = start + 120 * 1_000_000_000

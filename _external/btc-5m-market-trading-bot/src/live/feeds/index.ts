@@ -4,7 +4,7 @@ import type { UserFeedEvent } from "./user.js";
 
 export interface BookSnapshot {
   tsUnix: number;
-  source?: "polymarket-ws" | "clob-rest" | "tokyo-rest";
+  source?: "polymarket-ws" | "clob-rest" | "collector-rest";
   /** Exchange timestamps for each side; receive time is not a live freshness signal. */
   upExchangeTsUnix?: number;
   downExchangeTsUnix?: number;
@@ -21,6 +21,8 @@ export interface BookSnapshot {
   upSellTradeRate?: number;
   downSellTradeRate?: number;
   tickSize?: number;
+  upTickSize?: number;
+  downTickSize?: number;
 }
 
 export interface BookSnapshotMethods {

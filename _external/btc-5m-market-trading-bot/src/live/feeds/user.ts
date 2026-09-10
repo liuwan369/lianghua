@@ -179,8 +179,6 @@ export function parseAuthenticatedTrade(
   const e = raw as Record<string, unknown>;
   const status = String(e.status ?? "").toUpperCase();
   if (!["MATCHED", "MINED", "CONFIRMED"].includes(status)) return [];
-  const action = String(e.side ?? "").toUpperCase();
-  if (action && action !== "BUY") return [];
   const market = typeof e.market === "string" ? e.market : undefined;
   if (market && opts.conditionId && market !== opts.conditionId) return [];
   const tradeId = typeof e.id === "string" ? e.id : undefined;
@@ -198,6 +196,8 @@ export function parseAuthenticatedTrade(
   const out: UserFeedEvent[] = [];
 
   if (traderSide === "TAKER") {
+    const action = String(e.side ?? "").toUpperCase();
+    if (action && action !== "BUY") return [];
     const tok = typeof e.asset_id === "string" ? e.asset_id : undefined;
     const side = tok ? sideOfToken(tok, opts.upToken, opts.downToken) : undefined;
     const price = num(e.price);
@@ -291,6 +291,15 @@ function isSubscriptionConfirmation(raw: unknown): boolean {
     eventType === "user" ||
     channel === "user"
   );
+}
+
+export function isUserChannelFailure(raw: unknown): boolean {
+  if (typeof raw === "string") return /invalid.*auth|unauthori[sz]ed|authentication.*fail/i.test(raw);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const event = raw as Record<string, unknown>;
+  return Boolean(event.error || event.error_msg) ||
+    [event.type, event.event_type, event.status].some((value) =>
+      ["error", "failed", "failure", "rejected", "unauthorized"].includes(String(value ?? "").toLowerCase()));
 }
 
 /** True only when a message proves that the authenticated user channel is active. */
@@ -459,9 +468,19 @@ export function runUserFeed(
             const t = String(data);
             lastTransportAtMs = Date.now();
             if (t === "PONG" || t === "pong") return;
+            if (isUserChannelFailure(t)) {
+              setReady(false);
+              ws.terminate();
+              return;
+            }
             try {
               const v = JSON.parse(t) as unknown;
               const batch = Array.isArray(v) ? v : [v];
+              if (batch.some(isUserChannelFailure)) {
+                setReady(false);
+                ws.terminate();
+                return;
+              }
               for (const raw of batch) {
                 pending.accept(raw);
               }

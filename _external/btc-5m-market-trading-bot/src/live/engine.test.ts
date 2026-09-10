@@ -21,6 +21,19 @@ describe("bookOk gate", () => {
 });
 
 describe("Engine book ordering", () => {
+  it("passes independent venue ticks into risk checks so a valid hedge is evaluated at its executable price", () => {
+    const engine=new Engine({liveMode:true,pairCostMax:0.99,minMakerFillProbability:0});
+    engine.reset(1000,1300);
+    engine.confirmExchangeFill({side:Side.Up,shares:20,price:0.23,tsUnix:1005,isMaker:true});
+    const events=engine.onBook(1010,0.22,0.23,0.76,0.77,{upTickSize:0.001,downTickSize:0.01});
+    expect(events).toContainEqual(expect.objectContaining({kind:"quote",side:Side.Down,price:0.76}));
+  });
+  it("does not quote with an unknown live tick even when fill-probability filtering is disabled", () => {
+    const engine=new Engine({liveMode:true,minMakerFillProbability:0});
+    engine.reset(1000,1300);
+    expect(engine.onBook(1010,0.45,0.46,0.52,0.53).some(event=>event.kind === "quote")).toBe(false);
+    expect(engine.session.lastDecisionRejection()?.code).toBe("maker_tick_missing_or_invalid");
+  });
   it("drops out-of-order books", () => {
     const e = new Engine({});
     e.reset(1000, 1300);
@@ -122,6 +135,9 @@ describe("Engine maker microstructure gate", () => {
       downSellTradeRateSharesPerSec: 0.01,
     });
     expect(second.some((event) => event.kind === "cancel")).toBe(true);
+    expect(e.session.pendingQuotes()).toHaveLength(1);
+    expect(e.session.pendingQuotes(false)).toHaveLength(0);
+    e.onOrderCancelled(Side.Up);
     expect(e.session.pendingQuotes()).toHaveLength(0);
   });
 });

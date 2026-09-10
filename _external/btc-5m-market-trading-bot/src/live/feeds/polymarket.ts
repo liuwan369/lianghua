@@ -90,7 +90,8 @@ function applyMessage(
         const lastMs = side ? applied.upMs : applied.downMs;
         const bids = levelList(e.bids ?? e.buys);
         const asks = levelList(e.asks ?? e.sells);
-        if ((eventMs == null || eventMs >= lastMs) && (bids.length > 0 || asks.length > 0)) {
+        const isSnapshot = Array.isArray(e.bids ?? e.buys) && Array.isArray(e.asks ?? e.sells);
+        if ((eventMs == null || eventMs >= lastMs) && isSnapshot) {
           const ob = side ? up : dn;
           ob.applySnapshot(bids, asks);
           if (side) {
@@ -145,16 +146,17 @@ function applyMessage(
   return { upUpdated, downUpdated };
 }
 
-function tickSizeChanges(v: unknown): Array<{ token: string; tickSize: number }> {
-  const out: Array<{ token: string; tickSize: number }> = [];
+function tickSizeChanges(v: unknown): Array<{ token: string; tickSize: number; tsUnix?: number }> {
+  const out: Array<{ token: string; tickSize: number; tsUnix?: number }> = [];
   const events = Array.isArray(v) ? v : [v];
   for (const raw of events) {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
-    if (String(e.event_type ?? "").toLowerCase() !== "tick_size_change") continue;
+    if (!["tick_size_change", "book"].includes(String(e.event_type ?? "").toLowerCase())) continue;
     const token = typeof e.asset_id === "string" ? e.asset_id : undefined;
     const tickSize = num(e.new_tick_size ?? e.tick_size);
-    if (token && tickSize != null && tickSize > 0) out.push({ token, tickSize });
+    const atMs = exchangeTimeMs(e);
+    if (token && tickSize != null && tickSize > 0) out.push({ token, tickSize, ...(atMs != null ? {tsUnix:atMs / 1000} : {}) });
   }
   return out;
 }
@@ -275,7 +277,7 @@ export function runPolymarketFeed(
             try {
               const v = JSON.parse(t) as unknown;
               for (const change of tickSizeChanges(v)) {
-                sink({ kind: "tickSize", ...change, tsUnix: nowUnix() });
+                sink({ kind: "tickSize", ...change, tsUnix: change.tsUnix ?? nowUnix() });
                 if (change.token === upToken) tickSizes.up = change.tickSize;
                 if (change.token === downToken) tickSizes.down = change.tickSize;
               }
@@ -313,20 +315,20 @@ export function runPolymarketFeed(
                 } else {
                   const changed = applyMessage(v, upToken, downToken, up, dn, applied);
                   const atMs = Date.now();
-                  if (changed.upUpdated) lastUpAtMs = atMs;
-                  if (changed.downUpdated) lastDownAtMs = atMs;
+                  if (changed.upUpdated) { lastUpAtMs = atMs; fastUp = undefined; }
+                  if (changed.downUpdated) { lastDownAtMs = atMs; fastDown = undefined; }
                 }
               } else {
                 const changed = applyMessage(v, upToken, downToken, up, dn, applied);
                 const atMs = Date.now();
-                if (changed.upUpdated) lastUpAtMs = atMs;
-                if (changed.downUpdated) lastDownAtMs = atMs;
+                if (changed.upUpdated) { lastUpAtMs = atMs; fastUp = undefined; }
+                if (changed.downUpdated) { lastDownAtMs = atMs; fastDown = undefined; }
               }
               const ub = up.bestBid();
               const ua = up.bestAsk();
               const db = dn.bestBid();
               const da = dn.bestAsk();
-              if (!ub || !ua || !db || !da) return;
+              if (!ub || !ua || !db || !da) { hasCompleteBook = false; return; }
               hasCompleteBook = true;
               const nowMs = Date.now();
               const upTop = fastUp && nowMs - fastUp.atMs <= 1_000 ? fastUp : undefined;
@@ -369,6 +371,8 @@ export function runPolymarketFeed(
                 upBidLevels: up.bidLevels(),
                 downBidLevels: dn.bidLevels(),
                 tickSize: tickSizes.up ?? tickSizes.down,
+                upTickSize: tickSizes.up,
+                downTickSize: tickSizes.down,
               };
               sink({ kind: "book", snapshot: snap });
             } catch {

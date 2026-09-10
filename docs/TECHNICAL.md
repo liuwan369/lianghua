@@ -1,88 +1,81 @@
-# 技术说明
+# 参数、接口与执行语义
 
-更新时间：2026-09-08
+本文描述六页控制台、Python 服务与 TypeScript 引擎的实际连接边界。金额、费用、持仓和运行状态必须携带所属运行及数据来源；未知值不能默认为零。
 
-## 本地页面
+## 页面保存与后台参数
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/start-dashboard.ps1
-```
+页面 `web/src/forms.ts` 只提交以下六项映射：
 
-本地开发页面默认监听 `127.0.0.1:8765`；当前主节点迁移到 AWS 都柏林后，正式服务默认只监听服务器本机，先通过 SSH 隧道查看，避免未认证交易接口暴露公网。
+| 页面字段 ID 后缀 | 后台参数 | 含义 |
+|---|---|---|
+| `order` | `order_usd` | 单笔金额上限 |
+| `life` | `maker_life_sec` | 挂单寿命，秒 |
+| `mode` | `mode` | paper/live，保存不启动 |
+| `duration` | `duration_min` | 运行时长，分钟 |
+| `submitted` | `max_total_usd` | 累计提交名义金额上限，不是当前净持仓 |
+| `maxOrders` | `max_orders` | 订单数上限 |
 
-## 当前都柏林服务
+其他高级输入仅保留本页草稿，不持久化、不生效。后台完整配置模式另支持以下范围；后台支持不代表存在相应正式页面绑定：
 
-- 采集器：`pm-r25-dublin-collector.service`
-- 页面服务：`pm-system-dashboard-dublin.service`
-- 小时分析：`pm-r25-dublin-live-analyzer.timer`
-- 每日轮换：`pm-r25-dublin-daily-restart.timer`
-- 服务器内部接口：`http://127.0.0.1:18766/api/live`
-- 公网入口：`https://34-242-206-196.sslip.io:80/system-dashboard.html`（HTTPS Basic Auth）
-- 用户隧道入口：`http://127.0.0.1:18765/system-dashboard.html`
-- 旧东京主机：`13.115.254.211`（历史对照）
-- 当前主节点：`34.242.206.196`，AWS Lightsail 都柏林；Node.js `24.13.0`；公网防火墙当前开放 22/80，HTTPS 临时监听 80，SSH 隧道作为备用。
+| 参数 | 默认值 | 校验范围 |
+|---|---|---|
+| `order_usd` | 2 | 0.01–1000 |
+| `pair_cost_max` | 0.99 | 0.90–1.00 |
+| `max_orders` | 50 | 整数 1–10000 |
+| `max_total_usd` | paper 100 / live 10 | 0.01–100000 |
+| `duration_min` | paper 5 / live 15 | 0 表示不限时，否则 0.1–1440 |
+| `maker_life_sec` | 15 | 1–300 |
+| `decision_interval_ms` | 0 | 0–60000 |
+| `defensive_cancel_bps` | 0 | 0–1000 |
+| `mode` | paper | paper/live |
 
-账户接入使用官方 `@polymarket/client 0.9.0` 做公开只读预检。真实订单热路径暂时仍由旧 CLOB V2 适配器承担并保持锁定；Owner 签名认证、授权补齐和小额验收完成后即可放行，Session Key 只是官方 Beta 的可选委托方案。自建 bot 使用 Relayer API Key 访问 Relayer 接口；Builder Key 仅用于获批准的 Builder 集成，二者都不能代替订单签名。
+数值必须是有限 JSON number，字符串、布尔值、NaN、未知字段均拒绝。配置保存采用 `{params, expected_revision}`，版本冲突返回 409；成功后下次启动生效。损坏或已保存后丢失的配置会报错，不静默恢复可运行默认值。省略字段按明确的模式默认值补齐，前端保存则携带已有参数全量快照。
 
-页面服务读取都柏林本机采集数据，不把完整数据库暴露给浏览器。
+## HTTP 接口
 
-## 当前部署核对
+| 方法与路径 | 用途及边界 |
+|---|---|
+| GET `/api/v1/config` | 参数、版本及能力说明 |
+| POST `/api/v1/config` | 非敏感配置保存 |
+| GET `/api/v1/status` | 运行状态及数据来源 |
+| GET `/api/v1/markets` | 市场与盘口状态 |
+| GET `/api/v1/runs?limit=50&before_id=...` | 运行列表游标分页 |
+| GET `/api/v1/events?run_id=...&limit=50&before_id=...` | 指定运行事件游标分页 |
+| GET `/api/v1/summary?run_id=...` | 运行账本摘要，不是钱包账单 |
+| GET `/api/account/status` | 脱敏账户状态 |
+| POST `/api/account/check` | 只读账户检查，不保存 |
+| POST `/api/account/save` | 检查后持久化账户；失败不覆盖配置 |
+| GET `/api/live` | 采集行情/分析适配数据 |
+| POST `/api/v1/trading/start` | 按版本化配置启动，仅支持 paper |
+| POST `/api/v1/trading/stop` | 停止请求及退出状态 |
+| POST `/api/trading/start`、`/api/trading/stop` | 底层控制接口；live 使用独立解锁及授权 |
 
-- 2026-09-07 服务器复核：采集器、页面、小时分析和每日轮换均为 `active/enabled`。
-- 服务器 `/api/trading/status` 当前返回 `running=false`、`live_unlocked=false`、`account_configured=true`。Owner 私钥已配置并与链上 Owner 匹配；2026-09-07 网页只读核对的 `$15.71` 只是历史余额快照，不代表当前实时余额。
-- 服务器 `/api/live` 返回 `collector_online=true`，CLOB 与 Binance WebSocket 在线，队列深度为 0；这只是检查时快照。
-- 本机 `127.0.0.1:18765` 是否可访问取决于 SSH 隧道是否在线；隧道断开不代表服务器服务离线。
-- Nginx 公网入口已验证：未认证返回 401；认证后页面、`/api/live` 和 `/api/trading/status` 返回 200。证书自动续期 dry-run 已通过。
+前端普通请求超时 8 秒，按约 5 秒刷新并检查行情/事件新鲜度；账户操作超时 55 秒。账户只读后端主要 RPC 尝试 25 秒，失败时备用尝试 20 秒；并发检查返回 429，校验、上游或超时错误按情况返回 400/502/503/504。HTTP 成功只证明此次接口请求结果，不能代替业务端到端验收。
 
-## 网络入口与延迟
+公网页面登录关闭。账户写入要求正确公网 origin/代理配置；真实交易控制另外要求 control token、明确确认及 `PM_TRADING_LIVE_UNLOCK=1`。账户检查或保存不创建交易所订单、不自动进行链上授权。
 
-- 官方 SDK 使用统一域名：`https://clob.polymarket.com`、`wss://ws-subscriptions-clob.polymarket.com/ws/market`、`https://data-api.polymarket.com` 和 `https://gamma-api.polymarket.com`。官方没有公布可直接购买同机房的“主服务器 IP”或地区专用入口。
-- 这些域名会解析到 Cloudflare 等边缘 IP，IP 会变化，不能用 IP 归属地推断 Polymarket 源站位置。东京服务器本次响应头的 `cf-ray` 节点为 `NRT`，即接入东京边缘节点。
-- 东京实测（2026-09-06）：REST 首字节约 `0.28–0.31 秒`，公开行情 WebSocket 建连约 `0.49 秒`。这证明东京线路可用，但不代表交易获准，也不能据此断言全球最快；比较其他地区必须从各地区服务器重复同一测试。
-- Polymarket 不是所有地区都能交易。官方把限制分为三类：完全禁止、网页和 API 都 close-only、仅网页端 close-only。爱尔兰、日本、荷兰属于第三类，虽然 `/api/geoblock` 可能返回 `blocked=true`，官方文档明确说明 API 本身可用；德国、法国、波兰等属于网页和 API 都受限。用户本人仍必须符合平台资格，不能用服务器绕过司法辖区限制。
-- 官方文档明确给出：撮合主服务器在 AWS `eu-west-2`，普通开发者最近的非 API 限制区域是 `eu-west-1`；完成 KYC/KYB 后可申请 `eu-west-2` 直接同区部署。因此普通方案第一候选恢复为 **AWS 都柏林 `eu-west-1`**。苏黎世、马德里只作为线路对照，不能再用不同端点、不同运营商的公共样本直接排出全球第一。
-- 已取得的公共探针证据仍保留：AWS 都柏林一次新连接约 `39ms`；Oracle 苏黎世 `/time` 六次为 `44/45/60/45/97/50ms`。它们只能用于初筛；原始测量编号和样本保存在 `data/latency-location-screen-2026-09-06.json`。
-- 公共探针每次都会新建 DNS/TCP/TLS 连接，只能筛机房和运营商，不能代表长连接 WebSocket 的消息年龄，更不能代表真实订单 ACK。对 `ws-subscriptions-clob.polymarket.com` 用普通 HTTP 得到 `404` 是没有发送 WebSocket Upgrade 的预期结果。
-- 交易热路径已增加市场预热：在每个 5 分钟市场开始、策略接单前，一次取齐 API 版本和市场元数据，让 tick size、neg-risk、费用信息进入 SDK 内存缓存。真实订单日志会记录 CLOB ACK 耗时，用于计算事件到确认链路；这项改动不解锁真实交易。
-- Cloudflare 边缘只负责接入和转发，订单最终仍由平台撮合系统处理；靠近解析出的 IP 不能保证更快或获得排队优先级。
-- 统一测速器：`_external/btc-5m-market-trading-bot/scripts/latency-probe.mjs`。它从运行机器测官方地理限制、DNS、Cloudflare 节点、CLOB REST、WebSocket 建连、首个盘口和带平台时间戳的消息年龄；新机房必须运行同一脚本，不能混用网页 ping 和真实 WebSocket 指标。
-- 都柏林 30 分钟基线（2026-09-06）：REST `p50=26.19ms / p95=35.38ms`，WebSocket 建连 `p50=46.64ms`，首盘口 `p50=16.78ms`，校准后稳定消息年龄 `p50=9ms / p95=86ms`，收包间隔 `p99=32.04ms`，7 个市场约 51 万条消息，0 陈旧事件、0 错误，Cloudflare 节点 `DUB`。地理接口返回 `IE / blocked=true`，按官方文档属于网页端限制，API 初筛通过；真实下单仍未验证。
-- 都柏林内核 A/B 测试由 `_external/btc-5m-market-trading-bot/scripts/run-dublin-kernel-ab.sh` 自动执行。每组使用相同 REST/WS 探针，采用两轮相反顺序并夹入默认组；进程锁、异常恢复和完整性门槛已启用。只有零错误、零陈旧消息、完整样本且相对默认稳定改善至少 5% 的变体才会进入长测，否则保留默认内核配置。
-- Node `ws` 已在实际 WebSocket 连接上验证调用 `setNoDelay(true)`；TCP_NODELAY 已生效，无需重复改业务代码。
-- 测速器长测会在每个 BTC 5 分钟市场结束前关闭旧订阅并自动切换新市场，WebSocket 每 10 秒发送心跳，且把测试结束前的静默时间计入收包间隔。只有 `chrony` 提供了有限的具体时钟偏差时，盘口消息年龄才允许参加机房排名；`timedatectl=yes` 只能展示原始值。
-- 东京统一基线（2026-09-06，10 次 REST、5 次 WS）：REST `p50=250.58ms / p95=300.86ms`；WS 建连 `p50=498.48ms`；订阅后两边完整盘口 `p50=241.67ms`；稳定阶段消息年龄 `p50=118ms / p95=130ms`；Cloudflare 节点 `NRT`；官方地理结果 `JP / blocked=true`。原始报告：`data/latency-tokyo-2026-09-06.json`。
-- 修正测速器后的东京冒烟复核：时钟偏差约 `-0.001ms`，REST `p50=254.71ms / p95=267.85ms`，WS 建连 `p50=488.65ms`，首盘口 `p50=238.79ms`，稳定消息年龄 `p50=118ms / p95=195ms`，仍为 `JP / blocked=true`。报告：`data/latency-tokyo-smoke-final.json`。
-- 当前主机房已选 AWS 都柏林 `eu-west-1`，其 30 分钟公开链路基线明显优于东京。这个结论只适用于公开 REST/WS，不代表真实下单 ACK 已验收。
-- 内核短时 A/B 已结束：16MB TCP 缓冲区两轮完整短测的消息年龄 P95 聚合值约 `52.50ms`，默认三轮约 `63ms`，改善约 `16.7%`；但 REST P95 与收包间隔没有同步改善，且未完成长测，所以原始内核参数已恢复，候选参数尚未投入生产。
-- 下单热路径已改为本地签名后直接调用 `/order`，开启 `deferExec`，使用连接复用和 3 秒硬超时；日志分开记录签名、HTTP ACK 和总耗时。请求超时、连接重置或 5xx 被视为“平台状态不明”，程序停止，不能自动重复下单。
-- 实盘只允许 Polymarket 主 WebSocket 驱动策略。Up/Down 两边盘口必须完整且新鲜，任一侧盘口年龄超过 `250ms` 就禁止下单；用户订单/成交 WebSocket 必须在线。用户频道或主行情频道掉线会立即进入最高优先级撤单和停止流程。CLOB REST 和东京 REST 只用于纸面后备，东京报价保留原始时间且超过 2 秒即丢弃。
-- 用户成交推送可能先于 HTTP ACK。程序会把未知订单事件缓存 10 秒，HTTP 返回订单 ID 后重放，避免极快成交漏记仓位。
-- HTTP ACK 返回的成交编号会保留，并由只读成交查询在后台核对，避免只依赖单一回报来源。WebSocket 完整盘口建立后，时间戳更旧的增量会直接丢弃，防止乱序消息把本地盘口倒退。
-- ACK 超时或网络中断导致订单状态未知时，程序会冻结新单但保持用户回报通道在线，先撤销全部订单，再用至少 5 秒的账户查询窗口取得稳定的本市场完整成交并重建仓位，最后连续两次确认未成交订单为空；无论核对是否成功，本次运行都不会自动继续交易。
-- maker 与 taker 成交统一以平台成交事件记账，普通订单更新只更新状态，不再重复增加仓位。未使用的逐交易所 BTC 明细不会进入策略队列，降低 HTTP ACK 等待期间的排队压力。
-- 已移除被 GitHub 安全公告 `GHSA-v6qq-cv3g-3jjq` 标记为恶意包的 `poly-price-node@1.1.2`；启动健康检查改为直接请求官方 CLOB。使用官方 npm 源审计当前生产依赖：高危 `0`、中危 `0`，有 `12` 个低危项，均来自官方 `@polymarket/clob-client-v2` 的 ethers/elliptic 传递依赖，暂时没有无风险的自动修复版本；实盘放行前仍需完成新版交易路径迁移或风险评估。
+## 账户 V2
 
-## 交易引擎
+真实执行适配使用 `@polymarket/clob-client-v2` 1.1.0，版本端点必须返回原始数值 `2`。账户检查使用 `@polymarket/client` 0.9.0，但 readiness 只评估实际 V2 标准和 neg-risk 路径所需的 allowance/operator，不把其他产品授权纳入本系统门槛。
 
-```powershell
-Set-Location _external/btc-5m-market-trading-bot
-npm.cmd run build
-npm.cmd test
-node dist/cli/live.js preflight
-```
+2026-09-10 私有只读验证完成已有 API key 派生、未结订单、成交和 collateral 查询；未创建新 key、未提交订单或链上交易。凭据仅在检查内存使用，不能把私有查询通过写成资金执行验收通过。账户检查编译缓存与 RPC 配置见 [QUICK_REF.md](QUICK_REF.md)。
 
-入口：`dist/cli/live.js`。页面启动时调用 `run --paper`；真实模式需要额外的服务器环境解锁，不由页面自行开启，当前没有账户签名配置。
+## 策略与风险约束
 
-都柏林页面服务在 `127.0.0.1:18766`，交易子进程通过 `PM_LIVE_URL=http://127.0.0.1:18766/api/live` 读取本机实时聚合。单笔美元值是严格上限：执行器先按市场 tick 向下调整价格，再把份数向下取整到两位，并把最终价格和份数同步回策略仓位与日志。公开 BTC 5 分钟市场当前最小挂单为 5 份，因此 `$1` 限价单只在最终价格不高于约 `$0.20` 时可下；网页的 `$1` 立即买入属于另一条主动成交路径。
+在线 `Engine` 默认 `target_clone`，不是 `stableLive` 锁定预设。默认启用 `dynamicHedgeSizing`；`target_clone` 的补仓配对最终上限 `hedgePairCostCeiling=0.99`。CLI `--pair-cost-max` 改变 `pairCostMax` 与 `pairAddCostMax`，不是所有风险阈值的通用替换。
 
-核心回放脚本：`pm-r26-historical-shadow-replay.py`、`pm-r27-parameter-sweep.py`、`pm-r28-risk-sweep.py`。它们只读历史数据，不提交订单。
+每边 maker 价格先按该 token 的真实 tick 向下量化；缺少有效 tick 则拒绝挂单，不使用 0.01 猜测值。数量经过预算、单边限制、最坏结算亏损及挂单未成交负债检查，至少满足策略 5 份门槛；执行器再校验市场真实最小数量，不能扩大已批准数量。估算手续费计入成本，返佣奖励不抵扣下单成本。
 
-## 验证原则
+缺边修复有两层门槛：maker 候选门槛随裸露时长从约 0.99 放宽至最多 0.999；裸露达 30 秒或距结束不超过 75 秒的强制候选分支检查含费 taker 成本不超过 `pairCostEmergencyStop=1.05`。但当前启用的动态补仓构建仍检查最终 0.99 上限。因此候选通过 1.05 并不意味着允许以 1.05 最终提交，更不保证补齐。
 
-- Python 语法和单元测试必须通过。
-- TypeScript 必须构建成功并通过 Vitest。
-- 最新低延迟链路验证：TypeScript 类型检查、构建和 Vitest `101/101` 通过；Python `82 passed`；地区检查失败时强制停止。
-- 2026-09-07 从都柏林服务器本机检查 `/api/trading/status` 和 `/api/live` 均成功；采集器最新事件持续更新。分析报告会如实标记历史断线、队列满或行情序号缺口。
-- 模拟启动后日志必须出现挂单/成交/撤单或明确的无成交原因。
-- 停止后不应继续产生本地成交记录。
-- 没有官方结算价时必须保持“未结算”，不能用盘口猜赢家。
+例如已持 DOWN 均价 0.18，UP ask 为 0.95，模型费用为 `0.07 × 0.95 × 0.05 = 0.003325`，候选总成本 1.133325，超过 1.05 会拒绝。这是模型估计，不是交易所真实费用凭证。小于最小数量的残余、预算不足或缺边过贵均可能留有未配对库存；尚无已验证的强制亏损平仓政策或盈利保证。
+
+部分成交只扣减匹配订单的剩余负债；撤单请求发出后必须等确认才释放。订单替换使用身份匹配，迟到事件不能清除新挂单。live taker 在途期间冻结新提交，固定份数 FOK 避免更优价格导致数量膨胀。拒绝原因变化记录为 `decision_rejected`。
+
+退出先排空提交、撤单并核对剩余订单和稳定成交，记录迟到成交且只处理本运行所属订单。Python 等待 8 秒未完成时返回 pending，不强杀引擎；重复停止不反复向同一 PID 发信号。这些路径有模拟测试覆盖，真实资金退出仍需验收。
+
+## 存储与回放
+
+引擎根目录下 `results/dashboard/config.json` 存非敏感配置，`results/dashboard/ledger.sqlite3` 存投影账本。证据库位于部署根目录 `data/pm-r25-live/days`。日志、证据与账本各自保留来源，不把模拟 fill 当作真实交易所回报。
+
+回测快照必须包含两边 token 当时真实 `tick_size` 或 `tickSize`；无效或冲突元数据直接报错。时间戳保留显式时区，无时区按 UTC；非法时间报错。详见 [BACKTEST-TICK-DATA.md](BACKTEST-TICK-DATA.md)。

@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/root/pm-system
-ExecStart=/root/pm-system/.venv/bin/python /root/pm-system/scripts/pm-r25-tokyo-evidence-collector.py --config /root/pm-system/config/pm-r25-dublin-collector.json
+ExecStart=/root/pm-system/.venv/bin/python /root/pm-system/scripts/pm-r25-dublin-evidence-collector.py --config /root/pm-system/config/pm-r25-dublin-collector.json
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1

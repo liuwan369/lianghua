@@ -66,6 +66,19 @@ def test_check_does_not_inherit_old_account(monkeypatch, tmp_path):
     assert STORE.check_account(tmp_path, {"POLYMARKET_WALLET_ADDRESS": B})["wallet"] == B
 
 
+def test_account_rpc_override_is_local_to_read_only_child(monkeypatch, tmp_path):
+    monkeypatch.setenv("POLYGON_RPC", "https://trading.example.test")
+    monkeypatch.setenv("PM_ACCOUNT_RPC_URL", "https://account.example.test")
+
+    def run(*args, **kwargs):
+        assert kwargs["env"]["POLYGON_RPC"] == "https://account.example.test"
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"wallet": B, "checks": [], "read_only": True}))
+
+    monkeypatch.setattr(STORE.subprocess, "run", run)
+    assert STORE.check_account(tmp_path, {"POLYMARKET_WALLET_ADDRESS": B})["read_only"] is True
+    assert os.environ["POLYGON_RPC"] == "https://trading.example.test"
+
+
 def test_invalid_saved_profile_never_falls_back_to_environment(monkeypatch, tmp_path):
     target = tmp_path / "account.json"
     target.write_text("invalid json")

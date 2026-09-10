@@ -9,7 +9,7 @@ import zlib
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "pm-r25-tokyo-evidence-collector.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "pm-r25-dublin-evidence-collector.py"
 SPEC = importlib.util.spec_from_file_location("pm_r25_collector", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader

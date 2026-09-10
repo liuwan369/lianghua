@@ -88,10 +88,16 @@ export class Executor {
   /** Track remaining size so partial fills stay cancellable. */
   private restingRemaining = new Map<string, number>();
   private allOrderIds = new Set<string>();
-  private takerInFlight = new Set<Side>();
+  /** Ownership persists for late fills after a cancellation ACK. */
+  private knownOrderIds = new Set<string>();
+  private takerInFlight = new Map<Side, { orderId?: string; remaining: number }>();
+  private stopping = false;
+  private paused = false;
+  private submissions = new Set<Promise<SubmitResult>>();
   private clob?: ClobWrapper;
   private stopClobHeartbeat?: () => void;
   private tickCache = new Map<string, number>();
+  private tickUpdatedAt = new Map<string, number>();
 
   constructor(
     live: boolean,
@@ -133,10 +139,25 @@ export class Executor {
 
   /** Cancel resting orders and stop CLOB heartbeat. */
   async shutdown(): Promise<void> {
+    this.stopping = true;
+    await this.pauseSubmissions();
     this.stopClobHeartbeat?.();
     this.stopClobHeartbeat = undefined;
     this.clob?.stopHeartbeat();
     await this.cancelAll();
+  }
+
+  async pauseSubmissions(): Promise<void> {
+    this.paused = true;
+    await Promise.allSettled([...this.submissions]);
+  }
+
+  resumeSubmissions(): void {
+    if (!this.stopping) this.paused = false;
+  }
+
+  confirmAccountReconciled(): void {
+    this.takerInFlight.clear();
   }
 
   apiCreds(): ApiKeyCreds | undefined {
@@ -144,13 +165,15 @@ export class Executor {
   }
 
   isOurOrder(orderId: string): boolean {
-    return this.allOrderIds.has(orderId) || this.resting.has(orderId);
+    return this.knownOrderIds.has(orderId) || this.allOrderIds.has(orderId) || this.resting.has(orderId);
   }
 
-  async prepareMarket(conditionId: string): Promise<void> {
-    if (!this.clob) return;
-    const latencyMs = await this.clob.warmMarket(conditionId);
-    console.info(`CLOB market metadata ready in ${latencyMs.toFixed(1)}ms`);
+  async prepareMarket(conditionId: string, tokens: string[] = []): Promise<void> {
+    if (this.clob) {
+      const latencyMs = await this.clob.warmMarket(conditionId);
+      console.info(`CLOB market metadata ready in ${latencyMs.toFixed(1)}ms`);
+    }
+    await Promise.all(tokens.map(token => this.tick(token)));
   }
 
   private capSize(price: number, size: number): number {
@@ -162,13 +185,29 @@ export class Executor {
   private async tick(token: string): Promise<number> {
     const cached = this.tickCache.get(token);
     if (cached != null) return cached;
-    const t = this.clob ? await this.clob.tickSize(token) : 0.01;
+    let t: number;
+    if (this.clob) t = await this.clob.tickSize(token);
+    else {
+      const response = await fetch(`https://clob.polymarket.com/tick-size?token_id=${encodeURIComponent(token)}`, {
+        signal: AbortSignal.timeout(3_000),
+      });
+      if (!response.ok) throw new Error("market tick size lookup failed");
+      const payload = await response.json() as { minimum_tick_size?: unknown };
+      t = Number(payload.minimum_tick_size);
+    }
+    if (!Number.isFinite(t) || t <= 0 || t >= 1) throw new Error("market tick size is unavailable or invalid");
     this.tickCache.set(token, t);
     return t;
   }
 
-  updateTickSize(token: string, tickSize: number): void {
+  knownTickSize(token: string): number | undefined {
+    return this.tickCache.get(token);
+  }
+
+  updateTickSize(token: string, tickSize: number, updatedAtUnix = Date.now() / 1000): void {
     if (!Number.isFinite(tickSize) || tickSize <= 0) return;
+    if (!Number.isFinite(updatedAtUnix) || updatedAtUnix < (this.tickUpdatedAt.get(token) ?? 0)) return;
+    this.tickUpdatedAt.set(token, updatedAtUnix);
     this.tickCache.set(token, tickSize);
     this.clob?.updateTickSize(token, tickSize);
   }
@@ -176,15 +215,10 @@ export class Executor {
   private prepSize(px: number, shares: number, minOrderShares: number): number {
     let size = Math.floor((this.capSize(px, shares) + 1e-9) * 100) / 100;
     if (size > 0 && size < minOrderShares) {
-      const minNotional = px * minOrderShares;
-      if (minNotional <= this.maxOrderUsd + 1e-9) {
-        size = minOrderShares;
-      } else {
-        console.warn(
-          `skip: ${size.toFixed(2)} shares below min ${minOrderShares} and bump would exceed cap`,
-        );
-        size = 0;
-      }
+      // The strategy already approved this quantity against inventory risk.
+      // Increasing it to a venue minimum would bypass that approval.
+      console.warn(`skip: ${size.toFixed(2)} shares below market minimum ${minOrderShares}`);
+      size = 0;
     }
     if (px * size > this.maxOrderUsd + 1e-9) size = 0;
     return size;
@@ -204,7 +238,21 @@ export class Executor {
     return true;
   }
 
-  async submit(
+  submit(side: Side, token: string, price: number, shares: number): Promise<SubmitResult> {
+    return this.trackSubmission(() => this.submitMaker(side, token, price, shares), price);
+  }
+
+  private trackSubmission(operation: () => Promise<SubmitResult>, price: number): Promise<SubmitResult> {
+    if (this.stopping || this.paused || this.submissions.size > 0 || this.takerInFlight.size > 0) {
+      return Promise.resolve({ok:false,price,size:0,notional:0});
+    }
+    const submission = operation();
+    this.submissions.add(submission);
+    void submission.then(() => this.submissions.delete(submission), () => this.submissions.delete(submission));
+    return submission;
+  }
+
+  private async submitMaker(
     side: Side,
     token: string,
     price: number,
@@ -221,13 +269,14 @@ export class Executor {
     const notional = px * size;
     const none: SubmitResult = { ok: false, price: px, size, notional };
 
-    if (size <= 0 || px <= 0 || px >= 1) return none;
+    if (this.stopping || this.takerInFlight.size > 0 || !Number.isFinite(size) || !Number.isFinite(px) || size <= 0 || px <= 0 || px >= 1) return none;
     if (!this.canSpend(notional)) return none;
 
     const existing = this.resting.get(side);
     if (existing) {
       await this.cancelSide(side);
     }
+    if (this.stopping || this.paused) return none;
 
     if (!this.clob) {
       this.paperSeq += 1;
@@ -236,6 +285,7 @@ export class Executor {
       const id = `paper-${this.paperSeq}`;
       this.resting.set(side, id);
       this.allOrderIds.add(id);
+      this.knownOrderIds.add(id);
       this.restingRemaining.set(id, size);
       console.info(
         `PAPER GTC BUY ${Side.asStr(side)} …${tail(token, 6)} ${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)}) id=${id}`,
@@ -251,12 +301,13 @@ export class Executor {
       tickSize: tick,
     });
 
-    if (resp.success || resp.orderId) {
+    if (resp.success && resp.orderId) {
       this.sent += 1;
       this.spentUsd += notional;
       if (resp.orderId) {
         this.resting.set(side, resp.orderId);
         this.allOrderIds.add(resp.orderId);
+        this.knownOrderIds.add(resp.orderId);
         this.restingRemaining.set(resp.orderId, size);
       }
       console.info(
@@ -272,7 +323,7 @@ export class Executor {
       };
     }
 
-    if (resp.stateUnknown) {
+    if (resp.stateUnknown || resp.success || resp.orderId) {
       this.sent += 1;
       this.spentUsd += notional;
       throw new UnknownOrderStateError(
@@ -286,7 +337,11 @@ export class Executor {
   }
 
   /** FOK market cross for urgent hedges (live only). */
-  async submitTaker(
+  submitTaker(side: Side, token: string, price: number, shares: number): Promise<SubmitResult> {
+    return this.trackSubmission(() => this.submitTakerOrder(side, token, price, shares), price);
+  }
+
+  private async submitTakerOrder(
     side: Side,
     token: string,
     price: number,
@@ -303,7 +358,7 @@ export class Executor {
     const notional = px * size;
     const none: SubmitResult = { ok: false, price: px, size, notional };
 
-    if (size <= 0 || px <= 0 || px >= 1) return none;
+    if (this.stopping || this.takerInFlight.size > 0 || !Number.isFinite(size) || !Number.isFinite(px) || size <= 0 || px <= 0 || px >= 1) return none;
     if (!this.canSpend(notional)) return none;
     if (this.takerInFlight.has(side)) {
       console.warn(`taker in-flight ${Side.asStr(side)} — skip duplicate`);
@@ -311,14 +366,16 @@ export class Executor {
     }
 
     await this.cancelSide(side);
+    if (this.stopping || this.paused) return none;
 
     if (!this.clob) {
       this.paperSeq += 1;
       this.sent += 1;
       this.spentUsd += notional;
-      this.takerInFlight.add(side);
       const id = `paper-taker-${this.paperSeq}`;
+      this.takerInFlight.set(side, {orderId:id,remaining:size});
       this.allOrderIds.add(id);
+      this.knownOrderIds.add(id);
       console.info(
         `PAPER TAKER BUY ${Side.asStr(side)} …${tail(token, 6)} ${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)})`,
       );
@@ -327,11 +384,14 @@ export class Executor {
 
     const submittedAtUnix = Date.now() / 1000;
     const resp = await this.clob.submitMarketBuy(token, notional, px, tick);
-    if (resp.success || resp.orderId) {
+    if (resp.success && resp.orderId) {
       this.sent += 1;
       this.spentUsd += notional;
-      this.takerInFlight.add(side);
-      if (resp.orderId) this.allOrderIds.add(resp.orderId);
+      this.takerInFlight.set(side, {orderId:resp.orderId,remaining:size});
+      if (resp.orderId) {
+        this.allOrderIds.add(resp.orderId);
+        this.knownOrderIds.add(resp.orderId);
+      }
       console.info(
         `LIVE TAKER BUY ${Side.asStr(side)} …${tail(token, 6)} ~${size.toFixed(2)}@${px.toFixed(4)} ($${notional.toFixed(2)}) id=…${tail(resp.orderId ?? "", 8)} sign=${resp.signLatencyMs?.toFixed(1) ?? "?"}ms ack=${resp.ackLatencyMs?.toFixed(1) ?? "?"}ms total=${resp.latencyMs?.toFixed(1) ?? "?"}ms`,
       );
@@ -345,10 +405,10 @@ export class Executor {
       };
     }
 
-    if (resp.stateUnknown) {
+    if (resp.stateUnknown || resp.success || resp.orderId) {
       this.sent += 1;
       this.spentUsd += notional;
-      this.takerInFlight.add(side);
+      this.takerInFlight.set(side, {orderId:resp.orderId,remaining:size});
       throw new UnknownOrderStateError(
         `taker ACK timeout; exchange state is unknown, stopping before any retry: ${resp.errorMsg ?? "timeout"}`,
         { kind: "taker", side, token, price: px, size, notional, submittedAtUnix },
@@ -360,7 +420,13 @@ export class Executor {
   }
 
   noteFill(side: Side, orderId?: string, shares?: number): void {
-    this.takerInFlight.delete(side);
+    const taker = this.takerInFlight.get(side);
+    if (taker && (orderId != null ? taker.orderId === orderId : !this.live)) {
+      if (!this.live || (shares != null && Number.isFinite(shares) && shares > 0)) {
+        taker.remaining -= shares ?? taker.remaining;
+        if (taker.remaining <= 1e-8) this.takerInFlight.delete(side);
+      }
+    }
     const id = this.resting.get(side);
     if (!id) {
       if (orderId != null) this.allOrderIds.delete(orderId);
@@ -379,17 +445,13 @@ export class Executor {
     this.allOrderIds.delete(id);
   }
 
-  onOrderCancelled(orderId: string, side?: Side): void {
+  onOrderCancelled(orderId: string, _side?: Side): Side | undefined {
+    const cancelledSide = this.resting.up === orderId ? Side.Up
+      : this.resting.down === orderId ? Side.Down : undefined;
     this.allOrderIds.delete(orderId);
     this.restingRemaining.delete(orderId);
-    if (side != null) {
-      const cur = this.resting.get(side);
-      if (cur === orderId) this.resting.set(side, undefined);
-    } else if (this.resting.up === orderId) {
-      this.resting.set(Side.Up, undefined);
-    } else if (this.resting.down === orderId) {
-      this.resting.set(Side.Down, undefined);
-    }
+    if (cancelledSide != null) this.resting.set(cancelledSide, undefined);
+    return cancelledSide;
   }
 
   async cancelSide(side: Side): Promise<void> {
@@ -415,6 +477,7 @@ export class Executor {
       // while an unconfirmed live order may still be resting.
       this.resting.set(side, id);
       this.allOrderIds.add(id);
+      this.knownOrderIds.add(id);
       throw e;
     }
   }

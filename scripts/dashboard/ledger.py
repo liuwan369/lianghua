@@ -316,6 +316,21 @@ class Ledger:
                                         else "waiting" if lag is None else "catching_up" if lag else "caught_up"))
             return result
 
+    def list_runs_page(self, *, before_id=None, limit=50):
+        """Return a bounded, stable page of runs without reading journal files."""
+        limit = max(1, min(int(limit), 200))
+        with self._connect() as db:
+            args = []
+            clause = ""
+            if before_id is not None:
+                clause = " WHERE rowid < ?"
+                args.append(int(before_id))
+            args.append(limit + 1)
+            rows = list(db.execute("""SELECT rowid AS id,run_id,mode,account_id,config_revision,created_at
+                FROM runs""" + clause + " ORDER BY rowid DESC LIMIT ?", args))
+            runs = [dict(row) for row in rows[:limit]]
+            return {"runs": runs, "next_before_id": runs[-1]["id"] if len(rows) > limit else None}
+
     def events(self, run_id, *, before_id=None, limit=100):
         limit = max(1, min(int(limit), 200))
         with self._connect() as db:

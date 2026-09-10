@@ -57,6 +57,20 @@ export interface MarketBooks {
   volatilityBps?: number;
 }
 
+export interface MarketTickSizes {
+  upTickSize?: number;
+  downTickSize?: number;
+}
+
+/** Quantize a BUY without inventing a venue tick or raising the risk-approved price. */
+export function quantizeMakerBuyPrice(price: number, tickSize: number | undefined): number | undefined {
+  if (!Number.isFinite(price) || price <= 0 || price >= 1 ||
+    tickSize == null || !Number.isFinite(tickSize) || tickSize <= 0 || tickSize >= 1) return undefined;
+  const rounded = Math.round(Math.floor(price / tickSize + 1e-9) * tickSize * 1e9) / 1e9;
+  return rounded >= tickSize - 1e-12 && rounded <= 1 - tickSize + 1e-12 &&
+    rounded <= price + 1e-12 ? rounded : undefined;
+}
+
 export function btcProxyChangePct(books: MarketBooks): number {
   const m = bookMid(books.up);
   return m != null ? (m - 0.5) * 2 : 0;
@@ -170,6 +184,16 @@ export interface Fill {
   isMaker: boolean;
   estimatedFillProbability?: number;
 }
+
+/** Remaining BUY commitments; these are not fills or guaranteed paired payouts. */
+export interface PendingExposure {
+  cost: number;
+  upShares: number;
+  downShares: number;
+  orders: number;
+}
+
+export const MIN_ORDER_SHARES = 5;
 
 /** Polymarket fee for one fill: fee = shares × rate × (p·(1−p))^exponent */
 export function polymarketFillFee(

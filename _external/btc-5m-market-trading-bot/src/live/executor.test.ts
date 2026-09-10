@@ -1,8 +1,122 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Side } from "../models.js";
 import { Executor, UnknownOrderStateError } from "./executor.js";
 
+beforeEach(()=>vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({minimum_tick_size:0.01})))));
+afterEach(()=>vi.unstubAllGlobals());
+
+describe("market tick metadata", () => {
+  it("does not roll back a token's tick from a stale exchange notification or affect its other leg", () => {
+    const executor=new Executor(false,10,10,100);
+    executor.updateTickSize("up",0.01,100);
+    executor.updateTickSize("down",0.001,200);
+    executor.updateTickSize("down",0.01,150);
+    expect(executor.knownTickSize("up")).toBe(0.01);
+    expect(executor.knownTickSize("down")).toBe(0.001);
+  });
+  it("loads real per-token paper ticks and uses subsequent tick changes for execution", async () => {
+    const fetchMock=vi.fn(async(url:string)=>new Response(JSON.stringify({minimum_tick_size:url.endsWith("up")?0.01:0.005})));
+    vi.stubGlobal("fetch",fetchMock);
+    const executor=new Executor(false,10,10,100);
+    await executor.prepareMarket("market",["up","down"]);
+    expect(executor.knownTickSize("up")).toBe(0.01);
+    expect(executor.knownTickSize("down")).toBe(0.005);
+    expect((await executor.submit(Side.Down,"down",0.7615,5)).price).toBe(0.76);
+    executor.updateTickSize("down",0.001);
+    expect((await executor.submit(Side.Down,"down",0.7615,5)).price).toBe(0.761);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+  it("loads both live ticks after SDK market warmup", async () => {
+    const executor=new Executor(true,10,10,100);
+    const warmMarket=vi.fn().mockResolvedValue(1);
+    (executor as unknown as {clob:Record<string,unknown>}).clob={warmMarket,tickSize:async(token:string)=>token==="up"?0.01:0.001};
+    await executor.prepareMarket("market",["up","down"]);
+    expect(warmMarket).toHaveBeenCalledWith("market");
+    expect(executor.knownTickSize("up")).toBe(0.01);
+    expect(executor.knownTickSize("down")).toBe(0.001);
+  });
+  it("refuses paper execution when official tick metadata is missing", async () => {
+    vi.stubGlobal("fetch",vi.fn(async()=>new Response("{}")));
+    const executor=new Executor(false,10,10,100);
+    await expect(executor.submit(Side.Up,"up",0.7615,5)).rejects.toThrow(/tick size/);
+    expect(executor.sent).toBe(0);
+  });
+});
+
 describe("Executor fill tracking", () => {
+  it("blocks every new order until all shares of the current taker are authoritatively filled", async () => {
+    const executor = new Executor(true, 10, 20, 100);
+    const submitOrder = vi.fn().mockResolvedValue({success:true,orderId:"new-maker"});
+    (executor as unknown as {clob:Record<string,unknown>}).clob = {
+      tickSize:async()=>0.01,minOrderSize:()=>5,submitOrder,
+      submitMarketBuy:vi.fn().mockResolvedValue({success:true,orderId:"taker-1"}),
+    };
+    expect((await executor.submitTaker(Side.Up,"up",0.4,5)).ok).toBe(true);
+    executor.noteFill(Side.Up,"old-maker",5);
+    expect((await executor.submit(Side.Down,"down",0.5,5)).ok).toBe(false);
+    expect((await executor.submitTaker(Side.Down,"down",0.5,5)).ok).toBe(false);
+    executor.noteFill(Side.Up,"taker-1",2);
+    expect((await executor.submit(Side.Down,"down",0.5,5)).ok).toBe(false);
+    executor.noteFill(Side.Up,"taker-1",3);
+    expect((await executor.submit(Side.Down,"down",0.5,5)).ok).toBe(true);
+    expect(submitOrder).toHaveBeenCalledOnce();
+  });
+
+  it("waits for an in-flight order ACK before shutdown cancellation and rejects new work", async () => {
+    const executor = new Executor(true,10,10,100);
+    let ack!: (value:{success:boolean;orderId:string}) => void;
+    const submitted = new Promise<{success:boolean;orderId:string}>(resolve=>{ack=resolve;});
+    const submitOrder = vi.fn().mockReturnValue(submitted);
+    const cancelAll = vi.fn().mockResolvedValue(undefined);
+    (executor as unknown as {clob:Record<string,unknown>}).clob = {
+      tickSize:async()=>0.01,minOrderSize:()=>5,submitOrder,cancelAll,stopHeartbeat:vi.fn(),
+    };
+    const posting = executor.submit(Side.Up,"up",0.4,5);
+    await vi.waitFor(()=>expect(submitOrder).toHaveBeenCalledOnce());
+    const stopping = executor.shutdown();
+    expect(cancelAll).not.toHaveBeenCalled();
+    expect((await executor.submit(Side.Down,"down",0.5,5)).ok).toBe(false);
+    ack({success:true,orderId:"late-ack"});
+    await posting;
+    await stopping;
+    expect(cancelAll).toHaveBeenCalledOnce();
+    expect(executor.restingId(Side.Up)).toBeUndefined();
+  });
+  it.each(["maker", "taker"])("never increases a strategy-approved size to the %s venue minimum", async (kind) => {
+    const executor = new Executor(true, 10, 10, 100);
+    const submit = vi.fn();
+    (executor as unknown as {clob:Record<string,unknown>}).clob = {
+      tickSize:async()=>0.01,minOrderSize:()=>10,submitOrder:submit,submitMarketBuy:submit,
+    };
+    const result = kind === "maker" ? await executor.submit(Side.Up,"up",0.3,5)
+      : await executor.submitTaker(Side.Up,"up",0.3,5);
+    expect(result.ok).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+    expect(executor.spentUsd).toBe(0);
+  });
+  it("recognizes a fill after cancellation without cancelling the replacement order", async () => {
+    const executor = new Executor(false, 10, 10, 100);
+    const first = await executor.submit(Side.Up, "token-up", 0.4, 5);
+    await executor.cancelSide(Side.Up);
+    const replacement = await executor.submit(Side.Up, "token-up", 0.39, 5);
+    expect(executor.isOurOrder(first.orderId!)).toBe(true);
+    expect(executor.onOrderCancelled(first.orderId!, Side.Up)).toBeUndefined();
+    executor.noteFill(Side.Up, first.orderId, 2);
+    expect(executor.restingId(Side.Up)).toBe(replacement.orderId);
+    expect(executor.onOrderCancelled(replacement.orderId!, Side.Up)).toBe(Side.Up);
+  });
+
+  it.each([{ success: true }, { success: false, orderId: "ambiguous" }])(
+    "freezes an ambiguous maker ACK instead of allowing untracked orders: %j", async (response) => {
+      const executor = new Executor(true, 10, 10, 100);
+      (executor as unknown as { clob: Record<string, unknown> }).clob = {
+        tickSize: vi.fn().mockResolvedValue(0.01), minOrderSize: () => 5,
+        submitOrder: vi.fn().mockResolvedValue(response),
+      };
+      await expect(executor.submit(Side.Up, "token-up", 0.4, 5)).rejects.toBeInstanceOf(UnknownOrderStateError);
+      expect(executor.spentUsd).toBe(2);
+    },
+  );
   it("enforces the USD cap on the actual submitted size", async () => {
     const executor = new Executor(false, 1, 10, 10);
 
@@ -28,7 +142,7 @@ describe("Executor fill tracking", () => {
 
     executor.noteFill(Side.Up, submitted.orderId, 3);
     expect(executor.restingId(Side.Up)).toBeUndefined();
-    expect(executor.isOurOrder(submitted.orderId!)).toBe(false);
+    expect(executor.isOurOrder(submitted.orderId!)).toBe(true);
   });
 
   it("keeps local order tracking when cancel-all is not confirmed", async () => {

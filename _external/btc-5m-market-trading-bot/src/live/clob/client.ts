@@ -21,6 +21,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
+import { quantizeMakerBuyPrice } from "../../models.js";
 import {
   envWalletOverrides,
   resolveWallet,
@@ -37,10 +38,7 @@ export const DEFAULT_HOST =
   process.env.CLOB_HOST ?? "https://clob.polymarket.com";
 
 export function tickRoundDown(price: number, tick: number): number {
-  const t = tick > 0 ? tick : 0.01;
-  const p = Math.floor(price / t + 1e-9) * t;
-  const clamped = Math.min(Math.max(p, t), 1 - t);
-  return Math.round(clamped * 1e6) / 1e6;
+  return quantizeMakerBuyPrice(price, tick) ?? 0;
 }
 
 export interface ClobWrapperOptions {
@@ -149,7 +147,7 @@ export class ClobWrapper {
 
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private heartbeatId?: string;
-  private orderVersion: 1 | 2 | 3 = 2;
+  private orderVersion: 2 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
   private marketMinOrderSizes = new Map<string, number>();
 
@@ -319,11 +317,11 @@ export class ClobWrapper {
     });
   }
 
-  private async currentVersion(): Promise<1 | 2 | 3> {
+  private async currentVersion(): Promise<2> {
     const payload = await this.fetchJson("/version", { method: "GET" });
-    const version = Number((payload as Record<string, unknown>)?.version ?? 2);
-    if (version !== 1 && version !== 2 && version !== 3) {
-      throw new Error(`unsupported CLOB order version ${version}`);
+    const version = (payload as Record<string, unknown>)?.version;
+    if (version !== 2) {
+      throw new Error("unsupported CLOB order version: this executor requires V2");
     }
     return version;
   }
@@ -388,13 +386,10 @@ export class ClobWrapper {
   }
 
   async tickSize(tokenId: string): Promise<number> {
-    try {
-      const ts = await this.client.getTickSize(tokenId);
-      const n = Number.parseFloat(String(ts));
-      return Number.isFinite(n) && n > 0 ? n : 0.01;
-    } catch {
-      return 0.01;
-    }
+    const ts = await withTimeout(this.client.getTickSize(tokenId), this.requestTimeoutMs, "CLOB tick size");
+    const n = Number(ts);
+    sdkTickSize(n);
+    return n;
   }
 
   minOrderSize(tokenId: string): number | undefined {
@@ -408,14 +403,15 @@ export class ClobWrapper {
 
   async submitOrder(args: SubmitOrderArgs): Promise<SubmitOrderResult> {
     const started = performance.now();
+    let postAttempted = false;
     try {
-      const negRisk = await this.client.getNegRisk(args.tokenId);
+      const negRisk = await withTimeout(this.client.getNegRisk(args.tokenId), this.requestTimeoutMs, "CLOB risk metadata");
       let signLatencyMs = 0;
       let ackLatencyMs = 0;
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const signStarted = performance.now();
-        const order = await this.client.createOrder(
+        const order = await withTimeout(this.client.createOrder(
           {
             tokenID: args.tokenId,
             price: args.price,
@@ -427,11 +423,13 @@ export class ClobWrapper {
             negRisk,
             version: this.orderVersion,
           },
-        );
+        ), this.requestTimeoutMs, "CLOB order signing");
         signLatencyMs += performance.now() - signStarted;
 
         const ackStarted = performance.now();
+        postAttempted = true;
         const resp = await this.postSignedOrder(order, OrderType.GTC, true);
+        postAttempted = false;
         ackLatencyMs += performance.now() - ackStarted;
         const orderId = resp?.orderID;
         const apiError = responseError(resp);
@@ -458,7 +456,7 @@ export class ClobWrapper {
         success: false,
         errorMsg: e instanceof Error ? e.message : String(e),
         latencyMs: performance.now() - started,
-        stateUnknown: requestStateUnknown(e),
+        stateUnknown: postAttempted && requestStateUnknown(e),
       };
     }
   }
@@ -530,7 +528,7 @@ export class ClobWrapper {
     );
   }
 
-  /** FOK market buy — amount is USDC notional. */
+  /** Fixed-quantity FOK buy at a price cap; never expand strategy share limits. */
   async submitMarketBuy(
     tokenId: string,
     usdcAmount: number,
@@ -538,31 +536,33 @@ export class ClobWrapper {
     tickSize: number,
   ): Promise<SubmitOrderResult> {
     const started = performance.now();
+    let postAttempted = false;
     try {
-      const negRisk = await this.client.getNegRisk(tokenId);
+      const negRisk = await withTimeout(this.client.getNegRisk(tokenId), this.requestTimeoutMs, "CLOB risk metadata");
       let signLatencyMs = 0;
       let ackLatencyMs = 0;
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const signStarted = performance.now();
-        const order = await this.client.createMarketOrder(
+        const order = await withTimeout(this.client.createOrder(
           {
             tokenID: tokenId,
-            amount: usdcAmount,
+            size: Math.floor((usdcAmount / price + 1e-9) * 100) / 100,
             price,
             side: ClobSide.BUY,
-            orderType: OrderType.FOK,
           },
           {
             tickSize: sdkTickSize(tickSize),
             negRisk,
             version: this.orderVersion,
           },
-        );
+        ), this.requestTimeoutMs, "CLOB order signing");
         signLatencyMs += performance.now() - signStarted;
 
         const ackStarted = performance.now();
+        postAttempted = true;
         const resp = await this.postSignedOrder(order, OrderType.FOK, false);
+        postAttempted = false;
         ackLatencyMs += performance.now() - ackStarted;
         const orderId = resp?.orderID;
         const apiError = responseError(resp);
@@ -589,7 +589,7 @@ export class ClobWrapper {
         success: false,
         errorMsg: e instanceof Error ? e.message : String(e),
         latencyMs: performance.now() - started,
-        stateUnknown: requestStateUnknown(e),
+        stateUnknown: postAttempted && requestStateUnknown(e),
       };
     }
   }

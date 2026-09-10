@@ -342,7 +342,7 @@ def render_report(result: dict[str, Any], history_coverage: dict[str, Any]) -> s
         lines.append(f"| {label}份 | {item['observations']:,} | {'无' if repair is None else str(repair) + '%'} | {item['wait_to_next_batch_seconds']['median']}秒 |")
     lines.extend([
         "",
-        "这些是成交状态分布，不是已确认的下单参数。目标地址为maker时，成交时间受对手方影响；精确挂单价格与撤单规则要靠东京实时盘口采集。",
+        "这些是成交状态分布，不是已确认的下单参数。目标地址为maker时，成交时间受对手方影响；精确挂单价格与撤单规则要靠都柏林实时盘口采集。",
     ])
     return "\n".join(lines) + "\n"
 

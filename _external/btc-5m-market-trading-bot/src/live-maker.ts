@@ -4,9 +4,12 @@ import {
   Side,
   type Fill,
   type MarketBooks,
+  type PendingExposure,
+  type MarketTickSizes,
 } from "./models.js";
 import type { StrategyConfig } from "./config.js";
-import { PairCostMarketMaker } from "./strategy.js";
+import { PairCostMarketMaker, type DecisionRejection } from "./strategy.js";
+import { MarketMode } from "./risk.js";
 
 /** Incremental 1-second BTC spot price ring. */
 export class BtcRing {
@@ -54,6 +57,7 @@ interface RestingQuote {
   shares: number;
   lifeEnd: number;
   btcAtPost: number;
+  cancelRequested?: boolean;
 }
 
 export interface PendingQuote {
@@ -140,17 +144,32 @@ export class MakerSession {
     upAsk?: number,
     downBid?: number,
     downAsk?: number,
+    ticks: MarketTickSizes = {},
   ): MakerEvent[] {
     const book: MarketBooks = {
       tsUnix,
-      up: { bid: upBid, ask: upAsk, tsUnix },
-      down: { bid: downBid, ask: downAsk, tsUnix },
+      up: { bid: upBid, ask: upAsk, tickSize: ticks.upTickSize, tsUnix },
+      down: { bid: downBid, ask: downAsk, tickSize: ticks.downTickSize, tsUnix },
     };
     const out: MakerEvent[] = [];
     const btcNow = this.btc.price(Math.round(tsUnix));
 
     const still: RestingQuote[] = [];
     for (const q of this.pending) {
+      if (q.cancelRequested) {
+        still.push(q);
+        continue;
+      }
+      const cancel = (): void => {
+        out.push({ kind: "cancel", side: q.side, price: q.price });
+        // A live cancellation request is not an exchange acknowledgement.
+        if (this.liveMode) still.push({ ...q, cancelRequested: true });
+      };
+      if (this.haltNew || tsUnix >= q.lifeEnd ||
+        tsUnix >= this.marketEnd - this.strat.config.stopBeforeEndSec) {
+        cancel();
+        continue;
+      }
       if (this.defensiveCancelBps > 0 && btcNow != null && q.btcAtPost > 0) {
         const mvBps = ((btcNow - q.btcAtPost) / q.btcAtPost) * 1e4;
         const adverse =
@@ -158,7 +177,7 @@ export class MakerSession {
             ? mvBps <= -this.defensiveCancelBps
             : mvBps >= this.defensiveCancelBps;
         if (adverse) {
-          out.push({ kind: "cancel", side: q.side, price: q.price });
+          cancel();
           continue;
         }
       }
@@ -189,8 +208,6 @@ export class MakerSession {
           isMaker: true,
           fee,
         });
-      } else if (tsUnix > q.lifeEnd) {
-        out.push({ kind: "cancel", side: q.side, price: q.price });
       } else {
         still.push(q);
       }
@@ -220,13 +237,14 @@ export class MakerSession {
         btcChg,
       );
 
-      if (side != null) {
+      if (side != null && !this.pending.some((quote) => quote.side === side)) {
         const f = this.strat.buildFill(
           side,
           this.inv,
           book,
           tsUnix,
           this.marketEnd,
+          this.pendingExposure(),
         );
         if (f) {
           if (f.isMaker) {
@@ -236,7 +254,8 @@ export class MakerSession {
                 side: f.side,
                 price: f.price,
                 shares: f.shares,
-                lifeEnd: tsUnix + this.makerLifeSec,
+                lifeEnd: Math.min(tsUnix + this.makerLifeSec,
+                  this.marketEnd - this.strat.config.stopBeforeEndSec),
                 btcAtPost: btcNow ?? 0,
               });
               out.push({
@@ -274,8 +293,15 @@ export class MakerSession {
   }
 
   /** Authoritative fill from CLOB user channel (live mode). */
-  confirmExchangeFill(fill: Fill): MakerEvent {
-    this.pending = this.pending.filter((q) => q.side !== fill.side);
+  confirmExchangeFill(fill: Fill, pendingFillShares: number = fill.shares): MakerEvent {
+    this.validateFill(fill);
+    if (!Number.isFinite(pendingFillShares) || pendingFillShares < 0 ||
+      pendingFillShares > fill.shares + 1e-9) throw new Error("Invalid pending fill quantity");
+    this.pending = this.pending.flatMap((quote) => {
+      if (quote.side !== fill.side || pendingFillShares === 0) return [quote];
+      const shares = Math.max(0, quote.shares - pendingFillShares);
+      return shares > 1e-9 ? [{ ...quote, shares }] : [];
+    });
     this.inv.execute(fill);
     this.strat.recordFill(this.inv);
     return {
@@ -288,14 +314,40 @@ export class MakerSession {
     };
   }
 
+  lastDecisionRejection(): DecisionRejection | null {
+    return this.strat.lastDecisionRejection();
+  }
+
+  private validateFill(fill: Fill): void {
+    if (![fill.shares, fill.price, fill.tsUnix].every(Number.isFinite) ||
+      fill.shares <= 0 || fill.price <= 0 || fill.price >= 1 ||
+      (fill.side !== Side.Up && fill.side !== Side.Down)) {
+      throw new Error("Invalid exchange fill");
+    }
+  }
+
+  private pendingExposure(): PendingExposure {
+    return this.pending.reduce((exposure, quote) => ({
+      cost: exposure.cost + quote.shares * quote.price + this.fee(quote.shares, quote.price, true),
+      upShares: exposure.upShares + (quote.side === Side.Up ? quote.shares : 0),
+      downShares: exposure.downShares + (quote.side === Side.Down ? quote.shares : 0),
+      orders: exposure.orders + 1,
+    }), { cost: 0, upShares: 0, downShares: 0, orders: 0 });
+  }
+
   /** Replace current-market inventory from an authenticated complete trade snapshot. */
   replaceCurrentMarketFills(fills: Fill[]): void {
-    const start = this.marketStart;
-    const end = this.marketEnd;
-    this.reset(start, end);
+    // A trade snapshot says nothing about remaining exchange orders. Preserve
+    // reservations until a separate order reconciliation confirms cancellation.
+    fills.forEach((fill) => this.validateFill(fill));
+    const halted = this.strat.risk.marketMode === MarketMode.Halted;
+    this.inv = new Inventory();
+    this.strat.risk.marketFillsWhileHot = 0;
+    this.strat.risk.marketPeakPairCost = 0;
     for (const fill of [...fills].sort((a, b) => a.tsUnix - b.tsUnix)) {
-      this.confirmExchangeFill(fill);
+      this.confirmExchangeFill(fill, 0);
     }
+    if (halted) this.strat.risk.marketMode = MarketMode.Halted;
   }
 
   onOrderCancelled(side?: Side): void {
@@ -306,9 +358,20 @@ export class MakerSession {
     }
   }
 
+  /** Used for an already submitted order; retain its liability until ACK. */
+  requestOrderCancellation(side: Side): void {
+    if (!this.liveMode) {
+      this.onOrderCancelled(side);
+      return;
+    }
+    this.pending = this.pending.map((quote) => quote.side === side
+      ? { ...quote, cancelRequested: true } : quote);
+  }
+
   /** Snapshot of quotes still represented in the local strategy state. */
-  pendingQuotes(): PendingQuote[] {
-    return this.pending.map(({ side, price, shares }) => ({ side, price, shares }));
+  pendingQuotes(includeCancelling = true): PendingQuote[] {
+    return this.pending.filter((quote) => includeCancelling || !quote.cancelRequested)
+      .map(({ side, price, shares }) => ({ side, price, shares }));
   }
 
   resizePendingQuote(side: Side, shares: number, price?: number): void {

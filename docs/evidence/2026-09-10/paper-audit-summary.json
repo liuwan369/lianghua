@@ -1,0 +1,20 @@
+{
+  "mode": "paper",
+  "exit_code": 0,
+  "elapsed_seconds": 376.8,
+  "event_counts": {
+    "reset": 3,
+    "resolved": 2,
+    "quote": 1,
+    "fill": 1,
+    "stopped": 1
+  },
+  "markets": [
+    "btc-updown-5m-1789020300",
+    "btc-updown-5m-1789020600",
+    "btc-updown-5m-1789020900"
+  ],
+  "journal": "/root/pm-system/_external/btc-5m-market-trading-bot/results/paper/audit-20260910-0609.jsonl",
+  "real_orders": 0,
+  "credentials_in_environment": false
+}

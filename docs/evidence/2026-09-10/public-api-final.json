@@ -1,0 +1,39 @@
+[
+  {
+    "path": "/api/v1/status",
+    "http": 200,
+    "seconds": 1.05,
+    "state": {
+      "running": false,
+      "mode": "paper",
+      "live_unlocked": false
+    }
+  },
+  {
+    "path": "/api/v1/config",
+    "http": 200,
+    "seconds": 1.04
+  },
+  {
+    "path": "/api/v1/markets",
+    "http": 200,
+    "seconds": 1.04
+  },
+  {
+    "path": "/api/v1/runs",
+    "http": 200,
+    "seconds": 0.97
+  },
+  {
+    "path": "/api/account/status",
+    "http": 200,
+    "seconds": 0.95,
+    "account": {
+      "checked_at": "2026-09-10T06:18:34.338Z",
+      "balance": 108.728676,
+      "approvals_ready": true,
+      "signer_matches": true,
+      "account_ready": true
+    }
+  }
+]

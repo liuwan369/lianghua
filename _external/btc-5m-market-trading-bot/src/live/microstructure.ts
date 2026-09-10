@@ -3,6 +3,7 @@ import {
   estimateMakerFillProbability,
   Side,
   visibleBuyQueueAhead,
+  quantizeMakerBuyPrice,
   type BookLevel,
   type BookQuote,
   type MarketBooks,
@@ -109,8 +110,8 @@ export class MakerMicrostructureGate {
         continue;
       }
       const quote = event.side === Side.Up ? books.up : books.down;
-      const tickSize = quote.tickSize != null && quote.tickSize > 0 ? quote.tickSize : 0.01;
-      const price = Math.floor((event.price + 1e-12) / tickSize) * tickSize;
+      const price = quantizeMakerBuyPrice(event.price, quote.tickSize);
+      if (price == null) { removePending(event.side); continue; }
       const probability = this.probability(quote, price, event.shares, books);
       if (probability == null || probability < this.config.minimumProbability) {
         removePending(event.side);
@@ -138,9 +139,8 @@ export class MakerMicrostructureGate {
     const out: MakerEvent[] = [];
     for (const item of pending) {
       const quote = item.side === Side.Up ? books.up : books.down;
-      const tickSize = quote.tickSize != null && quote.tickSize > 0 ? quote.tickSize : 0.01;
-      const price = Math.floor((item.price + 1e-12) / tickSize) * tickSize;
-      const probability = this.probability(quote, price, item.shares, books);
+      const price = quantizeMakerBuyPrice(item.price, quote.tickSize);
+      const probability = price != null ? this.probability(quote, price, item.shares, books) : undefined;
       if (probability == null || probability < this.config.minimumProbability) {
         removePending(item.side);
         out.push({ kind: "cancel", side: item.side, price: item.price });
@@ -186,7 +186,8 @@ export class MakerMicrostructureGate {
       restingSeconds == null ||
       volatilityBps == null
     ) return undefined;
-    const tickSize = quote.tickSize != null && quote.tickSize > 0 ? quote.tickSize : 0.01;
+    const tickSize = quote.tickSize;
+    if (tickSize == null || !Number.isFinite(tickSize) || tickSize <= 0 || tickSize >= 1) return undefined;
     const ticksBehindBest = quote.bid != null
       ? Math.max(0, (quote.bid - price) / tickSize)
       : 0;

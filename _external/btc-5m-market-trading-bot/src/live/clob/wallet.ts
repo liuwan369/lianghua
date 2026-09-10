@@ -59,7 +59,10 @@ export function envWalletOverrides(): {
   funder?: Address;
   sigType?: number;
 } {
-  const funderRaw = process.env.POLY_FUNDER?.trim();
+  const funderRaw = process.env.POLYMARKET_WALLET_ADDRESS?.trim() || process.env.POLY_FUNDER?.trim();
+  if (funderRaw && !/^0x[0-9a-fA-F]{40}$/.test(funderRaw)) {
+    throw new Error("configured trading wallet address is invalid");
+  }
   const funder =
     funderRaw?.startsWith("0x") && funderRaw.length === 42
       ? (funderRaw as Address)

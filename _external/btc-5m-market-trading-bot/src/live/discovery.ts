@@ -141,13 +141,13 @@ async function fetchBySlug(slug: string): Promise<Candidate | undefined> {
     .find((c): c is Candidate => c != null);
 }
 
-/** Fallback for environments where Gamma is unreachable but our Tokyo read-only
+/** Fallback for environments where Gamma is unreachable but our local read-only
  * collector is available. This endpoint never places orders; it only supplies
- * the current market identifiers collected from Gamma in Tokyo. */
-async function fetchFromTokyo(): Promise<Candidate | undefined> {
-  const base = process.env.PM_LIVE_URL ?? process.env.TOKYO_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
+ * the current market identifiers collected from Gamma. */
+async function fetchFromCollector(): Promise<Candidate | undefined> {
+  const base = process.env.PM_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
   try {
-    // The Tokyo collector is the low-latency source on the trading host. Keep
+    // The local collector is the low-latency source on the trading host. Keep
     // this probe short so a stale/unavailable dashboard cannot delay discovery.
     // The dashboard may need one SSH-backed refresh on a cold start. Allow it
     // to complete; later requests are served from the five-second cache.
@@ -177,7 +177,7 @@ async function fetchFromTokyo(): Promise<Candidate | undefined> {
       }
     }
   } catch (e) {
-    console.warn("Tokyo market discovery failed:", e);
+    console.warn("Collector market discovery failed:", e);
   }
   return undefined;
 }
@@ -185,17 +185,17 @@ async function fetchFromTokyo(): Promise<Candidate | undefined> {
 /** Discover the live market with a feed-clock-anchored 5-min window. */
 export async function findMarket(
   now: number,
-  allowTokyoFallback = true,
+  allowCollectorFallback = true,
 ): Promise<Market | undefined> {
   const fc = Math.floor(now / 300) * 300;
   const slug = `btc-updown-5m-${fc}`;
 
-  // Paper mode may use the nearby Tokyo collector for instant discovery.
-  // Live mode passes allowTokyoFallback=false and never takes this branch.
-  if (allowTokyoFallback) {
-    const tokyo = await fetchFromTokyo();
-    if (tokyo && isWindowLive(tokyo.slugStart, now)) {
-      return marketFrom(tokyo, tokyo.slugStart);
+  // Paper mode may use the nearby collector for instant discovery.
+  // Live mode passes allowCollectorFallback=false and never takes this branch.
+  if (allowCollectorFallback) {
+    const collector = await fetchFromCollector();
+    if (collector && isWindowLive(collector.slugStart, now)) {
+      return marketFrom(collector, collector.slugStart);
     }
   }
 

@@ -676,7 +676,7 @@ def analyze(path: Path, hours: float) -> dict[str, Any]:
             "taker": "成交时刻可近似主动执行时刻，但仍不是下单发送时刻。",
             "maker": "成交由对手方触发，只能说明成交状态与BTC走势相关，不能当作目标地址的决策时刻。",
             "mixed": "同一交易和Token同时出现maker/taker链上角色，不用于推断单一执行方式。",
-            "clock": "主口径只使用东京服务器先收到的Binance消息，并分别保留0/50/100/250毫秒安全滞后。",
+            "clock": "主口径只使用都柏林服务器先收到的Binance消息，并分别保留0/50/100/250毫秒安全滞后。",
         },
         "strategy_conclusion_status": "usable_for_parameter_fit" if strategy_evidence_sufficient else "raw_observation_only",
         "details": details,
@@ -684,8 +684,8 @@ def analyze(path: Path, hours: float) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Analyze Tokyo CLOB, Binance, Activity and Polygon evidence")
-    parser.add_argument("--db", default="data/pm-r25-live/tokyo-evidence.sqlite3")
+    parser = argparse.ArgumentParser(description="Analyze Dublin CLOB, Binance, Activity and Polygon evidence")
+    parser.add_argument("--db", default="data/pm-r25-live/dublin-evidence.sqlite3")
     parser.add_argument("--hours", type=float, default=24)
     parser.add_argument("--out", default="data/pm-r25-live/live-analysis.json")
     args = parser.parse_args()

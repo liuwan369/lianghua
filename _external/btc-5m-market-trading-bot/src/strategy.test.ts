@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  stableLive,
   targetClone,
   targetCloneActive,
   targetCloneV2,
@@ -16,8 +17,8 @@ const TS = 1050.0;
 function books(ub: number, ua: number, db: number, da: number): MarketBooks {
   return {
     tsUnix: TS,
-    up: { bid: ub, ask: ua, tsUnix: TS },
-    down: { bid: db, ask: da, tsUnix: TS },
+    up: { bid: ub, ask: ua, tickSize: 0.01, tsUnix: TS },
+    down: { bid: db, ask: da, tickSize: 0.01, tsUnix: TS },
   };
 }
 
@@ -127,5 +128,129 @@ describe("dynamic hedge sizing", () => {
       baseClip: 20,
       targetPairCost: 0.99,
     })).toBe(10);
+  });
+});
+
+
+describe("final order risk bounds", () => {
+  const cfg = (): StrategyConfig => ({ ...stableLive(), makerSpreadFrac: 0,
+    maxMarketLossUsd: 1000, pairCostHardStop: 1.2, pairCostEmergencyStop: 1.3,
+    reduceClipAbovePairCost: 1.2 });
+  const buy = (inv: Inventory, side: Side, shares: number, price: number, isMaker = true) =>
+    inv.execute({ side, shares, price, isMaker, tsUnix: 1010 });
+
+  it("caps the hedge to remaining cash including incurred and proposed fees", () => {
+    const config = { ...cfg(), maxTotalCost: 8, makerFeeRate: 0.02 };
+    const strat = new PairCostMarketMaker(config);
+    const inv = new Inventory();
+    buy(inv, Side.Up, 10, 0.4, false);
+    const fill = strat.buildFill(Side.Down, inv, books(0.4,0.41,0.5,0.51), TS, END);
+    expect(fill).toBeDefined();
+    const spent = 4 + 10 * 0.07 * 0.4 * 0.6;
+    const unitCost = 0.5 + 0.02 * 0.5 * 0.5;
+    expect(spent + fill!.shares * unitCost).toBeCloseTo(8, 8);
+    expect(inv.totalCost()).toBe(4); // Risk view must not mutate actual cash accounting.
+  });
+
+  it("bounds the very first naked leg by worst settlement loss", () => {
+    const strat = new PairCostMarketMaker({ ...cfg(), maxMarketLossUsd: 12 });
+    const fill = strat.buildFill(Side.Up, new Inventory(), books(0.6,0.61,0.35,0.36), TS, END);
+    expect(fill).toBeDefined();
+    expect(fill!.shares * fill!.price).toBeCloseTo(12, 8);
+  });
+
+  it("does not round a three-share hedge deficit up to the five-share minimum", () => {
+    const inv = new Inventory();
+    buy(inv, Side.Up, 8, 0.4); buy(inv, Side.Down, 5, 0.45);
+    expect(new PairCostMarketMaker(cfg()).buildFill(Side.Down, inv,
+      books(0.4,0.41,0.45,0.46), TS, END)).toBeUndefined();
+  });
+
+  it("rechecks dynamic pair cost when the cash cap truncates the required repair", () => {
+    const inv = new Inventory();
+    buy(inv, Side.Up, 100, 0.6); buy(inv, Side.Down, 50, 0.45);
+    const strat = new PairCostMarketMaker({ ...cfg(), maxTotalCost: 90, hedgePairCostCeiling: 0.99 });
+    expect(strat.buildFill(Side.Down, inv, books(0.6,0.61,0.3,0.31), TS, END)).toBeUndefined();
+  });
+
+  it("reserves unfilled orders without counting them as a guaranteed hedge payout", () => {
+    const strat = new PairCostMarketMaker({ ...cfg(), maxTotalCost: 10, maxMarketLossUsd: 8 });
+    const fill = strat.buildFill(Side.Down, new Inventory(), books(0.4,0.41,0.5,0.51), TS, END,
+      { cost: 5, upShares: 10, downShares: 0, orders: 1 });
+    expect(fill).toBeDefined();
+    expect(fill!.shares).toBe(6); // $5 pending + $3 new is all at risk until fills arrive.
+  });
+
+  it("enforces cutoff even if called after a previously accepted side decision", () => {
+    const strat = new PairCostMarketMaker(cfg());
+    expect(strat.buildFill(Side.Up, new Inventory(), books(0.4,0.41,0.5,0.51), END-10, END)).toBeUndefined();
+  });
+
+  it("blocks an additional order when confirmed fills exhausted the limit", () => {
+    const inv = new Inventory(); buy(inv, Side.Up, 10, 0.4);
+    const strat = new PairCostMarketMaker({ ...cfg(), maxFillsPerMarket: 1 });
+    expect(strat.buildFill(Side.Down, inv, books(0.4,0.41,0.5,0.51), TS, END)).toBeUndefined();
+  });
+});
+
+
+describe("entry economics include both legs", () => {
+  it("does not cross when the opening fee breaks the paired cost ceiling", () => {
+    const config = { ...targetCloneActive(), takerFeeRate: 0.07, pairAddCostMax: 0.98 };
+    const fill = firstFill(new PairCostMarketMaker(config), books(0.48,0.49,0.48,0.49));
+    expect(fill).toBeDefined();
+    expect(fill!.isMaker).toBe(true);
+  });
+  it("does not treat estimated rebates as negative entry costs", () => {
+    const config = { ...targetClone(), makerFeeRate: -1, pairAddCostMax: 0.98 };
+    const strat = new PairCostMarketMaker(config);
+    expect(strat.buildFill(Side.Up,new Inventory(),books(0.50,0.51,0.50,0.51),TS,END)).toBeUndefined();
+  });
+});
+
+
+describe("hedge risk uses the executable market tick", () => {
+  function hedgeBook(tickSize: number, downAsk = 0.77): MarketBooks {
+    const quote = books(0.23,0.24,0.76,downAsk);
+    quote.up.tickSize=tickSize;quote.down.tickSize=tickSize;
+    return quote;
+  }
+  function nakedInventory(): Inventory {
+    const inv=new Inventory();
+    inv.execute({side:Side.Up,shares:20,price:0.23,tsUnix:1020,isMaker:true});
+    return inv;
+  }
+  it("quotes the affordable .76 hedge on a .01 tick rather than rejecting .7615", () => {
+    const strat=new PairCostMarketMaker({...targetClone(),pairAddCostMax:0.99});
+    strat.onMarketStart(START);
+    const inv=nakedInventory(); const quote=hedgeBook(0.01);
+    const side=strat.chooseSide(inv,quote,TS,START,END);
+    expect(side).toBe(Side.Down);
+    const fill=strat.buildFill(side!,inv,quote,TS,END);
+    expect(fill).toMatchObject({side:Side.Down,price:0.76,shares:20,isMaker:true});
+    expect(inv.projectedPairCostIfBuy(Side.Down,fill!.shares,fill!.price)).toBeCloseTo(0.99,10);
+    expect(strat.lastDecisionRejection()).toBeNull();
+  });
+  it("keeps .001 tick economics distinct and reports why the same spread is too expensive", () => {
+    const strat=new PairCostMarketMaker(targetClone());const inv=nakedInventory();
+    expect(strat.buildFill(Side.Down,inv,hedgeBook(0.001),TS,END)).toBeUndefined();
+    expect(strat.lastDecisionRejection()).toMatchObject({code:'hedge_pair_cost',price:0.761,limit:0.99});
+    expect(strat.buildFill(Side.Down,inv,hedgeBook(0.001,0.761),TS,END)).toMatchObject({price:0.76,shares:20});
+  });
+  it("does not invent .01 when the token tick is absent or invalid", () => {
+    for(const tick of [undefined,0,Number.NaN]) {
+      const quote=hedgeBook(0.01);quote.down.tickSize=tick;
+      const strat=new PairCostMarketMaker(targetClone());
+      expect(strat.buildFill(Side.Down,nakedInventory(),quote,TS,END)).toBeUndefined();
+      expect(strat.lastDecisionRejection()?.code).toBe('maker_tick_missing_or_invalid');
+    }
+  });
+  it("recomputes fees and limits from the quantized maker price", () => {
+    const inv=nakedInventory();
+    const strat=new PairCostMarketMaker({...targetClone(),makerFeeRate:0.02,hedgePairCostCeiling:1.0,maxTotalCost:10});
+    const fill=strat.buildFill(Side.Down,inv,hedgeBook(0.01),TS,END)!;
+    expect(fill.price).toBe(0.76);
+    const firstFee=20*0.02*0.23*0.77;
+    expect(4.6+firstFee+fill.shares*(0.76+0.02*0.76*0.24)).toBeCloseTo(10,8);
   });
 });

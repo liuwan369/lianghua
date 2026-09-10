@@ -1,71 +1,53 @@
 # 系统架构
 
-更新时间：2026-09-09（运行架构沿用 2026-09-08 记录；本次未复查服务器）
+系统以都柏林节点作为在线数据和运行状态来源，分为行情证据、策略执行、账本投影、HTTP 服务和六页前端。paper 与 live 共用策略逻辑，但成交来源和资金含义不同。
 
-## 新控制台接入方向
-
-六页演示设计已保存为 `ui-demo-2026-09-09`（`269f8ab`），尚未替换正式前端。下一阶段采用模块化单体：前端 TypeScript 按六页拆分，Python 页面 API 按账户、配置、运行控制、市场、账本、奖励、监控拆分；保留已有 TypeScript 交易引擎。总览复用各业务模块数据，不另算一份。详细接口缺口、参数映射、逐功能验收与切换方案见 [前端接入方案](FRONTEND-INTEGRATION-PLAN.md)。以下为已有架构，不代表拟议模块已建成。
-
-## 数据流
+## 数据与执行链路
 
 ```text
-Polymarket 市场 WS/REST ─┐
-Polymarket 公开活动 API ─┼─> 都柏林采集器 ─> SQLite 日库 ─> 页面 / 小时分析
-Binance BTC 行情 WS ─────┤
-Polygon 链上日志 ─────────┘
-
-Polymarket 主 WS ─> TypeScript 策略 ─> 风控 ─> 纸面执行器
-                                           └─> 真实执行器（当前锁定）
-
-公开资金地址 ─> 官方 SDK/Polygon 只读预检 ─> 钱包类型、Owner、余额、授权缺项
-Owner 钱包签名 ─> 官方 SDK 认证与下单（当前主路径）
-Session Key ─> 可选 Beta 委托路径（不等待、不作为上线前提）
-
-浏览器 ─HTTPS+登录保护─> Nginx ─> 都柏林页面 API ─> 启停纸面引擎 / 读取汇总
+Polymarket 公开盘口/成交 + Binance BTC
+        │
+        ├─ Dublin collector → SQLite 原始证据 → 回放/定时分析
+        │
+        └─ TypeScript feeds ← Chainlink RTDS
+                     │
+                     └─ orchestrator → Engine → maker/strategy
+                                                   │
+                          paper 模拟执行或 V2 CLOB executor
+                                                   │
+                                          JSONL 运行日志
+                                                   │
+                            后台 projection → SQLite ledger
+                                                   │
+                           HTTP 只读接口 → 六页正式控制台
 ```
 
-## 组件职责
+`scripts/pm-r25-dublin-evidence-collector.py` 保存真实公开消息。TypeScript `src/live/feeds/collector.ts` 提供采集器数据适配，paper 可以读取都柏林采集数据；live 的用户订单事件来自经认证的用户 WebSocket。缺失、单边或过期行情必须保留无效状态。
 
-| 组件 | 文件 | 作用 | 当前状态 |
-| --- | --- | --- | --- |
-| 主交易引擎 | `_external/btc-5m-market-trading-bot/src/` | 市场发现、盘口、策略、风控、订单与回报 | 纸面可用，实盘锁定 |
-| 账户预检 | `src/live/account.ts`、`onchain.ts` | 严格区分资金钱包、Owner、Session、Relayer、Builder | 公开只读已接通 |
-| 动态补仓模型 | `pm_maker/` | 配对成本、补仓数量、风险和影子成交 | 已接入回放测试 |
-| 公开数据采集 | `scripts/pm-r25-tokyo-evidence-collector.py` | 采集盘口、成交、BTC、Polygon；文件名是历史名称 | 都柏林持续运行 |
-| 分析服务 | `scripts/pm-r25-live-evidence-analysis.py` | 生成最近窗口的完整性和行为报告 | 每小时运行 |
-| 页面后端 | `scripts/system-dashboard-server.py` | 页面静态文件、实时状态、模拟启停与日志汇总 | 都柏林运行 |
-| 页面前端 | `docs/system-dashboard.html/js` | 交易、账户、配置、订单四个用户入口 | 已部署，公网浏览器登录验收待用户完成 |
-| 账户接入 | `scripts/dashboard_account.py`、`src/cli/account-check.ts` | 用户配置、只读预检、原子保存 | Linux 权限测试通过 |
+## 组件责任
 
-## 交易状态机
+| 位置 | 职责 |
+|---|---|
+| `web/src/approved-layout.html`、`layout.ts` | 保留总览、自动交易、市场、订单、收益、设置六页设计 |
+| `web/src/live-data.ts`、`forms.ts` | 接口刷新、错误与未知值显示、六项参数及账户表单 |
+| `scripts/system-dashboard-server.py` | loopback HTTP 服务、账户与控制操作、版本化 API |
+| `scripts/dashboard/config.py` | 非敏感配置校验、版本冲突和原子保存 |
+| `scripts/dashboard/read_model.py`、`projection_worker.py`、`ledger.py` | 后台日志投影、增量偏移、稳定事件 ID、SQLite 查询 |
+| `_external/btc-5m-market-trading-bot/src/live/` | 行情发现、运行编排、策略、执行、订单核对和退出 |
+| `pm_maker/` | 只读影子策略与证据回放，不提交交易所订单 |
 
-```text
-发现市场 -> 建立两边盘口 -> 检查数据新鲜度 -> 计算报价
-    -> 模拟/提交挂单 -> 接收成交 -> 计算另一边补仓量
-    -> 继续报价 / 撤单停止 -> 官方结算后计算结果
-```
+HTTP 查询不在请求中摄取完整运行日志；后台读模型与请求线程分离。账本按运行组织，提供有界游标分页。账本 PnL 是引擎记录的结算兑付减成本、费用，不能替代钱包现金对账；缺少真实费用时保持未知。
 
-实盘额外要求：主行情 WS 和用户订单 WS 都在线、两边盘口完整且不超过 `250ms`、账户预检通过。任一关键通道断开或订单状态不明，系统进入撤单、核对、重建仓位并停止，不自动恢复交易。
+## 部署边界
 
-账户身份固定分层：Deposit Wallet 持有资金；Owner 或获官方授权的 Session Key 负责订单签名；Relayer API Key 负责官方 Relayer API 访问和免 Gas 钱包操作；Builder 凭据只用于获批准的 Builder 集成。五者不得互相替代。Session Key 当前为 Beta 受邀功能，不是自建 bot 的默认依赖。
+公网 `https://34-242-206-196.sslip.io/console/` 经 Nginx 转发到 `127.0.0.1:18766`，Python 服务拒绝非 loopback 监听。部署根目录 `/root/pm-system`，主服务 `pm-system-dashboard-dublin.service`。HTTP 80 跳转 HTTPS 443，公网页面登录认证关闭。
 
-## 部署
+账户保存在 `/root/.config/pm-system/account.json`，仅服务器读取敏感内容。公网账户操作通过显式 origin 配置与代理检查进入；真实交易另有 control token、明确确认和 `PM_TRADING_LIVE_UNLOCK=1` 条件。前端模式保存不会绕过这些条件。直接使用引擎 CLI 是独立执行入口，不能把网页解锁状态误认为覆盖所有 CLI。
 
-- 当前主节点：AWS 都柏林 `eu-west-1a`，项目目录 `/root/pm-system`。
-- Node.js：`24.13.0`，满足官方 `@polymarket/client 0.9.0` 要求。
-- 页面服务监听服务器 `127.0.0.1:18766`。
-- Nginx 通过 `https://34-242-206-196.sslip.io:80` 提供受密码保护的公网入口。
-- 用户通过 SSH 隧道映射为本机 `127.0.0.1:18765`。
-- 东京节点只作历史数据和延迟对照，不是当前主交易节点。
-- 云仓库只备份代码和小型报告；SQLite 原始行情库保留在服务器/本机。
+采集服务为 `pm-r25-dublin-collector.service`；证据目录 `data/pm-r25-live/days`，文件模式 `dublin-evidence-*.sqlite3`。分析由 `pm-r25-dublin-live-analyzer.service` 及其 timer 执行。
 
-## 安全边界
+## 能力边界与资源
 
-- 单管理员账户页面通过已登录 HTTPS 提交密钥；Nginx 覆盖认证头并保留 Host 端口，后端校验来源、认证及 HTTPS。不是多用户托管平台。
-- `GET /api/account/status` 仅返回状态；`POST /api/account/check` 只读检查；`POST /api/account/save` 检查后保存。检查子进程不返回原始错误或秘密。
-- 新配置存于 `/root/.config/pm-system/account.json`，目录 700、文件 600，原子替换。密码不回填，不进入浏览器 localStorage 或 Git。
-- 管理配置一旦存在就覆盖旧环境配置；文件损坏或权限不符时拒绝读取，不回退旧密钥。更换资金地址清除旧密钥；保存与启动互斥，保存撤销当前进程实盘解锁。
-- 策略参数目前仍保存在各浏览器 localStorage；账户配置由服务器保存。不同浏览器的策略参数不会自动同步。
-- 默认 `trade_authorization=false`。
-- 真实执行必须同时具备服务器账户配置、显式实盘解锁和代码预检。
-- 当前未解锁，旧 Owner 凭据命中暴露记录，链上授权仍缺项，不会提交真实订单。只读通过也不等于真实交易验收通过。
+实际页面保存映射为六项，后台参数模式为八个数值项加 mode；两者不可混同。完整钱包资产、真实账单、到账凭证、延迟遥测和页面交易控制尚未完整接入。详细接口见 [TECHNICAL.md](TECHNICAL.md)。
+
+2026-09-10 都柏林 `t3.small`（2 vCPU、约 2 GB RAM）采样存在高 steal，后台盘口重复重建和定时分析也消耗 CPU。进程拆分与 CPUWeight 不增加云端 CPU 额度。资源优化应保持行情完整性、页面设计和交易语义，详见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。

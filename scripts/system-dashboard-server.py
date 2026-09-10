@@ -28,6 +28,7 @@ from dashboard.read_model import ReadModel
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
 _trading_lock = threading.RLock()
+_account_check_lock = threading.Lock()
 _trading_process: subprocess.Popen[str] | None = None
 _trading_pid: int | None = None
 _trading_started_at: float | None = None
@@ -68,55 +69,50 @@ def _static_content_type(path: Path) -> str:
     return _STATIC_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
-def _environment(primary: str, legacy: str | None, default: str) -> str:
-    """Read a generic setting while retaining compatibility with Tokyo deployments."""
-    if primary in os.environ:
-        return os.environ[primary]
-    if legacy and legacy in os.environ:
-        return os.environ[legacy]
-    return default
-
-
 def _live_config() -> dict:
     project_root = Path(__file__).resolve().parents[1]
     local_data_dir = Path(
-        _environment(
+        os.environ.get(
             "PM_LIVE_DATA_DIR",
-            None,
             str(project_root / "data" / "pm-r25-live" / "days"),
         )
     )
-    local_setting = _environment("PM_LIVE_LOCAL", "PM_TOKYO_LIVE_LOCAL", "")
+    local_setting = os.environ.get("PM_LIVE_LOCAL", "")
     collector_is_local = local_setting == "1" if local_setting else local_data_dir.is_dir()
     return {
-        "node_label": _environment("PM_NODE_LABEL", None, "东京节点"),
+        "node_label": os.environ.get("PM_NODE_LABEL", "都柏林节点"),
         "local_data_dir": local_data_dir,
         "collector_is_local": collector_is_local,
-        "remote_data_dir": _environment(
-            "PM_REMOTE_DATA_DIR",
-            "PM_TOKYO_REMOTE_DATA_DIR",
-            "/root/pm-system/data/pm-r25-live/days",
+        "remote_data_dir": os.environ.get(
+            "PM_REMOTE_DATA_DIR", "/root/pm-system/data/pm-r25-live/days"
         ),
-        "evidence_glob": _environment("PM_EVIDENCE_GLOB", None, "tokyo-evidence-*.sqlite3"),
-        "collector_service": _environment(
-            "PM_COLLECTOR_SERVICE", None, "pm-r25-tokyo-collector.service"
+        "evidence_glob": os.environ.get("PM_EVIDENCE_GLOB", "dublin-evidence-*.sqlite3"),
+        "collector_service": os.environ.get(
+            "PM_COLLECTOR_SERVICE", "pm-r25-dublin-collector.service"
         ),
         "ssh_key": Path(
-            _environment(
+            os.environ.get(
                 "PM_REMOTE_SSH_KEY",
-                "PM_TOKYO_SSH_KEY",
-                str(Path.home() / ".ssh" / "id_ed25519_tokyo"),
+                str(Path.home() / ".ssh" / "id_ed25519_dublin_pm"),
             )
         ),
-        "remote_host": _environment("PM_REMOTE_HOST", None, "root@13.115.254.211"),
-        "remote_port": _environment("PM_REMOTE_PORT", None, "22"),
-        "connect_timeout": _environment("PM_REMOTE_CONNECT_TIMEOUT", None, "5"),
-        "remote_python": _environment("PM_REMOTE_PYTHON", None, "python3"),
+        "remote_host": os.environ.get("PM_REMOTE_HOST", "root@34.242.206.196"),
+        "remote_port": os.environ.get("PM_REMOTE_PORT", "22"),
+        "connect_timeout": os.environ.get("PM_REMOTE_CONNECT_TIMEOUT", "5"),
+        "remote_python": os.environ.get("PM_REMOTE_PYTHON", "python3"),
     }
 
 
 def _state_path() -> Path:
     return TRADING_ROOT / "results" / "dashboard-state.json"
+
+
+def control_source() -> dict:
+    """Market data may be remote; account/config/control always belong here."""
+    local = _live_config()["collector_is_local"]
+    return {"scope": "collector_host" if local else "local_preview",
+            "label": _live_config()["node_label"] if local else "本机预览服务",
+            "market_node": _live_config()["node_label"]}
 
 
 def _persist_trading_state() -> None:
@@ -305,6 +301,16 @@ def account_config_status() -> dict:
 
 
 def account_action(payload: dict, save: bool = False) -> dict:
+    # Do not queue another slow chain check past the browser's request deadline.
+    if not _account_check_lock.acquire(blocking=False):
+        raise account_store.AccountCheckError("account_check_busy")
+    try:
+        return _checked_account_action(payload, save)
+    finally:
+        _account_check_lock.release()
+
+
+def _checked_account_action(payload: dict, save: bool = False) -> dict:
     global _account_report
     # Serialise account changes with start/stop, including the chain check.
     with _trading_lock:
@@ -339,9 +345,13 @@ def _account_request_error(headers) -> tuple[int, str] | None:
         return 415, "请求格式必须是 JSON"
     # Backend listens only on loopback. Nginx overwrites these identity headers.
     trusted_https = (os.environ.get("PM_TRUST_ACCOUNT_PROXY") == "1"
-                     and headers.get("X-Forwarded-Proto") == "https"
-                     and bool(headers.get("X-PM-Authenticated")) and parsed.scheme == "https")
-    if trusted_https:
+                     and headers.get("X-Forwarded-Proto") == "https" and parsed.scheme == "https")
+    # Explicit deployment opt-in for the operator-requested public console.
+    # An origin is routing/CSRF protection, not an authenticated identity:
+    # anyone reaching this configured console may check/change its account.
+    public_origin = os.environ.get("PM_ACCOUNT_PUBLIC_ORIGIN", "").strip()
+    public_allowed = bool(public_origin) and origin == public_origin
+    if trusted_https and (headers.get("X-PM-Authenticated") or public_allowed):
         return None
     if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
         return 403, "请使用带登录保护的 HTTPS 页面接入账户"
@@ -401,6 +411,8 @@ def cached_live_status() -> dict:
         age = time.monotonic() - _live_cache_at if _live_cache_at else None
     value.update(node_label=_live_config()["node_label"], cache_age_seconds=age,
                  refreshing=age is None or age >= 5)
+    value.setdefault("current_markets", [])
+    value.setdefault("collector_online", False)
     if age is None or age > 15:
         value["collector_online"] = False
         value["current_markets"] = []
@@ -432,7 +444,7 @@ def _live_status_fetch() -> dict:
     config = _live_config()
     now = time.monotonic()
     with _live_lock:
-        if now - _live_cache_at < 5:
+        if now - _live_cache_at < 1:
             return {**_live_cache, "node_label": config["node_label"]}
     data_dir = config["local_data_dir"] if config["collector_is_local"] else Path(config["remote_data_dir"])
     script = r'''# -*- coding: utf-8 -*-
@@ -459,18 +471,24 @@ else:
     try:
         now_ns = time.time_ns()
         now_second = int(now_ns // 1_000_000_000)
+        # Daily databases exceed 1 GB. received_at_ns has no standalone index;
+        # scanning it (or grouping the whole table) blocks the snapshot for >30s.
+        # Read a bounded PK tail, and use the existing source/second chunk index.
+        tail = list(conn.execute('SELECT source,received_at_ns FROM events ORDER BY id DESC LIMIT 10000'))
+        sources = ('clob', 'binance', 'activity', 'gamma', 'polygon', 'collector')
+        latest = {}
+        for source in sources:
+            last = conn.execute('SELECT received_second FROM event_chunks WHERE source=? ORDER BY received_second DESC LIMIT 1', (source,)).fetchone()
+            if last: latest[source] = int(last[0]) * 1_000_000_000
+        for source, timestamp in tail:
+            latest[source] = max(latest.get(source, 0), timestamp)
         for name, seconds in (('1m', 60), ('5m', 300)):
-            chunk_count = conn.execute(
-                'SELECT COALESCE(SUM(event_count),0) FROM event_chunks WHERE received_second >= ?',
-                (now_second - seconds,),
-            ).fetchone()[0]
-            event_count = conn.execute(
-                'SELECT COUNT(*) FROM events WHERE received_at_ns >= ?',
-                (now_ns - seconds * 1_000_000_000,),
-            ).fetchone()[0]
-            result['events_' + name] = int(chunk_count or 0) + int(event_count or 0)
-        latest = {row[0]: int(row[1]) * 1_000_000_000 for row in conn.execute('SELECT source, MAX(received_second) FROM event_chunks GROUP BY source')}
-        latest.update({row[0]: row[1] for row in conn.execute('SELECT source, MAX(received_at_ns) FROM events GROUP BY source')})
+            complete = len(tail) < 10000
+            chunk_count = sum(conn.execute('SELECT COALESCE(SUM(event_count),0) FROM event_chunks WHERE source=? AND received_second>=?',
+                                          (source, now_second-seconds)).fetchone()[0] for source in sources)
+            event_count = sum(timestamp >= now_ns-seconds*1_000_000_000 for _, timestamp in tail)
+            result['events_' + name] = int(chunk_count) + event_count if complete else None
+            result['events_' + name + '_complete'] = complete
         result['latest_by_source'] = latest
         result['latest_event_ns'] = max(latest.values()) if latest else None
         if result['latest_event_ns'] is not None:
@@ -479,7 +497,7 @@ else:
         for row in conn.execute("SELECT payload_json FROM events WHERE source='gamma' AND event_type='market_metadata' ORDER BY received_at_ns DESC LIMIT 20"):
             try:
                 item = json.loads(row[0])
-                metadata[item.get('slug')] = item
+                metadata.setdefault(item.get('slug'), item)
             except Exception:
                 pass
         books = {}
@@ -524,7 +542,7 @@ else:
                                 'up_token': item.get('up_token') or item.get('upToken') or '', 'down_token': item.get('down_token') or item.get('downToken') or '',
                                 'start': item.get('start_at'), 'end': item.get('end_at'), 'up_bid': ub, 'up_ask': ua, 'down_bid': db, 'down_ask': da,
                                 'ask_sum': ua + da if ua is not None and da is not None else None,
-                                'quote_at': datetime.fromtimestamp(max(up.get('received_ns', 0), down.get('received_ns', 0)) / 1_000_000_000, timezone.utc).isoformat() if max(up.get('received_ns', 0), down.get('received_ns', 0)) else None})
+                                'quote_at': datetime.fromtimestamp(min(up.get('received_ns', 0), down.get('received_ns', 0)) / 1_000_000_000, timezone.utc).isoformat() if min(up.get('received_ns', 0), down.get('received_ns', 0)) else None})
             except (TypeError, ValueError):
                 continue
         # Keep one deterministic selection rule for every client: the market
@@ -570,12 +588,14 @@ print(json.dumps(result, ensure_ascii=True))
         if config["collector_is_local"]:
             command = [sys.executable, "-c", script]
         else:
+            if not config["ssh_key"].is_file():
+                raise FileNotFoundError("都柏林 SSH 密钥未配置，请检查 PM_REMOTE_SSH_KEY")
             command = [
                 "ssh", "-i", str(config["ssh_key"]), "-p", str(config["remote_port"]),
                 "-o", "BatchMode=yes", "-o", f"ConnectTimeout={config['connect_timeout']}",
-                "-o", "StrictHostKeyChecking=no", config["remote_host"], config["remote_python"], "-",
+                "-o", "StrictHostKeyChecking=yes", config["remote_host"], config["remote_python"], "-",
             ]
-        completed = subprocess.run(command, input=script, text=True, capture_output=True, timeout=30)
+        completed = subprocess.run(command, input=script, text=True, encoding="utf-8", capture_output=True, timeout=30)
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or f"ssh exit {completed.returncode}")
         value = json.loads(completed.stdout)
@@ -587,7 +607,9 @@ print(json.dumps(result, ensure_ascii=True))
             "collector_online": False,
             "checked_at": datetime.now(timezone.utc).isoformat(),
             "node_label": config["node_label"],
-            "error": f"无法读取{config['node_label']}采集器：{type(exc).__name__}: {exc}",
+            "current_markets": [],
+            "error_code": "collector_connection_failed",
+            "error": f"无法读取{config['node_label']}采集器，请检查 SSH 密钥、连接和采集服务。",
         }
     with _live_lock:
         _live_cache = value
@@ -756,7 +778,13 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         if not private_key_configured():
             raise PermissionError("未配置交易账户")
     def positive(name: str, default: float, minimum: float) -> float:
-        value = float(payload.get(name, default))
+        raw_value = payload.get(name, default)
+        if type(raw_value) not in {int, float}:
+            raise ValueError(f"{name} must be a finite JSON number")
+        try:
+            value = float(raw_value)
+        except OverflowError:
+            raise ValueError(f"{name} must be a finite JSON number") from None
         if not math.isfinite(value) or value < minimum:
             raise ValueError(f"{name} must be >= {minimum}")
         return value
@@ -770,7 +798,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
     max_orders = int(max_orders_value)
     max_total_usd = positive("max_total_usd", 10 if mode == "live" else 100, 0.01)
     # 运行时间允许填 0，表示不按时间自动停止，直到用户手动停止。
-    duration_min = float(payload.get("duration_min", 15 if mode == "live" else 5))
+    duration_min = positive("duration_min", 15 if mode == "live" else 5, 0)
     if not math.isfinite(duration_min) or duration_min < 0 or (duration_min != 0 and duration_min < 0.1):
         raise ValueError("duration_min 必须为 0（一直运行）或至少 0.1 分钟")
     maker_life_sec = positive("maker_life_sec", 15, 1)
@@ -861,6 +889,14 @@ def stop_trading() -> dict:
         process = _trading_process
         restored_pid = _trading_pid if process is None else None
         candidate_pid = restored_pid or (process.pid if process else None)
+        if (_trading_mode == "live" and candidate_pid
+                and (_trading_stop_result or {}).get("requested_pid") == candidate_pid
+                and not (_trading_stop_result or {}).get("process_stopped")
+                and _process_matches(candidate_pid, _trading_log)):
+            # A repeated signal can terminate a child whose one-shot signal
+            # handler is already draining orders. The first request owns stop.
+            return trading_status(include_stats=False)
+        stop_requested = False
         if process is None and not _process_matches(candidate_pid, _trading_log):
             _trading_stop_result = {
                 "confirmed": False,
@@ -875,7 +911,8 @@ def stop_trading() -> dict:
                     subprocess.run(["taskkill", "/PID", str(restored_pid), "/T"], timeout=10, check=False)
                 else:
                     os.kill(restored_pid, signal.SIGTERM)
-                deadline = time.monotonic() + 20
+                stop_requested = True
+                deadline = time.monotonic() + (8 if _trading_mode == "live" else 20)
                 while time.monotonic() < deadline and _process_matches(restored_pid, _trading_log):
                     time.sleep(0.2)
             except (ProcessLookupError, OSError, subprocess.SubprocessError):
@@ -886,31 +923,39 @@ def stop_trading() -> dict:
                     process.send_signal(signal.CTRL_BREAK_EVENT)
                 else:
                     process.send_signal(signal.SIGTERM)
+                stop_requested = True
             except (ProcessLookupError, OSError):
                 pass
             try:
-                process.wait(timeout=20)
+                process.wait(timeout=8 if _trading_mode == "live" else 20)
             except subprocess.TimeoutExpired:
-                try:
-                    process.kill()
-                except (ProcessLookupError, OSError):
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
+                # Live shutdown drains in-flight POSTs, cancels, and reconciles
+                # fills. Keep it alive and report pending instead of killing
+                # the very process responsible for resolving remote exposure.
+                if _trading_mode != "live":
+                    try:
+                        process.kill()
+                    except (ProcessLookupError, OSError):
+                        pass
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
         _trading_exit_code = process.poll() if process else None
         stopped = not _process_matches(restored_pid or (process.pid if process else None), _trading_log)
         # A stopped process does not prove remote live orders were cancelled.
         # Paper mode has no remote orders; live mode needs an account query.
         confirmed = stopped and _trading_mode == "paper"
         if not stopped:
-            message = "停止未完成，请检查后台进程。"
+            message = ("已请求停止，正在等待撤单及成交对账完成；后台进程保留，请稍后核对。"
+                       if _trading_mode == "live" else "停止未完成，请检查后台进程。")
         elif _trading_mode == "live":
             message = "进程已停止；实盘挂单尚未通过账户查询确认。"
         else:
             message = "模拟已停止，没有真实挂单。"
         _trading_stop_result = {"confirmed": confirmed, "process_stopped": stopped, "message": message}
+        if stop_requested:
+            _trading_stop_result["requested_pid"] = candidate_pid
         if stopped:
             _trading_process = None
             _trading_pid = None
@@ -941,7 +986,7 @@ def make_handler(root: Path):
                 self._send_json(body)
                 return
             if path == "/api/account/status":
-                self._send_json(json.dumps(account_config_status(), ensure_ascii=False).encode("utf-8"))
+                self._send_json(json.dumps({**account_config_status(), "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
                 return
             if path == "/api/trading/log":
                 status = trading_status()
@@ -958,7 +1003,9 @@ def make_handler(root: Path):
             if path == "/api/live":
                 self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
                 return
-            relative = "system-dashboard.html" if path in {"/", "/system-dashboard.html"} else path.lstrip("/")
+            relative = "system-dashboard.html" if path in {"/", "/system-dashboard.html"} else (
+                "console/index.html" if path in {"/console", "/console/"} else path.lstrip("/")
+            )
             candidate = (docs / relative).resolve()
             if docs not in candidate.parents or not candidate.is_file():
                 self.send_error(404)
@@ -985,12 +1032,15 @@ def make_handler(root: Path):
                              "projection": status["stats"].get("projection"),
                              "stats": status["stats"]}
                 elif path == "/api/v1/markets":
-                    value = {"schemaVersion": 1, **cached_live_status()}
+                    value = {"schemaVersion": 1, "asOf": time.time(), **cached_live_status()}
                 elif path in {"/api/v1/runs", "/api/v1/events", "/api/v1/summary"}:
                     ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
                     query = parse_qs(urlsplit(self.path).query)
                     if path.endswith("/runs"):
-                        value = {"schemaVersion": 1, "runs": ledger.list_runs()}
+                        before_id = query.get("before_id", [None])[0]
+                        limit = int(query.get("limit", ["50"])[0])
+                        value = {"schemaVersion": 1, **ledger.list_runs_page(
+                            before_id=int(before_id) if before_id else None, limit=limit)}
                     else:
                         run_id = query.get("run_id", [None])[0]
                         if not run_id or len(run_id) > 200:
@@ -1005,6 +1055,8 @@ def make_handler(root: Path):
                 else:
                     self._send_json(b'{"error":"not found"}', 404)
                     return
+                if path != "/api/v1/markets":
+                    value["control_source"] = control_source()
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
             except KeyError:
                 self._send_json(b'{"error":"run not found"}', 404)
@@ -1060,6 +1112,9 @@ def make_handler(root: Path):
                 else:
                     result = stop_trading() if path.endswith("/stop") else start_trading(payload)
                 self._send_json(json.dumps({"ok": True, "status": result}, ensure_ascii=False).encode("utf-8"))
+            except account_store.AccountCheckError as exc:
+                self._send_json(json.dumps({"ok": False, "error": str(exc), "error_code": exc.code,
+                                            "retryable": exc.retryable}, ensure_ascii=False).encode("utf-8"), exc.http_status)
             except ConfigConflictError as exc:
                 self._send_json(json.dumps({"ok": False, "error": str(exc), "current_revision": exc.current_revision}, ensure_ascii=False).encode(), 409)
             except PermissionError as exc:

@@ -3,7 +3,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot ".." )).Path
 $port = 8765
 $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Output "Dashboard already running at http://127.0.0.1:$port/system-dashboard.html"
+    Write-Output "Dashboard already running at http://127.0.0.1:$port/console/"
     exit 0
 }
 Start-Process -FilePath "python" `
@@ -12,8 +12,8 @@ Start-Process -FilePath "python" `
     -WindowStyle Hidden
 for ($attempt = 0; $attempt -lt 20; $attempt++) {
     try {
-        Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/system-dashboard.html" -TimeoutSec 2 | Out-Null
-        Write-Output "Dashboard started at http://127.0.0.1:$port/system-dashboard.html"
+        Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/console/" -TimeoutSec 2 | Out-Null
+        Write-Output "Dashboard started at http://127.0.0.1:$port/console/"
         exit 0
     } catch {
         Start-Sleep -Milliseconds 250

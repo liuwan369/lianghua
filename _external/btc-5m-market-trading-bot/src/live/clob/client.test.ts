@@ -91,6 +91,32 @@ function jsonResponse(value: unknown, status = 200): Response {
 }
 
 describe("ClobWrapper low-latency order path", () => {
+  it("fails closed instead of inventing a default tick after a metadata error", async () => {
+    const wrapper=wrapperWith({getTickSize:vi.fn().mockRejectedValue(new Error("metadata unavailable"))});
+    await expect(wrapper.tickSize("token")).rejects.toThrow(/metadata unavailable/);
+  });
+  it("bounds a stuck signing phase without treating it as a posted unknown order", async () => {
+    const fetchMock=vi.fn();
+    vi.stubGlobal("fetch",fetchMock);
+    const wrapper=wrapperWith({getNegRisk:async()=>false,createOrder:()=>new Promise(()=>{})});
+    (wrapper as unknown as {requestTimeoutMs:number}).requestTimeoutMs=5;
+    const result=await wrapper.submitOrder({tokenId:"token",price:0.4,size:5,tickSize:0.01});
+    expect(result.success).toBe(false);
+    expect(result.stateUnknown).toBe(false);
+    expect(result.errorMsg).toContain("signing timed out");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it.each([{}, { version: 1 }, { version: 3 }, { version: "2" }])(
+    "refuses missing or changed protocol versions before signing: %j", async (payload) => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(payload)));
+      const client = {
+        getClobMarketInfo: vi.fn().mockResolvedValue({ t: [{ t: "token" }], mts: "0.01", mos: 5 }),
+        createOrder: vi.fn(),
+      };
+      await expect(wrapperWith(client).warmMarket("condition", 100, 1)).rejects.toThrow(/requires V2/);
+      expect(client.createOrder).not.toHaveBeenCalled();
+    },
+  );
   beforeEach(() => {
     vi.restoreAllMocks();
     sdkMocks.createL2Headers.mockClear();
@@ -160,27 +186,28 @@ describe("ClobWrapper low-latency order path", () => {
     expect(result.tradeIds).toEqual(["trade-1"]);
   });
 
-  it("passes the known price into urgent hedge signing", async () => {
+  it("signs a fixed-share FOK hedge so price improvement cannot expand the share budget", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(jsonResponse({ success: true, orderID: "order-2" })),
     );
     const client = {
       getNegRisk: vi.fn().mockResolvedValue(false),
-      createMarketOrder: vi.fn().mockResolvedValue({ signed: true }),
+      createOrder: vi.fn().mockResolvedValue({ signed: true }),
     };
     const wrapper = wrapperWith(client);
 
     const result = await wrapper.submitMarketBuy("token", 2.5, 0.5, 0.01);
 
     expect(result.success).toBe(true);
-    expect(client.createMarketOrder).toHaveBeenCalledWith(
-      expect.objectContaining({ tokenID: "token", amount: 2.5, price: 0.5 }),
+    expect(client.createOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ tokenID: "token", size: 5, price: 0.5 }),
       expect.objectContaining({ tickSize: "0.01" }),
     );
+    expect(sdkMocks.orderToJsonV2).toHaveBeenCalledWith(expect.anything(), "k", OrderType.FOK, false, true);
   });
 
-  it("refreshes the version and re-signs only once on mismatch", async () => {
+  it("stops after a version mismatch announces V3 instead of switching signature domains", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ success: false, error: "order_version_mismatch" }))
@@ -200,10 +227,10 @@ describe("ClobWrapper low-latency order path", () => {
       tickSize: 0.01,
     });
 
-    expect(result.success).toBe(true);
-    expect(client.createOrder).toHaveBeenCalledTimes(2);
-    expect(client.createOrder.mock.calls[1]?.[1]).toMatchObject({ version: 3 });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.success).toBe(false);
+    expect(result.errorMsg).toContain("requires V2");
+    expect(client.createOrder).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("marks an aborted POST as unknown exchange state", async () => {

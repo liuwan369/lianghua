@@ -1,0 +1,68 @@
+{
+  "evidence_type": "private_clob_readonly_probe",
+  "environment": "dublin_production",
+  "host": "https://clob.polymarket.com",
+  "checked_at_utc": null,
+  "check_time_note": "The completed probe did not emit an exact UTC timestamp. Its result was received before evidence_recorded_at_utc; the recording timestamp must not be treated as the request timestamp.",
+  "evidence_recorded_at_utc": "2026-09-10T06:40:52Z",
+  "result_source": "Previously completed remote read-only probe; no remote request was repeated to produce this file.",
+  "signature_type": 3,
+  "endpoints": {
+    "derive_existing_api_key": {
+      "method": "GET",
+      "path": "/auth/derive-api-key",
+      "status": "success",
+      "credentials_kept_in_memory_only": true
+    },
+    "open_orders": {
+      "method": "GET",
+      "sdk_method": "getOpenOrders",
+      "status": "success",
+      "first_page_count": 0,
+      "scope": "first_page_only"
+    },
+    "trades": {
+      "method": "GET",
+      "sdk_method": "getTrades",
+      "status": "success",
+      "first_page_count": 19,
+      "scope": "first_page_only"
+    },
+    "collateral": {
+      "method": "GET",
+      "sdk_method": "getBalanceAllowance",
+      "status": "success",
+      "asset_type": "COLLATERAL",
+      "tradable_balance_usd": 108.728676,
+      "allowance_entries": 4,
+      "positive_allowance_entries": 4
+    },
+    "version": {
+      "method": "GET",
+      "path": "/version",
+      "status": "success",
+      "version": 2,
+      "raw_response_checked_without_sdk_version_fallback": true
+    }
+  },
+  "http_status_note": "Exact HTTP status codes were not retained; success does not assert a specific HTTP code.",
+  "side_effect_boundaries": {
+    "read_only_api_requests": true,
+    "offline_signature_scope": "ClobAuthDomain / ClobAuth identity authentication only",
+    "api_key_creation_called": false,
+    "credentials_persisted": false,
+    "credentials_or_addresses_output": false,
+    "balance_allowance_update_called": false,
+    "order_submission_called": false,
+    "order_cancellation_called": false,
+    "chain_transaction_signed_or_sent": false,
+    "live_connector_started": false,
+    "account_configuration_changed": false
+  },
+  "limitations": [
+    "Order and trade counts are first-page counts, not verified full-history totals.",
+    "Positive allowance entry counts do not independently prove every strategy-specific approval prerequisite.",
+    "Successful private API requests do not prove that the frontend displays or synchronizes these results.",
+    "Balances, orders and allowances can change after the check."
+  ]
+}

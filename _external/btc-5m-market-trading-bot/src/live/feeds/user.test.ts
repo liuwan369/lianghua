@@ -156,6 +156,17 @@ describe("parseUserMessage", () => {
 });
 
 describe("authenticated trade reconciliation", () => {
+  it("includes our maker BUY when the matched taker is selling", () => {
+    const events = parseAuthenticatedTrade({
+      id: "maker-buy-taker-sell", status: "CONFIRMED", market: "0xcond",
+      trader_side: "MAKER", side: "SELL", maker_orders: [{
+        order_id: "our-order", maker_address: "0xabc", side: "BUY",
+        asset_id: "up-tok", price: "0.4", matched_amount: "2",
+      }],
+    }, { ...opts, accountAddress: "0xAbC" }, new Set());
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "exchangeFill", fill: { side: Side.Up, shares: 2 } });
+  });
   it("rebuilds a maker fill using the configured account address", () => {
     const evs = parseAuthenticatedTrade(
       {

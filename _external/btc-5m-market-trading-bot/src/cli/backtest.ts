@@ -23,6 +23,7 @@ import {
   type MarketResult,
 } from "../models.js";
 import { PairCostMarketMaker } from "../strategy.js";
+import { snapshotsToTimeline, type SnapshotRow } from "./backtest-snapshots.js";
 
 const program = new Command();
 program
@@ -189,45 +190,10 @@ function runDailyFile(
   return { markets, fills, pnl, fees, wins };
 }
 
-interface SnapshotRow {
-  ts: string;
-  slug: string;
-  token_type: string;
-  bid?: number;
-  ask?: number;
-}
-
 interface MarketDataEntry {
   market: { slug: string };
   window: { start_unix: number; end_unix: number };
   snapshots: SnapshotRow[];
-}
-
-function tsToUnix(ts: string): number {
-  const d = Date.parse(ts.replace(" ", "T") + "Z");
-  return Number.isFinite(d) ? d / 1000 : 0;
-}
-
-function snapshotsToTimeline(snapshots: SnapshotRow[]): MarketBooks[] {
-  const byTs = new Map<number, Partial<Record<"up" | "down", SnapshotRow>>>();
-  for (const s of snapshots) {
-    const t = tsToUnix(s.ts);
-    if (!byTs.has(t)) byTs.set(t, {});
-    const side = s.token_type.toLowerCase();
-    if (side === "up" || side === "down") byTs.get(t)![side] = s;
-  }
-  const out: MarketBooks[] = [];
-  for (const [ts, sides] of [...byTs.entries()].sort((a, b) => a[0] - b[0])) {
-    const up = sides.up;
-    const dn = sides.down;
-    if (!up || !dn) continue;
-    out.push({
-      tsUnix: ts,
-      up: { bid: up.bid, ask: up.ask, tsUnix: ts },
-      down: { bid: dn.bid, ask: dn.ask, tsUnix: ts },
-    });
-  }
-  return out;
 }
 
 function inferWinner(timeline: MarketBooks[], endUnix: number): Side {

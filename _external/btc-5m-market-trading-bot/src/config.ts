@@ -337,7 +337,7 @@ export function assertOneSecondDecisionPacing(cfg: StrategyConfig): void {
 }
 
 function checkF64(out: string[], name: string, a: number, b: number): void {
-  if (Math.abs(a - b) > 1e-9) out.push(`${name}: got ${a} want ${b}`);
+  if (!Number.isFinite(a) || Math.abs(a - b) > 1e-9) out.push(`${name}: got ${a} want ${b}`);
 }
 
 function lockedProductionFieldMismatches(got: StrategyConfig, want: StrategyConfig): string[] {
@@ -362,6 +362,9 @@ function lockedProductionFieldMismatches(got: StrategyConfig, want: StrategyConf
   }
   if (got.fillIntervalSec !== want.fillIntervalSec) {
     out.push(`fillIntervalSec: got ${got.fillIntervalSec} want ${want.fillIntervalSec}`);
+  }
+  if (got.burstIntervalSec !== want.burstIntervalSec) {
+    out.push(`burstIntervalSec: got ${got.burstIntervalSec} want ${want.burstIntervalSec}`);
   }
   if (got.passiveBudgetMode !== want.passiveBudgetMode) {
     out.push(`passiveBudgetMode: got ${got.passiveBudgetMode} want ${want.passiveBudgetMode}`);

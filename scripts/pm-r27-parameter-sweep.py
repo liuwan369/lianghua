@@ -81,7 +81,7 @@ def run_one(events: list[tuple[int, str, int, str, Any]], markets: dict[str, dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Historical Tokyo CLOB parameter sweep; read-only")
+    parser = argparse.ArgumentParser(description="Historical collector CLOB parameter sweep; read-only")
     parser.add_argument("--sqlite", nargs="+", required=True)
     parser.add_argument("--history-dir", required=True)
     parser.add_argument("--out", required=True)
@@ -115,7 +115,7 @@ def main() -> int:
     output = {
         "run_type": "pm-r27_historical_parameter_sweep",
         "trade_authorization": False, "account_connected": False,
-        "source": {"sqlite": [str(x) for x in dbs], "history_dir": args.history_dir, "clock": "Tokyo received_at_ns"},
+        "source": {"sqlite": [str(x) for x in dbs], "history_dir": args.history_dir, "clock": "collector received_at_ns"},
         "split": {"train_utc_day": days[-2], "holdout_utc_day": days[-1], "train_markets": len(train_slugs), "holdout_markets": len(holdout_slugs), "clob_events": len(events)},
         "assumptions": ["Activity只用于目标成交量对照，不用于假设目标订单已经成交。", "排队前置量为可见同价位数量乘参数queue_factor；这不是目标真实队列位置。", "maker返佣和流动性奖励按0，未计入收益。", "只统计盘口覆盖到的市场；RPC链上缺口不被补成完整。"],
         "top10": results[:10], "all_results": results,

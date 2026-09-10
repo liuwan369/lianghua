@@ -3,6 +3,12 @@ import { OrderBook } from "../orderbook.js";
 import { applyMessage, bookFeedHealthy, marketTrades, tickSizeChanges } from "./polymarket.js";
 
 describe("Polymarket market feed metadata", () => {
+  it("loads initial tick metadata from each token's book snapshot", () => {
+    expect(tickSizeChanges([
+      {event_type:"book",asset_id:"up",tick_size:"0.01"},
+      {event_type:"book",asset_id:"down",tick_size:"0.001"},
+    ])).toEqual([{token:"up",tickSize:0.01},{token:"down",tickSize:0.001}]);
+  });
   it("parses tick-size changes used by live order rounding", () => {
     expect(
       tickSizeChanges({
@@ -44,6 +50,15 @@ describe("Polymarket public trade flow", () => {
 });
 
 describe("Polymarket websocket health", () => {
+  it("clears old liquidity when an empty book snapshot arrives", () => {
+    const up = new OrderBook();
+    const down = new OrderBook();
+    up.applySnapshot([[0.4, 10]], [[0.41, 10]]);
+    const updated = applyMessage({ event_type: "book", asset_id: "up", bids: [], asks: [] }, "up", "down", up, down);
+    expect(updated.upUpdated).toBe(true);
+    expect(up.bestBid()).toBeUndefined();
+    expect(up.bestAsk()).toBeUndefined();
+  });
   it("requires both Up and Down books to be fresh", () => {
     expect(bookFeedHealthy(true, true, 9_900, 9_800, 10_000, 500)).toBe(true);
     expect(bookFeedHealthy(true, true, 9_900, 9_000, 10_000, 500)).toBe(false);

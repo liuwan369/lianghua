@@ -112,6 +112,7 @@ export interface PreflightReport {
   missingErc20Approvals: number;
   missingErc1155Approvals: number;
   approvalsError: string | null;
+  otherApprovalsMissing?: number;
   configErrors: string[];
   clobUsd: number | null;
   pusdOnChain: number;
@@ -129,7 +130,7 @@ export async function preflight(
   printPreflight(report);
   if (opts?.strict && !report.ready) {
     throw new Error(
-      "账户预检未通过：需核对 Owner/Session 签名、资金和官方 SDK 交易授权",
+      "账户预检未通过：需核对 Owner/Session 签名、资金和当前 CLOB V2 交易授权",
     );
   }
   return report.ready;
@@ -257,6 +258,7 @@ export async function preflightReport(
     missingErc20Approvals: publicCheck.missingErc20Approvals,
     missingErc1155Approvals: publicCheck.missingErc1155Approvals,
     approvalsError: publicCheck.approvalsError ?? null,
+    otherApprovalsMissing: publicCheck.otherApprovalsMissing,
     configErrors: accountConfig.errors,
     clobUsd,
     pusdOnChain: pusdF,
@@ -294,7 +296,7 @@ function printPreflight(r: PreflightReport): void {
     `  pUSD→Exchange allowance: ${r.pUsdAllowance > 1e12 ? "unlimited" : r.pUsdAllowance.toFixed(2)}   ${r.pUsdAllowance > 0 ? "✅" : r.signatureType !== SignatureTypeV2.EOA ? "(proxy-managed)" : "❌ run approve --broadcast"}`,
   );
   console.log(
-    `  官方 SDK 完整授权: ${r.approvalsFullyReady === true ? "是" : r.approvalsFullyReady === false ? "否" : "查询失败"}` +
+    `  当前 CLOB V2 交易授权: ${r.approvalsFullyReady === true ? "是" : r.approvalsFullyReady === false ? "否" : "查询失败"}` +
       `（缺 ERC20 ${r.missingErc20Approvals} 项，ERC1155 ${r.missingErc1155Approvals} 项）`,
   );
   if (r.approvalsError) console.log(`  授权查询错误:      ${r.approvalsError}`);
@@ -341,6 +343,10 @@ export async function approve(broadcast: boolean): Promise<void> {
     rpcUrl: rpcUrl(),
   });
   const owner = resolved.funder;
+  if (resolved.signatureType !== SignatureTypeV2.EOA
+    || owner.toLowerCase() !== account.address.toLowerCase()) {
+    throw new Error("此命令仅支持普通 EOA 钱包；平台资金钱包必须通过其自身的授权流程，不能由 Owner 地址直接代替授权。");
+  }
 
   const existing = await publicClient.readContract({
     address: PUSD,
@@ -369,7 +375,7 @@ export async function wrap(
   amountUsd: number,
   broadcast: boolean,
 ): Promise<void> {
-  if (amountUsd <= 0) throw new Error("amount must be > 0");
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) throw new Error("amount must be finite and > 0");
   const amount = parseUnits(amountUsd.toFixed(6), 6);
 
   console.log(
@@ -463,8 +469,7 @@ export async function settle(
     }
   }
 
-  const seen = new Set<string>();
-  const unique = conds.filter((c) => c && seen.add(c));
+  const unique = [...new Set(conds.filter(Boolean))];
   if (unique.length === 0) {
     console.log("no conditionIds (use --condition-id or --from-log)");
     return;
@@ -476,8 +481,18 @@ export async function settle(
   if (broadcast) {
     const pk = privateKeyHex();
     if (!pk) throw new Error("--broadcast requires POLYMARKET_PRIVATE_KEY");
+    const account = privateKeyToAccount(pk);
+    const resolved = await resolveWallet(account.address, {
+      funderOverride: envWalletOverrides().funder,
+      sigTypeOverride: envWalletOverrides().sigType,
+      rpcUrl: rpcUrl(),
+    });
+    if (resolved.signatureType !== SignatureTypeV2.EOA
+      || resolved.funder.toLowerCase() !== account.address.toLowerCase()) {
+      throw new Error("此结算命令仅支持普通 EOA 钱包；平台资金钱包的持仓必须由其自身的结算流程赎回。");
+    }
     walletClient = createWalletClient({
-      account: privateKeyToAccount(pk),
+      account,
       chain: polygon,
       transport: http(rpcUrl()),
     });

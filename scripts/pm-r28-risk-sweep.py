@@ -175,7 +175,7 @@ def main() -> int:
         row["train_rank"] = index
     output = {
         "run_type": "pm-r28_risk_gated_parameter_sweep", "trade_authorization": False, "account_connected": False,
-        "source": {"sqlite": [str(p) for p in dbs], "clock": "Tokyo received_at_ns"},
+        "source": {"sqlite": [str(p) for p in dbs], "clock": "collector received_at_ns"},
         "split": {"train_utc_days": train_days, "holdout_utc_day": holdout_day, "train_markets": len(train_slugs), "holdout_markets": len(holdout_slugs), "clob_events": sum(1 for _ in event_factory())},
         "assumptions": ["安全补仓门槛只表示盘口当时有可见对手方卖单，不等于真实一定成交。", "maker返佣和流动性奖励按0。", "目标地址Activity不用于假设影子账户成交。"],
         "selection_rule": "按训练日最差结算盈亏降序选前10，再查看留出日；不按留出日挑选",

@@ -113,6 +113,18 @@ def test_revision_bound_start_is_idempotent_and_does_not_switch_mode(monkeypatch
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("field", ["order_usd", "duration_min", "max_orders"])
+@pytest.mark.parametrize("value", [None, True, {}, "2", 10 ** 400])
+def test_legacy_start_rejects_invalid_numbers_before_process_creation(monkeypatch, tmp_path, field, value):
+    cli = tmp_path / "dist" / "cli" / "live.js"
+    cli.parent.mkdir(parents=True)
+    cli.touch()
+    monkeypatch.setattr(SERVER, "TRADING_ROOT", tmp_path)
+    monkeypatch.setattr(SERVER, "_trading_environment", lambda: pytest.fail("invalid request reached execution"))
+    with pytest.raises(ValueError, match="finite JSON number"):
+        SERVER.start_trading({"mode": "paper", field: value})
+
+
 def test_ledger_compatibility_deduplicates_and_preserves_unknown_fee(tmp_path):
     journal = tmp_path / "test.jsonl"
     fill = {"event": "fill", "event_id": "f1", "market_slug": "m", "price": 0.4, "shares": 5}
@@ -157,6 +169,34 @@ def test_stop_control_does_not_read_analytics(monkeypatch):
     monkeypatch.setattr(SERVER, "_persist_trading_state", lambda: None)
     monkeypatch.setattr(SERVER, "trade_log_stats", lambda *a: pytest.fail("analytics in stop"))
     assert SERVER.stop_trading()["running"] is False
+
+
+def test_live_stop_timeout_keeps_reconciliation_process_alive(monkeypatch):
+    signals = []
+    class Process:
+        pid = 12345
+        def poll(self): return None
+        def send_signal(self, value): signals.append(value)
+        def wait(self, timeout):
+            assert timeout == 8
+            raise SERVER.subprocess.TimeoutExpired("test-node", timeout)
+        def kill(self): pytest.fail("must not kill live cancellation/reconciliation")
+    process = Process()
+    monkeypatch.setattr(SERVER, "_restore_trading_state", lambda: None)
+    monkeypatch.setattr(SERVER, "_persist_trading_state", lambda: None)
+    monkeypatch.setattr(SERVER, "_trading_process", process)
+    monkeypatch.setattr(SERVER, "_trading_pid", process.pid)
+    monkeypatch.setattr(SERVER, "_trading_mode", "live")
+    monkeypatch.setattr(SERVER, "_trading_exit_code", None)
+    monkeypatch.setattr(SERVER, "_trading_stop_result", None)
+    monkeypatch.setattr(SERVER, "_process_matches", lambda *args: True)
+    monkeypatch.setattr(SERVER, "trading_status", lambda **kwargs: {"stop_result": SERVER._trading_stop_result})
+    result = SERVER.stop_trading()["stop_result"]
+    assert result["confirmed"] is False and result["process_stopped"] is False
+    assert "对账" in result["message"]
+    assert SERVER._trading_process is process and SERVER._trading_pid == process.pid
+    assert SERVER.stop_trading()["stop_result"] == result
+    assert len(signals) == 1
 
 
 def test_new_run_does_not_abandon_old_tail(tmp_path):

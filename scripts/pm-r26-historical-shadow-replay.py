@@ -186,7 +186,7 @@ def apply_changes(book: dict[str, Any], payload: list[Any]) -> dict[str, list[di
 def apply_best_bid_ask(book: dict[str, Any], payload: list[Any]) -> dict[str, Any]:
     """Apply a top-of-book update while retaining known depth.
 
-    Tokyo capture stores best_bid_ask separately from depth changes.  The
+    The collector stores best_bid_ask separately from depth changes.  The
     message has no size, so carry the previous top level's size as a clearly
     approximate placeholder; this fixes stale quote prices without pretending
     to know the true queue size.
@@ -249,7 +249,7 @@ def summarize_market(engine: MakerShadowEngine, meta: dict[str, Any], first_ms: 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Tokyo SQLite CLOB historical read-only shadow replay")
+    parser = argparse.ArgumentParser(description="Collector SQLite CLOB historical read-only shadow replay")
     parser.add_argument("--sqlite", nargs="+", required=True)
     parser.add_argument("--history-dir", required=True)
     parser.add_argument("--out", required=True)
@@ -346,11 +346,11 @@ def main() -> int:
             "settlement_note": "到期兑付按Up/Down最差结果计算；没有把平台返佣或奖励算进收益。",
         }
     output = {
-        "run_type": "pm-r26_tokyo_historical_clob_shadow_replay",
+        "run_type": "pm-r26_historical_clob_shadow_replay",
         "trade_authorization": False,
         "account_connected": False,
-        "source": {"server": "Tokyo 13.115.254.211", "sqlite": [str(path) for path in dbs], "history_dir": str(Path(args.history_dir)), "chain_links": chain_links},
-        "coverage": {"metadata_markets": len(metadata), "selected_markets": len(selected), "complete_markets": len(complete_slugs), "clob_events_replayed": seen_events, "activity_is_comparison_only": True, "replay_clock": "Tokyo received_at_ns"},
+        "source": {"server": "configured evidence collector", "sqlite": [str(path) for path in dbs], "history_dir": str(Path(args.history_dir)), "chain_links": chain_links},
+        "coverage": {"metadata_markets": len(metadata), "selected_markets": len(selected), "complete_markets": len(complete_slugs), "clob_events_replayed": seen_events, "activity_is_comparison_only": True, "replay_clock": "collector received_at_ns"},
         "assumptions": ["公开盘口只显示汇总数量，排队位置按可见同价位数量乘0.25/保守模型模拟。", "碰到价格不等于一定成交；只有公开last_trade且对手方为SELL才给影子挂单成交。", "maker返佣和流动性奖励暂记0，需逐笔结算数据核实后再加。", "历史Activity不能恢复未成交订单，所以不能证明历史下单参数。"],
         "summary": summary,
         "markets": {name: items for name, items in rows.items()},

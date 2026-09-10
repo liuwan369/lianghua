@@ -1,0 +1,15 @@
+{
+  "mode": "paper",
+  "exit_code": 0,
+  "elapsed_seconds": 106.72,
+  "real_orders": 0,
+  "credentials_in_environment": false,
+  "event_counts": {
+    "reset": 1,
+    "quote": 1,
+    "fill": 1,
+    "decision_rejected": 35,
+    "stopped": 1
+  },
+  "journal": "/root/pm-system/_external/btc-5m-market-trading-bot/results/paper/audit-tick-final-20260910.jsonl"
+}
