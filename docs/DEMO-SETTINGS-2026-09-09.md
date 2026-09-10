@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | order | order_usd | 每次委托名义金额上限，实际费用另受预算约束 |
 | life | maker_life_sec | 挂单寿命秒数，撤单确认前仍有占用 |
-| mode | mode | 模式，前端交易按钮仍禁用 |
+| mode | mode | 模式，纸面控制可用；保存 live 不解锁实盘 |
 | duration | duration_min | 运行时长分钟，0 表示无期限 |
 | submitted | max_total_usd | 累计提交金额保险丝，不因撤单恢复 |
 | maxOrders | max_orders | 累计提交订单数上限 |

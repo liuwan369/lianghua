@@ -29,3 +29,5 @@
 | [云仓库备份](GIT-BACKUP.md) | 可提交内容、秘密排除与回滚边界 |
 
 脱敏验收数据位于 [evidence/2026-09-10](evidence/2026-09-10)，官方研究正文位于 [research/rewards-2026-09-09](research/rewards-2026-09-09)。
+
+- [账户数据接入与剩余验收](ACCOUNT-DATA-INTEGRATION-2026-09-10.md)

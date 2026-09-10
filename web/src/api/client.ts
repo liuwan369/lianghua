@@ -27,6 +27,12 @@ export function validate(kind: string, data: unknown): void {
   if (kind === 'account') valid = typeof data.wallet === 'string' && typeof data.wallet_configured === 'boolean'
     && typeof data.owner_signer_configured === 'boolean' && typeof data.relayer_api_configured === 'boolean'
     && (data.last_check === null || object(data.last_check)) && nullableString(data.config_error);
+  if (kind === 'account-data') valid = data.read_only === true && typeof data.stale === 'boolean'
+    && nullableString(data.wallet) && nullableString(data.checked_at)
+    && ['collateral','open_orders','trades','positions','closed_positions','activity'].every(k => {
+      const s=data[k];return (data.stale === true && s===undefined) || object(s) && typeof s.available==='boolean' && typeof s.complete==='boolean'
+        && typeof s.checked_at==='string' && Array.isArray(s.items) && s.items.every(object);
+    });
   if (kind === 'runs') valid = nullableNumber(data.next_before_id) && Array.isArray(data.runs) && data.runs.every(r => object(r)
     && integer(r.id) && typeof r.run_id === 'string' && typeof r.mode === 'string' && nullableString(r.account_id) && num(r.created_at));
   if (kind === 'events') valid = typeof data.run_id === 'string' && nullableNumber(data.next_before_id) && Array.isArray(data.events)

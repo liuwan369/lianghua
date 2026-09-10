@@ -42,6 +42,7 @@
 | GET `/api/v1/runs?limit=50&before_id=...` | 运行列表游标分页 |
 | GET `/api/v1/events?run_id=...&limit=50&before_id=...` | 指定运行事件游标分页 |
 | GET `/api/v1/summary?run_id=...` | 运行账本摘要，不是钱包账单 |
+| GET `/api/v1/account-data` | 同账户后台缓存：抵押余额、未完成委托、成交、持仓、关闭持仓、活动；各来源有时间及分页完整性 |
 | GET `/api/account/status` | 脱敏账户状态 |
 | POST `/api/account/check` | 只读账户检查，不保存 |
 | POST `/api/account/save` | 检查后持久化账户；失败不覆盖配置 |
@@ -89,3 +90,5 @@
 24 小时历史分析由独立 oneshot 服务在同机 `pm-analysis.slice` 内执行，CPU 配额 20%（0.2 核），CPU/IO 权重均为 10，并设置低调度优先级和内存上限。该服务不参与在线接口的同步链路；隔离限制分析争用，不增加宿主机可用 CPU。
 
 回测快照必须包含两边 token 当时真实 `tick_size` 或 `tickSize`；无效或冲突元数据直接报错。时间戳保留显式时区，无时区按 UTC；非法时间报错。详见 [BACKTEST-TICK-DATA.md](BACKTEST-TICK-DATA.md)。
+
+账户只读后台与前端展示口径见 [账户接入](ACCOUNT-DATA-INTEGRATION-2026-09-10.md)。HTTP读取不重新派生凭据；Node进程驻留并在账户变化时销毁。

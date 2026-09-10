@@ -1,5 +1,8 @@
 import { api } from './api/client';
 import { connectForms } from './forms';
+import { connectAccountData } from './account-data';
+import { connectTradingControls } from './trading-controls';
+import { pageTelemetry } from './page-telemetry';
 import type { Account, Config, Events, Markets, Resource, Status } from './api/types';
 import { activeMarkets, date, esc, finite, fresh, money, modeName, number, price, quotePair, serverNow, usableMarket, marketMessage } from './ui';
 
@@ -53,9 +56,19 @@ export function prepareReadOnly() {
 
 export function connect() {
   prepareReadOnly();
+  const accountData=connectAccountData();
+  const telemetry=pageTelemetry();
+  const trading=connectTradingControls(refresh);
   const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>();
   let closed=false, refreshing=false, runLoading=false, runsLoading=false, historyGeneration=0;
   let configGeneration=0, accountGeneration=0;
+  let marketFilter=0;
+  const marketFilters=Array.from(document.querySelectorAll<HTMLButtonElement>('#view-markets .subnav button'));
+  marketFilters.forEach((button,index)=>{
+    button.disabled=index===3;
+    button.title=index===3?'需要完整实时深度与实际委托份数，当前不使用双边报价冒充盘口容量':'只筛选行情，不代表通过账户和策略风控';
+    button.addEventListener('click',()=>{marketFilter=index;marketFilters.forEach((b,i)=>b.classList.toggle('active',i===index));renderMarkets();});
+  });
   const forms = connectForms({
     config: value => {
       configGeneration++;
@@ -86,8 +99,11 @@ export function connect() {
     row('#view-home','数据连接',data?.collector_online && usable ? `行情已更新 · ${data.node_label}`:marketMessage(markets));
     row('#settings-system','数据节点',data?.node_label || '--');
     row('#settings-system','行情更新时间',data?.latest_event_at || '--');
+    const threshold=fresh(config)?.params.pair_cost_max;
+    marketFilters[2].textContent=`成本低于 ${money(threshold)}（已保存配置）`;
+    const filtered=list.filter(m=>marketFilter===0||marketFilter===1&&usableMarket(m,markets)||marketFilter===2&&usableMarket(m,markets)&&finite(threshold)&&finite(m.ask_sum)&&m.ask_sum<threshold);
     const tbody=document.querySelector('#view-markets tbody')!;
-    tbody.innerHTML=list.length ? list.map(m=>{const ok=usableMarket(m,markets);return `<tr><td>${esc(m.slug)}</td><td>${number(Math.max(0,Math.floor(m.end-clock)))} 秒</td><td>${quotePair(m,'up',ok)}</td><td>${quotePair(m,'down',ok)}</td><td>${ok?price(m.ask_sum):'--'}</td><td>${ok?'已获取快照':'已过期/缺失'}</td><td><span class="pill warn">策略状态待接入</span></td></tr>`;}).join('') : `<tr><td colspan="7" class="empty">${esc(marketMessage(markets))}</td></tr>`;
+    tbody.innerHTML=filtered.length ? filtered.map(m=>{const ok=usableMarket(m,markets);return `<tr><td>${esc(m.slug)}</td><td>${number(Math.max(0,Math.floor(m.end-clock)))} 秒</td><td>${quotePair(m,'up',ok)}</td><td>${quotePair(m,'down',ok)}</td><td>${ok?price(m.ask_sum):'--'}</td><td>${ok?'已获取快照':'已过期/缺失'}</td><td><span class="pill warn">${ok?'行情可用 · 执行另需风控':'行情不可用'}</span></td></tr>`;}).join('') : `<tr><td colspan="7" class="empty">${esc(list.length?'没有符合当前筛选的市场':marketMessage(markets))}</td></tr>`;
   }
   function renderStatus() {
     const s=fresh(status);
@@ -107,6 +123,7 @@ export function connect() {
     set('#homeLog',status.error||logs||'尚无可用运行事件。'); set('#tradeLog',status.error||logs||'尚无可用运行事件。');
     for(const id of ['homeLog','tradeLog'])document.getElementById(id)!.style.whiteSpace='pre-wrap';
     const a=fresh(account);
+    trading.receive(fresh(config),s);
     row('#view-home','当前账户',account.error?'-- · 读取失败':a?.wallet_configured ? `${a.wallet} · ${a.control_source?.label || '来源未标注'}` : a ? `未配置 · ${a.control_source?.label || '来源未标注'}` : '读取中');
     if(s?.control_source?.scope === 'local_preview') {
       set('.side-note',`${s.control_source.market_node}公开行情\n账户、运行、账本：本机预览`);
@@ -119,6 +136,7 @@ export function connect() {
     row('#view-trade','目标成本上限','-- · 目标与硬上限尚未分别接入');
   }
   function renderEvents() {
+    if(document.getElementById('view-orders')?.dataset.source==='account')return;
     const body=document.querySelector('#view-orders tbody')!;
     const expired=events!==null && Date.now()-eventsReceivedAt>=15000;
     const rows=events?.run_id===selectedRun && Date.now()-eventsReceivedAt<15000 ? events.events:[];
@@ -168,16 +186,18 @@ export function connect() {
     catch(e){if(obsolete())return;r.data=null;r.error=e instanceof Error?e.message:'读取失败';r.receivedAt=0;}
     if(!closed){
       if(r===config)forms.receiveConfig(config.data,config.error);
-      if(r===account)forms.receiveAccount(account.data);
-      renderMarkets();renderStatus();renderConfig();
+      if(r===account){forms.receiveAccount(account.data);accountData.receiveAccount(account.data);}
+      renderMarkets();renderStatus();renderConfig();accountData.render();
     }
   }
   async function refresh() {
     if(refreshing||closed)return;refreshing=true;
+    const started=performance.now();
     try{await Promise.allSettled([load(status,api.status),load(markets,api.markets),load(config,api.config),load(account,api.account)]);
+      await accountData.refresh();
       await loadRuns(undefined,true);
       if(selectedRun&&!runLoading)await loadEvents(selectedRun,historyCursor);
-    }finally{refreshing=false;renderEvents();}
+    }finally{refreshing=false;renderEvents();if(fresh(status))telemetry.record(performance.now()-started);}
   }
   // refresh() owns the run/event refresh sequence. Triggering the paginated
   // loaders here as well races the same requests and can replace a fresh
@@ -185,6 +205,6 @@ export function connect() {
   document.querySelectorAll('[data-refresh]').forEach(b=>b.addEventListener('click',()=>{void refresh();}));
   renderMarkets();renderStatus();renderConfig();renderEvents();void refresh();
   const poll=window.setInterval(()=>void refresh(),5000);
-  const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();},1000);
-  return ()=>{closed=true;forms.close();historyGeneration++;window.clearInterval(poll);window.clearInterval(tick);};
+  const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();},1000);
+  return ()=>{closed=true;forms.close();accountData.close();trading.close();historyGeneration++;window.clearInterval(poll);window.clearInterval(tick);};
 }

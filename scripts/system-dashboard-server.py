@@ -26,6 +26,7 @@ from dashboard.config import ConfigStore, ConfigConflictError
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
 from dashboard.market_snapshot import MarketSnapshot, publish_snapshot, validate_snapshot
+from dashboard.account_data import AccountData
 
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
@@ -49,6 +50,8 @@ _live_cache_at = 0.0
 _market_projection: MarketSnapshot | None = None
 _market_projection_config: tuple | None = None
 _account_report: dict | None = None
+_account_data: AccountData | None = None
+_account_data_lock = threading.Lock()
 _read_model: ReadModel | None = None
 _config_store: ConfigStore | None = None
 _config_control_lock = threading.RLock()
@@ -119,6 +122,14 @@ def control_source() -> dict:
     return {"scope": "collector_host" if local else "local_preview",
             "label": _live_config()["node_label"] if local else "本机预览服务",
             "market_node": _live_config()["node_label"]}
+
+
+def account_data() -> AccountData:
+    global _account_data
+    with _account_data_lock:
+        if _account_data is None:
+            _account_data = AccountData(TRADING_ROOT, _account_values)
+        return _account_data
 
 
 def _persist_trading_state() -> None:
@@ -897,6 +908,8 @@ def make_handler(root: Path):
                              "stats": status["stats"]}
                 elif path == "/api/v1/markets":
                     value = {"schemaVersion": 1, "asOf": time.time(), **cached_live_status()}
+                elif path == "/api/v1/account-data":
+                    value = account_data().snapshot()
                 elif path in {"/api/v1/runs", "/api/v1/events", "/api/v1/summary"}:
                     ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
                     query = parse_qs(urlsplit(self.path).query)
@@ -1005,6 +1018,7 @@ def main() -> int:
     collector = threading.Thread(target=refresh_live_background, args=(stop,), daemon=True)
     collector.start()
     threading.Thread(target=supervise_projection, args=(stop,), daemon=True).start()
+    threading.Thread(target=account_data().run, args=(stop,), daemon=True).start()
     try:
         server.serve_forever()
     finally:
@@ -1012,6 +1026,8 @@ def main() -> int:
         server.server_close()
         if _read_model:
             _read_model.close()
+        if _account_data:
+            _account_data.close()
     return 0
 
 

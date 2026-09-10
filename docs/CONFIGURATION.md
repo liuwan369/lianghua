@@ -66,3 +66,5 @@ API 还支持 `pair_cost_max`、`decision_interval_ms`、`defensive_cancel_bps`�
 资金钱包、Owner 签名、Relayer、Builder、Session Key 各有独立用途。当前路线使用 Owner 为 CLOB V2 订单签名；Builder 和 Session Key 并非该路线必需项。官方 SDK 对其他产品的授权缺项不能用于阻止当前路线。
 
 账户文件不进 Git；Linux 限制为所属用户读写，检查/保存响应不返回密钥。前端不把秘密字段写入浏览器持久存储。完整实盘就绪结论见 [交付状态](DELIVERY.md)。
+
+账户数据缓存默认至少30秒刷新；不受浏览器刷新次数放大。CLOB抵押余额不表示扣除挂单占用后的可花资金。纸面启动要求先保存配置（revision > 0），提交保存版本与唯一请求编号；实盘保存不自动开启交易。

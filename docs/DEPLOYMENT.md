@@ -2,7 +2,7 @@
 
 核对日期：2026-09-10。正式入口：[https://34-242-206-196.sslip.io/console/](https://34-242-206-196.sslip.io/console/)。HTTP 80 跳转 HTTPS 443，后端仅监听 127.0.0.1:18766。
 
-本轮 CPU 优化的 7 个运行文件及配置已部署并校验 SHA-256；控制台与采集器运行，分析进入独立 slice。采集器未重启，账户文件未改变，交易未运行且实盘锁关闭：[发布核对记录](evidence/2026-09-10/cpu-release-check.json)。
+最新账户数据接入的35个源码与构建文件已部署，SHA-256一致；公网页面及6个API均HTTP200。账户缓存跨两个30秒刷新周期保持有效，账户文件未改变，采集器未重启，交易未运行且实盘锁关闭：[发布记录](evidence/2026-09-10/account-data-release-check.json)、[公网验证](evidence/2026-09-10/account-data-public-check.json)。
 
 ## 当前组件
 
@@ -34,3 +34,5 @@
 本仓库没有覆盖所有步骤的一键生产发布工具；不要把 Git 推送等同于服务器部署。当前公开控制台按已确定配置免登录，账户操作的暴露范围与独立交易限制见 [配置](CONFIGURATION.md)。
 
 本轮回滚文件备份：`/root/.local/share/pm-system-recovery/20260910-072809-cpu`。账本 schema 2 的 ledger.py、projection_worker.py、read_model.py 必须成套部署；heartbeat.json 自动生成。
+
+账户读取的 Python模块、Node入口和实现及前端构建需同步部署；后台自动启动常驻只读进程。当前备份：`/root/.local/share/pm-system-recovery/20260910-094339-account-data`。浏览器操作因工具不能识别URL而停止，公网API核验不能替代该项验收。

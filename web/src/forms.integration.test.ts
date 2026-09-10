@@ -113,6 +113,8 @@ it('confirms supported config saves, excludes unsupported drafts, and updates th
 
 it('discovers new runs while preserving the selected historical run and pagination',async()=>{
   const {fetch}=await setup();const original=fetch.getMockImplementation()!;
+  const source=document.querySelector<HTMLSelectElement>('#orders-source')!;
+  source.value='run';source.dispatchEvent(new Event('change'));
   let newest=false;
   const run=(id:number)=>({id,run_id:`run-${id}`,mode:'paper',account_id:null,config_revision:1,created_at:id});
   fetch.mockImplementation(async(path,options)=>{

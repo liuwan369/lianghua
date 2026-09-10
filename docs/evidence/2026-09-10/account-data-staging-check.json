@@ -1,0 +1,38 @@
+{
+  "recorded_at": "2026-09-10T09:34:56.317739+00:00",
+  "scope": "isolated staging process on Dublin, existing account, GET-only",
+  "cold_seconds": 23.123667748004664,
+  "warm_seconds": 0.5727643110440113,
+  "sections": {
+    "collateral": {
+      "available": true,
+      "complete": true
+    },
+    "open_orders": {
+      "available": true,
+      "complete": true,
+      "items": 0
+    },
+    "trades": {
+      "available": true,
+      "complete": true,
+      "items": 19
+    },
+    "positions": {
+      "available": true,
+      "complete": true,
+      "items": 8
+    },
+    "closed_positions": {
+      "available": true,
+      "complete": true,
+      "items": 3
+    },
+    "activity": {
+      "available": true,
+      "complete": true,
+      "items": 22
+    }
+  },
+  "order_or_chain_writes": false
+}

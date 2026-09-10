@@ -1,0 +1,256 @@
+{
+  "recorded_at": "2026-09-10T09:44:16.288787+00:00",
+  "endpoints": {
+    "/console/": {
+      "http": 200,
+      "seconds": 0.536
+    },
+    "/api/v1/status": {
+      "http": 200,
+      "seconds": 0.712
+    },
+    "/api/v1/config": {
+      "http": 200,
+      "seconds": 0.494
+    },
+    "/api/v1/markets": {
+      "http": 200,
+      "seconds": 0.698
+    },
+    "/api/v1/runs": {
+      "http": 200,
+      "seconds": 0.512
+    },
+    "/api/account/status": {
+      "http": 200,
+      "seconds": 0.84
+    },
+    "/api/v1/account-data": {
+      "http": 200,
+      "seconds": 0.662
+    }
+  },
+  "samples": [
+    {
+      "at": 1789033461.721109,
+      "request_seconds": 0.978,
+      "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+      "stale": false,
+      "checked_at": "2026-09-10T09:44:12.417Z",
+      "cache_age_seconds": 9.117223445966374,
+      "duration_ms": 412,
+      "sections": {
+        "collateral": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "open_orders": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "trades": {
+          "available": true,
+          "complete": true,
+          "items": 19,
+          "pages": 1,
+          "error_code": null
+        },
+        "positions": {
+          "available": true,
+          "complete": true,
+          "items": 8,
+          "pages": 1,
+          "error_code": null
+        },
+        "closed_positions": {
+          "available": true,
+          "complete": true,
+          "items": 3,
+          "pages": 1,
+          "error_code": null
+        },
+        "activity": {
+          "available": true,
+          "complete": true,
+          "items": 22,
+          "pages": 1,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "at": 1789033474.8813457,
+      "request_seconds": 1.16,
+      "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+      "stale": false,
+      "checked_at": "2026-09-10T09:44:12.417Z",
+      "cache_age_seconds": 22.152684910979588,
+      "duration_ms": 412,
+      "sections": {
+        "collateral": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "open_orders": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "trades": {
+          "available": true,
+          "complete": true,
+          "items": 19,
+          "pages": 1,
+          "error_code": null
+        },
+        "positions": {
+          "available": true,
+          "complete": true,
+          "items": 8,
+          "pages": 1,
+          "error_code": null
+        },
+        "closed_positions": {
+          "available": true,
+          "complete": true,
+          "items": 3,
+          "pages": 1,
+          "error_code": null
+        },
+        "activity": {
+          "available": true,
+          "complete": true,
+          "items": 22,
+          "pages": 1,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "at": 1789033487.8745484,
+      "request_seconds": 0.993,
+      "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+      "stale": false,
+      "checked_at": "2026-09-10T09:44:42.980Z",
+      "cache_age_seconds": 4.708054286020342,
+      "duration_ms": 407,
+      "sections": {
+        "collateral": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "open_orders": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "trades": {
+          "available": true,
+          "complete": true,
+          "items": 19,
+          "pages": 1,
+          "error_code": null
+        },
+        "positions": {
+          "available": true,
+          "complete": true,
+          "items": 8,
+          "pages": 1,
+          "error_code": null
+        },
+        "closed_positions": {
+          "available": true,
+          "complete": true,
+          "items": 3,
+          "pages": 1,
+          "error_code": null
+        },
+        "activity": {
+          "available": true,
+          "complete": true,
+          "items": 22,
+          "pages": 1,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "at": 1789033500.9398699,
+      "request_seconds": 1.065,
+      "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+      "stale": false,
+      "checked_at": "2026-09-10T09:44:42.980Z",
+      "cache_age_seconds": 17.67793626204366,
+      "duration_ms": 407,
+      "sections": {
+        "collateral": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "open_orders": {
+          "available": true,
+          "complete": true,
+          "items": 0,
+          "pages": 1,
+          "error_code": null
+        },
+        "trades": {
+          "available": true,
+          "complete": true,
+          "items": 19,
+          "pages": 1,
+          "error_code": null
+        },
+        "positions": {
+          "available": true,
+          "complete": true,
+          "items": 8,
+          "pages": 1,
+          "error_code": null
+        },
+        "closed_positions": {
+          "available": true,
+          "complete": true,
+          "items": 3,
+          "pages": 1,
+          "error_code": null
+        },
+        "activity": {
+          "available": true,
+          "complete": true,
+          "items": 22,
+          "pages": 1,
+          "error_code": null
+        }
+      }
+    }
+  ],
+  "assets": [
+    "assets/index-BZIaeJ0n.js",
+    "assets/index-VssSm6Ku.css"
+  ],
+  "runtime": {
+    "running": false,
+    "mode": "paper",
+    "live_unlocked": false
+  }
+}

@@ -75,6 +75,8 @@ describe('approved six-page design regression',()=>{
     };
     const fetch=vi.fn().mockImplementation((path:string)=>Promise.resolve(new Response(JSON.stringify(fixtures[path.split('?')[0]]))));
     vi.stubGlobal('fetch',fetch);const stop=connect();await vi.advanceTimersByTimeAsync(100);
+    const source=document.querySelector<HTMLSelectElement>('#orders-source')!;
+    source.value='run';source.dispatchEvent(new Event('change'));await vi.advanceTimersByTimeAsync(1000);
     expect(document.getElementById('homeVolume')!.textContent).toBe('2 / $4.00');
     expect(document.querySelector('#view-trade .quote b')!.textContent).toBe('0.4000 / 0.4100');
     expect((document.getElementById('setting-order') as HTMLInputElement).value).toBe('2');
