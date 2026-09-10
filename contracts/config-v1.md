@@ -28,7 +28,7 @@
 
 ## 六页设置映射
 
-仅 order→order_usd、life→maker_life_sec、mode→mode、duration→duration_min、submitted→max_total_usd、maxOrders→max_orders 六项可提交。其余目标成本、硬上限、库存、补仓等输入仅为草稿。
+仅 order→order_usd、life→maker_life_sec、mode→mode、duration→duration_min、submitted→max_total_usd、maxOrders→max_orders 六项可提交。新增 pairCost→pair_cost_max、decisionInterval→decision_interval_ms、defensiveCancel→defensive_cancel_bps，合计九项可保存；其余原设计高级字段仍为草稿。其余目标成本、硬上限、库存、补仓等输入仅为草稿。
 
 capabilities 明确 effectivePolicy=next_start、versionedStartModes=[paper]、accountScoped=false、separatePairTargetAndHardCap=false、pairCostMaxIsUniversalHardCap=false。API 支持的九项字段不等于页面九项都有对应控件。
 

@@ -20,6 +20,9 @@
 | duration | duration_min | 运行时长分钟，0 表示无期限 |
 | submitted | max_total_usd | 累计提交金额保险丝，不因撤单恢复 |
 | maxOrders | max_orders | 累计提交订单数上限 |
+| pairCost | pair_cost_max | 现有引擎配对/加仓成本参数，不等于补仓硬上限 |
+| decisionInterval | decision_interval_ms | 最短决策间隔，0 不节流 |
+| defensiveCancel | defensive_cancel_bps | BTC 逆向波动撤单阈值，0 关闭 |
 
 其他原设计字段仍是明确标注的草稿，不保存到服务器或影响引擎。后端已有的 `pair_cost_max` 等字段不表示原设计相似输入框已经接线。
 

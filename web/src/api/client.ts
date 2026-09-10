@@ -33,6 +33,14 @@ export function validate(kind: string, data: unknown): void {
       const s=data[k];return (data.stale === true && s===undefined) || object(s) && typeof s.available==='boolean' && typeof s.complete==='boolean'
         && typeof s.checked_at==='string' && Array.isArray(s.items) && s.items.every(object);
     });
+  if (kind === 'account-data' && data.order_history !== undefined) {
+    const s=data.order_history;
+    valid=valid&&object(s)&&typeof s.available==='boolean'&&typeof s.complete==='boolean'
+      &&typeof s.checked_at==='string'&&typeof s.source==='string'&&Array.isArray(s.items)
+      &&s.items.every(o=>object(o)&&typeof o.id==='string'&&typeof o.status==='string'
+        &&typeof o.status_stale==='boolean'&&typeof o.status_checked_at==='string')
+      &&s.coverage==='observed_order_ids'&&s.historical_complete===false;
+  }
   if (kind === 'runs') valid = nullableNumber(data.next_before_id) && Array.isArray(data.runs) && data.runs.every(r => object(r)
     && integer(r.id) && typeof r.run_id === 'string' && typeof r.mode === 'string' && nullableString(r.account_id) && num(r.created_at));
   if (kind === 'events') valid = typeof data.run_id === 'string' && nullableNumber(data.next_before_id) && Array.isArray(data.events)

@@ -24,6 +24,13 @@ describe('versioned API validation', () => {
     await expect(api.config()).rejects.toThrow('读取失败（HTTP 503）');
     vi.unstubAllGlobals();
   });
+  it('rejects malformed or unscoped optional order history',()=>{
+    const base={schemaVersion:1,read_only:true,stale:true,wallet:null,checked_at:null};
+    const section={available:true,complete:true,checked_at:new Date().toISOString(),source:'clob-v2-order-detail',items:[],coverage:'observed_order_ids',historical_complete:false};
+    expect(()=>validate('account-data',{...base,order_history:section})).not.toThrow();
+    expect(()=>validate('account-data',{...base,order_history:{...section,items:[{}]}})).toThrow();
+    expect(()=>validate('account-data',{...base,order_history:{...section,historical_complete:true}})).toThrow();
+  });
   it('does not reflect submitted credentials in an account failure', async () => {
     const owner_key='a'.repeat(64), relayer_key='synthetic-relayer-test-only';
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({ok:false,error:`rejected ${owner_key} ${relayer_key}`} ),{status:400})));

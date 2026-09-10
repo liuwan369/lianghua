@@ -54,6 +54,26 @@ it('validates empty numeric inputs before sending config',async()=>{
   expect(requests).toHaveLength(0);
 });
 
+it('round trips engine parameters through the versioned save without replacing separate risk drafts',async()=>{
+  const {fetch}=await setup();const original=fetch.getMockImplementation()!;
+  let saved:Record<string,unknown>|undefined;
+  fetch.mockImplementation(async(path,options)=>{
+    if(options.method==='POST') {
+      saved=JSON.parse(options.body as string);
+      return new Response(JSON.stringify({ok:true,status:{schemaVersion:1,revision:4,savedAt:null,params:saved!.params,capabilities:{}}}));
+    }
+    return original(path,options);
+  });
+  expect(document.querySelector<HTMLInputElement>('#setting-pairCost')!.value).toBe('0.99');
+  input('#setting-pairCost','0.97');input('#setting-decisionInterval','120');input('#setting-defensiveCancel','8');
+  input('#setting-cap','0.96');
+  click('#settings-strategy [data-settings-save]');await vi.advanceTimersByTimeAsync(100);
+  expect(saved).toEqual({expected_revision:3,params:{...params,pair_cost_max:.97,decision_interval_ms:120,defensive_cancel_bps:8}});
+  expect(document.querySelector<HTMLInputElement>('#setting-pairCost')!.value).toBe('0.97');
+  expect(document.querySelector<HTMLInputElement>('#setting-cap')!.dataset.persistence).toBe('draft');
+  expect(document.querySelector('[data-settings-message]')!.textContent).toContain('版本 4');
+});
+
 it('account buttons surface protected endpoint errors without saving or losing the public address',async()=>{
   const {requests}=await setup();const wallet=input('#settings-account input','0x'+'2'.repeat(40));
   click('[data-setting="account"]');

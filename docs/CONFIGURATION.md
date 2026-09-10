@@ -4,7 +4,7 @@
 
 ## 页面与引擎参数
 
-新版六页设置中已接入保存的字段只有六项：
+新版六页设置中已接入保存的字段共九项：
 
 | 页面字段 | API 字段 | 含义 |
 | --- | --- | --- |
@@ -14,8 +14,11 @@
 | duration | duration_min | 运行分钟数，0 表示不限时 |
 | submitted | max_total_usd | 累计提交金额保险丝 |
 | maxOrders | max_orders | 累计订单次数上限 |
+| pairCost | pair_cost_max | 现有引擎配对/加仓成本参数，不等于补仓硬上限 |
+| decisionInterval | decision_interval_ms | 最短决策间隔，0 不节流 |
+| defensiveCancel | defensive_cancel_bps | BTC 逆向波动撤单阈值，0 关闭 |
 
-API 还支持 `pair_cost_max`、`decision_interval_ms`、`defensive_cancel_bps`，当前页面保存时保留读到的这些字段；其余成本目标、库存、补仓和退出设置仅为草稿。不能把控件可输入当成引擎生效。
+三个独立引擎控件已连接 `pair_cost_max`、`decision_interval_ms`、`defensive_cancel_bps`；其余成本目标、库存、补仓和退出设置仅为草稿。不能把控件可输入当成引擎生效。
 
 默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改，作用于下次启动；版本化启动仅支持 paper。当前为单服务器配置，不按账户隔离。
 

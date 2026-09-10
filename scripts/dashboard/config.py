@@ -103,6 +103,8 @@ def capabilities() -> dict:
             "order": "order_usd", "life": "maker_life_sec",
             "duration": "duration_min", "submitted": "max_total_usd",
             "maxOrders": "max_orders", "mode": "mode",
+            "pairCost": "pair_cost_max", "decisionInterval": "decision_interval_ms",
+            "defensiveCancel": "defensive_cancel_bps",
         },
         "effectivePolicy": "next_start",
         "versionedStartModes": ["paper"],

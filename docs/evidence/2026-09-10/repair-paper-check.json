@@ -1,0 +1,47 @@
+{
+  "recorded_at": "2026-09-10T10:27:15.007988+00:00",
+  "paper_only": true,
+  "duration_seconds": 90,
+  "credentials_in_environment": false,
+  "events": {
+    "reset": 1,
+    "quote": 1,
+    "fill": 1,
+    "decision_rejected": 206,
+    "stopped": 1
+  },
+  "fills": [
+    {
+      "event": "fill",
+      "session_id": "1789035651",
+      "recv_ts": 1789035657.539,
+      "engine_ts": 1789035657.538,
+      "sec_into_market": 57.53800010681152,
+      "market_slug": "btc-updown-5m-1789035600",
+      "market_start": 1789035600,
+      "market_end": 1789035900,
+      "conditionId": "0xff2fa75e82348de0ff40cbea52cc64ae94bb6a5f1909cd64de4df5fe0d8e73d4",
+      "side": "DOWN",
+      "price": 0.39,
+      "shares": 5.12,
+      "is_maker": true,
+      "fee": 0
+    }
+  ],
+  "final_event": {
+    "event": "stopped",
+    "session_id": "1789035651",
+    "recv_ts": 1789035741.37,
+    "engine_ts": null,
+    "sec_into_market": null,
+    "market_slug": "btc-updown-5m-1789035600",
+    "market_start": 1789035600,
+    "market_end": 1789035900,
+    "conditionId": "0xff2fa75e82348de0ff40cbea52cc64ae94bb6a5f1909cd64de4df5fe0d8e73d4",
+    "reason": "\u8fd0\u884c\u65f6\u95f4\u5230\u8fbe\uff0c\u5e02\u573a\u5c1a\u672a\u7ed3\u675f\uff0c\u672a\u7ed3\u7b97",
+    "fills": 1
+  },
+  "hedge_completed": false,
+  "real_money_acceptance": false,
+  "browser_acceptance": false
+}

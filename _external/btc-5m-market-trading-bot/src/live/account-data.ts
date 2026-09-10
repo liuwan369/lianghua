@@ -42,6 +42,7 @@ export async function cursorPages(get: Getter, path: string, kind: string, walle
   let cursor = "MA==";
   const seen = new Set<string>();
   const ids = new Set<string>();
+  let overlap = false;
   const deadline = Date.now() + 60000;
   try {
     while (result.pages < maxPages) {
@@ -54,13 +55,14 @@ export async function cursorPages(get: Getter, path: string, kind: string, walle
         const item = sanitize(row, kind, wallet);
         if (typeof item.id !== "string" || !item.id) throw new Error("invalid_id");
         if (!ids.has(item.id)) { ids.add(item.id); result.items.push(item); }
+        else overlap = true;
       }
       result.pages++;
       result.available = true;
       cursor = page.next_cursor;
-      if (cursor === endCursor) { result.complete = true; break; }
+      if (cursor === endCursor) { result.complete = !overlap; if (overlap) result.error_code = "pagination_overlap"; break; }
     }
-    if (!result.complete) result.error_code = "page_limit";
+    if (!result.complete && !result.error_code) result.error_code = "page_limit";
   } catch { result.error_code = "fetch_or_pagination_failed"; }
   result.checked_at = new Date().toISOString();
   return result;
@@ -69,6 +71,8 @@ export async function cursorPages(get: Getter, path: string, kind: string, walle
 export async function offsetPages(get: Getter, path: string, kind: string, wallet: string, limit = 100, maxOffset = 10000): Promise<Section> {
   const result: Section = { available: false, complete: false, items: [], pages: 0, checked_at: new Date().toISOString(), source: "polymarket-data-api" };
   const seen = new Set<string>();
+  const rows = new Set<string>();
+  let overlap = false;
   const deadline = Date.now() + 60000;
   try {
     for (let offset = 0; offset <= maxOffset; offset += limit) {
@@ -78,12 +82,22 @@ export async function offsetPages(get: Getter, path: string, kind: string, walle
       const signature = JSON.stringify(data);
       if (data.length && seen.has(signature)) throw new Error("pagination_loop");
       seen.add(signature);
-      result.items.push(...data.map(row => sanitize(row, kind, wallet)));
+      for (const row of data) {
+        const item = sanitize(row, kind, wallet);
+        // Position identity survives price/PnL changes between offset requests.
+        // Activity has no stable event index; identical records are ambiguous,
+        // so retain one and mark incomplete rather than double-count amounts.
+        const identity = kind === "positions" || kind === "closed_positions"
+          ? JSON.stringify([item.asset, item.conditionId]) : JSON.stringify(item);
+        if (rows.has(identity)) { overlap = true; continue; }
+        rows.add(identity);
+        result.items.push(item);
+      }
       result.available = true;
       result.pages++;
-      if (data.length < limit) { result.complete = true; break; }
+      if (data.length < limit) { result.complete = !overlap; if (overlap) result.error_code = "pagination_overlap"; break; }
     }
-    if (!result.complete) result.error_code = "page_limit";
+    if (!result.complete && !result.error_code) result.error_code = "page_limit";
   } catch { result.error_code = "fetch_or_pagination_failed"; }
   result.checked_at = new Date().toISOString();
   return result;
@@ -95,6 +109,72 @@ async function getJson(host: string, path: string, params: Record<string, string
   const response = await fetch(url, { method: "GET", headers, signal: AbortSignal.timeout(8000) });
   if (!response.ok) throw new Error("http_failed");
   return response.json();
+}
+
+interface ObservedOrder { item?: Row; checked: number; attempted: number; failed: boolean; unavailable?: boolean; }
+export interface OrderHistorySection extends Section {
+  coverage: "observed_order_ids"; historical_complete: false; persistence: "reader_session";
+  known_order_count: number; pending_order_count: number; unavailable_order_count: number; truncated: boolean;
+}
+/** Account-bound, bounded observations; absence from /data/orders is never a cancellation. */
+export class OrderHistoryReader {
+  private readonly known = new Map<string, ObservedOrder>();
+  private truncated = false;
+  constructor(private readonly wallet: string, private readonly maxKnown = 2000, private readonly maxQueries = 8) {}
+
+  async read(get: Getter, open: Section, trades: Section, now = Date.now()): Promise<OrderHistorySection> {
+    const current = new Set<string>();
+    const remember = (id: unknown) => {
+      if (typeof id !== "string" || !/^[a-zA-Z0-9_-]{1,256}$/.test(id)) return;
+      if (!this.known.has(id)) {
+        if (this.known.size >= this.maxKnown) { this.truncated = true; return; }
+        this.known.set(id, { checked: 0, attempted: 0, failed: false });
+      }
+    };
+    for (const item of open.items) { remember(item.id); if (typeof item.id === "string") current.add(item.id); }
+    for (const trade of trades.items) {
+      // A maker trade's taker order belongs to another account.
+      if (trade.trader_side === "TAKER") remember(trade.taker_order_id);
+      if (trade.trader_side === "MAKER" && Array.isArray(trade.maker_orders)) {
+        for (const maker of trade.maker_orders as Row[]) remember(maker.order_id);
+      }
+    }
+    const terminal = (entry: ObservedOrder) => ["CANCELED", "CANCELLED", "MATCHED", "EXPIRED"].includes(String(entry.item?.status).toUpperCase());
+    const due = [...this.known].filter(([id, entry]) => {
+      if (current.has(id)) return false;
+      const cooldown = entry.failed ? 300_000 : terminal(entry) ? 86_400_000 : 60_000;
+      return !entry.attempted || now - entry.attempted >= cooldown;
+    }).sort((a, b) => a[1].attempted - b[1].attempted).slice(0, this.maxQueries);
+    // At most two waves of four requests (8s HTTP timeout each), preserving
+    // the bridge's total 90s budget after the paginated snapshot's 60s budget.
+    for (let offset = 0; offset < due.length; offset += 4) {
+      await Promise.all(due.slice(offset, offset + 4).map(async ([id, entry]) => {
+        entry.attempted = now;
+        try {
+          const raw = await get(`/data/order/${encodeURIComponent(id)}`) as Row;
+          entry.unavailable = raw === null;
+          if (entry.unavailable) throw new Error("order_detail_not_returned");
+          if (!raw || raw.id !== id || typeof raw.maker_address !== "string" || raw.maker_address.toLowerCase() !== this.wallet.toLowerCase()) throw new Error("order_identity_mismatch");
+          const item = sanitize(raw, "orders", this.wallet);
+          if (typeof item.status !== "string" || !item.status) throw new Error("invalid_order_status");
+          entry.item = { ...item, status_checked_at: new Date(now).toISOString() };
+          entry.checked = now;
+          entry.failed = false;
+        } catch { entry.failed = true; }
+      }));
+    }
+    const stale = (entry: ObservedOrder) => entry.failed || now - entry.checked > (terminal(entry) ? 86_400_000 : 120_000);
+    const pending = [...this.known].filter(([id, entry]) => !current.has(id) && (!entry.item || stale(entry))).length;
+    const unavailable = [...this.known].filter(([id, entry]) => !current.has(id) && entry.unavailable).length;
+    const items = [...this.known].flatMap(([id, entry]) => entry.item && !current.has(id) ? [{ ...entry.item, status_stale: stale(entry) }] : []);
+    return {
+      available: open.available || trades.available || items.length > 0, complete: pending === 0 && !this.truncated && open.complete && trades.complete,
+      items, pages: due.length, checked_at: new Date(now).toISOString(), source: "clob-v2-order-detail",
+      coverage: "observed_order_ids", historical_complete: false, persistence: "reader_session",
+      known_order_count: this.known.size, pending_order_count: pending, unavailable_order_count: unavailable, truncated: this.truncated,
+      ...(pending ? { error_code: unavailable ? "order_details_unavailable" : "order_details_pending" } : {}),
+    };
+  }
 }
 
 export async function connectAccountReader() {
@@ -120,6 +200,7 @@ export async function connectAccountReader() {
     return getJson(host, path, params, headers as unknown as Record<string, string>);
   };
   const publicGet: Getter = (path, params) => getJson("https://data-api.polymarket.com", path, params);
+  const historyReader = new OrderHistoryReader(wallet);
   return async () => {
     const began = Date.now();
     const balance = (async (): Promise<Section> => {
@@ -136,7 +217,8 @@ export async function connectAccountReader() {
       balance, cursorPages(get, "/data/orders", "orders", wallet), cursorPages(get, "/data/trades", "trades", wallet),
       offsetPages(publicGet, "/positions", "positions", wallet), offsetPages(publicGet, "/closed-positions", "closed_positions", wallet, 50), offsetPages(publicGet, "/activity", "activity", wallet),
     ]);
-    return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began, collateral, open_orders, trades, positions, closed_positions, activity,
+    const order_history = await historyReader.read(get, open_orders, trades);
+    return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began, collateral, open_orders, trades, positions, closed_positions, activity, order_history,
       pagination_atomic: false,
       fees: { available: false, reason: "成交费率不是实际扣费到账凭证" }, rewards: { available: false, reason: "尚无奖励到账凭证来源" } };
   };

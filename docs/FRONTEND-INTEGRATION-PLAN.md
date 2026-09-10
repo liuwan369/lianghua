@@ -15,11 +15,11 @@
 | 总览 | 服务器状态、盘口、运行摘要；CLOB 抵押余额、真实持仓、已关闭持仓报告盈亏 | 扣除挂单占用的可花余额、完整净收益核算 |
 | 自动交易 | 双边盘口、来源和新鲜度；版本化纸面模拟启停 | 实盘启停、完整模拟库存/委托状态、全部策略参数 |
 | 市场 | 当前市场、有效盘口筛选、已保存成本阈值筛选 | 完整深度容量筛选、浏览器验收 |
-| 订单 | 真实未完成订单和逐笔成交；按来源切换运行事件；筛选、分页和 CSV 导出 | 官方已撤历史和完整逐委托生命周期；运行账本仍 `order_lifecycle_available=false` |
+| 订单 | 真实未完成订单、已确认成交和已观察订单官方撤单状态；按来源切换运行事件；筛选、分页和 CSV 导出 | 完整已撤历史和持久化逐委托生命周期；运行账本仍 `order_lifecycle_available=false` |
 | 收益 | 已关闭持仓报告盈亏按 UTC 周期筛选、账户活动、官方规则及试算 | 真实扣费、可核实奖励付款、最终净收益及资格档位 |
 | 设置 | 账户检查/保存、基础配置、节点状态、页面刷新最近5分钟 P50/P95 | 高级策略草稿、其余七项交易遥测及同订单端到端延迟 |
 
-原设计中只有 `order → order_usd`、`life → maker_life_sec`、`mode → mode`、`duration → duration_min`、`submitted → max_total_usd`、`maxOrders → max_orders` 六项接入服务器保存。其他字段仍是明确标注的草稿，不能用后端有相近参数来声称已生效。映射见 [设置设计契约](DEMO-SETTINGS-2026-09-09.md)。
+原设计中 `order → order_usd`、`life → maker_life_sec`、`mode → mode`、`duration → duration_min`、`submitted → max_total_usd`、`maxOrders → max_orders` 六项接入服务器保存。新增 pairCost→pair_cost_max、decisionInterval→decision_interval_ms、defensiveCancel→defensive_cancel_bps，合计九项可保存。其余高级字段仍是明确标注的草稿，不能用后端有相近参数来声称已生效。映射见 [设置设计契约](DEMO-SETTINGS-2026-09-09.md)。
 
 ## 剩余验收项目
 

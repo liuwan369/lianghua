@@ -31,7 +31,7 @@ Polymarket 公开盘口/成交 + Binance BTC
 | 位置 | 职责 |
 |---|---|
 | `web/src/approved-layout.html`、`layout.ts` | 保留总览、自动交易、市场、订单、收益、设置六页设计 |
-| `web/src/live-data.ts`、`forms.ts` | 接口刷新、错误与未知值显示、六项参数及账户表单 |
+| `web/src/live-data.ts`、`forms.ts` | 接口刷新、错误与未知值显示、九项参数及账户表单 |
 | `scripts/system-dashboard-server.py` | loopback HTTP 服务、账户与控制操作、版本化 API |
 | `scripts/dashboard/config.py` | 非敏感配置校验、版本冲突和原子保存 |
 | `scripts/dashboard/market_snapshot.py` | 常驻增量盘口、压缩块变更检测、行情快照及过期校验 |
@@ -55,7 +55,7 @@ HTTP 查询不在请求中摄取完整运行日志；后台读模型与请求线
 
 ## 能力边界与资源
 
-实际页面保存映射为六项，后台参数模式为八个数值项加 mode；两者不可混同。抵押余额、持仓、未完成委托、成交、关闭持仓和活动已有常驻只读缓存；完整可花资产/账单/付款凭证、其余交易遥测与实盘控制仍未完整接入。纸面控制和页面刷新测量已接线。详细接口见 [TECHNICAL.md](TECHNICAL.md)。
+实际页面保存映射为九项，与后台八个数值项加 mode 对齐；其余高级设计字段尚未实现。抵押余额、持仓、未完成委托、成交、关闭持仓和活动已有常驻只读缓存；完整可花资产/账单/付款凭证、其余交易遥测与实盘控制仍未完整接入。纸面控制和页面刷新测量已接线。详细接口见 [TECHNICAL.md](TECHNICAL.md)。
 
 都柏林 `t3.small` 的云端 CPU 供给限制与应用开销是不同问题。在线侧用增量行情及账本空闲跳过减少重复工作；历史分析配置为 `CPUQuota=20%`（最多 0.2 个逻辑核）、`CPUWeight=10`、`IOWeight=10`，并使用低优先级调度及内存限制。这是同一台服务器上的资源隔离，并非独立分析服务器；配额限制不能增加云端 CPU 额度，也不能消除宿主机 steal。诊断依据见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。
 

@@ -1,0 +1,27 @@
+{
+  "recorded_at": "2026-09-10T10:33:02.981206+00:00",
+  "backup": "/root/.local/share/pm-system-recovery/20260910-103302-repair",
+  "files": 17,
+  "hashes_match": true,
+  "account_unchanged": true,
+  "collector_restarted": false,
+  "manifest": {
+    "_external/btc-5m-market-trading-bot/dist/cli/account-data.d.ts": "218dc6a2f167a6b8c8990ae84f4eacc04f93ae2e129e70ae2cdf25c272ee1726",
+    "_external/btc-5m-market-trading-bot/dist/cli/account-data.d.ts.map": "109f01432db976333797f093679ffc1e5adb1d08a98aec101493ca8945c337df",
+    "_external/btc-5m-market-trading-bot/dist/cli/account-data.js": "0d2f24cb70e01c6cc6c50de9e21d6b24e9d0468c84ceab95355426c8ff4ac856",
+    "_external/btc-5m-market-trading-bot/dist/cli/account-data.js.map": "9f4553b7f325de1e000686551e372119c8e706c28de530d05dc2b4a3ebfee842",
+    "_external/btc-5m-market-trading-bot/dist/live/account-data.d.ts": "aaa0522ac7973d55a0397c60d8deb2a8655063b4e9b753d6c4bca29bf219b659",
+    "_external/btc-5m-market-trading-bot/dist/live/account-data.d.ts.map": "68c153a73e4ef36ace422efd5ecab8e066cf581a45db7d32b2f0454c544d3069",
+    "_external/btc-5m-market-trading-bot/dist/live/account-data.js": "b85df02cf0ddf6c29c176d36ad859e7576e4b5fe0d56391f1a23e86665d2f367",
+    "_external/btc-5m-market-trading-bot/dist/live/account-data.js.map": "7a8579dc3c685fda8a8ccfbf19bea19ae65af51fc3a2e10c227e1bea69a224c1",
+    "_external/btc-5m-market-trading-bot/src/live/account-data.ts": "ea212e1045cd785f8f9541aa530bc0bacf6dd34865625d9a5fdc768f48a91cd5",
+    "docs/console/assets/index-B3Le_F6h.js": "05eac1f653881a09461029b6a20f992a93d2da87bf7c0a96ec5307d0114ba5a3",
+    "docs/console/assets/index-VssSm6Ku.css": "683b65435328d63c9a2619c137e7be943cc29617a5505836a509670435afd45d",
+    "docs/console/index.html": "828826b639463e13faf9409038dd813797f190baff2b2c225aebd81a136bff2e",
+    "scripts/dashboard/config.py": "729448921c12c344ec30ff074c000e59933354ad6abe182230b5a1e380b6232c",
+    "web/src/account-data.ts": "5c17f273b240647866b419b9a02472809fa8248fb9193ac32d30d6e5845e93a0",
+    "web/src/api/client.ts": "055f5de94d46c3ef40583ebb0575f6b0c29f547021af4f8e5ce107e41c68c214",
+    "web/src/forms.ts": "92a6cb63883c81d2bfd18e399b90e3d9705f4417e55478dffa5911d6ec0ac02b",
+    "web/src/pages/settings-layout.js": "a7bba3e5cc7949668f6ace5010605e9a92bdb836f44f6ed37e665c5192496414"
+  }
+}

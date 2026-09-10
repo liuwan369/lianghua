@@ -19,10 +19,11 @@ describe('approved six-page design regression',()=>{
     }
     mount();
     const signature=(doc:Document,selector:string)=>Array.from(doc.querySelectorAll(selector),e=>e.textContent?.trim());
-    expect(signature(document,'.view h1,.view h2,.view h3,details summary')).toEqual(signature(baseline.window.document,'.view h1,.view h2,.view h3,details summary'));
+    expect(signature(document,'.view h1,.view h2,.view h3:not([data-engine-extension]),details summary')).toEqual(signature(baseline.window.document,'.view h1,.view h2,.view h3,details summary'));
     expect(signature(document,'[data-view],[data-setting]')).toEqual(signature(baseline.window.document,'[data-view],[data-setting]'));
     expect(document.querySelectorAll('.reward-card')).toHaveLength(baseline.window.document.querySelectorAll('.reward-card').length);
-    expect(Array.from(document.querySelectorAll('input,select'),e=>e.id)).toEqual(Array.from(baseline.window.document.querySelectorAll('input,select'),e=>e.id));
+    expect(Array.from(document.querySelectorAll('input,select')).filter(e=>!e.closest('[data-engine-extension]')).map(e=>e.id)).toEqual(Array.from(baseline.window.document.querySelectorAll('input,select'),e=>e.id));
+    expect(Array.from(document.querySelectorAll('[data-engine-extension] input'),e=>e.id)).toEqual(['setting-pairCost','setting-decisionInterval','setting-defensiveCancel']);
     expect(document.querySelectorAll('.latency-table tbody tr')).toHaveLength(8);
     expect(document.querySelector('#view-home')!.querySelectorAll('.stat')).toHaveLength(8);
     const css=readFileSync(resolve(process.cwd(),'src/style.css'),'utf8');

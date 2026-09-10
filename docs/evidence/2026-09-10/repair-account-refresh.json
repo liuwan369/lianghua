@@ -1,0 +1,54 @@
+[
+  {
+    "stale": false,
+    "error_code": null,
+    "checked_at": "2026-09-10T10:29:17.543Z",
+    "duration_ms": 493,
+    "sections": {
+      "collateral": {
+        "available": true,
+        "complete": true,
+        "count": 0
+      },
+      "open_orders": {
+        "available": true,
+        "complete": true,
+        "count": 0
+      },
+      "trades": {
+        "available": true,
+        "complete": true,
+        "count": 19
+      },
+      "positions": {
+        "available": true,
+        "complete": true,
+        "count": 8
+      },
+      "closed_positions": {
+        "available": true,
+        "complete": true,
+        "count": 3
+      },
+      "activity": {
+        "available": true,
+        "complete": true,
+        "count": 22
+      }
+    },
+    "order_history": {
+      "available": true,
+      "complete": false,
+      "pages": 3,
+      "checked_at": "2026-09-10T10:29:17.457Z",
+      "source": "clob-v2-order-detail",
+      "coverage": "observed_order_ids",
+      "historical_complete": false,
+      "persistence": "reader_session",
+      "known_order_count": 19,
+      "pending_order_count": 19,
+      "truncated": false,
+      "error_code": "order_details_pending"
+    }
+  }
+]

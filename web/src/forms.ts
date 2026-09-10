@@ -4,6 +4,7 @@ import type { Account, Config, Obj } from './api/types';
 export const fieldMap: Record<string, string> = {
   order: 'order_usd', life: 'maker_life_sec', mode: 'mode', duration: 'duration_min',
   submitted: 'max_total_usd', maxOrders: 'max_orders',
+  pairCost: 'pair_cost_max', decisionInterval: 'decision_interval_ms', defensiveCancel: 'defensive_cancel_bps',
 };
 type Control = HTMLInputElement | HTMLSelectElement;
 

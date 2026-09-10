@@ -4,8 +4,12 @@ export function mountSettings() {
     inventoryMode:'auto', inventory:10, life:15, hedgeWait:10, stopOpen:30, stopHedge:10,
     layers:'single', spacing:0.01, fallback:'wait', slippage:0.01, hedgeLoss:1,
     mode:'paper', duration:0, submitted:100, dailyLoss:10, concurrency:1,
-    disconnect:'stop', stale:250, stopPolicy:'hold', effective:'restart', maxOrders:50});
+    disconnect:'stop', stale:250, stopPolicy:'hold', effective:'restart', maxOrders:50,
+    pairCost:0.99, decisionInterval:0, defensiveCancel:0});
   const fields = [
+    ['pairCost','引擎配对成本参数','USD / 对','对应现有引擎的配对与加仓成本参数。补仓仍有独立规则，不代表补仓成本硬上限。',0.9,1],
+    ['decisionInterval','最短决策间隔','毫秒','限制策略重算频率；0 表示每次有效盘口更新均可判断，不改变行情过期阈值。',0,60000],
+    ['defensiveCancel','逆向波动撤单阈值','基点','相对挂单时 BTC 价格的逆向变化阈值；1 基点为 0.01%，0 关闭此规则。撤单请求仍需确认。',0,1000],
     ['capital','策略可用本金','USD','只允许策略占用这部分资金，不等于账户全部余额。',0.01,100000],
     ['order','每笔最多投入','USD','单笔委托名义金额上限；手续费等成本还需预留。',0.01,1000],
     ['market','单场最多占用','USD','同一五分钟市场的持仓成本、有效挂单和费用预留上限。',0.01,100000],
@@ -39,5 +43,8 @@ export function mountSettings() {
   $('settings-run').innerHTML=`<h2>运行设置</h2><div class="settings-intro">资金占用上限、累计提交上限和亏损停止线分别计算，不能互相替代。此处不提供自动实盘启动。</div><div class="settings-form"><h3 class="settings-group">模式与运行范围</h3><div class="form">${select('mode','交易模式',[['paper','演示模拟'],['live','真实交易 · 此演示不支持']],'真钱功能只能在正式系统完成账户与订单验收后开放。')}${input('duration')}${input('submitted')}${input('maxOrders')}${input('dailyLoss')}${input('concurrency')}</div><h3 class="settings-group">连接异常与停止</h3><div class="form">${select('disconnect','断线处理',[['stop','停止新单 → 尝试撤单 → 核对仓位']],'网络断开时可能撤单失败，必须显示待核对；重连后不立即重启。')}${input('stale')}${select('stopPolicy','停止后的持仓',[['hold','保留持仓，等待结算'],['sell','按损失限制减仓 · 待验证']],'停止并撤单不会自动把已有持仓卖掉。')}${select('effective','修改何时生效',[['restart','保存后，下次启动生效'],['nextMarket','下一场生效 · 待验证']],'运行中不会悄悄改变参数。保存配置与当前生效配置分开显示。')}</div></div>`;
   const checkHTML=suffix=>`<div class="settings-checks panel"><div class="section-title"><h2>启动前检查</h2><span data-check-state>检查中</span></div><div class="settings-example"><label for="example-price-${suffix}">示例市场最低 5 份 · 委托价格（非实时行情）</label><input id="example-price-${suffix}" data-example-price type="number" min="0.01" max="0.99" step="0.01" value="0.50"> USD / 份</div><ul class="settings-check-list" data-setting-checks></ul><p class="settings-check-foot">当前实际账户余额、真实市场最小量和费用：未接入。演示通过不等于正式系统可下单。</p><div class="settings-footer"><span data-effective-summary class="settings-check-foot"></span><div class="settings-actions"><button type="button" data-settings-save>保存演示设置</button><button type="button" data-settings-reset>恢复演示默认值</button></div></div><div role="status" aria-live="polite" class="settings-feedback" data-settings-message></div></div>`;
   for(const name of ['strategy','run']) $( `settings-${name}`).insertAdjacentHTML('beforeend',checkHTML(name));
+
+  $('settings-strategy').querySelector('.settings-form').insertAdjacentHTML('beforeend',
+    `<h3 class="settings-group" data-engine-extension>现有引擎参数</h3><div class="form" data-engine-extension>${['pairCost','decisionInterval','defensiveCancel'].map(input).join('')}</div>`);
 
 }

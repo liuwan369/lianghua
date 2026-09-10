@@ -1,0 +1,104 @@
+[
+  {
+    "path": "/console/",
+    "status": 200,
+    "seconds": 0.914,
+    "bundle": [
+      "index-B3Le_F6h.js"
+    ]
+  },
+  {
+    "path": "/api/v1/status",
+    "status": 200,
+    "seconds": 0.837,
+    "running": false,
+    "mode": "paper",
+    "live_unlocked": false
+  },
+  {
+    "path": "/api/v1/config",
+    "status": 200,
+    "seconds": 0.762,
+    "revision": 0,
+    "field_mappings": {
+      "order": "order_usd",
+      "life": "maker_life_sec",
+      "duration": "duration_min",
+      "submitted": "max_total_usd",
+      "maxOrders": "max_orders",
+      "mode": "mode",
+      "pairCost": "pair_cost_max",
+      "decisionInterval": "decision_interval_ms",
+      "defensiveCancel": "defensive_cancel_bps"
+    }
+  },
+  {
+    "path": "/api/v1/markets",
+    "status": 200,
+    "seconds": 0.854
+  },
+  {
+    "path": "/api/v1/runs",
+    "status": 200,
+    "seconds": 0.681
+  },
+  {
+    "path": "/api/account/status",
+    "status": 200,
+    "seconds": 0.714
+  },
+  {
+    "path": "/api/v1/account-data",
+    "status": 200,
+    "seconds": 0.627,
+    "stale": false,
+    "duration_ms": 402,
+    "sections": {
+      "collateral": {
+        "available": true,
+        "complete": true,
+        "count": 0
+      },
+      "open_orders": {
+        "available": true,
+        "complete": true,
+        "count": 0
+      },
+      "trades": {
+        "available": true,
+        "complete": true,
+        "count": 19
+      },
+      "positions": {
+        "available": true,
+        "complete": true,
+        "count": 8
+      },
+      "closed_positions": {
+        "available": true,
+        "complete": true,
+        "count": 3
+      },
+      "activity": {
+        "available": true,
+        "complete": true,
+        "count": 22
+      }
+    },
+    "order_history": {
+      "available": true,
+      "complete": false,
+      "pages": 8,
+      "checked_at": "2026-09-10T10:33:34.649Z",
+      "source": "clob-v2-order-detail",
+      "coverage": "observed_order_ids",
+      "historical_complete": false,
+      "persistence": "reader_session",
+      "known_order_count": 19,
+      "pending_order_count": 19,
+      "unavailable_order_count": 16,
+      "truncated": false,
+      "error_code": "order_details_unavailable"
+    }
+  }
+]
