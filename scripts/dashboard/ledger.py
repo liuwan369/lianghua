@@ -6,6 +6,7 @@ reconciliation. Missing order identifiers prevent reliable order lifecycle metri
 from __future__ import annotations
 
 import hashlib
+from collections import OrderedDict
 from contextlib import contextmanager
 import json
 import math
@@ -90,6 +91,7 @@ class Ledger:
     def __init__(self, path, *, readonly=False):
         self.path = Path(path).resolve()
         self.readonly = readonly
+        self._idle_sources = OrderedDict()
         if not readonly:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as db:
@@ -240,6 +242,45 @@ class Ledger:
                 return result
 
     @staticmethod
+    def _source_stamp(path):
+        stat = Path(path).stat()
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def ingest_if_changed(self, run_id, **limits):
+        """Single-writer worker fast path; pending/error sources always recheck.
+
+        Metadata changes still pass through ingest's identity and content checks.
+        Cache only a stable, caught-up source, bounded across historical runs.
+        Ordinary ingest remains uncached for callers sharing a writer database.
+        """
+        cached = self._idle_sources.pop(run_id, None)
+        if cached:
+            path, stamp, result = cached
+            try:
+                if self._source_stamp(path) == stamp:
+                    self._idle_sources[run_id] = cached
+                    return {**result, "records": 0, "inserted": 0, "bytes": 0}
+            except OSError:
+                pass
+        else:
+            with self._connect() as db:
+                path = self._run(db, run_id)["path"]
+        try:
+            before = self._source_stamp(path)
+        except OSError:
+            before = None
+        result = self.ingest(run_id, **limits)
+        if not result["pending"] and not result["error"] and before is not None:
+            try:
+                if before == self._source_stamp(path):
+                    self._idle_sources[run_id] = (path, before, dict(result))
+                    while len(self._idle_sources) > 256:
+                        self._idle_sources.popitem(last=False)
+            except OSError:
+                pass
+        return result
+
+    @staticmethod
     def _accumulate(db, run_id, event):
         kind, market = event["event"], event["market"]
         db.execute("INSERT INTO kind_counts VALUES(?,?,1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id, kind))
@@ -269,9 +310,9 @@ class Ledger:
         elif kind in {"stopped", "unresolved"} and market:
             db.execute("UPDATE market_details SET status='未结算（已停止）' WHERE run_id=? AND market=? AND pnl IS NULL", (run_id, market))
 
-    def legacy_stats(self, run_id):
+    def legacy_stats(self, run_id, *, summary=None):
         """Old UI shape, built only from the same deduplicated ledger."""
-        summary = self.summary(run_id)
+        summary = self.summary(run_id) if summary is None else summary
         with self._connect() as db:
             counts = {r["kind"]: r["count"] for r in db.execute("SELECT kind,count FROM kind_counts WHERE run_id=?", (run_id,))}
             traded = db.execute("SELECT COUNT(*) FROM markets WHERE run_id=? AND fills>0", (run_id,)).fetchone()[0]

@@ -1,0 +1,53 @@
+{
+  "recorded_at_utc": "2026-09-10T07:32:46.619952+00:00",
+  "backup": "/root/.local/share/pm-system-recovery/20260910-072809-cpu",
+  "runtime_files": 7,
+  "account_unchanged": true,
+  "collector_restarted": false,
+  "files": {
+    "scripts/system-dashboard-server.py": "24b7e2ed557b3a6268c243fba8f293d195e036b1b434bccfd58baea5763f4f67",
+    "scripts/dashboard/market_snapshot.py": "e093774b5743483510cdb978a1278f6cc8c1fbf11ea31e247f2da6168700c8e4",
+    "scripts/dashboard/ledger.py": "c44a6dd2b1ed5fb53f3b6acd11b0792681277195c7f169e18819bf1352b53837",
+    "scripts/dashboard/projection_worker.py": "bbf5d8162a336c8b3d47be1b74fb24d4d61a78e8e6bd4cb3291026e41413f21b",
+    "scripts/dashboard/read_model.py": "37b10d9b7dfc815aa0f301315ee59839c0dbe73f90fcc6485ba55afe44152e6f",
+    "config/pm-analysis.slice": "52ed8d55bb3ba3830c0e9298d43a9423fe1c1dbc9d85ae60a9d0ea7c2fc3dee7",
+    "config/pm-r25-dublin-live-analyzer.service": "0c17a479f4a3d1c07843a7ba0c621e413b78aec5ed947620fc024ac6960957c3"
+  },
+  "analysis_cgroup": "/pm.slice/pm-analysis.slice",
+  "analysis_limits": {
+    "cpu.max": "20000 100000",
+    "cpu.weight": "10",
+    "cpu.stat": "usage_usec 35765517\nuser_usec 27316607\nsystem_usec 8448909\nnice_usec 7376546\ncore_sched.force_idle_usec 0\nnr_periods 2735\nnr_throttled 1373\nthrottled_usec 106429744\nnr_bursts 0\nburst_usec 0",
+    "memory.high": "402653184",
+    "memory.max": "536870912",
+    "io.weight": "default 10"
+  },
+  "all_runtime_hashes_match": true,
+  "runtime": {
+    "running": false,
+    "live_unlocked": false,
+    "projection": {
+      "state": "ready",
+      "run_id": "legacy-1ae1b9d55ac2d66c683c35c8",
+      "as_of": 1789025570.8959491,
+      "age_seconds": 0.40642690658569336,
+      "stale": false,
+      "worker_alive": true,
+      "projection_ms": 76.03946403833106
+    }
+  },
+  "service_states": {
+    "pm-system-dashboard-dublin.service": [
+      "ActiveState=active",
+      "SubState=running"
+    ],
+    "pm-r25-dublin-collector.service": [
+      "ActiveState=active",
+      "SubState=running"
+    ],
+    "pm-r25-dublin-live-analyzer.service": [
+      "ActiveState=activating",
+      "SubState=start"
+    ]
+  }
+}

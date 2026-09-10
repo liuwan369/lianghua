@@ -76,6 +76,16 @@
 
 ## 存储与回放
 
-引擎根目录下 `results/dashboard/config.json` 存非敏感配置，`results/dashboard/ledger.sqlite3` 存投影账本。证据库位于部署根目录 `data/pm-r25-live/days`。日志、证据与账本各自保留来源，不把模拟 fill 当作真实交易所回报。
+引擎根目录下 `results/dashboard/config.json` 存非敏感配置，`results/dashboard/ledger.sqlite3` 存投影账本；同目录 `snapshot.json` 为账本数据快照，`heartbeat.json` 为 worker 检查心跳。证据库位于部署根目录 `data/pm-r25-live/days`；行情投影位于部署根目录 `data/dashboard/market-snapshot.json`，与账本快照用途不同。日志、证据与账本各自保留来源，不把模拟 fill 当作真实交易所回报。
+
+`scripts/dashboard/market_snapshot.py` 持有最近 180 秒已解码块及盘口，约每秒在一个只读 SQLite 事务内读取行情与元数据。每轮仍读取窗口内压缩块进行内容比较；未变化的块不重复解压，普通追加只应用新增事件。相同秒块的更改、删除或晚到事件会从已解码窗口纠正重放。日库切换、文件身份变化、事件编号回退时重置；处理异常丢弃内存投影，下次从证据库重新构建。`projection_metrics` 的累计解码、应用、读取字节、纠正回放及重置计数用于核对实际开销。
+
+行情由后台原子发布，HTTP 只读内存快照。本地预览 SSH 只读都柏林快照文件，不调用远端 Python 重放。源 `checked_at` 超过 15 秒或超前超过 5 秒会返回离线及空当前市场；本机缓存停止更新超过 15 秒也降级。双边 `quote_at` 使用两边真实报价更新时间的较早值，成交消息和无效增量不会续鲜；前端及引擎各自的报价过期校验继续生效。
+
+账本 `ingest_if_changed` 仅供单写入 worker 使用：缓存已追平且无摄取错误的源指纹（设备、inode、大小、mtime、ctime），无变化时跳过摄取 SQL；缓存最多 256 个 run。指纹变化仍进入原摄取检查，保留前缀/尾部指纹、替换及截断检测。pending 和错误不走空闲缓存，历史 run 保留逐次轮询；空闲优化不表示零 SQL。
+
+投影数据只有在选中 run、偏移、摄取状态或记录变化时重新生成；`legacy_stats` 复用同次摘要。账本 schema 2 将数据 `as_of` 与每秒心跳分开，心跳必须匹配 `run_id` 和 `snapshot_version`，`age_seconds` 按匹配心跳计算。worker 退出、心跳超过 3 秒或版本不匹配都会 stale；错误和无效记录保持 incomplete，不会因心跳存在变成完整数据。旧 schema 1 快照仍按数据时间判定新鲜度。
+
+24 小时历史分析由独立 oneshot 服务在同机 `pm-analysis.slice` 内执行，CPU 配额 20%（0.2 核），CPU/IO 权重均为 10，并设置低调度优先级和内存上限。该服务不参与在线接口的同步链路；隔离限制分析争用，不增加宿主机可用 CPU。
 
 回测快照必须包含两边 token 当时真实 `tick_size` 或 `tickSize`；无效或冲突元数据直接报错。时间戳保留显式时区，无时区按 UTC；非法时间报错。详见 [BACKTEST-TICK-DATA.md](BACKTEST-TICK-DATA.md)。

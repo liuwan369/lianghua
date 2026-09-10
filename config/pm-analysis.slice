@@ -1,0 +1,13 @@
+[Unit]
+Description=Background evidence analysis resource budget
+
+[Slice]
+CPUAccounting=yes
+CPUWeight=10
+CPUQuota=20%
+MemoryAccounting=yes
+MemoryHigh=384M
+MemoryMax=512M
+IOAccounting=yes
+IOWeight=10
+TasksMax=32

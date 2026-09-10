@@ -1,0 +1,870 @@
+{
+  "started_at": "2026-09-10T07:30:25.713173+00:00",
+  "endpoints": {
+    "/console/": {
+      "http": 200,
+      "seconds": 0.764
+    },
+    "/api/v1/status": {
+      "http": 200,
+      "seconds": 0.477
+    },
+    "/api/v1/config": {
+      "http": 200,
+      "seconds": 0.688
+    },
+    "/api/v1/markets": {
+      "http": 200,
+      "seconds": 0.512
+    },
+    "/api/v1/runs": {
+      "http": 200,
+      "seconds": 0.483
+    },
+    "/api/account/status": {
+      "http": 200,
+      "seconds": 0.867
+    }
+  },
+  "samples": [
+    {
+      "at": 1789025430.2551994,
+      "seconds": 0.752,
+      "collector_online": true,
+      "cache_age_seconds": 1.1136889240005985,
+      "freshness_seconds": {
+        "health_at": 43.11587357521057,
+        "latest_event_at": 0.7110984325408936
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 313,
+        "events_applied": 147918,
+        "chunk_bytes_read": 128307662,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:30:26.994054+00:00",
+          "up_bid": 0.56,
+          "up_ask": 0.57,
+          "down_bid": 0.43,
+          "down_ask": 0.44
+        }
+      ]
+    },
+    {
+      "at": 1789025435.964739,
+      "seconds": 0.709,
+      "collector_online": true,
+      "cache_age_seconds": 0.07904116302961484,
+      "freshness_seconds": {
+        "health_at": 49.755820989608765,
+        "latest_event_at": 1.193457841873169
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 320,
+        "events_applied": 153708,
+        "chunk_bytes_read": 136582373,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:30:33.947442+00:00",
+          "up_bid": 0.58,
+          "up_ask": 0.59,
+          "down_bid": 0.41,
+          "down_ask": 0.42
+        }
+      ]
+    },
+    {
+      "at": 1789025441.5926707,
+      "seconds": 0.628,
+      "collector_online": true,
+      "cache_age_seconds": 0.7833210999961011,
+      "freshness_seconds": {
+        "health_at": 54.79588341712952,
+        "latest_event_at": 0.07695627212524414
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 325,
+        "events_applied": 157618,
+        "chunk_bytes_read": 143358885,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:30:38.983481+00:00",
+          "up_bid": 0.6,
+          "up_ask": 0.61,
+          "down_bid": 0.39,
+          "down_ask": 0.4
+        }
+      ]
+    },
+    {
+      "at": 1789025447.2700794,
+      "seconds": 0.676,
+      "collector_online": true,
+      "cache_age_seconds": 0.6633057580329478,
+      "freshness_seconds": {
+        "health_at": 0.7438163757324219,
+        "latest_event_at": 2.5985074043273926
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 331,
+        "events_applied": 161172,
+        "chunk_bytes_read": 151958969,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:30:44.997198+00:00",
+          "up_bid": 0.58,
+          "up_ask": 0.59,
+          "down_bid": 0.41,
+          "down_ask": 0.42
+        }
+      ]
+    },
+    {
+      "at": 1789025452.9171333,
+      "seconds": 0.646,
+      "collector_online": true,
+      "cache_age_seconds": 0.3892021040082909,
+      "freshness_seconds": {
+        "health_at": 6.606741428375244,
+        "latest_event_at": 1.347771406173706
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 336,
+        "events_applied": 163498,
+        "chunk_bytes_read": 160623672,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:30:49.949256+00:00",
+          "up_bid": 0.59,
+          "up_ask": 0.6,
+          "down_bid": 0.4,
+          "down_ask": 0.41
+        }
+      ]
+    },
+    {
+      "at": 1789025458.5534687,
+      "seconds": 0.636,
+      "collector_online": true,
+      "cache_age_seconds": 0.17093668499728665,
+      "freshness_seconds": {
+        "health_at": 12.444522619247437,
+        "latest_event_at": 1.403071641921997
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 342,
+        "events_applied": 166074,
+        "chunk_bytes_read": 169355420,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:30:55.947622+00:00",
+          "up_bid": 0.56,
+          "up_ask": 0.57,
+          "down_bid": 0.43,
+          "down_ask": 0.44
+        }
+      ]
+    },
+    {
+      "at": 1789025464.3029041,
+      "seconds": 0.749,
+      "collector_online": true,
+      "cache_age_seconds": 0.7824561229790561,
+      "freshness_seconds": {
+        "health_at": 17.50879192352295,
+        "latest_event_at": 3.36348295211792
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 347,
+        "events_applied": 168358,
+        "chunk_bytes_read": 176389527,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:00.987359+00:00",
+          "up_bid": 0.57,
+          "up_ask": 0.58,
+          "down_bid": 0.42,
+          "down_ask": 0.43
+        }
+      ]
+    },
+    {
+      "at": 1789025469.82812,
+      "seconds": 0.524,
+      "collector_online": true,
+      "cache_age_seconds": 1.0358517770073377,
+      "freshness_seconds": {
+        "health_at": 22.63475728034973,
+        "latest_event_at": 3.489448308944702
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 352,
+        "events_applied": 171448,
+        "chunk_bytes_read": 183500361,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:05.938115+00:00",
+          "up_bid": 0.46,
+          "up_ask": 0.47,
+          "down_bid": 0.53,
+          "down_ask": 0.54
+        }
+      ]
+    },
+    {
+      "at": 1789025475.733163,
+      "seconds": 0.904,
+      "collector_online": true,
+      "cache_age_seconds": 0.5525879549677484,
+      "freshness_seconds": {
+        "health_at": 29.0237717628479,
+        "latest_event_at": 1.8957138061523438
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 359,
+        "events_applied": 176433,
+        "chunk_bytes_read": 192566630,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:12.981642+00:00",
+          "up_bid": 0.41,
+          "up_ask": 0.42,
+          "down_bid": 0.58,
+          "down_ask": 0.59
+        }
+      ]
+    },
+    {
+      "at": 1789025481.643555,
+      "seconds": 0.91,
+      "collector_online": true,
+      "cache_age_seconds": 1.1941533429780975,
+      "freshness_seconds": {
+        "health_at": 34.394707679748535,
+        "latest_event_at": 1.6785106658935547
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 364,
+        "events_applied": 179118,
+        "chunk_bytes_read": 199987683,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:17.943251+00:00",
+          "up_bid": 0.52,
+          "up_ask": 0.53,
+          "down_bid": 0.47,
+          "down_ask": 0.48
+        }
+      ]
+    },
+    {
+      "at": 1789025487.2749307,
+      "seconds": 0.631,
+      "collector_online": true,
+      "cache_age_seconds": 0.15243169700261205,
+      "freshness_seconds": {
+        "health_at": 41.11485743522644,
+        "latest_event_at": 2.077430486679077
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 371,
+        "events_applied": 183776,
+        "chunk_bytes_read": 207386403,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:24.982068+00:00",
+          "up_bid": 0.49,
+          "up_ask": 0.5,
+          "down_bid": 0.5,
+          "down_ask": 0.51
+        }
+      ]
+    },
+    {
+      "at": 1789025493.0175476,
+      "seconds": 0.742,
+      "collector_online": true,
+      "cache_age_seconds": 0.7898663759697229,
+      "freshness_seconds": {
+        "health_at": 46.074658155441284,
+        "latest_event_at": 1.0392401218414307
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 376,
+        "events_applied": 187406,
+        "chunk_bytes_read": 214711432,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:29.952061+00:00",
+          "up_bid": 0.53,
+          "up_ask": 0.56,
+          "down_bid": 0.44,
+          "down_ask": 0.47
+        }
+      ]
+    },
+    {
+      "at": 1789025498.5749924,
+      "seconds": 0.557,
+      "collector_online": true,
+      "cache_age_seconds": 0.89809921302367,
+      "freshness_seconds": {
+        "health_at": 51.59513711929321,
+        "latest_event_at": 0.15792012214660645
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 382,
+        "events_applied": 190964,
+        "chunk_bytes_read": 222003113,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:35.955740+00:00",
+          "up_bid": 0.7,
+          "up_ask": 0.71,
+          "down_bid": 0.29,
+          "down_ask": 0.3
+        }
+      ]
+    },
+    {
+      "at": 1789025504.0754588,
+      "seconds": 0.5,
+      "collector_online": true,
+      "cache_age_seconds": 1.0406730709946714,
+      "freshness_seconds": {
+        "health_at": 56.79476046562195,
+        "latest_event_at": 2.649451494216919
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 387,
+        "events_applied": 195226,
+        "chunk_bytes_read": 229299743,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:40.987079+00:00",
+          "up_bid": 0.59,
+          "up_ask": 0.6,
+          "down_bid": 0.4,
+          "down_ask": 0.41
+        }
+      ]
+    },
+    {
+      "at": 1789025509.9719906,
+      "seconds": 0.896,
+      "collector_online": true,
+      "cache_age_seconds": 1.4469870179891586,
+      "freshness_seconds": {
+        "health_at": 2.2316596508026123,
+        "latest_event_at": 3.089674711227417
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 392,
+        "events_applied": 198785,
+        "chunk_bytes_read": 236634226,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:45.954986+00:00",
+          "up_bid": 0.48,
+          "up_ask": 0.49,
+          "down_bid": 0.51,
+          "down_ask": 0.52
+        }
+      ]
+    },
+    {
+      "at": 1789025515.8138106,
+      "seconds": 0.841,
+      "collector_online": true,
+      "cache_age_seconds": 0.15602555900113657,
+      "freshness_seconds": {
+        "health_at": 9.271291732788086,
+        "latest_event_at": 3.1293067932128906
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 399,
+        "events_applied": 203452,
+        "chunk_bytes_read": 245763896,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:52.907346+00:00",
+          "up_bid": 0.49,
+          "up_ask": 0.5,
+          "down_bid": 0.5,
+          "down_ask": 0.51
+        }
+      ]
+    },
+    {
+      "at": 1789025521.5702534,
+      "seconds": 0.756,
+      "collector_online": true,
+      "cache_age_seconds": 0.6375718539929949,
+      "freshness_seconds": {
+        "health_at": 14.552730321884155,
+        "latest_event_at": 1.673964500427246
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 405,
+        "events_applied": 208240,
+        "chunk_bytes_read": 252971747,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:31:58.986927+00:00",
+          "up_bid": 0.47,
+          "up_ask": 0.48,
+          "down_bid": 0.52,
+          "down_ask": 0.53
+        }
+      ]
+    },
+    {
+      "at": 1789025527.2727468,
+      "seconds": 0.702,
+      "collector_online": true,
+      "cache_age_seconds": 0.3086482679937035,
+      "freshness_seconds": {
+        "health_at": 20.952167749404907,
+        "latest_event_at": 2.810182809829712
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 411,
+        "events_applied": 211008,
+        "chunk_bytes_read": 261951522,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:04.991046+00:00",
+          "up_bid": 0.46,
+          "up_ask": 0.47,
+          "down_bid": 0.53,
+          "down_ask": 0.54
+        }
+      ]
+    },
+    {
+      "at": 1789025533.0770042,
+      "seconds": 0.804,
+      "collector_online": true,
+      "cache_age_seconds": 0.6254582350375131,
+      "freshness_seconds": {
+        "health_at": 26.311833143234253,
+        "latest_event_at": 3.1698482036590576
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 416,
+        "events_applied": 214956,
+        "chunk_bytes_read": 269109545,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:09.946581+00:00",
+          "up_bid": 0.46,
+          "up_ask": 0.47,
+          "down_bid": 0.53,
+          "down_ask": 0.54
+        }
+      ]
+    },
+    {
+      "at": 1789025538.5591245,
+      "seconds": 0.482,
+      "collector_online": true,
+      "cache_age_seconds": 0.8904267530306242,
+      "freshness_seconds": {
+        "health_at": 31.51166844367981,
+        "latest_event_at": 3.3696835041046143
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 421,
+        "events_applied": 218072,
+        "chunk_bytes_read": 276228931,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:14.991614+00:00",
+          "up_bid": 0.46,
+          "up_ask": 0.47,
+          "down_bid": 0.53,
+          "down_ask": 0.54
+        }
+      ]
+    },
+    {
+      "at": 1789025544.3110802,
+      "seconds": 0.751,
+      "collector_online": true,
+      "cache_age_seconds": 1.2214288240065798,
+      "freshness_seconds": {
+        "health_at": 37.031527519226074,
+        "latest_event_at": 2.889542579650879
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 427,
+        "events_applied": 220462,
+        "chunk_bytes_read": 283322152,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:20.982959+00:00",
+          "up_bid": 0.2,
+          "up_ask": 0.21,
+          "down_bid": 0.79,
+          "down_ask": 0.8
+        }
+      ]
+    },
+    {
+      "at": 1789025550.131843,
+      "seconds": 0.82,
+      "collector_online": true,
+      "cache_age_seconds": 0.32267905201297253,
+      "freshness_seconds": {
+        "health_at": 43.59180021286011,
+        "latest_event_at": 1.1946003437042236
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 433,
+        "events_applied": 224790,
+        "chunk_bytes_read": 292051490,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:26.987564+00:00",
+          "up_bid": 0.23,
+          "up_ask": 0.24,
+          "down_bid": 0.76,
+          "down_ask": 0.77
+        }
+      ]
+    },
+    {
+      "at": 1789025555.67497,
+      "seconds": 0.542,
+      "collector_online": true,
+      "cache_age_seconds": 0.641446519002784,
+      "freshness_seconds": {
+        "health_at": 48.859166622161865,
+        "latest_event_at": 2.71718168258667
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 439,
+        "events_applied": 227644,
+        "chunk_bytes_read": 297208553,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:32.988735+00:00",
+          "up_bid": 0.21,
+          "up_ask": 0.22,
+          "down_bid": 0.78,
+          "down_ask": 0.79
+        }
+      ]
+    },
+    {
+      "at": 1789025561.279058,
+      "seconds": 0.603,
+      "collector_online": true,
+      "cache_age_seconds": 1.2009174859849736,
+      "freshness_seconds": {
+        "health_at": 53.991427183151245,
+        "latest_event_at": 1.5980052947998047
+      },
+      "queue_depth": 0,
+      "projection_metrics": {
+        "chunks_decoded": 444,
+        "events_applied": 230130,
+        "chunk_bytes_read": 303993150,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:37.975565+00:00",
+          "up_bid": 0.22,
+          "up_ask": 0.23,
+          "down_bid": 0.77,
+          "down_ask": 0.78
+        }
+      ]
+    },
+    {
+      "at": 1789025566.9488401,
+      "error_type": "HTTPError"
+    },
+    {
+      "at": 1789025573.4847622,
+      "seconds": 1.535,
+      "collector_online": false,
+      "cache_age_seconds": null,
+      "freshness_seconds": null,
+      "queue_depth": null,
+      "projection_metrics": null,
+      "markets": []
+    },
+    {
+      "at": 1789025579.1934721,
+      "seconds": 0.708,
+      "collector_online": true,
+      "cache_age_seconds": 1.0307314110104926,
+      "freshness_seconds": {
+        "health_at": 11.174039363861084,
+        "latest_event_at": 0.21719646453857422
+      },
+      "queue_depth": 4,
+      "projection_metrics": {
+        "chunks_decoded": 188,
+        "events_applied": 110955,
+        "chunk_bytes_read": 3276596,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:32:54.649049+00:00",
+          "up_bid": 0.33,
+          "up_ask": 0.35,
+          "down_bid": 0.65,
+          "down_ask": 0.67
+        }
+      ]
+    },
+    {
+      "at": 1789025584.945935,
+      "seconds": 0.752,
+      "collector_online": true,
+      "cache_age_seconds": 1.1928704309975728,
+      "freshness_seconds": {
+        "health_at": 17.410115480422974,
+        "latest_event_at": 0.44901156425476074
+      },
+      "queue_depth": 4,
+      "projection_metrics": {
+        "chunks_decoded": 194,
+        "events_applied": 112696,
+        "chunk_bytes_read": 9813122,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:33:00.905546+00:00",
+          "up_bid": 0.3,
+          "up_ask": 0.31,
+          "down_bid": 0.69,
+          "down_ask": 0.7
+        }
+      ]
+    },
+    {
+      "at": 1789025590.559812,
+      "seconds": 0.613,
+      "collector_online": true,
+      "cache_age_seconds": 1.277088549977634,
+      "freshness_seconds": {
+        "health_at": 23.130871534347534,
+        "latest_event_at": 0.8836784362792969
+      },
+      "queue_depth": 4,
+      "projection_metrics": {
+        "chunks_decoded": 200,
+        "events_applied": 114362,
+        "chunk_bytes_read": 16268203,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:33:06.987630+00:00",
+          "up_bid": 0.28,
+          "up_ask": 0.29,
+          "down_bid": 0.71,
+          "down_ask": 0.72
+        }
+      ]
+    },
+    {
+      "at": 1789025596.2293487,
+      "seconds": 0.669,
+      "collector_online": true,
+      "cache_age_seconds": 0.7946379659697413,
+      "freshness_seconds": {
+        "health_at": 28.410005807876587,
+        "latest_event_at": 2.3438308238983154
+      },
+      "queue_depth": 4,
+      "projection_metrics": {
+        "chunks_decoded": 206,
+        "events_applied": 116682,
+        "chunk_bytes_read": 22641416,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:33:12.983547+00:00",
+          "up_bid": 0.19,
+          "up_ask": 0.2,
+          "down_bid": 0.8,
+          "down_ask": 0.81
+        }
+      ]
+    },
+    {
+      "at": 1789025601.9619198,
+      "seconds": 0.732,
+      "collector_online": true,
+      "cache_age_seconds": 0.960520826978609,
+      "freshness_seconds": {
+        "health_at": 34.794206380844116,
+        "latest_event_at": 2.7280313968658447
+      },
+      "queue_depth": 4,
+      "projection_metrics": {
+        "chunks_decoded": 212,
+        "events_applied": 117558,
+        "chunk_bytes_read": 28813491,
+        "correction_replays": 0,
+        "database_resets": 1
+      },
+      "markets": [
+        {
+          "slug": "btc-updown-5m-1789025400",
+          "quote_at": "2026-09-10T07:33:18.984532+00:00",
+          "up_bid": 0.19,
+          "up_ask": 0.2,
+          "down_bid": 0.8,
+          "down_ask": 0.81
+        }
+      ]
+    }
+  ],
+  "runtime": {
+    "running": false,
+    "live_unlocked": false,
+    "projection": {
+      "state": "ready",
+      "run_id": "legacy-1ae1b9d55ac2d66c683c35c8",
+      "as_of": 1789025299.4349215,
+      "age_seconds": 0.16190052032470703,
+      "stale": false,
+      "worker_alive": true,
+      "projection_ms": 56.20914697647095
+    }
+  }
+}

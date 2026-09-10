@@ -28,9 +28,12 @@ API 还支持 `pair_cost_max`、`decision_interval_ms`、`defensive_cancel_bps`�
 | PM_NODE_LABEL | 页面采集来源标签 |
 | PM_LIVE_LOCAL | 1 表示控制台本机读取采集数据库 |
 | PM_LIVE_DATA_DIR / PM_EVIDENCE_GLOB | 日库目录及 dublin-evidence 文件匹配 |
+| PM_MARKET_SNAPSHOT_PATH | 本机增量行情投影输出；默认项目根目录下 data/dashboard/market-snapshot.json |
 | PM_COLLECTOR_SERVICE | pm-r25-dublin-collector.service |
 | PM_LIVE_URL | 引擎 paper 使用的控制台行情快照 URL |
-| PM_REMOTE_HOST / PM_REMOTE_SSH_KEY | 本地开发预览读取都柏林行情的 SSH 配置 |
+| PM_REMOTE_HOST / PM_REMOTE_SSH_KEY | 本地开发预览通过 SSH 读取都柏林快照；不在远端重新分析证据库 |
+| PM_REMOTE_PORT / PM_REMOTE_CONNECT_TIMEOUT | SSH 端口及连接超时 |
+| PM_REMOTE_SNAPSHOT_PATH | SSH 读取文件；默认 /root/pm-system/data/dashboard/market-snapshot.json |
 | PM_ACCOUNT_PROFILE | 服务器账户 JSON 路径 |
 | PM_ACCOUNT_RPC_URL / PM_ACCOUNT_RPC_FALLBACK_URL | 只读账户检查的主备 Polygon RPC |
 | PM_ACCOUNT_NODE_COMPILE_CACHE | 只缓存账户检查 Node 编译产物，不缓存凭据/检查结果 |
@@ -39,6 +42,22 @@ API 还支持 `pair_cost_max`、`decision_interval_ms`、`defensive_cancel_bps`�
 | PM_TRADING_LIVE_UNLOCK | 实盘解锁开关；当前关闭 |
 
 准确部署值使用 `config/pm-system-dashboard-dublin.service` 与 `config/pm-system-dashboard-dublin-public-account.conf`。公开来源检查不是登录认证；当前部署允许访问该公开来源的人检查/保存账户，交易控制仍有独立限制。
+
+`PM_LIVE_LOCAL=1` 时控制台后台持有增量盘口并原子发布快照；非本机采集模式只通过 SSH 读取已发布文件。读取动作不会更新快照内的 `checked_at`。快照超过 15 秒或源时间向未来偏移超过 5 秒时显示离线和空市场，不能靠加快前端刷新续鲜。
+
+## 历史分析资源预算
+
+`config/pm-r25-dublin-live-analyzer.service` 通过 `Slice=pm-analysis.slice` 进入同机专用资源组，配置文件为 `config/pm-analysis.slice`。
+
+| 配置 | 值与含义 |
+| --- | --- |
+| CPUQuota | 20%，相当于最多 0.2 个逻辑核，不是整台服务器 CPU 的 20% |
+| CPUWeight / IOWeight | 均为 10，争用时降低分析任务权重 |
+| MemoryHigh / MemoryMax | 384M / 512M |
+| TasksMax | 32 |
+| Nice / IOSchedulingClass | 服务使用 19 / idle |
+
+分析仍按 timer 运行，配额可能延长完成时间。采集、控制台和交易进程不加入分析 slice；这不是新增服务器，也不会提高云端 CPU 配额。在线行情接口读取行情投影，不等待历史分析完成。
 
 ## 账户与凭据
 

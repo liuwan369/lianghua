@@ -7,7 +7,9 @@
 ```text
 Polymarket 公开盘口/成交 + Binance BTC
         │
-        ├─ Dublin collector → SQLite 原始证据 → 回放/定时分析
+        ├─ Dublin collector → SQLite 原始证据
+        │                         ├─ 增量行情投影 → 内存/原子 JSON 快照 → HTTP
+        │                         └─ 历史回放/定时分析（pm-analysis.slice）
         │
         └─ TypeScript feeds ← Chainlink RTDS
                      │
@@ -32,11 +34,16 @@ Polymarket 公开盘口/成交 + Binance BTC
 | `web/src/live-data.ts`、`forms.ts` | 接口刷新、错误与未知值显示、六项参数及账户表单 |
 | `scripts/system-dashboard-server.py` | loopback HTTP 服务、账户与控制操作、版本化 API |
 | `scripts/dashboard/config.py` | 非敏感配置校验、版本冲突和原子保存 |
-| `scripts/dashboard/read_model.py`、`projection_worker.py`、`ledger.py` | 后台日志投影、增量偏移、稳定事件 ID、SQLite 查询 |
+| `scripts/dashboard/market_snapshot.py` | 常驻增量盘口、压缩块变更检测、行情快照及过期校验 |
+| `scripts/dashboard/read_model.py`、`projection_worker.py`、`ledger.py` | 后台日志投影、空闲跳过、独立心跳、稳定事件 ID、SQLite 查询 |
 | `_external/btc-5m-market-trading-bot/src/live/` | 行情发现、运行编排、策略、执行、订单核对和退出 |
 | `pm_maker/` | 只读影子策略与证据回放，不提交交易所订单 |
 
 HTTP 查询不在请求中摄取完整运行日志；后台读模型与请求线程分离。账本按运行组织，提供有界游标分页。账本 PnL 是引擎记录的结算兑付减成本、费用，不能替代钱包现金对账；缺少真实费用时保持未知。
+
+行情后台约每秒刷新常驻投影。首次读取最近 180 秒盘口；以后比较窗口内压缩块的实际内容，只解压变化的块，普通追加只应用新事件。晚到、更改或删除触发已解码窗口的纠正回放；数据库日切、替换、截断或处理异常会重建状态。HTTP 读取内存结果，都柏林同时原子写入 `data/dashboard/market-snapshot.json`；本地开发预览通过 SSH 只读该文件，不在远端再次解压重建盘口。源快照超过 15 秒未更新时清空当前市场并标记离线；重复读取不改变源时间。
+
+账本 worker 每约 250 毫秒检查来源，已追平且无摄取错误的日志在文件身份、大小及修改时间未变时跳过摄取事务。只有选择或数据状态变化才生成摘要和数据快照。schema 2 使用独立的每秒 heartbeat 绑定 run 与快照版本；超过 3 秒、版本不匹配或 worker 退出均保留 stale 语义。历史 run 仍轮询发现和增量摄取，pending 或错误状态继续检查。
 
 ## 部署边界
 
@@ -44,10 +51,10 @@ HTTP 查询不在请求中摄取完整运行日志；后台读模型与请求线
 
 账户保存在 `/root/.config/pm-system/account.json`，仅服务器读取敏感内容。公网账户操作通过显式 origin 配置与代理检查进入；真实交易另有 control token、明确确认和 `PM_TRADING_LIVE_UNLOCK=1` 条件。前端模式保存不会绕过这些条件。直接使用引擎 CLI 是独立执行入口，不能把网页解锁状态误认为覆盖所有 CLI。
 
-采集服务为 `pm-r25-dublin-collector.service`；证据目录 `data/pm-r25-live/days`，文件模式 `dublin-evidence-*.sqlite3`。分析由 `pm-r25-dublin-live-analyzer.service` 及其 timer 执行。
+采集服务为 `pm-r25-dublin-collector.service`；证据目录 `data/pm-r25-live/days`，文件模式 `dublin-evidence-*.sqlite3`。分析由 `pm-r25-dublin-live-analyzer.service` 及其 timer 执行，并归入同机 `pm-analysis.slice`，不与在线控制台共用资源控制组。
 
 ## 能力边界与资源
 
 实际页面保存映射为六项，后台参数模式为八个数值项加 mode；两者不可混同。完整钱包资产、真实账单、到账凭证、延迟遥测和页面交易控制尚未完整接入。详细接口见 [TECHNICAL.md](TECHNICAL.md)。
 
-2026-09-10 都柏林 `t3.small`（2 vCPU、约 2 GB RAM）采样存在高 steal，后台盘口重复重建和定时分析也消耗 CPU。进程拆分与 CPUWeight 不增加云端 CPU 额度。资源优化应保持行情完整性、页面设计和交易语义，详见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。
+都柏林 `t3.small` 的云端 CPU 供给限制与应用开销是不同问题。在线侧用增量行情及账本空闲跳过减少重复工作；历史分析配置为 `CPUQuota=20%`（最多 0.2 个逻辑核）、`CPUWeight=10`、`IOWeight=10`，并使用低优先级调度及内存限制。这是同一台服务器上的资源隔离，并非独立分析服务器；配额限制不能增加云端 CPU 额度，也不能消除宿主机 steal。诊断依据见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。

@@ -44,13 +44,13 @@
 | 项目 | 对应版本的结果 |
 | --- | --- |
 | 当前引擎（含节点清理） | 201 passed / 20 files；TypeScript build 通过，独立复审通过 |
-| Python | 217 passed / 1 skipped；跳过为平台权限相关测试 |
+| Python | 243 passed / 1 skipped；跳过为平台权限相关测试 |
 | 前端 | 23 passed，类型检查与构建通过 |
-| 部署核对 | 都柏林当前源码/构建同步、采集器入口切换及服务重启完成，账户文件摘要未变化；[发布检查](evidence/2026-09-10/dublin-release-check.json) |
+| 部署核对 | 本轮 CPU 优化 7 个运行文件与配置哈希一致，控制台重启、分析迁入限额 slice，采集器未重启且账户文件未变；[发布检查](evidence/2026-09-10/cpu-release-check.json) |
 
 公网 status/config/markets/runs/account 接口均 HTTP 200，来源为 `collector_host`。浏览器独立标签完成六页导航、运行历史和账户按钮检查，账户就绪、签名匹配、授权就绪均为“是”。[公网记录](evidence/2026-09-10/public-api-final.json)
 
-账户完整检查无模拟负载时 HTTP 200、耗时 21.47 秒；模拟负载下出现 HTTP 504，满负载可用性未通过。详见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。
+CPU 优化已上线：最新无模拟交易负载账户检查 HTTP 200、23.817 秒；此前负载下出现 504，完整 paper 并发及长期负载可用性仍未通过。详见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。
 
 ## 最终版本真实行情 paper
 

@@ -8,6 +8,7 @@ import json
 import math
 import os
 import signal
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import dashboard_account as account_store
 from dashboard.config import ConfigStore, ConfigConflictError
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
+from dashboard.market_snapshot import MarketSnapshot, publish_snapshot, validate_snapshot
 
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
@@ -44,6 +46,8 @@ _live_lock = threading.RLock()
 _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
+_market_projection: MarketSnapshot | None = None
+_market_projection_config: tuple | None = None
 _account_report: dict | None = None
 _read_model: ReadModel | None = None
 _config_store: ConfigStore | None = None
@@ -100,6 +104,8 @@ def _live_config() -> dict:
         "remote_port": os.environ.get("PM_REMOTE_PORT", "22"),
         "connect_timeout": os.environ.get("PM_REMOTE_CONNECT_TIMEOUT", "5"),
         "remote_python": os.environ.get("PM_REMOTE_PYTHON", "python3"),
+        "snapshot_path": Path(os.environ.get("PM_MARKET_SNAPSHOT_PATH", str(project_root / "data" / "dashboard" / "market-snapshot.json"))),
+        "remote_snapshot_path": os.environ.get("PM_REMOTE_SNAPSHOT_PATH", "/root/pm-system/data/dashboard/market-snapshot.json"),
     }
 
 
@@ -407,7 +413,7 @@ def live_status() -> dict:
 def cached_live_status() -> dict:
     """HTTP/feed clients only read the last background collector snapshot."""
     with _live_lock:
-        value = dict(_live_cache)
+        value = validate_snapshot(_live_cache)
         age = time.monotonic() - _live_cache_at if _live_cache_at else None
     value.update(node_label=_live_config()["node_label"], cache_age_seconds=age,
                  refreshing=age is None or age >= 5)
@@ -435,185 +441,43 @@ def supervise_projection(stop: threading.Event) -> None:
 
 
 def _live_status_fetch() -> dict:
-    """Read a small, read-only health snapshot from the configured collector.
-
-    The full SQLite database stays on the collector host. Only aggregate counters,
-    timestamps, and the latest health JSON cross the SSH connection.
-    """
-    global _live_cache, _live_cache_at
+    """Background-only incremental local projection or remote snapshot read."""
+    global _live_cache, _live_cache_at, _market_projection, _market_projection_config
     config = _live_config()
-    now = time.monotonic()
     with _live_lock:
-        if now - _live_cache_at < 1:
-            return {**_live_cache, "node_label": config["node_label"]}
-    data_dir = config["local_data_dir"] if config["collector_is_local"] else Path(config["remote_data_dir"])
-    script = r'''# -*- coding: utf-8 -*-
-import glob, json, os, sqlite3, subprocess, time, zlib
-from datetime import datetime, timezone
-data_dir = __DATA_DIR__
-evidence_glob = __EVIDENCE_GLOB__
-collector_service = __COLLECTOR_SERVICE__
-node_label = __NODE_LABEL__
-paths = sorted(glob.glob(os.path.join(data_dir, evidence_glob)))
-result = {'checked_at': datetime.now(timezone.utc).isoformat(), 'service': 'unknown', 'node_label': node_label}
-try:
-    result['service'] = subprocess.run(['systemctl', 'is-active', collector_service], capture_output=True, text=True, timeout=3).stdout.strip()
-except Exception as exc:
-    result['service_error'] = type(exc).__name__
-if not paths:
-    result['error'] = node_label + ' SQLite missing'
-else:
-    path = paths[-1]
-    result['db'] = os.path.basename(path)
-    result['db_bytes'] = os.path.getsize(path)
-    result['db_mtime'] = datetime.fromtimestamp(os.path.getmtime(path), timezone.utc).isoformat()
-    conn = sqlite3.connect('file:' + path + '?mode=ro', uri=True, timeout=3)
+        if time.monotonic() - _live_cache_at < 1:
+            return {**validate_snapshot(_live_cache), "node_label": config["node_label"]}
     try:
-        now_ns = time.time_ns()
-        now_second = int(now_ns // 1_000_000_000)
-        # Daily databases exceed 1 GB. received_at_ns has no standalone index;
-        # scanning it (or grouping the whole table) blocks the snapshot for >30s.
-        # Read a bounded PK tail, and use the existing source/second chunk index.
-        tail = list(conn.execute('SELECT source,received_at_ns FROM events ORDER BY id DESC LIMIT 10000'))
-        sources = ('clob', 'binance', 'activity', 'gamma', 'polygon', 'collector')
-        latest = {}
-        for source in sources:
-            last = conn.execute('SELECT received_second FROM event_chunks WHERE source=? ORDER BY received_second DESC LIMIT 1', (source,)).fetchone()
-            if last: latest[source] = int(last[0]) * 1_000_000_000
-        for source, timestamp in tail:
-            latest[source] = max(latest.get(source, 0), timestamp)
-        for name, seconds in (('1m', 60), ('5m', 300)):
-            complete = len(tail) < 10000
-            chunk_count = sum(conn.execute('SELECT COALESCE(SUM(event_count),0) FROM event_chunks WHERE source=? AND received_second>=?',
-                                          (source, now_second-seconds)).fetchone()[0] for source in sources)
-            event_count = sum(timestamp >= now_ns-seconds*1_000_000_000 for _, timestamp in tail)
-            result['events_' + name] = int(chunk_count) + event_count if complete else None
-            result['events_' + name + '_complete'] = complete
-        result['latest_by_source'] = latest
-        result['latest_event_ns'] = max(latest.values()) if latest else None
-        if result['latest_event_ns'] is not None:
-            result['latest_event_at'] = datetime.fromtimestamp(result['latest_event_ns'] / 1_000_000_000, timezone.utc).isoformat()
-        metadata = {}
-        for row in conn.execute("SELECT payload_json FROM events WHERE source='gamma' AND event_type='market_metadata' ORDER BY received_at_ns DESC LIMIT 20"):
-            try:
-                item = json.loads(row[0])
-                metadata.setdefault(item.get('slug'), item)
-            except Exception:
-                pass
-        books = {}
-        for codec, blob in conn.execute("SELECT codec,payload_blob FROM event_chunks WHERE source='clob' AND received_second >= ? ORDER BY received_second", (now_second - 180,)):
-            if codec != 'zlib-json-v2':
-                continue
-            try:
-                rows = json.loads(zlib.decompress(blob).decode('utf-8'))
-            except Exception:
-                continue
-            for event_type, received_ns, source_ms, _slug, token, payload in rows:
-                if not token:
-                    continue
-                state = books.setdefault(str(token), {'bids': {}, 'asks': {}, 'received_ns': received_ns})
-                state['received_ns'] = max(state.get('received_ns', 0), received_ns)
-                if event_type == 'book':
-                    state['bids'] = {str(price): float(size) for price, size in (payload[1] or []) if float(size) > 0}
-                    state['asks'] = {str(price): float(size) for price, size in (payload[2] or []) if float(size) > 0}
-                elif event_type == 'best_bid_ask':
-                    if payload[1] is not None: state['bids'] = {str(payload[1]): 1.0}
-                    if payload[2] is not None: state['asks'] = {str(payload[2]): 1.0}
-                elif event_type == 'price_change':
-                    for changed_token, price, size, side, _best_bid, _best_ask in (payload[1] or []):
-                        if str(changed_token) != str(token):
-                            continue
-                        levels = state['bids'] if str(side).upper() in ('BUY', 'BID') else state['asks']
-                        if float(size) > 0: levels[str(price)] = float(size)
-                        else: levels.pop(str(price), None)
-        current = []
-        now_sec = time.time()
-        for slug, item in metadata.items():
-            try:
-                if not (float(item.get('start_at', 0)) <= now_sec < float(item.get('end_at', 0))):
-                    continue
-                up = books.get(str(item.get('up_token')), {})
-                down = books.get(str(item.get('down_token')), {})
-                ub = max((float(x) for x in up.get('bids', {})), default=None)
-                ua = min((float(x) for x in up.get('asks', {})), default=None)
-                db = max((float(x) for x in down.get('bids', {})), default=None)
-                da = min((float(x) for x in down.get('asks', {})), default=None)
-                current.append({'slug': slug, 'condition_id': item.get('condition_id') or item.get('conditionId') or '',
-                                'up_token': item.get('up_token') or item.get('upToken') or '', 'down_token': item.get('down_token') or item.get('downToken') or '',
-                                'start': item.get('start_at'), 'end': item.get('end_at'), 'up_bid': ub, 'up_ask': ua, 'down_bid': db, 'down_ask': da,
-                                'ask_sum': ua + da if ua is not None and da is not None else None,
-                                'quote_at': datetime.fromtimestamp(min(up.get('received_ns', 0), down.get('received_ns', 0)) / 1_000_000_000, timezone.utc).isoformat() if min(up.get('received_ns', 0), down.get('received_ns', 0)) else None})
-            except (TypeError, ValueError):
-                continue
-        # Keep one deterministic selection rule for every client: the market
-        # ending soonest is first, while the full active set remains visible.
-        result['current_markets'] = sorted(current, key=lambda market: float(market.get('end') or 10**20))
-        row = conn.execute('SELECT recorded_at,queue_depth,counters_json,source_status_json FROM health ORDER BY id DESC LIMIT 1').fetchone()
-        if row:
-            result['health_at'] = row[0]
-            result['queue_depth'] = row[1]
-            result['counters'] = json.loads(row[2])
-            result['sources'] = json.loads(row[3])
-    finally:
-        conn.close()
-result['collector_online'] = result.get('service') == 'active' and bool(result.get('health_at'))
-now = datetime.now(timezone.utc)
-freshness = {}
-for key in ('health_at', 'latest_event_at'):
-    value = result.get(key)
-    if value:
-        try:
-            freshness[key] = max(0.0, (now - datetime.fromisoformat(value)).total_seconds())
-        except ValueError:
-            freshness[key] = None
-result['freshness_seconds'] = freshness
-stale = [key for key, seconds in freshness.items() if seconds is None or seconds > 120]
-if stale:
-    result['collector_online'] = False
-    result['stale_reason'] = 'stale data older than 120 seconds: ' + ','.join(stale)
-print(json.dumps(result, ensure_ascii=True))
-'''
-    try:
-        # On a collector host the database is local. Running SSH back
-        # into the same host adds a long timeout and makes the dashboard look
-        # frozen. A separate dashboard host can read aggregates over SSH.
-        replacements = {
-            "__DATA_DIR__": str(data_dir).replace("\\", "/"),
-            "__EVIDENCE_GLOB__": config["evidence_glob"],
-            "__COLLECTOR_SERVICE__": config["collector_service"],
-            "__NODE_LABEL__": config["node_label"],
-        }
-        for marker, value in replacements.items():
-            script = script.replace(marker, json.dumps(value, ensure_ascii=True))
         if config["collector_is_local"]:
-            command = [sys.executable, "-c", script]
+            identity = (str(config["local_data_dir"]), config["evidence_glob"], config["collector_service"], config["node_label"])
+            if _market_projection is None or _market_projection_config != identity:
+                _market_projection = MarketSnapshot(config["local_data_dir"], config["evidence_glob"], config["collector_service"], config["node_label"])
+                _market_projection_config = identity
+            value = _market_projection.snapshot()
+            publish_snapshot(config["snapshot_path"], value)
         else:
             if not config["ssh_key"].is_file():
-                raise FileNotFoundError("都柏林 SSH 密钥未配置，请检查 PM_REMOTE_SSH_KEY")
-            command = [
-                "ssh", "-i", str(config["ssh_key"]), "-p", str(config["remote_port"]),
-                "-o", "BatchMode=yes", "-o", f"ConnectTimeout={config['connect_timeout']}",
-                "-o", "StrictHostKeyChecking=yes", config["remote_host"], config["remote_python"], "-",
-            ]
-        completed = subprocess.run(command, input=script, text=True, encoding="utf-8", capture_output=True, timeout=30)
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or f"ssh exit {completed.returncode}")
-        value = json.loads(completed.stdout)
-        if not isinstance(value, dict):
-            raise RuntimeError(f"{config['node_label']}状态返回格式错误")
+                raise FileNotFoundError("remote SSH key missing")
+            command = ["ssh", "-i", str(config["ssh_key"]), "-p", str(config["remote_port"]),
+                       "-o", "BatchMode=yes", "-o", f"ConnectTimeout={config['connect_timeout']}",
+                       "-o", "StrictHostKeyChecking=yes", config["remote_host"],
+                       "cat -- " + shlex.quote(config["remote_snapshot_path"])]
+            completed = subprocess.run(command, text=True, encoding="utf-8", capture_output=True, timeout=10)
+            if completed.returncode != 0:
+                raise RuntimeError("remote snapshot read failed")
+            value = validate_snapshot(json.loads(completed.stdout))
         value["node_label"] = config["node_label"]
-    except Exception as exc:
-        value = {
-            "collector_online": False,
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "node_label": config["node_label"],
-            "current_markets": [],
-            "error_code": "collector_connection_failed",
-            "error": f"无法读取{config['node_label']}采集器，请检查 SSH 密钥、连接和采集服务。",
-        }
+    except Exception:
+        value = {"collector_online": False, "checked_at": datetime.now(timezone.utc).isoformat(),
+                 "node_label": config["node_label"], "current_markets": [], "error_code": "collector_connection_failed",
+                 "error": f"无法读取{config['node_label']}行情投影，请检查采集服务、快照和连接。"}
+        if config["collector_is_local"]:
+            try:
+                publish_snapshot(config["snapshot_path"], value)
+            except OSError:
+                pass  # Readers will reject the previous file by its source clock.
     with _live_lock:
-        _live_cache = value
-        _live_cache_at = time.monotonic()
+        _live_cache, _live_cache_at = value, time.monotonic()
         return dict(value)
 
 

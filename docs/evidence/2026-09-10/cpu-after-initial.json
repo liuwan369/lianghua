@@ -1,0 +1,44 @@
+{
+  "recorded_at_utc": "2026-09-10T07:29:03.626811+00:00",
+  "sample_seconds": 20.564,
+  "cpu_pct": {
+    "user": 14.04,
+    "nice": 0.64,
+    "system": 2.42,
+    "idle": 5.86,
+    "iowait": 11.34,
+    "irq": 0.0,
+    "softirq": 0.11,
+    "steal": 65.59
+  },
+  "services": {
+    "pm-r25-dublin-live-analyzer.service": {
+      "cpu_seconds": 1.7475,
+      "throttle_seconds": 0.0
+    },
+    "pm-system-dashboard-dublin.service": {
+      "cpu_seconds": 3.8308,
+      "throttle_seconds": 0.0
+    },
+    "pm-r25-dublin-collector.service": {
+      "cpu_seconds": 17.3159,
+      "throttle_seconds": 0.0
+    }
+  },
+  "collector": {
+    "collector_online": true,
+    "queue_depth": 0,
+    "freshness_seconds": {
+      "health_at": 17.995386123657227,
+      "latest_event_at": 2.6896281242370605
+    },
+    "cache_age_seconds": 0.00018934201216325164,
+    "projection_metrics": {
+      "chunks_decoded": 228,
+      "events_applied": 88806,
+      "chunk_bytes_read": 35030812,
+      "correction_replays": 0,
+      "database_resets": 1
+    }
+  }
+}

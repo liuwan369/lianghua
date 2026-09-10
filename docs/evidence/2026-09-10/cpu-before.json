@@ -1,0 +1,37 @@
+{
+  "recorded_at_utc": "2026-09-10T07:19:31.131618+00:00",
+  "sample_seconds": 20.073,
+  "cpu_pct": {
+    "user": 12.24,
+    "nice": 5.81,
+    "system": 1.83,
+    "idle": 0.91,
+    "iowait": 0.0,
+    "irq": 0.0,
+    "softirq": 0.07,
+    "steal": 79.13
+  },
+  "services": {
+    "pm-system-dashboard-dublin.service": {
+      "cpu_seconds": 12.6823,
+      "throttle_seconds": 0.0
+    },
+    "pm-r25-dublin-collector.service": {
+      "cpu_seconds": 10.0101,
+      "throttle_seconds": 0.0
+    },
+    "pm-r25-dublin-live-analyzer.service": {
+      "cpu_seconds": 9.897,
+      "throttle_seconds": 0.068
+    }
+  },
+  "collector": {
+    "collector_online": true,
+    "queue_depth": 84,
+    "freshness_seconds": {
+      "health_at": 45.596365,
+      "latest_event_at": 3.035517
+    },
+    "cache_age_seconds": 1.9341416049865074
+  }
+}

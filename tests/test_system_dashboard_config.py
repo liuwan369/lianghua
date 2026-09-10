@@ -29,6 +29,8 @@ GENERIC_ENV = (
     "PM_REMOTE_PORT",
     "PM_REMOTE_CONNECT_TIMEOUT",
     "PM_REMOTE_PYTHON",
+    "PM_MARKET_SNAPSHOT_PATH",
+    "PM_REMOTE_SNAPSHOT_PATH",
 )
 
 
@@ -70,6 +72,7 @@ def test_snapshot_replay_uses_latest_metadata_and_oldest_side_clock(monkeypatch,
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
     monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(tmp_path / "snapshot.json"))
     monkeypatch.setattr(MODULE, "_live_cache_at", 0.0)
     monkeypatch.setattr(MODULE, "_live_cache", {})
     now = time.time()
@@ -107,27 +110,27 @@ def test_generic_environment_configures_collector(monkeypatch, tmp_path: Path) -
     assert config["ssh_key"] == tmp_path / "new-key"
 
 
-def test_dublin_local_status_uses_local_python_and_returns_node(monkeypatch, tmp_path: Path) -> None:
+def test_dublin_local_status_projects_in_process_without_python_child(monkeypatch, tmp_path: Path) -> None:
     clear_live_environment(monkeypatch)
-    monkeypatch.setenv("PM_NODE_LABEL", "都柏林节点")
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
     monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("PM_EVIDENCE_GLOB", "dublin-evidence-*.sqlite3")
-    monkeypatch.setenv("PM_COLLECTOR_SERVICE", "pm-r25-dublin-collector.service")
+    monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(tmp_path / "snapshot.json"))
     calls = []
 
     def fake_run(command, **kwargs):
-        calls.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout='{"collector_online": false}', stderr="")
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout="active", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(MODULE, "_market_projection", None)
     MODULE._live_cache_at = 0.0
     value = MODULE._live_status_fetch()
     assert value["node_label"] == "都柏林节点"
-    assert calls[0][0][:2] == [sys.executable, "-c"]
-    assert "ssh" not in calls[0][0]
-    assert "dublin-evidence-*.sqlite3" in calls[0][1]["input"]
-    assert "pm-r25-dublin-collector.service" in calls[0][1]["input"]
+    assert calls == [["systemctl", "is-active", "pm-r25-dublin-collector.service"]]
+    MODULE._live_cache_at = 0.0
+    MODULE._live_status_fetch()
+    assert len(calls) == 1
+    assert json.loads((tmp_path / "snapshot.json").read_text(encoding="utf-8"))["collector_online"] is False
 
 
 def test_busy_live_status_still_returns_configured_node(monkeypatch) -> None:
@@ -143,7 +146,28 @@ def test_busy_live_status_still_returns_configured_node(monkeypatch) -> None:
     assert value["refreshing"] is True
 
 
-def test_remote_status_uses_configured_host_key_port_and_python(monkeypatch, tmp_path: Path) -> None:
+def test_failed_local_projection_publishes_offline_for_remote_readers(monkeypatch, tmp_path):
+    clear_live_environment(monkeypatch)
+    monkeypatch.setenv("PM_LIVE_LOCAL", "1")
+    monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
+    target = tmp_path / "snapshot.json"
+    monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(target))
+    target.write_text('{"collector_online":true}', encoding="utf-8")
+    class BrokenProjection:
+        def __init__(self, *args):
+            pass
+        def snapshot(self):
+            raise ValueError("corrupt collector chunk")
+    monkeypatch.setattr(MODULE, "MarketSnapshot", BrokenProjection)
+    monkeypatch.setattr(MODULE, "_market_projection", None)
+    monkeypatch.setattr(MODULE, "_live_cache_at", 0.)
+    assert MODULE._live_status_fetch()["collector_online"] is False
+    saved = json.loads(target.read_text(encoding="utf-8"))
+    assert saved["collector_online"] is False
+    assert saved["current_markets"] == []
+
+
+def test_remote_status_reads_lightweight_snapshot_with_configured_host_key_port(monkeypatch, tmp_path: Path) -> None:
     clear_live_environment(monkeypatch)
     key = tmp_path / "id_ed25519"
     key.touch()
@@ -152,7 +176,7 @@ def test_remote_status_uses_configured_host_key_port_and_python(monkeypatch, tmp
     monkeypatch.setenv("PM_REMOTE_HOST", "collector@example.test")
     monkeypatch.setenv("PM_REMOTE_SSH_KEY", str(key))
     monkeypatch.setenv("PM_REMOTE_PORT", "2222")
-    monkeypatch.setenv("PM_REMOTE_PYTHON", "/usr/bin/python3.12")
+    monkeypatch.setenv("PM_REMOTE_SNAPSHOT_PATH", "/srv/project data/snapshot.json")
     calls = []
 
     def fake_run(command, **kwargs):
@@ -167,7 +191,8 @@ def test_remote_status_uses_configured_host_key_port_and_python(monkeypatch, tmp
     assert command[0] == "ssh"
     assert command[command.index("-i") + 1] == str(key)
     assert command[command.index("-p") + 1] == "2222"
-    assert command[-3:] == ["collector@example.test", "/usr/bin/python3.12", "-"]
+    assert command[-2:] == ["collector@example.test", "cat -- '/srv/project data/snapshot.json'"]
+    assert value["collector_online"] is False  # Missing source generation clock fails closed.
 
 
 def test_dashboard_uses_node_label_from_api() -> None:

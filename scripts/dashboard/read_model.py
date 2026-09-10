@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -98,10 +99,23 @@ class ReadModel:
                 # Preserve last known values as stale; never replace them with 0.
                 alive = False
             value = copy.deepcopy(self._cache) if self._cache.get("run_id") == run_id else {}
-            age = max(0, time.time() - value.get("as_of", 0)) if value else None
+            checked_at = value.get("as_of", 0)
+            if value.get("schemaVersion") == 2:
+                try:
+                    heartbeat = read_json(self.directory / "heartbeat.json", 8192)
+                    if (heartbeat.get("run_id") != run_id or not value.get("snapshot_version") or
+                            heartbeat.get("snapshot_version") != value["snapshot_version"]):
+                        raise ValueError("heartbeat does not match projection")
+                    checked_at = heartbeat["as_of"]
+                    if type(checked_at) not in (int, float) or not math.isfinite(checked_at):
+                        raise ValueError("invalid heartbeat time")
+                except (OSError, ValueError, KeyError):
+                    checked_at = 0
+            age = max(0, time.time() - checked_at) if value else None
             damaged = bool(value.get("ingestion", {}).get("error") or
                            value.get("summary", {}).get("invalid_records"))
             return {**value, "run_id": run_id, "worker_alive": alive,
+                    "checked_at": checked_at,
                     "age_seconds": age,
                     "stale": not alive or age is None or age > 3,
                     "state": "incomplete" if damaged else ("catching_up" if value.get("ingestion", {}).get("pending")
