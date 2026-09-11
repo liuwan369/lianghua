@@ -62,6 +62,7 @@ _trading_config_revision: int | None = None
 _trading_account_id: str | None = None
 _trading_request_id: str | None = None
 _projection_pending: deque = deque()
+_evidence_download_lock = threading.BoundedSemaphore(2)
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -970,9 +971,14 @@ def make_handler(root: Path):
             total = path.stat().st_size
             if offset >= total:
                 self._send_json(b'{"error":"offset beyond file"}', 416); return
-            with path.open("rb") as handle:
-                handle.seek(offset); body = handle.read(min(size, total - offset))
-            self.send_response(200)
+            if not _evidence_download_lock.acquire(timeout=5):
+                self._send_json(b'{"error":"download busy"}', 429); return
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(offset); body = handle.read(min(size, total - offset))
+            finally:
+                _evidence_download_lock.release()
+            self.send_response(206 if offset > 0 or len(body) < total else 200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Range", f"bytes {offset}-{offset + len(body) - 1}/{total}")
             self.send_header("Accept-Ranges", "bytes")
