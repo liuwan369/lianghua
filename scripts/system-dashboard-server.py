@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import uuid
+import re
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -109,6 +110,7 @@ def _live_config() -> dict:
         "remote_python": os.environ.get("PM_REMOTE_PYTHON", "python3"),
         "snapshot_path": Path(os.environ.get("PM_MARKET_SNAPSHOT_PATH", str(project_root / "data" / "dashboard" / "market-snapshot.json"))),
         "remote_snapshot_path": os.environ.get("PM_REMOTE_SNAPSHOT_PATH", "/root/pm-system/data/dashboard/market-snapshot.json"),
+        "evidence_download_token": os.environ.get("PM_EVIDENCE_DOWNLOAD_TOKEN", "").strip(),
     }
 
 
@@ -896,6 +898,9 @@ def make_handler(root: Path):
 
         def _get_v1(self, path: str) -> None:
             try:
+                if path == "/api/v1/evidence":
+                    self._get_evidence()
+                    return
                 if path == "/api/v1/config":
                     with _config_control_lock:
                         value = config_store().get()
@@ -941,6 +946,39 @@ def make_handler(root: Path):
                 self._send_json('{"error":"请求参数不正确"}'.encode(), 400)
             except (OSError, sqlite3.Error, RuntimeError):
                 self._send_json('{"error":"数据暂不可用，请稍后重试"}'.encode(), 503)
+
+        def _get_evidence(self) -> None:
+            cfg = _live_config()
+            token = cfg.get("evidence_download_token", "")
+            if not token or not hmac.compare_digest(self.headers.get("X-PM-Evidence-Token", ""), token):
+                self._send_json(b'{"error":"evidence download unauthorized"}', 403)
+                return
+            query = parse_qs(urlsplit(self.path).query)
+            date = (query.get("date", [""])[0] or "").strip()
+            if not re.fullmatch(r"202[0-9]-[0-9]{2}-[0-9]{2}", date):
+                self._send_json(b'{"error":"invalid date"}', 400); return
+            try:
+                offset = int(query.get("offset", ["0"])[0])
+                size = int(query.get("size", [str(8 * 1024 * 1024)])[0])
+            except ValueError:
+                self._send_json(b'{"error":"invalid range"}', 400); return
+            if offset < 0 or size < 1 or size > 8 * 1024 * 1024:
+                self._send_json(b'{"error":"range exceeds limit"}', 416); return
+            path = cfg["local_data_dir"] / f"dublin-evidence-{date}.sqlite3"
+            if not path.is_file():
+                self._send_json(b'{"error":"evidence not found"}', 404); return
+            total = path.stat().st_size
+            if offset >= total:
+                self._send_json(b'{"error":"offset beyond file"}', 416); return
+            with path.open("rb") as handle:
+                handle.seek(offset); body = handle.read(min(size, total - offset))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Range", f"bytes {offset}-{offset + len(body) - 1}/{total}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body)
 
         def _send_json(self, body: bytes, status: int = 200) -> None:
             self.send_response(status)
