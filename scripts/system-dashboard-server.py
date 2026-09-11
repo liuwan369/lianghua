@@ -62,7 +62,7 @@ _trading_config_revision: int | None = None
 _trading_account_id: str | None = None
 _trading_request_id: str | None = None
 _projection_pending: deque = deque()
-_evidence_download_lock = threading.BoundedSemaphore(2)
+_evidence_download_lock = threading.BoundedSemaphore(6)
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -976,15 +976,15 @@ def make_handler(root: Path):
             try:
                 with path.open("rb") as handle:
                     handle.seek(offset); body = handle.read(min(size, total - offset))
+                self.send_response(206 if offset > 0 or len(body) < total else 200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Range", f"bytes {offset}-{offset + len(body) - 1}/{total}")
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers(); self.wfile.write(body)
             finally:
                 _evidence_download_lock.release()
-            self.send_response(206 if offset > 0 or len(body) < total else 200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Range", f"bytes {offset}-{offset + len(body) - 1}/{total}")
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers(); self.wfile.write(body)
 
         def _send_json(self, body: bytes, status: int = 200) -> None:
             self.send_response(status)
