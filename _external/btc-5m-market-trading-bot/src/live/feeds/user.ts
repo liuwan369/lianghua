@@ -566,9 +566,40 @@ export function runUserFeed(
       let finalRows: unknown[] = [];
       while (Date.now() < observeUntil) {
         if (!ready || activeWs?.readyState !== WebSocket.OPEN) {
-          throw new Error("user websocket dropped during trade reconciliation");
+          // A close and reconnect can race with the caller's cancellation
+          // sweep. Wait within the existing bounded reconciliation window so
+          // the REST snapshot is taken only after the authenticated channel
+          // is usable again. The caller still fails closed when the window
+          // expires or the feed cannot reconnect.
+          const remainingMs = observeUntil - Date.now();
+          if (remainingMs <= 0) break;
+          await new Promise<void>((resolve) => {
+            let done = false;
+            const onReady = () => {
+              if (done) return;
+              done = true;
+              clearTimeout(timer);
+              readyWaiters.delete(onReady);
+              resolve();
+            };
+            const timer = setTimeout(() => {
+              if (done) return;
+              done = true;
+              readyWaiters.delete(onReady);
+              resolve();
+            }, remainingMs);
+            readyWaiters.add(onReady);
+          });
+          if (!ready || activeWs?.readyState !== WebSocket.OPEN) continue;
         }
-        const rows = await opts.fetchRecentTrades(afterUnix);
+        // A reconnect may restore WS before the REST endpoint is ready. Keep
+        // retrying until the same bounded observation deadline rather than
+        // reporting an incomplete account snapshot on one transient error.
+        const rows = await opts.fetchRecentTrades(afterUnix).catch(() => null);
+        if (rows == null) {
+          await sleep(Math.min(250, Math.max(1, observeUntil - Date.now())));
+          continue;
+        }
         finalRows = rows;
         const key = rows
           .map((row) => {

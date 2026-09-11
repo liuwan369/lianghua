@@ -59,4 +59,30 @@ describe("live websocket safety", () => {
       expect(events).toContainEqual(expect.objectContaining({kind:"userStatus",healthy:false}));
     },
   );
+
+  it("waits for the built-in reconnect before taking the final trade snapshot", async () => {
+    const events: FeedEvent[] = [];
+    const fetchRecentTrades = vi.fn().mockResolvedValue([]);
+    const feed = runUserFeed((event) => events.push(event), {
+      creds:{key:"test",secret:"test",passphrase:"test"}, conditionId:"market",
+      upToken:"up", downToken:"down", isOurOrder:()=>false, fetchRecentTrades,
+    }, Date.now()/1000+60);
+    stop = feed.stop;
+    const first = await openSocket();
+    expect(feed.isHealthy()).toBe(true);
+
+    first.emit("close");
+    const snapshot = feed.reconcileRecentTrades(Date.now()/1000 - 10);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(mocks.sockets).toHaveLength(2));
+    const second = mocks.sockets[1];
+    second.emit("open");
+    await vi.waitFor(() => expect(feed.isHealthy()).toBe(true));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(snapshot).resolves.toEqual([]);
+    expect(fetchRecentTrades).toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({kind:"userStatus",healthy:false}));
+    expect(events).toContainEqual(expect.objectContaining({kind:"userStatus",healthy:true}));
+  });
 });
