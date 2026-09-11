@@ -1,0 +1,16 @@
+{
+  "checked_at": "2026-09-11T17:00:00+08:00",
+  "historical_verification": {
+    "source": "data/pm-r25-history-30d-verified plus Polygon eth_getTransactionReceipt",
+    "address": "0x3048d65321be3497164cdfc2996f94f98a2e7537",
+    "unique_transactions": 77,
+    "verified_exact": 77,
+    "failed_or_mismatched": 0,
+    "by_type": {"TAKER_REBATE": 29, "MAKER_REBATE": 29, "REWARD": 19}
+  },
+  "current_dublin_account": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+  "applies_to_current_account": false,
+  "reason": "历史奖励证据的收款地址与当前都柏林账户不同，不能计入当前钱包收益",
+  "current_live_account_reward_evidence": {"available": false, "verified_transactions": 0},
+  "trade_authorization": false
+}
