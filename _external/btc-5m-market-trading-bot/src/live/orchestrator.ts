@@ -493,6 +493,30 @@ async function runOneMarket(
 
   let latestOracle: number | undefined;
 
+  const attemptResidualExit = async (reason: string) => {
+    if (!cfg.live || !latest) return;
+    const exposure = engine.session.exposure();
+    if (exposure.residualShares <= 1e-8 || exposure.residualSide == null) return;
+    const side = exposure.residualSide;
+    const token = side === Side.Up ? mkt.upToken : mkt.downToken;
+    const bid = side === Side.Up ? latest.upBid : latest.downBid;
+    if (bid == null || !Number.isFinite(bid) || bid <= 0 || bid >= 1) {
+      journal.log("exit_unavailable", mkt, nowUnix(), { reason, ...exposure });
+      return;
+    }
+    try {
+      const result = await executor.submitExit(side, token, bid, exposure.residualShares);
+      journal.log(result.ok ? "exit_submitted" : "exit_rejected", mkt, nowUnix(), {
+        reason, side: Side.asStr(side), price: result.price, shares: result.size,
+        notional: result.notional, order_id: result.orderId ?? null,
+      });
+    } catch (error) {
+      journal.log("exit_unknown", mkt, nowUnix(), { reason, ...exposure,
+        error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  };
+
 
 
   const decideAndApply = async (ts: number, b: BookSnapshot) => {
@@ -717,9 +741,11 @@ async function runOneMarket(
 
   }
     reachedMarketEnd = nowUnix() >= mkt.end;
-    if (cfg.live && user) await finalizeMarketAccount(executor, engine, mkt, user,
+    if (cfg.live && user) {
+      if (!reachedMarketEnd) await attemptResidualExit("duration_stop");
+      await finalizeMarketAccount(executor, engine, mkt, user,
       event => handleUserEvent(engine, executor, mkt, journal, event.kind === "exchangeFill" ? event.fill.tsUnix : nowUnix(), event, journaledFills), journaledFills);
-    else await executor.cancelAll();
+    } else await executor.cancelAll();
   } catch (error) {
     await executor.pauseSubmissions();
     if (cfg.live && user && !(error instanceof UnknownOrderStateError)) {
