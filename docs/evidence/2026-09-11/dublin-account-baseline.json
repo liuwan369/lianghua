@@ -1,0 +1,16 @@
+{
+  "captured_at": "2026-09-11T09:35:12.781Z",
+  "source": "https://34-242-206-196.sslip.io/api/v1/account-data",
+  "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+  "collateral_usd": 107.659376,
+  "positions": 8,
+  "open_orders": 0,
+  "trades": 20,
+  "known_fee_amount_usd": 0.86631,
+  "receipts_checked": 24,
+  "receipts_pending": 0,
+  "rewards_available": false,
+  "wallet_net_profit": null,
+  "trading": {"running": false, "mode": "paper", "live_unlocked": false},
+  "purpose": "只读期初快照；不是完整历史资金基线，不构成收益结论"
+}
