@@ -1,0 +1,33 @@
+{
+  "checked_at": "2026-09-11T16:45:00+08:00",
+  "scope": "代码级恢复与公网只读资金核对",
+  "engine_targeted_tests": {"passed": 46, "skipped": 184, "failed": 0},
+  "covered": [
+    "部分成交保持剩余数量可撤",
+    "迟到成交回报不覆盖新订单",
+    "停止前最终账户对账纳入自有成交",
+    "WebSocket 断线重连后再取最终成交快照",
+    "链上回执解析及费用证据",
+    "奖励多活动记录按单笔交易合并"
+  ],
+  "public_snapshot": {
+    "running": false,
+    "mode": "paper",
+    "live_unlocked": false,
+    "stale": false,
+    "open_orders": 0,
+    "known_fee_amount": 0.86631,
+    "fees_complete": false,
+    "rewards_available": false,
+    "receipts_checked": 24,
+    "receipts_pending": 0,
+    "wallet_net_profit": null
+  },
+  "not_claimed": [
+    "自然发生的实盘部分成交",
+    "自然断线期间的实盘成交恢复",
+    "完整历史费用及期初资金基线",
+    "正奖励到账凭证",
+    "钱包最终净收益"
+  ]
+}
