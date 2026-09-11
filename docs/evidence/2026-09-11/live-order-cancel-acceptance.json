@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "acceptedAt": "2026-09-11T03:00:00Z",
+  "node": "都柏林节点",
+  "endpoint": "https://34-242-206-196.sslip.io",
+  "account": {
+    "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+    "collateralUsdAfter": 108.728676,
+    "openOrdersAfter": 0,
+    "tradesAfter": 19,
+    "positionsAfter": 8
+  },
+  "liveProbe": {
+    "preflight": "passed",
+    "ownerSignature": "matched",
+    "clobV2": "connected",
+    "marketData": ["rtds-chainlink", "coinbase", "bybit-perp", "binance-spot", "binance-perp", "okx"],
+    "userOrderFeed": "authenticated",
+    "strategyRun": {
+      "orderUsdCap": 1,
+      "maxTotalUsd": 2,
+      "durationMinutes": 0.5,
+      "orders": 0,
+      "fills": 0,
+      "spentUsd": 0,
+      "exit": "normal"
+    },
+    "directOrderProbe": {
+      "sizeShares": 5,
+      "priceUsd": 0.01,
+      "notionalUsd": 0.05,
+      "submit": {
+        "success": true,
+        "status": "live",
+        "ackLatencyMs": 148.536,
+        "tradeIds": []
+      },
+      "cancel": {
+        "success": true,
+        "confirmed": true
+      },
+      "filled": false
+    }
+  },
+  "finalState": {
+    "running": false,
+    "mode": "paper",
+    "liveUnlocked": false,
+    "dashboardService": "active",
+    "collectorService": "active"
+  },
+  "coverage": {
+    "verified": ["real order ACK", "real cancel ACK", "no residual open order", "balance unchanged"],
+    "notVerified": ["partial fill", "disconnect recovery", "late fill reconciliation", "settlement fees", "rebates and rewards"],
+    "note": "The direct probe used a maker price below the current ask and was cancelled immediately; it intentionally did not force a fill."
+  }
+}
