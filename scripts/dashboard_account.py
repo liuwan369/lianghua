@@ -13,6 +13,9 @@ FIELDS = {
     "owner_key": "POLYMARKET_OWNER_PRIVATE_KEY",
     "relayer_key": "RELAYER_API_KEY",
     "relayer_address": "RELAYER_API_KEY_ADDRESS",
+    "builder_api_key": "POLY_BUILDER_API_KEY",
+    "builder_secret": "POLY_BUILDER_SECRET",
+    "builder_passphrase": "POLY_BUILDER_PASSPHRASE",
 }
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 KEY = re.compile(r"(?:0x)?[0-9a-fA-F]{64}\Z")
@@ -86,6 +89,15 @@ def candidate_profile(payload: dict, previous: dict) -> dict:
         raise ValueError("Relayer 密钥格式错误，请去掉说明文字")
     if addr and not ADDRESS.fullmatch(addr):
         raise ValueError("Relayer 地址格式错误")
+    builder_values = [result.get(name, "") for name in (
+        "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"
+    )]
+    if any(value and any(char.isspace() for char in value) for value in builder_values):
+        raise ValueError("Builder 凭据不能包含空白字符")
+    if any(builder_values) and not all(builder_values):
+        raise ValueError("Builder API Key、Secret 和 Passphrase 需要一起填写")
+    if any(len(value) > 512 for value in builder_values):
+        raise ValueError("Builder 凭据长度超出限制")
     return {name: result.get(name, "") for name in FIELDS.values()}
 
 

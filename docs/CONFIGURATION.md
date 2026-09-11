@@ -64,7 +64,7 @@
 
 ## 账户与凭据
 
-页面账户字段为 `wallet`、`owner_key`、`relayer_key`、`relayer_address`。同一钱包的空密钥输入保留已有值；更换钱包不会继承原钱包密钥。检查成功不等于保存，保存成功也不启动交易。
+页面账户字段为 `wallet`、`owner_key`、`relayer_key`、`relayer_address`、`builder_api_key`、`builder_secret`、`builder_passphrase`。Builder 三项必须同时填写或同时留空。同一钱包的空密钥输入保留已有值；更换钱包不会继承原钱包密钥。检查成功不等于保存，保存成功也不启动交易。
 
 资金钱包、Owner 签名、Relayer、Builder、Session Key 各有独立用途。当前路线使用 Owner 为 CLOB V2 订单签名；Builder 和 Session Key 不是下单必需项，但 Deposit Wallet 赎回等免 Gas Relayer 操作需要 Builder 认证。官方 SDK 对其他产品的授权缺项不能用于阻止下单路线。
 

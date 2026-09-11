@@ -214,10 +214,13 @@
     if ($('accountSave').disabled) return;
     if (save && !window.isSecureContext) { set('accountResult', '请使用带登录保护的 HTTPS 页面。'); return; }
     if (save && !$('accountForm').reportValidity()) return;
-    const body = save ? { wallet: $('accountWallet').value.trim(), owner_key: $('accountOwner').value.trim(), relayer_key: $('accountRelayer').value.trim(), relayer_address: $('accountRelayerAddress').value.trim() } : {};
+    const body = save ? { wallet: $('accountWallet').value.trim(), owner_key: $('accountOwner').value.trim(), relayer_key: $('accountRelayer').value.trim(), relayer_address: $('accountRelayerAddress').value.trim(), builder_api_key: $('accountBuilderApiKey').value.trim(), builder_secret: $('accountBuilderSecret').value.trim(), builder_passphrase: $('accountBuilderPassphrase').value.trim() } : {};
     // Secrets are never placed in storage, URLs, or error messages.
     $('accountOwner').value = '';
     $('accountRelayer').value = '';
+    $('accountBuilderApiKey').value = '';
+    $('accountBuilderSecret').value = '';
+    $('accountBuilderPassphrase').value = '';
     $('accountSave').disabled = $('accountCheck').disabled = true;
     set('accountResult', '正在核对账户、余额和授权，请稍候…');
     try {
@@ -231,7 +234,7 @@
       if (save) set('accountResult', $('accountResult').textContent + ' 账户已保存；没有下单或广播授权。');
       await loadTrading();
     } catch (error) { set('accountResult', error.message + '；密码字段已清空。'); }
-    finally { body.owner_key = body.relayer_key = ''; $('accountSave').disabled = $('accountCheck').disabled = false; }
+    finally { body.owner_key = body.relayer_key = body.builder_api_key = body.builder_secret = body.builder_passphrase = ''; $('accountSave').disabled = $('accountCheck').disabled = false; }
   }
 
   const configKey = 'pm-dashboard-config-v1';

@@ -30,7 +30,7 @@
 | POST /api/account/save | 校验候选并原子保存账户；清除进程内实盘解锁 |
 | POST /api/trading/start、/api/trading/stop | 兼容交易控制接口，受独立控制校验和实盘门槛约束 |
 
-请求须为 JSON 对象，最大 32,000 字节。配置完整替换和边界见 [配置契约](../contracts/config-v1.md)。账户字段只接受 wallet、owner_key、relayer_key、relayer_address。服务运行交易期间拒绝检查/更换账户。
+请求须为 JSON 对象，最大 32,000 字节。配置完整替换和边界见 [配置契约](../contracts/config-v1.md)。账户字段只接受 wallet、owner_key、relayer_key、relayer_address、builder_api_key、builder_secret、builder_passphrase；Builder 三项必须同时填写或同时留空。服务运行交易期间拒绝检查/更换账户。
 
 公网没有登录认证。账户操作要求 Origin/Host、JSON 类型、可信 HTTPS 代理及所配置公开来源匹配；此来源规则不识别用户身份。交易控制令牌与实盘解锁是另一组条件，公开访问不等于允许真实交易。当前六页启停按钮仍未接通。
 

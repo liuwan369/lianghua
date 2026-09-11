@@ -11,6 +11,10 @@ type Control = HTMLInputElement | HTMLSelectElement;
 /** Form drafts live only in the current page; polling never replaces edited fields. */
 export function connectForms(saved?: { config: (value: Config) => void; account: () => void }) {
   const fields = Array.from(document.querySelectorAll<Control>('#settings-strategy [id^="setting-"],#settings-run [id^="setting-"]'));
+  const accountPanel = document.querySelector<HTMLElement>('#settings-account .form');
+  if (accountPanel && !accountPanel.querySelector('[data-builder-credentials]')) {
+    accountPanel.insertAdjacentHTML('beforeend', `<div data-builder-credentials class="field"><label for="accountBuilderApiKey">Builder API Key（选填）</label><input id="accountBuilderApiKey" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"><small class="field-help">Deposit Wallet 赎回等 Builder Relayer 操作需要，与 Builder Code 不同。</small></div><div data-builder-credentials class="field"><label for="accountBuilderSecret">Builder Secret（配套填写）</label><input id="accountBuilderSecret" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"><small class="field-help">从 Polymarket Settings → Builder 创建 Profile 后获取。</small></div><div data-builder-credentials class="field"><label for="accountBuilderPassphrase">Builder Passphrase（配套填写）</label><input id="accountBuilderPassphrase" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"><small class="field-help">三项必须同时填写；不会回显或写入浏览器存储。</small></div>`);
+  }
   const accountFields = Array.from(document.querySelectorAll<HTMLInputElement>('#settings-account input'));
   const accountButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#settings-account button'));
   const globalSave = document.querySelector<HTMLButtonElement>('[data-save]')!;
@@ -71,11 +75,12 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   document.querySelectorAll<HTMLInputElement>('[data-example-price]').forEach(field => { field.disabled = false; field.title = '示例输入，不是实时行情或启动校验'; });
   const modeLive = document.querySelector<HTMLOptionElement>('#setting-mode option[value="live"]');
   if (modeLive) modeLive.textContent = '真实交易 · 保存不会解锁或启动';
-  const accountNames = ['wallet', 'owner_key', 'relayer_key', 'relayer_address'];
+  const accountNames = ['wallet', 'owner_key', 'relayer_key', 'relayer_address', 'builder_api_key', 'builder_secret', 'builder_passphrase'];
+  const accountLabels = ['资金钱包地址', 'Owner 签名私钥', 'Relayer API Key', 'Relayer 地址', 'Builder API Key', 'Builder Secret', 'Builder Passphrase'];
   accountFields.forEach((field, index) => {
     field.disabled = false; field.title = '仅在点击检查或保存时提交；空白密钥不会读取或回显';
-    field.name = accountNames[index]; field.autocomplete = index === 1 || index === 2 ? 'new-password' : 'off';
-    field.setAttribute('aria-label', ['资金钱包地址', 'Owner 签名私钥', 'Relayer API Key', 'Relayer 地址'][index]);
+    field.name = accountNames[index]; field.autocomplete = index === 1 || index === 2 || index >= 4 ? 'new-password' : 'off';
+    field.setAttribute('aria-label', accountLabels[index]);
     if (index === 0 || index === 3) field.pattern = '0x[0-9a-fA-F]{40}';
     if (index === 1) field.pattern = '(0x)?[0-9a-fA-F]{64}';
     if (index === 0) field.required = true;
@@ -120,7 +125,7 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
       if (save) {
         savedWallet = String(payload.wallet || '');
         accountFields.forEach((field, index) => {
-          if (field.value === submitted[index]) { accountDirty.delete(field); if (index === 1 || index === 2) field.value = ''; }
+          if (field.value === submitted[index]) { accountDirty.delete(field); if (index === 1 || index === 2 || index >= 4) field.value = ''; }
         });
         saved?.account();
       }

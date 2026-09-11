@@ -15,7 +15,7 @@ describe('versioned API validation', () => {
     expect(() => validate('markets', {...valid, current_markets:[{...market, up_ask:'0.5'}]})).toThrow();
   });
   it('requires the explicit account safety fields', () => {
-    expect(() => validate('account', {wallet:'',wallet_configured:false,owner_signer_configured:false,relayer_api_configured:false,config_error:null,last_check:null})).not.toThrow();
+    expect(() => validate('account', {wallet:'',wallet_configured:false,owner_signer_configured:false,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null})).not.toThrow();
     expect(() => validate('account', {wallet:'',wallet_configured:false})).toThrow();
   });
   it('uses no cached network response when the endpoint fails', async () => {
@@ -32,12 +32,13 @@ describe('versioned API validation', () => {
     expect(()=>validate('account-data',{...base,order_history:{...section,historical_complete:true}})).toThrow();
   });
   it('does not reflect submitted credentials in an account failure', async () => {
-    const owner_key='a'.repeat(64), relayer_key='synthetic-relayer-test-only';
-    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({ok:false,error:`rejected ${owner_key} ${relayer_key}`} ),{status:400})));
-    const error=await api.checkAccount({wallet:'',owner_key,relayer_key}).catch(e=>e as Error);
+    const owner_key='a'.repeat(64), relayer_key='synthetic-relayer-test-only', builder_secret='builder-secret-test-only';
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({ok:false,error:`rejected ${owner_key} ${relayer_key} ${builder_secret}`} ),{status:400})));
+    const error=await api.checkAccount({wallet:'',owner_key,relayer_key,builder_secret}).catch(e=>e as Error);
     expect((error as Error).message).toContain('HTTP 400');
     expect((error as Error).message).not.toContain(owner_key);
     expect((error as Error).message).not.toContain(relayer_key);
+    expect((error as Error).message).not.toContain(builder_secret);
   });
   it('rejects proxy HTML and malformed save confirmations', async()=>{
     const fetch=vi.fn().mockResolvedValue(new Response('<html>upstream failed</html>',{status:502}));

@@ -29,7 +29,7 @@ it('renders real balances and positions, escapes upstream text, and clears after
   document.body.innerHTML='<div id="app"></div>';mountLayout(document.getElementById('app')!);
   const d=data();d.positions=section([{title:'<img src=x onerror=alert(1)>',outcome:'UP',size:3,avgPrice:.4,currentValue:1.3,cashPnl:.1}]);
   const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify(d)));vi.stubGlobal('fetch',fetch);
-  const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,last_check:null,config_error:null,control_source:{scope:'local_preview',label:'本机预览服务',market_node:'都柏林节点'}});
+  const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,last_check:null,config_error:null,control_source:{scope:'local_preview',label:'本机预览服务',market_node:'都柏林节点'}});
   await ui.refresh();expect(document.querySelector('#view-home')!.textContent).toContain('$108.70');
   expect(document.querySelector('.side-note')!.textContent).toContain('本机预览服务');
   expect(document.querySelector('#account-positions')!.textContent).toContain('<img src=x');expect(document.querySelector('#account-positions img')).toBeNull();
@@ -40,7 +40,7 @@ it('activates the original filter toolbar and filters real orders versus fills',
   const d=data();d.open_orders=section([{id:'order-open',market:'open-market',side:'BUY',price:'.4',size_matched:'0',created_at:1}]);
   d.trades=section([{id:'trade-filled',trader_side:'TAKER',taker_order_id:'order-filled',market:'filled-market',side:'BUY',price:'.5',size:'3',match_time:2,status:'CONFIRMED'}]);
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify(d))));
-  const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,last_check:null,config_error:null});await ui.refresh();
+  const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,last_check:null,config_error:null});await ui.refresh();
   const buttons=document.querySelector('#view-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button');
   expect(buttons[1].disabled).toBe(false);buttons[1].click();expect(document.querySelector('#view-orders tbody')!.textContent).toContain('open-market');expect(document.querySelector('#view-orders tbody')!.textContent).not.toContain('filled-market');
   buttons[2].click();expect(document.querySelector('#view-orders tbody')!.textContent).toContain('filled-market');expect(document.querySelector('#view-orders tbody')!.textContent).not.toContain('open-market');ui.close();
@@ -49,7 +49,7 @@ it('activates the original filter toolbar and filters real orders versus fills',
 async function mounted(d:AccountData){
   document.body.innerHTML='<div id="app"></div>';mountLayout(document.getElementById('app')!);
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify(d))));
-  const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,last_check:null,config_error:null});await ui.refresh();return ui;
+  const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,last_check:null,config_error:null});await ui.refresh();return ui;
 }
 it('keeps failed and provisional trade reports out of settled fills and clears their accounting amounts',async()=>{
   const d=data();d.trades=section(['CONFIRMED','FAILED','MATCHED','MINED','RETRYING','UNKNOWN'].map((status,i)=>({trader_side:'TAKER',taker_order_id:'order-'+status,market:'market-'+status,price:'.5',size:'10',match_time:i,status})));

@@ -23,7 +23,8 @@ def test_switch_account_cannot_inherit_previous_secrets():
     switched = STORE.candidate_profile({"wallet": B}, old)
     assert switched["POLYMARKET_OWNER_PRIVATE_KEY"] == ""
     assert switched["RELAYER_API_KEY"] == ""
-    assert STORE.candidate_profile({"wallet": A}, old) == old
+    same = STORE.candidate_profile({"wallet": A}, old)
+    assert {key: same[key] for key in old} == old
 
 
 @pytest.mark.parametrize("payload", [
@@ -38,6 +39,18 @@ def test_invalid_profile_rejected_without_echo(payload):
         STORE.candidate_profile(payload, {})
     assert "bad secret value" not in str(caught.value)
     assert "LIVE=true" not in str(caught.value)
+
+
+def test_builder_credentials_must_be_complete_and_are_returned_only_as_config():
+    base = {"wallet": A}
+    with pytest.raises(ValueError, match="Builder API Key、Secret 和 Passphrase"):
+        STORE.candidate_profile({**base, "builder_api_key": "api"}, {})
+    with pytest.raises(ValueError, match="空白字符"):
+        STORE.candidate_profile({**base, "builder_api_key": "api", "builder_secret": "secret value", "builder_passphrase": "pass"}, {})
+    values = STORE.candidate_profile({**base, "builder_api_key": "api", "builder_secret": "secret", "builder_passphrase": "pass"}, {})
+    assert values["POLY_BUILDER_API_KEY"] == "api"
+    assert values["POLY_BUILDER_SECRET"] == "secret"
+    assert values["POLY_BUILDER_PASSPHRASE"] == "pass"
 
 
 def test_check_failure_does_not_echo_child_output(monkeypatch, tmp_path):

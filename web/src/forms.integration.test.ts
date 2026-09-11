@@ -17,7 +17,7 @@ async function setup() {
       return new Response(JSON.stringify({ok:false,error:path.includes('/account/')?'请使用带登录保护的 HTTPS 页面接入账户':'配置版本已变化，请重新读取后保存',current_revision:4}),{status:path.includes('/account/')?403:409});
     }
     if(path==='/api/v1/config') return new Response(JSON.stringify({schemaVersion:1,revision,savedAt:null,params,capabilities:{supportedFields:Object.keys(params),demoFieldMappings:{order:'order_usd',life:'maker_life_sec',duration:'duration_min',submitted:'max_total_usd',maxOrders:'max_orders',mode:'mode'}}}));
-    if(path==='/api/account/status') return new Response(JSON.stringify({wallet:'0x'+'1'.repeat(40),wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,config_error:null,last_check:null}));
+    if(path==='/api/account/status') return new Response(JSON.stringify({wallet:'0x'+'1'.repeat(40),wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null}));
     if(path.startsWith('/api/v1/runs')) return new Response(JSON.stringify({schemaVersion:1,runs:[],next_before_id:null}));
     return new Response('{}',{status:503});
   });
@@ -98,14 +98,14 @@ it('does not let an older account read overwrite a successful account save',asyn
     }
     if(path==='/api/account/status') {
       if(++accountReads===1)return oldRead;
-      return new Response(JSON.stringify({wallet:newWallet,wallet_configured:true,owner_signer_configured:false,relayer_api_configured:false,config_error:null,last_check:null}));
+      return new Response(JSON.stringify({wallet:newWallet,wallet_configured:true,owner_signer_configured:false,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null}));
     }
     return original(path,options);
   });
   await vi.advanceTimersByTimeAsync(5000);
   const wallet=input('#settings-account input',newWallet);click('[data-setting="account"]');click('[data-save]');
   await vi.advanceTimersByTimeAsync(100);
-  release(new Response(JSON.stringify({wallet:'0x'+'1'.repeat(40),wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,config_error:null,last_check:null})));
+  release(new Response(JSON.stringify({wallet:'0x'+'1'.repeat(40),wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null})));
   await vi.advanceTimersByTimeAsync(100);
   expect(wallet.value).toBe(newWallet);
   expect(document.querySelector('#settings-account .note')!.textContent).toContain('账户已保存');

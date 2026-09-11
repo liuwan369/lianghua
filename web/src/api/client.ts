@@ -26,6 +26,7 @@ export function validate(kind: string, data: unknown): void {
       && ['up_bid','up_ask','down_bid','down_ask','ask_sum'].every(k => nullableNumber(m[k])) && nullableString(m.quote_at));
   if (kind === 'account') valid = typeof data.wallet === 'string' && typeof data.wallet_configured === 'boolean'
     && typeof data.owner_signer_configured === 'boolean' && typeof data.relayer_api_configured === 'boolean'
+    && typeof data.builder_api_configured === 'boolean'
     && (data.last_check === null || object(data.last_check)) && nullableString(data.config_error);
   if (kind === 'account-data') valid = data.read_only === true && typeof data.stale === 'boolean'
     && nullableString(data.wallet) && nullableString(data.checked_at)
@@ -80,7 +81,7 @@ export async function post(path: string, payload: Obj, timeoutMs = 15000): Promi
     const value: unknown = await response.json().catch(() => null);
     if (!response.ok || !object(value) || value.ok !== true) {
       let message = object(value) && typeof value.error === 'string' ? value.error : '服务器未确认操作成功';
-      for (const key of ['owner_key', 'relayer_key']) {
+      for (const key of ['owner_key', 'relayer_key', 'builder_api_key', 'builder_secret', 'builder_passphrase']) {
         const secret = payload[key];
         if (typeof secret === 'string' && secret) message = message.split(secret).join('[已隐藏]');
       }

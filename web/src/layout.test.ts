@@ -70,7 +70,7 @@ describe('approved six-page design regression',()=>{
       '/api/v1/config':{schemaVersion:1,revision:3,savedAt:null,params:{mode:'paper',order_usd:2,maker_life_sec:15},capabilities:{}},
       '/api/v1/status':{schemaVersion:1,asOf:now,running:true,mode:'paper',run_id:'r1',account_id:null,config_revision:3,params:{max_total_usd:10},live_unlocked:false,stop_result:{},stats:{available:true,fills:2,fill_notional:4,events:[]},projection:{stale:false,state:'ready',run_id:'r1'}},
       '/api/v1/markets':{schemaVersion:1,asOf:now,node_label:'测试节点',collector_online:true,cache_age_seconds:0,current_markets:[{slug:'test-market',start:now-10,end:now+100,up_bid:.4,up_ask:.41,down_bid:.58,down_ask:.59,ask_sum:1,quote_at:new Date(now*1000).toISOString()}]},
-      '/api/account/status':{wallet:'',wallet_configured:false,owner_signer_configured:false,relayer_api_configured:false,config_error:null,last_check:null},
+      '/api/account/status':{wallet:'',wallet_configured:false,owner_signer_configured:false,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null},
       '/api/v1/runs':{schemaVersion:1,runs:[{id:1,run_id:'r1',mode:'paper',account_id:null,created_at:now,config_revision:3}],next_before_id:null},
       '/api/v1/events':{schemaVersion:1,run_id:'r1',events:[{id:1,event:'fill',market:'<img src=x onerror=alert(1)>',time:now,side:'UP',price:.4,shares:5,amount:2,fee:null,pnl:null}],next_before_id:null},
     };
