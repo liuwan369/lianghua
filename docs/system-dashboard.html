@@ -28,7 +28,7 @@
             <div class="field"><label for="accountRelayer">Relayer API 密钥（选填）</label><input id="accountRelayer" type="password" autocomplete="new-password" maxlength="256"><small class="field-help">用于免 Gas 钱包授权操作，与订单签名不同。</small></div>
             <div class="field"><label for="accountRelayerAddress">Relayer 对应地址（配套填写）</label><input id="accountRelayerAddress" maxlength="42" placeholder="0x…" spellcheck="false"></div>
           </div>
-          <p class="field-help">密钥只通过已登录的 HTTPS 入口提交，保存于服务器受保护文件；不会回填、写入浏览器存储或返回到页面。无需 Builder / Session Key。</p>
+          <p class="field-help">密钥只通过 HTTPS 入口提交，保存于服务器受保护文件；不会回填、写入浏览器存储或返回到页面。订单签名不需要 Builder / Session Key；Deposit Wallet 赎回等免 Gas 操作可能需要 Builder 认证。</p>
           <div class="run-controls"><button id="accountSave" class="btn primary" type="submit">检查并保存账户</button><button id="accountCheck" class="btn" type="button">检查已保存账户</button><a class="btn" href="https://polymarket.com/" target="_blank" rel="noopener noreferrer">打开平台账户</a></div>
         </form>
         <div id="accountResult" class="result" role="status" aria-live="polite">尚未检查账户。</div>
