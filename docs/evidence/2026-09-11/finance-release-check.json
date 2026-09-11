@@ -1,0 +1,21 @@
+{
+  "checked_at": "2026-09-11T07:16:48.294Z",
+  "release": "b9880eb",
+  "strict_frontend_validator": "passed",
+  "asset": "/console/assets/index-D6S_zAwJ.js",
+  "asset_sha256": "3c945132bde419c0eb899ba89f2b4fdf9e736cfbf508102c69a5a10dd7e9412b",
+  "asset_matches_build": true,
+  "running": false,
+  "live_unlocked": false,
+  "stale": false,
+  "account_checked_at": "2026-09-11T07:16:28.900Z",
+  "open_orders": 0,
+  "history_items": 1,
+  "history_missing_checked": 0,
+  "known_fees": 0.37029,
+  "fees_complete": false,
+  "rewards_available": false,
+  "receipts_checked": 8,
+  "receipts_pending": 16,
+  "wallet_net_profit": null
+}

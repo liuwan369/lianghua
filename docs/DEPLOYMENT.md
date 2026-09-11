@@ -1,8 +1,8 @@
 # 都柏林部署
 
-核对日期：2026-09-10。正式入口：[https://34-242-206-196.sslip.io/console/](https://34-242-206-196.sslip.io/console/)。HTTP 80 跳转 HTTPS 443，后端仅监听 127.0.0.1:18766。
+核对日期：2026-09-11。正式入口：[https://34-242-206-196.sslip.io/console/](https://34-242-206-196.sslip.io/console/)。HTTP 80 跳转 HTTPS 443，后端仅监听 127.0.0.1:18766。
 
-最新账户数据接入的35个源码与构建文件已部署，SHA-256一致；公网页面及6个API均HTTP200。账户缓存跨两个30秒刷新周期保持有效，账户文件未改变，采集器未重启，交易未运行且实盘锁关闭：[发布记录](evidence/2026-09-10/account-data-release-check.json)、[公网验证](evidence/2026-09-10/account-data-public-check.json)。
+最新账户财务与历史恢复修复 `b9880eb` 已部署，34个发布文件内容一致，公网JS与构建SHA-256一致，账户接口通过前端实际严格校验。账户文件未改变，只重启控制台以刷新常驻账户读取进程，采集器未重启；交易未运行且实盘锁关闭：[公网验证](evidence/2026-09-11/finance-release-check.json)。本批回滚备份位于 `/root/.local/share/pm-system-recovery/20260911-finance-b9880eb.tar.gz`，只备份被替换的文件。
 
 ## 当前组件
 
