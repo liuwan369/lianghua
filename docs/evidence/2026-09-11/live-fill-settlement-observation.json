@@ -24,19 +24,22 @@
   },
   "settlement": {
     "redeemable": true,
-    "redeemed": false,
+    "redeemed": true,
+    "redeemTransactionHash": "0x5c35ee289c9b707845b8b6d17b1215503df3385677af1bbbea1330d2d424d093",
     "relayerAttempt": {
       "endpoint": "https://relayer-v2.polymarket.com",
       "method": "executeDepositWalletBatch",
-      "result": "rejected",
-      "httpStatus": 401,
-      "error": "invalid authorization",
-      "broadcast": false
+      "result": "confirmed",
+      "httpStatus": 200,
+      "error": null,
+      "broadcast": true,
+      "outcomeBalanceBefore": 100,
+      "outcomeBalanceAfter": 0
     },
-    "reason": "资金钱包是 Deposit Wallet（签名类型 3）；Owner EOA 不能直接调用 CTF redeemPositions。官方 Relayer 批量接口已验证到认证层，但当前账户没有 Builder API 凭据，服务拒绝请求且未广播。"
+    "reason": "资金钱包是 Deposit Wallet（签名类型 3）；Builder 凭据已通过官方 Relayer 认证，赎回交易已确认，目标 outcome token 余额从 100 降为 0。"
   },
   "coverage": {
-    "verified": ["real fill", "trade ID", "on-chain transaction hash", "fee receipt parsing", "balance change", "open order cleanup"],
-    "notVerified": ["partial fill", "disconnect during an in-flight fill", "redemption payout", "wallet net profit baseline", "rebate or reward payout"]
+    "verified": ["real fill", "trade ID", "on-chain transaction hash", "fee receipt parsing", "balance change", "open order cleanup", "Deposit Wallet redemption transaction", "redeemed outcome balance"],
+    "notVerified": ["partial fill", "disconnect during an in-flight fill", "wallet net profit baseline", "rebate or reward payout"]
   }
 }

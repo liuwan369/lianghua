@@ -12,7 +12,7 @@
 | [六分钟 paper 汇总](evidence/2026-09-10/paper-audit-summary.json) | 3 个市场窗口，其中一轮 UP 20 份、成本 4.60，oracle 推导 DOWN 获胜，模拟结算 -4.60 | 存在单边风险；不等于真实亏损，也缺少全程 tick 拒绝诊断来确定成因 |
 | [tick paper 汇总](evidence/2026-09-10/paper-tick-final-summary.json) | 90 秒配置实际运行含启动 106.72 秒；两边 tick 0.01，模拟 DOWN 20 份成本 3.60，35 次 hedge_pair_cost 拒绝，正常退出 | tick 传递与诊断有效；停止时未结算，3.60 不是已实现亏损 |
 | [受控实盘下单/撤单](evidence/2026-09-11/live-order-cancel-acceptance.json) | `$0.05` maker 单真实返回 `live`，ACK 148.536 ms，随后撤单确认；余额不变、开放订单 0 | 证明真实签名、下单 ACK、撤单 ACK 和残单清理；没有证明成交或部分成交 |
-| [受控实盘成交/结算观察](evidence/2026-09-11/live-fill-settlement-observation.json) | 100 份 UP 真实成交，交易回报、链上哈希、手续费回执和余额变化均已读取；市场进入 `redeemable=true`；Relayer 赎回真实返回 401 且未广播 | 证明真实成交和费用读取；Deposit Wallet 结算仍需 Builder 认证，未把可赎回误记为已到账 |
+| [受控实盘成交/结算观察](evidence/2026-09-11/live-fill-settlement-observation.json) | 100 份 UP 真实成交，交易回报、链上哈希、手续费回执和余额变化均已读取；Builder 认证通过，Deposit Wallet 赎回交易已确认，目标持仓余额降为 0 | 证明真实成交、费用读取和一笔 Deposit Wallet 结算；完整钱包净收益与奖励仍需独立对账 |
 
 私有只读记录生成时间为 `2026-09-10T06:40:52Z`，未保留精确请求时间或 HTTP 状态码，不能据此编造每个请求的 200 状态。记录未涉及新 key 创建、账户配置修改、余额更新、下单、撤单或链上交易。首屏条数不是完整交易历史。
 
