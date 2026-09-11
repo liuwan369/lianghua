@@ -1,0 +1,9 @@
+{
+  "checked_at": "2026-09-11",
+  "scope": "local-only acceptance",
+  "python_tests": {"passed": 249, "skipped": 1},
+  "typescript_tests": {"passed": 230, "files": 23},
+  "live_trading": "locked",
+  "result": "offline recovery, partial-fill, late-fill, cancel, fee-unknown, and ledger safety paths pass existing automated coverage",
+  "not_claimed": ["natural live partial fills", "natural disconnect fill recovery", "real reward settlement", "wallet final net profit"]
+}
