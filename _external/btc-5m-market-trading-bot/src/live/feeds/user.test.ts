@@ -322,3 +322,20 @@ describe("PendingUserEvents", () => {
     expect(emitted).toEqual([earlyFill]);
   });
 });
+
+
+describe("user report latency provenance", () => {
+  it("measures venue timestamp to original receive time even when buffered until ACK", () => {
+    const raw={event_type:"trade",status:"MATCHED",id:"timestamped",taker_order_id:"our-taker",
+      asset_id:"up-tok",price:"0.4",size:"5",matchtime:"1800000000",__receivedAtUnix:1800000000.025};
+    const events=parseUserMessage(raw,opts,new Map(),new Set());
+    expect(events[0].kind).toBe("exchangeFill");
+    if(events[0].kind === "exchangeFill") {
+      expect(events[0].fill.tsUnix).toBe(1800000000);
+      expect(events[0].reportLatencyMs).toBeCloseTo(25,2);
+    }
+    const noTimestamp={...raw,matchtime:undefined};
+    const unmeasurable=parseUserMessage(noTimestamp,opts,new Map(),new Set());
+    if(unmeasurable[0].kind === "exchangeFill") expect(unmeasurable[0].reportLatencyMs).toBeUndefined();
+  });
+});

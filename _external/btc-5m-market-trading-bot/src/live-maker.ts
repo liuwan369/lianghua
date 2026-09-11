@@ -26,6 +26,8 @@ export class BtcRing {
       }
     }
     this.px.set(sec, price);
+    const cutoff = Math.max(sec, this.lastSec) - 600;
+    for (const timestamp of this.px.keys()) if (timestamp < cutoff) this.px.delete(timestamp);
     if (sec >= this.lastSec) {
       this.lastSec = sec;
       this.lastPx = price;
@@ -404,6 +406,17 @@ export class MakerSession {
       cost,
       this.inv.fills.length,
     ];
+  }
+
+  exposure(): { upShares: number; downShares: number; residualShares: number; residualSide: Side | null; cost: number; fees: number; worstCaseLoss: number; pendingOrders: number } {
+    const upShares = this.inv.up.shares;
+    const downShares = this.inv.down.shares;
+    const fees = this.inv.fills.reduce((sum, fill) => sum + this.fee(fill.shares, fill.price, fill.isMaker), 0);
+    return { upShares, downShares, residualShares: Math.abs(upShares - downShares),
+      residualSide: upShares === downShares ? null : upShares > downShares ? Side.Up : Side.Down,
+      cost: this.inv.totalCost(), fees,
+      worstCaseLoss: Math.max(0, this.inv.totalCost() + fees - Math.min(upShares, downShares)),
+      pendingOrders: this.pending.length };
   }
 
   pairCost(): number {

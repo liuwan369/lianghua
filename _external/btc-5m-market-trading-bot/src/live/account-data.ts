@@ -1,4 +1,7 @@
-/** Read-only account data. Only GET endpoints; no credential creation or order methods. */
+/** Read-only account data: GET and receipt RPC; no credential creation or order methods. */
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { AccountFinanceReader, balanceOccupancy } from './account-finance.js';
 import { createL1Headers, createL2Headers, type ApiKeyCreds } from "@polymarket/clob-client-v2";
 import { createWalletClient, http, type WalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -113,14 +116,44 @@ async function getJson(host: string, path: string, params: Record<string, string
 
 interface ObservedOrder { item?: Row; checked: number; attempted: number; failed: boolean; unavailable?: boolean; }
 export interface OrderHistorySection extends Section {
-  coverage: "observed_order_ids"; historical_complete: false; persistence: "reader_session";
+  coverage: "observed_order_ids"; historical_complete: false; persistence: "reader_session" | "account_file";
   known_order_count: number; pending_order_count: number; unavailable_order_count: number; truncated: boolean;
 }
 /** Account-bound, bounded observations; absence from /data/orders is never a cancellation. */
 export class OrderHistoryReader {
   private readonly known = new Map<string, ObservedOrder>();
   private truncated = false;
-  constructor(private readonly wallet: string, private readonly maxKnown = 2000, private readonly maxQueries = 8) {}
+  private persistenceError = false;
+  constructor(private readonly wallet: string, private readonly maxKnown = 2000, private readonly maxQueries = 8, private readonly file?: string) {
+    if (!file) return;
+    try {
+      const raw = readFileSync(file);
+      if (raw.length > 8_000_000) throw new Error('oversized_history');
+      const saved = JSON.parse(raw.toString('utf8'));
+      if (saved.version !== 1 || saved.wallet !== wallet.toLowerCase() || !Array.isArray(saved.entries) || saved.entries.length > maxKnown) throw new Error('invalid_history');
+      const entries = new Map<string, ObservedOrder>();
+      for (const [id, entry] of saved.entries) {
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,256}$/.test(id) || !entry || !Number.isFinite(entry.checked)) throw new Error('invalid_history');
+        entries.set(id, { checked: entry.checked, attempted: 0, failed: true,
+          ...(entry.item ? { item: sanitize(entry.item, 'orders', wallet) } : {}) });
+      }
+      for (const [id, entry] of entries) this.known.set(id, entry);
+      this.truncated = saved.truncated === true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.persistenceError = true;
+    }
+  }
+
+  private persist() {
+    if (!this.file || this.persistenceError) return;
+    try {
+      mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+      const temp = `${this.file}.${process.pid}.tmp`;
+      writeFileSync(temp, JSON.stringify({ version: 1, wallet: this.wallet.toLowerCase(), truncated: this.truncated,
+        entries: [...this.known] }), { mode: 0o600 });
+      renameSync(temp, this.file);
+    } catch { this.persistenceError = true; }
+  }
 
   async read(get: Getter, open: Section, trades: Section, now = Date.now()): Promise<OrderHistorySection> {
     const current = new Set<string>();
@@ -131,7 +164,14 @@ export class OrderHistoryReader {
         this.known.set(id, { checked: 0, attempted: 0, failed: false });
       }
     };
-    for (const item of open.items) { remember(item.id); if (typeof item.id === "string") current.add(item.id); }
+    for (const item of open.items) {
+      remember(item.id);
+      if (typeof item.id === "string") {
+        current.add(item.id);
+        const entry = this.known.get(item.id);
+        if (entry) { entry.item = item; entry.checked = now; entry.failed = false; entry.unavailable = false; }
+      }
+    }
     for (const trade of trades.items) {
       // A maker trade's taker order belongs to another account.
       if (trade.trader_side === "TAKER") remember(trade.taker_order_id);
@@ -167,12 +207,13 @@ export class OrderHistoryReader {
     const pending = [...this.known].filter(([id, entry]) => !current.has(id) && (!entry.item || stale(entry))).length;
     const unavailable = [...this.known].filter(([id, entry]) => !current.has(id) && entry.unavailable).length;
     const items = [...this.known].flatMap(([id, entry]) => entry.item && !current.has(id) ? [{ ...entry.item, status_stale: stale(entry) }] : []);
+    this.persist();
     return {
-      available: open.available || trades.available || items.length > 0, complete: pending === 0 && !this.truncated && open.complete && trades.complete,
+      available: open.available || trades.available || items.length > 0, complete: pending === 0 && !this.truncated && !this.persistenceError && open.complete && trades.complete,
       items, pages: due.length, checked_at: new Date(now).toISOString(), source: "clob-v2-order-detail",
-      coverage: "observed_order_ids", historical_complete: false, persistence: "reader_session",
+      coverage: "observed_order_ids", historical_complete: false, persistence: this.file && !this.persistenceError ? "account_file" : "reader_session",
       known_order_count: this.known.size, pending_order_count: pending, unavailable_order_count: unavailable, truncated: this.truncated,
-      ...(pending ? { error_code: unavailable ? "order_details_unavailable" : "order_details_pending" } : {}),
+      ...(this.persistenceError ? { error_code: 'order_history_persistence_failed' } : pending ? { error_code: unavailable ? "order_details_unavailable" : "order_details_pending" } : {}),
     };
   }
 }
@@ -200,7 +241,19 @@ export async function connectAccountReader() {
     return getJson(host, path, params, headers as unknown as Record<string, string>);
   };
   const publicGet: Getter = (path, params) => getJson("https://data-api.polymarket.com", path, params);
-  const historyReader = new OrderHistoryReader(wallet);
+  const historyReader = new OrderHistoryReader(wallet, 2000, 8,
+    join(process.env.PM_ACCOUNT_HISTORY_DIR || 'results/account-history', `${wallet.toLowerCase()}.json`));
+  const financeReader = new AccountFinanceReader(wallet);
+  const receiptRpc = async (method: string, params: unknown[]) => {
+    const response = await fetch(process.env.POLYGON_RPC || 'https://polygon.drpc.org', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error('rpc_failed');
+    const data = await response.json() as Row;
+    if (data.error || data.result == null) throw new Error('rpc_result_invalid');
+    return data.result;
+  };
   return async () => {
     const began = Date.now();
     const balance = (async (): Promise<Section> => {
@@ -218,8 +271,9 @@ export async function connectAccountReader() {
       offsetPages(publicGet, "/positions", "positions", wallet), offsetPages(publicGet, "/closed-positions", "closed_positions", wallet, 50), offsetPages(publicGet, "/activity", "activity", wallet),
     ]);
     const order_history = await historyReader.read(get, open_orders, trades);
+    const finance = await financeReader.read(receiptRpc, trades, activity);
     return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began, collateral, open_orders, trades, positions, closed_positions, activity, order_history,
       pagination_atomic: false,
-      fees: { available: false, reason: "成交费率不是实际扣费到账凭证" }, rewards: { available: false, reason: "尚无奖励到账凭证来源" } };
+      occupancy: balanceOccupancy(collateral, open_orders), ...finance };
   };
 }

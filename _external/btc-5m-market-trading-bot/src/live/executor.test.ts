@@ -192,3 +192,26 @@ describe("Executor fill tracking", () => {
     expect(submitOrder).not.toHaveBeenCalled();
   });
 });
+
+
+describe("uncertain ACK circuit breaker", () => {
+  it("keeps submissions paused after the caller catches an unknown maker ACK", async () => {
+    const executor=new Executor(true,10,20,100);
+    const submitOrder=vi.fn().mockResolvedValue({success:false,stateUnknown:true,errorMsg:"timeout"});
+    (executor as unknown as {clob:Record<string,unknown>}).clob={
+      tickSize:async()=>0.01,minOrderSize:()=>5,submitOrder};
+    await expect(executor.submit(Side.Up,"up",0.4,5)).rejects.toBeInstanceOf(UnknownOrderStateError);
+    expect((await executor.submit(Side.Down,"down",0.5,5)).ok).toBe(false);
+    expect(submitOrder).toHaveBeenCalledOnce();
+    expect(executor.spentUsd).toBe(2);
+  });
+  it("returns actual signing and HTTP ACK durations without inventing paper samples", async () => {
+    const executor=new Executor(true,10,20,100);
+    (executor as unknown as {clob:Record<string,unknown>}).clob={tickSize:async()=>0.01,
+      minOrderSize:()=>5,submitOrder:async()=>({success:true,orderId:"ack",signLatencyMs:4,ackLatencyMs:9})};
+    expect(await executor.submit(Side.Up,"up",0.4,5)).toMatchObject({ok:true,signLatencyMs:4,ackLatencyMs:9});
+    const paper=new Executor(false,10,20,100);
+    const result=await paper.submit(Side.Up,"up",0.4,5);
+    expect(result.ackLatencyMs).toBeUndefined();
+  });
+});

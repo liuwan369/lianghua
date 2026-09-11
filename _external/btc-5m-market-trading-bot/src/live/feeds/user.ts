@@ -25,7 +25,7 @@ export interface UserFeedOptions {
 }
 
 export type UserFeedEvent =
-  | { kind: "exchangeFill"; fill: Fill; orderId?: string; tradeId?: string }
+  | { kind: "exchangeFill"; fill: Fill; reportLatencyMs?: number; orderId?: string; tradeId?: string }
   | { kind: "orderCancelled"; orderId: string; side?: Side };
 
 export interface UserFeedControl {
@@ -111,6 +111,12 @@ export function parseUserMessage(
           : undefined;
     if (tradeId && seenTrades.has(tradeId)) continue;
     const eventStart = events.length;
+    const receivedAtUnix = num(e.__receivedAtUnix);
+    const timestamp = num(e.match_time_nano ?? e.matchtime ?? e.match_time ?? e.timestamp);
+    const exchangeUnix = timestamp == null ? undefined : timestamp > 1e15 ? timestamp / 1e9
+      : timestamp > 1e12 ? timestamp / 1000 : timestamp;
+    const reportLatencyMs = receivedAtUnix != null && exchangeUnix != null
+      ? (receivedAtUnix - exchangeUnix) * 1000 : undefined;
 
     const takerId = typeof e.taker_order_id === "string" ? e.taker_order_id : undefined;
     if (takerId && opts.isOurOrder(takerId)) {
@@ -121,7 +127,8 @@ export function parseUserMessage(
       if (side != null && price != null && size != null && size > 0) {
         events.push({
           kind: "exchangeFill",
-          fill: { side, shares: size, price, tsUnix: nowUnix(), isMaker: false },
+          fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: false },
+          reportLatencyMs,
           orderId: takerId,
           tradeId,
         });
@@ -139,7 +146,8 @@ export function parseUserMessage(
         if (side == null || price == null || size == null || size <= 0) continue;
         events.push({
           kind: "exchangeFill",
-          fill: { side, shares: size, price, tsUnix: nowUnix(), isMaker: true },
+          fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: true },
+          reportLatencyMs,
           orderId,
           tradeId,
         });
@@ -482,6 +490,9 @@ export function runUserFeed(
                 return;
               }
               for (const raw of batch) {
+                if (raw && typeof raw === "object") {
+                  (raw as Record<string, unknown>).__receivedAtUnix = lastTransportAtMs / 1000;
+                }
                 pending.accept(raw);
               }
             } catch {

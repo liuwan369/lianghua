@@ -14,6 +14,8 @@ export interface SubmitResult {
   size: number;
   notional: number;
   tradeIds?: string[];
+  signLatencyMs?: number;
+  ackLatencyMs?: number;
 }
 
 export interface UnknownOrderContext {
@@ -320,10 +322,13 @@ export class Executor {
         size,
         notional,
         tradeIds: resp.tradeIds,
+        signLatencyMs: resp.signLatencyMs,
+        ackLatencyMs: resp.ackLatencyMs,
       };
     }
 
     if (resp.stateUnknown || resp.success || resp.orderId) {
+      this.paused = true;
       this.sent += 1;
       this.spentUsd += notional;
       throw new UnknownOrderStateError(
@@ -402,10 +407,13 @@ export class Executor {
         size,
         notional,
         tradeIds: resp.tradeIds,
+        signLatencyMs: resp.signLatencyMs,
+        ackLatencyMs: resp.ackLatencyMs,
       };
     }
 
     if (resp.stateUnknown || resp.success || resp.orderId) {
+      this.paused = true;
       this.sent += 1;
       this.spentUsd += notional;
       this.takerInFlight.set(side, {orderId:resp.orderId,remaining:size});

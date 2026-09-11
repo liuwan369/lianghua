@@ -254,3 +254,42 @@ describe("hedge risk uses the executable market tick", () => {
     expect(4.6+firstFee+fill.shares*(0.76+0.02*0.76*0.24)).toBeCloseTo(10,8);
   });
 });
+
+
+describe("consistent emergency hedge policy", () => {
+  function setup(overrides: Partial<StrategyConfig> = {}) {
+    const strat = new PairCostMarketMaker({ ...targetClone(), makerSpreadFrac: 0, ...overrides });
+    strat.onMarketStart(START);
+    const inv = new Inventory();
+    inv.execute({side:Side.Up,shares:20,price:0.4,tsUnix:1010,isMaker:true});
+    return {strat, inv};
+  }
+  it("executes the already configured emergency ceiling instead of reapplying the normal cap", () => {
+    const {strat,inv} = setup();
+    const b = books(0.39,0.4,0.59,0.6);
+    strat.chooseSide(inv,b,1011,START,END);
+    const side = strat.chooseSide(inv,b,1042,START,END);
+    expect(side).toBe(Side.Down);
+    const fill = strat.buildFill(side!,inv,b,1042,END)!;
+    expect(fill).toMatchObject({side:Side.Down,shares:20,price:0.6,isMaker:false});
+    expect(fill.price + 0.4 + 0.07 * 0.6 * 0.4).toBeLessThan(strat.config.pairCostEmergencyStop);
+  });
+  it("does not wait on a maker after the unhedged timeout when an affordable cross exists", () => {
+    const {strat,inv} = setup(); const b=books(0.39,0.4,0.58,0.59);
+    strat.chooseSide(inv,b,1011,START,END);
+    const side=strat.chooseSide(inv,b,1042,START,END);
+    expect(strat.buildFill(side!,inv,b,1042,END)?.isMaker).toBe(false);
+  });
+  it("keeps the passive hard ceiling and dollar risk budget at final sizing", () => {
+    const {strat,inv} = setup({passiveBudgetMode:true,passiveForcedHedgeCeiling:0.99,maxTotalCost:10});
+    const b=books(0.39,0.4,0.6,0.61);
+    expect(strat.chooseSide(inv,b,1230,START,END)).toBeUndefined();
+    expect(strat.lastDecisionRejection()?.limit).toBe(0.99);
+    expect(strat.buildFill(Side.Down,inv,b,1230,END)).toBeUndefined();
+  });
+  it("fixed-size repairs cannot bypass final pair cost validation", () => {
+    const {strat,inv}=setup({dynamicHedgeSizing:false});
+    expect(strat.buildFill(Side.Down,inv,books(0.39,0.4,0.65,0.66),TS,END)).toBeUndefined();
+    expect(strat.lastDecisionRejection()?.code).toBe("hedge_pair_cost");
+  });
+});

@@ -118,6 +118,24 @@ const PAPER_MIN_WINDOW_REMAINING_SEC = 15;
 
 
 
+export function recordLatency(journal: Journal, market: Market | undefined, metric: string,
+  durationMs: number | undefined, live: boolean, orderId?: string): void {
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return;
+  journal.log("latency", market, nowUnix(), { metric, duration_ms: durationMs,
+    mode: live ? "live" : "paper", order_id: orderId ?? null });
+}
+
+export function recordResidualExposure(engine: Engine, journal: Journal, market: Market,
+  reason: string, live: boolean): void {
+  const exposure = engine.session.exposure();
+  journal.log("inventory_exposure", market, nowUnix(), { ...exposure, reason,
+    state: exposure.residualShares > 1e-8 ? "unhedged" : exposure.cost > 0 ? "matched_unsettled" : "flat" });
+  if (live && exposure.cost > 0) {
+    engine.session.haltNew = true;
+    throw new Error("live inventory remains unsettled; refusing next market until official settlement and account reconciliation");
+  }
+}
+
 export async function applyEvents(
   events: MakerEvent[],
   executor: Executor,
@@ -128,6 +146,7 @@ export async function applyEvents(
   live: boolean,
   user?: UserFeedControl,
   canSubmit?: () => boolean,
+  triggerReceivedAtMonoMs?: number,
 ): Promise<void> {
   for (const ev of events) {
     switch (ev.kind) {
@@ -142,6 +161,13 @@ export async function applyEvents(
           ev.shares,
         );
         if (res.orderId) user?.registerOrder(res.orderId, res.tradeIds);
+        if (live && res.ok) {
+          recordLatency(journal,mkt,"order_sign",res.signLatencyMs,true,res.orderId);
+          recordLatency(journal,mkt,"order_ack",res.ackLatencyMs,true,res.orderId);
+          recordLatency(journal,mkt,"reaction",triggerReceivedAtMonoMs == null ? undefined
+            : performance.now() - triggerReceivedAtMonoMs,true,res.orderId);
+          journal.log("order_ack",mkt,ts,{order_id:res.orderId,side:Side.asStr(ev.side),price:res.price,shares:res.size});
+        }
         if (!res.ok) {
           if (live) console.warn(`quote submit failed ${Side.asStr(ev.side)} — clearing pending`);
           else console.info(`paper quote skipped ${Side.asStr(ev.side)} — configured limit reached`);
@@ -171,6 +197,13 @@ export async function applyEvents(
 
         );
         if (res.orderId) user?.registerOrder(res.orderId, res.tradeIds);
+        if (live && res.ok) {
+          recordLatency(journal,mkt,"order_sign",res.signLatencyMs,true,res.orderId);
+          recordLatency(journal,mkt,"order_ack",res.ackLatencyMs,true,res.orderId);
+          recordLatency(journal,mkt,"reaction",triggerReceivedAtMonoMs == null ? undefined
+            : performance.now() - triggerReceivedAtMonoMs,true,res.orderId);
+          journal.log("order_ack",mkt,ts,{order_id:res.orderId,side:Side.asStr(ev.side),price:res.price,shares:res.size});
+        }
 
         if (!res.ok) {
 
@@ -199,14 +232,21 @@ export async function applyEvents(
 
         break;
 
-      case "cancel":
-
+      case "cancel": {
+        const cancelStarted = performance.now();
+        const cancelledOrderId = executor.restingId(ev.side);
         journal.logEvent(ev, mkt, ts);
 
         await executor.cancelSide(ev.side);
-        if (live) engine.onOrderCancelled(ev.side);
-
+        if (live) {
+          engine.onOrderCancelled(ev.side);
+          if (cancelledOrderId) {
+            recordLatency(journal,mkt,"cancel_ack",performance.now()-cancelStarted,true,cancelledOrderId);
+            journal.log("cancel_ack",mkt,ts,{order_id:cancelledOrderId,side:Side.asStr(ev.side)});
+          }
+        }
         break;
+      }
 
     }
 
@@ -258,6 +298,7 @@ export async function handleUserEvent(
         fee: r4(fillEv.fee),
       });
       journaledFills.add(eventId);
+      recordLatency(journal,mkt,"fill_report",event.reportLatencyMs,executor.live,event.orderId);
 
       journal.log("exchange_fill", mkt, ts, {
 
@@ -459,6 +500,7 @@ async function runOneMarket(
     if (cfg.live && !liveBookIsFresh(b)) return;
     if (cfg.live && (!user?.isHealthy() || !pm.isHealthy(5_000))) return;
 
+    const decisionStarted = performance.now();
     const ev = engine.onBook(
 
       ts,
@@ -484,6 +526,7 @@ async function runOneMarket(
 
     );
 
+    recordLatency(journal,mkt,"strategy_decision",performance.now() - decisionStarted,cfg.live);
     const rejection = engine.session.lastDecisionRejection();
     const rejectionKey = rejection ? JSON.stringify(rejection) : undefined;
     if (rejectionKey !== lastDecisionRejection) {
@@ -507,6 +550,7 @@ async function runOneMarket(
       () => Boolean(
         liveBookIsFresh(b) && user?.isHealthy() && pm.isHealthy(5_000),
       ),
+      b.receivedAtMonoMs,
     );
 
   };
@@ -604,6 +648,9 @@ async function runOneMarket(
         if (msg.snapshot.source !== "polymarket-ws" && pm.isHealthy()) break;
 
         latest = msg.snapshot;
+        recordLatency(journal,mkt,"market_age",latest.marketAgeMs,cfg.live);
+        recordLatency(journal,mkt,"book_processing",latest.receivedAtMonoMs == null || latest.processedAtMonoMs == null
+          ? undefined : latest.processedAtMonoMs - latest.receivedAtMonoMs,cfg.live);
 
         await decideAndApply(msg.snapshot.tsUnix, msg.snapshot);
 
@@ -674,6 +721,17 @@ async function runOneMarket(
       event => handleUserEvent(engine, executor, mkt, journal, event.kind === "exchangeFill" ? event.fill.tsUnix : nowUnix(), event, journaledFills), journaledFills);
     else await executor.cancelAll();
   } catch (error) {
+    await executor.pauseSubmissions();
+    if (cfg.live && user && !(error instanceof UnknownOrderStateError)) {
+      try {
+        await finalizeMarketAccount(executor,engine,mkt,user,
+          event => handleUserEvent(engine,executor,mkt,journal,nowUnix(),event,journaledFills),journaledFills);
+        journal.log("account_reconciled",mkt,nowUnix(),{reason:"run_failed",...engine.session.exposure()});
+      } catch (reconcileError) {
+        journal.log("account_unreconciled",mkt,nowUnix(),{reason:"run_failed",...engine.session.exposure(),
+          detail:reconcileError instanceof Error ? reconcileError.message : String(reconcileError)});
+      }
+    }
     if (cfg.live && error instanceof UnknownOrderStateError && user) {
       console.error("order ACK state unknown — freezing submissions and reconciling account");
       let cancelFailure: unknown;
@@ -732,6 +790,7 @@ async function runOneMarket(
 
 
   if (!reachedMarketEnd) {
+    recordResidualExposure(engine,journal,mkt,"duration_stop",cfg.live);
     journal.log("stopped", mkt, undefined, {
       reason: "运行时间到达，市场尚未结束，未结算",
       fills: engine.fills(),
@@ -745,6 +804,7 @@ async function runOneMarket(
   // A book price is not the official outcome. Without an oracle/strike,
   // leave the market unsettled instead of turning a guess into PnL.
   if (strike == null || latestOracle == null) {
+    recordResidualExposure(engine,journal,mkt,"oracle_unavailable",cfg.live);
     journal.log("unresolved", mkt, undefined, {
       reason: "没有官方结算价，保留未结算",
       winner_src: "unavailable",
@@ -756,6 +816,11 @@ async function runOneMarket(
     return;
   }
 
+  // A sampled BTC price is only a paper estimate, never official settlement.
+  if (cfg.live) {
+    recordResidualExposure(engine,journal,mkt,"official_settlement_required",true);
+    return;
+  }
   const winner = latestOracle >= strike ? Side.Up : Side.Down;
 
 

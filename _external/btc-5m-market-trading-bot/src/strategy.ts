@@ -470,54 +470,27 @@ export class PairCostMarketMaker {
       const nakedFor =
         this.risk.singleSideSince != null ? tsUnix - this.risk.singleSideSince : 0.0;
       const forced = flatten || nakedFor >= this.config.maxUnhedgedSecs;
-      const proj = inv.projectedPairCostIfBuy(need, clip, needPx);
       this.pendingClipMult = 1.0;
 
-      if (this.config.feeAware) {
-        const frac =
-          this.config.maxUnhedgedSecs > 0
-            ? Math.min(Math.max(nakedFor / this.config.maxUnhedgedSecs, 0.0), 1.0)
-            : 1.0;
-        const top = Math.min(this.config.hedgePairCostCeiling + 0.01, 0.999);
-        const relaxed = Math.min(
-          this.config.hedgePairCostCeiling + (top - this.config.hedgePairCostCeiling) * frac,
-          0.999,
-        );
-        if (proj <= relaxed) {
-          if (this.wantCross(need, inv, books, clip, this.config.hedgePairCostCeiling)) {
-            this.pendingUrgent = true;
-          }
+      const ceiling = this.hedgeLimit(inv, tsUnix, marketEnd);
+      // Once overdue, an affordable resting maker is not a completed hedge.
+      // Cross only within the existing emergency/passive and dollar limits.
+      if (forced && needAsk != null) {
+        const cost = inv.projectedPairCostIfBuy(need, Math.min(clip, Math.max(upS, dnS)),
+          needAsk + this.takerFeePerShare(needAsk));
+        if (cost <= ceiling + 1e-9) {
+          this.pendingUrgent = true;
           return need;
         }
-        if (forced) {
-          if (needAsk != null) {
-            const projT = inv.projectedPairCostIfBuy(need, clip, needAsk);
-            if (
-              projT + this.takerFeePerShare(needAsk) <=
-              this.config.pairCostEmergencyStop
-            ) {
-              this.pendingUrgent = true;
-              return need;
-            }
-          }
-          return this.reject("hedge_pair_cost", { side: need, price: needAsk,
-            pairCost: needAsk == null ? proj : inv.projectedPairCostIfBuy(need, clip, needAsk) + this.takerFeePerShare(needAsk),
-            limit: this.config.pairCostEmergencyStop });
-        }
-        return this.reject("hedge_pair_cost", { side: need, price: needPx, pairCost: proj, limit: relaxed });
       }
-
-      if (forced) {
-        this.pendingUrgent = true;
+      const makerCost = inv.projectedPairCostIfBuy(need, clip,
+        needPx + this.fillFee(1, needPx, true));
+      if (makerCost <= ceiling + 1e-9) {
+        this.pendingUrgent = !forced && this.wantCross(need, inv, books, clip, ceiling);
         return need;
       }
-      if (proj <= this.config.hedgePairCostCeiling) {
-        if (this.wantCross(need, inv, books, clip, this.config.hedgePairCostCeiling)) {
-          this.pendingUrgent = true;
-        }
-        return need;
-      }
-      return undefined;
+      return this.reject("hedge_pair_cost", { side: need, price: needPx,
+        pairCost: makerCost, limit: ceiling });
     }
 
     const total = upS + dnS;
@@ -851,6 +824,26 @@ export class PairCostMarketMaker {
     return filtered[0][0];
   }
 
+  /** The decision and final sizing must use the same configured repair policy. */
+  private hedgeLimit(inv: Inventory, tsUnix: number, marketEnd: number): number {
+    let ceiling = this.config.hedgePairCostCeiling;
+    const oneSide = (inv.up.shares > 0) !== (inv.down.shares > 0);
+    if (oneSide) {
+      const nakedFor = this.risk.singleSideSince == null ? 0 : tsUnix - this.risk.singleSideSince;
+      if (marketEnd - tsUnix <= this.config.forceFlattenSec || nakedFor >= this.config.maxUnhedgedSecs) {
+        ceiling = this.config.pairCostEmergencyStop;
+      } else if (this.config.feeAware) {
+        const fraction = this.config.maxUnhedgedSecs > 0
+          ? Math.min(1, Math.max(0, nakedFor / this.config.maxUnhedgedSecs)) : 1;
+        const top = Math.min(ceiling + 0.01, 0.999);
+        ceiling = Math.min(ceiling + (top - ceiling) * fraction, 0.999);
+      }
+    } else if (this.config.closeToParity && marketEnd - tsUnix <= this.config.forceFlattenSec) {
+      ceiling = Math.min(1 - 1e-9, this.config.pairCostEmergencyStop);
+    }
+    return this.config.passiveBudgetMode ? Math.min(ceiling, this.config.passiveForcedHedgeCeiling) : ceiling;
+  }
+
   private buildFillStable(
     side: Side,
     inv: Inventory,
@@ -861,6 +854,7 @@ export class PairCostMarketMaker {
     pending: PendingExposure,
   ): Fill | undefined {
     const unitCost = price + this.fillFee(1, price, isMaker);
+    const hedgeLimit = this.hedgeLimit(inv, tsUnix, marketEnd);
     const base = evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd);
     let clip = this.effectiveClip(base.clipMultiplier) * Math.max(this.pendingClipMult, 1.0);
 
@@ -878,11 +872,11 @@ export class PairCostMarketMaker {
           otherCost: side === Side.Up ? inv.down.cost : inv.up.cost,
           price: unitCost,
           baseClip: clip,
-          targetPairCost: this.config.hedgePairCostCeiling,
+          targetPairCost: hedgeLimit,
         });
         if (clip <= 0) return this.reject("hedge_pair_cost", { side, price,
           pairCost: unitCost + (otherS > 0 ? (side === Side.Up ? inv.down.cost : inv.up.cost) / otherS : 0),
-          limit: this.config.hedgePairCostCeiling });
+          limit: hedgeLimit });
       } else {
         clip = Math.min(clip, otherS - thisS);
       }
@@ -908,9 +902,9 @@ export class PairCostMarketMaker {
     if (clip < MIN_ORDER_SHARES) return this.reject("order_limits_or_minimum", { side, price });
 
     const proj = inv.projectedPairCostIfBuy(side, clip, unitCost);
-    if (otherS > thisS && this.config.dynamicHedgeSizing &&
-      proj > this.config.hedgePairCostCeiling + 1e-9) return this.reject("hedge_pair_cost", {
-        side, price, pairCost: proj, limit: this.config.hedgePairCostCeiling });
+    if (otherS > thisS &&
+      proj > hedgeLimit + 1e-9) return this.reject("hedge_pair_cost", {
+        side, price, pairCost: proj, limit: hedgeLimit });
     const risk = evaluateRisk(inv, this.risk, this.config, tsUnix, marketEnd, proj);
     if (risk.haltMarket) {
       this.risk.marketMode = MarketMode.Halted;

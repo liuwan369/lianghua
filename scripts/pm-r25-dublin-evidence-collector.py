@@ -754,7 +754,7 @@ def run_polygon(config: dict[str, Any], store: EvidenceStore, status: RuntimeSta
             else:
                 inserted = 0
             status.update(
-                "polygon", state="ok", latest_block=latest, completed_confirmed_block=to_block,
+                "polygon", state="ok", error=None, latest_block=latest, completed_confirmed_block=to_block,
                 confirmation_blocks=confirmation_blocks, overlap_blocks=overlap_blocks,
                 logs_last_poll=len(logs), new_logs_last_poll=inserted,
                 request_ms=round((time.monotonic() - started) * 1000, 2),

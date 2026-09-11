@@ -11,6 +11,8 @@ import {
   handleUserEvent,
   applyEvents,
   finalizeMarketAccount,
+  recordResidualExposure,
+  recordLatency,
 } from "./orchestrator.js";
 
 beforeEach(()=>vi.stubGlobal("fetch",vi.fn(async()=>new Response(JSON.stringify({minimum_tick_size:0.01})))));
@@ -173,5 +175,36 @@ describe("live book freshness", () => {
       tsUnix: 10,
       source: "polymarket-ws",
     }, 10_000, 250)).toBe(false);
+  });
+});
+
+
+describe("residual exposure and measured telemetry", () => {
+  it("reports partial fills and stops live rollover instead of silently dropping inventory", () => {
+    const engine=new Engine({liveMode:true});engine.reset(100,400);
+    engine.confirmExchangeFill({side:Side.Up,shares:8,price:0.4,tsUnix:101,isMaker:true});
+    engine.confirmExchangeFill({side:Side.Down,shares:5,price:0.5,tsUnix:102,isMaker:true});
+    const log=vi.fn();
+    expect(()=>recordResidualExposure(engine,{log} as unknown as Journal,{} as Market,"cutoff",true))
+      .toThrow(/official settlement/);
+    expect(log.mock.calls[0][3]).toMatchObject({state:"unhedged",residualShares:3,residualSide:Side.Up});
+    expect(log.mock.calls[0][3].worstCaseLoss).toBeCloseTo(0.7);
+    expect(engine.session.haltNew).toBe(true);
+    expect(engine.fills()).toBe(2);
+  });
+  it("keeps matched live positions unsettled until actual settlement is confirmed", () => {
+    const engine=new Engine({liveMode:true});engine.reset(100,400);
+    engine.confirmExchangeFill({side:Side.Up,shares:5,price:0.4,tsUnix:101,isMaker:true});
+    engine.confirmExchangeFill({side:Side.Down,shares:5,price:0.5,tsUnix:102,isMaker:true});
+    const log=vi.fn();
+    expect(()=>recordResidualExposure(engine,{log} as unknown as Journal,{} as Market,"end",true)).toThrow();
+    expect(log.mock.calls[0][3]).toMatchObject({state:"matched_unsettled",residualShares:0});
+  });
+  it("rejects unavailable/negative clock samples and preserves real zero duration", () => {
+    const log=vi.fn(); const journal={log} as unknown as Journal;
+    for (const value of [undefined,Number.NaN,-1]) recordLatency(journal,undefined,"market_age",value,true);
+    recordLatency(journal,undefined,"order_ack",0,true,"our-order");
+    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls[0][3]).toMatchObject({metric:"order_ack",duration_ms:0,mode:"live",order_id:"our-order"});
   });
 });

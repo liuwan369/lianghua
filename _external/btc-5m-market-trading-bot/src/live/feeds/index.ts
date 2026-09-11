@@ -4,6 +4,10 @@ import type { UserFeedEvent } from "./user.js";
 
 export interface BookSnapshot {
   tsUnix: number;
+  receivedAtUnix?: number;
+  receivedAtMonoMs?: number;
+  processedAtMonoMs?: number;
+  marketAgeMs?: number;
   source?: "polymarket-ws" | "clob-rest" | "collector-rest";
   /** Exchange timestamps for each side; receive time is not a live freshness signal. */
   upExchangeTsUnix?: number;

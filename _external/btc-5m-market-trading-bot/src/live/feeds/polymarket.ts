@@ -271,6 +271,8 @@ export function runPolymarketFeed(
 
         await new Promise<void>((resolve) => {
           ws.on("message", (data) => {
+            const receivedAtUnix = nowUnix();
+            const receivedAtMonoMs = performance.now();
             const t = String(data);
             if (t === "PONG" || t === "pong") return;
             if (trace) console.info(`PM_RAW ${t.slice(0, 220)}`);
@@ -358,6 +360,11 @@ export function runPolymarketFeed(
               const snap: BookSnapshot = {
                 tsUnix: nowUnix(),
                 source: "polymarket-ws",
+                receivedAtUnix,
+                receivedAtMonoMs,
+                processedAtMonoMs: performance.now(),
+                marketAgeMs: Math.max(applied.upMs, applied.downMs) > 0
+                  ? receivedAtUnix * 1000 - Math.max(applied.upMs, applied.downMs) : undefined,
                 upExchangeTsUnix: applied.upMs > 0 ? applied.upMs / 1000 : undefined,
                 downExchangeTsUnix: applied.downMs > 0 ? applied.downMs / 1000 : undefined,
                 upBid,
