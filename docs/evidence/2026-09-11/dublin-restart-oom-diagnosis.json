@@ -1,0 +1,19 @@
+{
+  "checked_at": "2026-09-11",
+  "node": "Dublin 34.242.206.196",
+  "cause": "OOM confirmed",
+  "evidence": [
+    "Previous boot killed pm-r25-dublin-live-analyzer.service repeatedly at 512 MiB cgroup limit",
+    "One global OOM killed a manually launched Python process using about 840 MiB RSS",
+    "Current boot dashboard and collector are active; memory available about 1.1 GiB"
+  ],
+  "mitigation": [
+    "Stopped and disabled pm-r25-dublin-live-analyzer.timer",
+    "Historical replay must run locally",
+    "Paper mode and live_unlocked=false remain enforced"
+  ],
+  "remaining": [
+    "Collector Polygon RPC returns HTTP 400 and needs endpoint/request correction",
+    "Dashboard currently has no MemoryMax and should be bounded after measuring safe headroom"
+  ]
+}
