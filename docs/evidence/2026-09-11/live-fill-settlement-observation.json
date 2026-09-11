@@ -25,7 +25,15 @@
   "settlement": {
     "redeemable": true,
     "redeemed": false,
-    "reason": "资金钱包是 Deposit Wallet（签名类型 3）；Owner EOA 不能直接调用 CTF redeemPositions。需要已支持 Deposit Wallet 的 Relayer 批量执行，并且当前账户没有 Builder 凭据可供该 SDK 认证。"
+    "relayerAttempt": {
+      "endpoint": "https://relayer-v2.polymarket.com",
+      "method": "executeDepositWalletBatch",
+      "result": "rejected",
+      "httpStatus": 401,
+      "error": "invalid authorization",
+      "broadcast": false
+    },
+    "reason": "资金钱包是 Deposit Wallet（签名类型 3）；Owner EOA 不能直接调用 CTF redeemPositions。官方 Relayer 批量接口已验证到认证层，但当前账户没有 Builder API 凭据，服务拒绝请求且未广播。"
   },
   "coverage": {
     "verified": ["real fill", "trade ID", "on-chain transaction hash", "fee receipt parsing", "balance change", "open order cleanup"],
