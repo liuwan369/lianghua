@@ -74,6 +74,7 @@ describe("observed order history", () => {
       const result = await new OrderHistoryReader(wallet, 2000, 8, file).read(async () => null, section(), section(), 1_030_000);
       expect(result).toMatchObject({ persistence: 'account_file', historical_complete: false, unavailable_order_count: 1, complete: false });
       expect(result.items[0]).toMatchObject({ id: 'observed', status: 'LIVE', status_stale: true });
+      expect(result.items[0].status_checked_at).toBe(new Date(1_000_000).toISOString());
       const other = await new OrderHistoryReader('0x' + '2'.repeat(40), 2000, 8, file).read(async () => null, section(), section(), 1_040_000);
       expect(other).toMatchObject({ known_order_count: 0, complete: false, error_code: 'order_history_persistence_failed' });
     } finally { rmSync(dir, { recursive: true, force: true }); }

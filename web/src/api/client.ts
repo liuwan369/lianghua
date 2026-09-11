@@ -42,6 +42,18 @@ export function validate(kind: string, data: unknown): void {
         &&typeof o.status_stale==='boolean'&&typeof o.status_checked_at==='string')
       &&s.coverage==='observed_order_ids'&&s.historical_complete===false;
   }
+  if (kind === 'account-data') {
+    for (const key of ['fees','rewards','reconciliation']) {
+      const s=data[key];
+      if (s !== undefined && (!object(s) || typeof s.available!=='boolean' || typeof s.complete!=='boolean' || typeof s.checked_at!=='string' || !Number.isFinite(Date.parse(s.checked_at)) || (s.known_amount!==undefined && !nullableNumber(s.known_amount)) || (s.items!==undefined && (!Array.isArray(s.items)||!s.items.every(object))))) valid=false;
+    }
+    const tx=(v:unknown)=>typeof v==='string'&&/^0x[0-9a-f]{64}$/i.test(v);
+    if(object(data.fees)&&(!Array.isArray(data.fees.items)||!data.fees.items.every(f=>object(f)&&tx(f.transaction_hash)&&num(f.amount)&&(f.amount as number)>=0&&typeof f.token==='string')))valid=false;
+    if(object(data.rewards)&&(!Array.isArray(data.rewards.items)||!data.rewards.items.every(p=>object(p)&&tx(p.transaction_hash)&&typeof p.verified==='boolean'&&nullableNumber(p.received_amount)&&(!p.verified||num(p.received_amount)&&(p.received_amount as number)>=0&&typeof p.token==='string'))))valid=false;
+    if(object(data.reconciliation)&&(!integer(data.reconciliation.receipts_checked)||!integer(data.reconciliation.receipts_pending)||!nullableNumber(data.reconciliation.wallet_net_profit)))valid=false;
+    const o=data.occupancy;
+    if (o!==undefined && (!object(o)||typeof o.available!=='boolean'||typeof o.complete!=='boolean'||!nullableNumber(o.open_buy_notional)||!nullableNumber(o.balance_after_open_buy_notional)||!nullableNumber(o.spendable_balance))) valid=false;
+  }
   if (kind === 'runs') valid = nullableNumber(data.next_before_id) && Array.isArray(data.runs) && data.runs.every(r => object(r)
     && integer(r.id) && typeof r.run_id === 'string' && typeof r.mode === 'string' && nullableString(r.account_id) && num(r.created_at));
   if (kind === 'events') valid = typeof data.run_id === 'string' && nullableNumber(data.next_before_id) && Array.isArray(data.events)

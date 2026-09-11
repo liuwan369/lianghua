@@ -106,3 +106,61 @@ it('expires a reward from a rolling 30-day period without waiting for a network 
   period.selectedIndex=2;period.dispatchEvent(new Event('change'));expect(document.querySelector('#reward-payments tbody')!.textContent).toContain('$9.00');
   vi.setSystemTime(new Date('2026-09-10T12:00:02Z'));ui.render();expect(document.querySelector('#reward-payments tbody')!.textContent).not.toContain('$9.00');ui.close();
 });
+
+const tx='0x'+'a'.repeat(64),tx2='0x'+'b'.repeat(64);
+function financeData(){
+  const d=data();
+  d.fees={...section([{transaction_hash:tx,amount:1.25,token:'pUSD'}]),known_amount:1.25,complete:false};
+  d.trades=section([{transaction_hash:tx,match_time:Date.now()/1000}]);
+  d.rewards={...section([{transaction_hash:tx2,timestamp:Date.now()/1000,received_amount:2.5,verified:true,types:['REWARD','TAKER_REBATE'],token:wallet}]),complete:false};
+  d.reconciliation={available:true,complete:false,checked_at:new Date().toISOString(),receipts_checked:2,receipts_pending:1,wallet_net_profit:null};
+  d.occupancy={available:true,complete:false,open_buy_notional:8,balance_after_open_buy_notional:100.7,spendable_balance:null};
+  return d;
+}
+const feeCard=()=>document.querySelector('#income-summary .stat:nth-child(2) strong')!.textContent;
+const rewardCard=()=>document.querySelector('#income-summary .stat:nth-child(3) strong')!.textContent;
+it('shows receipt evidence, occupancy and incomplete reconciliation without double-counting reward claims',async()=>{
+  const d=financeData();d.activity=section([{transactionHash:tx2,type:'REWARD',timestamp:Date.now()/1000,usdcSize:2},{transactionHash:tx2,type:'TAKER_REBATE',timestamp:Date.now()/1000,usdcSize:.5}]);
+  const ui=await mounted(d);
+  expect(feeCard()).toBe('$1.25');expect(rewardCard()).toBe('2.500000');
+  expect(document.querySelector('#reward-payments tbody')!.querySelectorAll('tr')).toHaveLength(1);
+  expect(document.querySelector('#reward-payments tbody')!.textContent).toContain('链上到账与活动匹配');
+  expect(document.querySelector('#view-home')!.textContent).toContain('未结买单占用 $8.00');
+  expect(document.querySelector('#income-summary .stat:nth-child(4) strong')!.textContent).toBe('未完成');
+  expect(document.querySelector('#income-summary .stat:nth-child(4) small')!.textContent).toContain('回执已核对 2 / 待核对 1');ui.close();
+});
+it('filters finance by period and excludes ambiguous fee dates except from all-history scope',async()=>{
+  vi.useFakeTimers();vi.setSystemTime(new Date('2026-09-10T12:00:00Z'));
+  const d=financeData();d.trades!.items[0].match_time=Date.parse('2026-09-01T00:00:00Z')/1000;
+  d.rewards!.items![0].timestamp=d.trades!.items[0].match_time;
+  const ui=await mounted(d),period=document.querySelector<HTMLSelectElement>('#reward-period')!;
+  expect(feeCard()).toBe('--');expect(rewardCard()).toBe('--');
+  period.selectedIndex=1;period.dispatchEvent(new Event('change'));expect(feeCard()).toBe('$1.25');expect(rewardCard()).toBe('2.500000');
+  d.activity=section([{transactionHash:tx,timestamp:Date.now()/1000}]);
+  vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(d)));await ui.refresh();expect(feeCard()).toBe('--');
+  period.selectedIndex=3;period.dispatchEvent(new Event('change'));expect(feeCard()).toBe('$1.25');ui.close();
+});
+it('clears finance after expiry, failed fetch and a cross-account response',async()=>{
+  vi.useFakeTimers();vi.setSystemTime(new Date('2026-09-10T12:00:00Z'));
+  let d=financeData();const ui=await mounted(d);
+  vi.setSystemTime(Date.now()+91000);ui.render();expect(feeCard()).toBe('--');expect(rewardCard()).toBe('--');expect(document.querySelector('#view-home')!.textContent).not.toContain('未结买单占用');
+  d=financeData();vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(d)));await ui.refresh();expect(feeCard()).toBe('$1.25');
+  vi.mocked(fetch).mockResolvedValue(new Response('',{status:503}));await ui.refresh();expect(feeCard()).toBe('--');expect(rewardCard()).toBe('--');
+  d.wallet='0x'+'2'.repeat(40);vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(d)));await ui.refresh();expect(feeCard()).toBe('--');expect(rewardCard()).toBe('--');ui.close();
+});
+it('updates finance independently of unchanged positions and clears rolling-period receipts at the boundary',async()=>{
+  vi.useFakeTimers();vi.setSystemTime(new Date('2026-09-10T12:00:00Z'));
+  const d=financeData();const expiry=(Date.now()+1000)/1000-30*86400;
+  d.trades!.items[0].match_time=expiry;d.rewards!.items![0].timestamp=expiry;
+  const ui=await mounted(d),period=document.querySelector<HTMLSelectElement>('#reward-period')!;
+  period.selectedIndex=2;period.dispatchEvent(new Event('change'));expect(feeCard()).toBe('$1.25');expect(rewardCard()).toBe('2.500000');
+  vi.setSystemTime(Date.now()+2000);ui.render();expect(feeCard()).toBe('--');expect(rewardCard()).toBe('--');
+  period.selectedIndex=3;period.dispatchEvent(new Event('change'));
+  d.fees!.items![0].amount=3;d.fees!.known_amount=3;vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify(d)));await ui.refresh();expect(feeCard()).toBe('$3.00');ui.close();
+});
+it('rejects malformed finance while retaining legacy response compatibility',()=>{
+  expect(()=>validate('account-data',data())).not.toThrow();
+  const d=financeData();expect(()=>validate('account-data',d)).not.toThrow();
+  d.rewards!.items![0].received_amount='bad';expect(()=>validate('account-data',d)).toThrow();
+  const other=financeData();other.fees!.checked_at='bad';expect(()=>validate('account-data',other)).toThrow();
+});

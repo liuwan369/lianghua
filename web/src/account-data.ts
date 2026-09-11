@@ -3,7 +3,9 @@ import type { Account, Obj } from './api/types';
 import { date, esc, finite, money, number, price } from './ui';
 
 export interface AccountSection { available: boolean; complete: boolean; items: Obj[]; checked_at: string; source: string; value?: number; error_code?: string; coverage?: string; historical_complete?: boolean }
-export interface AccountData { schemaVersion: 1; account_id?: string | null; wallet: string | null; checked_at: string | null; stale: boolean; refreshing?: boolean; read_only: true; collateral?: AccountSection; open_orders?: AccountSection; order_history?: AccountSection; trades?: AccountSection; positions?: AccountSection; closed_positions?: AccountSection; activity?: AccountSection }
+export interface AccountData { schemaVersion: 1; account_id?: string | null; wallet: string | null; checked_at: string | null; stale: boolean; refreshing?: boolean; read_only: true; collateral?: AccountSection; open_orders?: AccountSection; order_history?: AccountSection; trades?: AccountSection; positions?: AccountSection; closed_positions?: AccountSection; activity?: AccountSection; fees?: FinanceSection; rewards?: FinanceSection; reconciliation?: FinanceSection; occupancy?: Occupancy }
+interface FinanceSection { available:boolean; complete:boolean; checked_at:string; known_amount?:number|null; items?: Record<string,unknown>[]; reason?:string; wallet_net_profit?:number|null; receipts_checked?:number; receipts_pending?:number }
+interface Occupancy { available:boolean; complete:boolean; open_buy_notional:number|null; balance_after_open_buy_notional:number|null; spendable_balance:number|null; source?:string; reason?:string }
 const numeric = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null;
 const text = (selector: string, value: string) => { const el = document.querySelector(selector); if (el) el.textContent = value; };
 const row = (section: string, label: string, value: string) => document.querySelectorAll(`${section} .row`).forEach(el => { if (el.querySelector('span')?.textContent === label) { const b=el.querySelector('b'); if(b)b.textContent=value; } });
@@ -78,7 +80,9 @@ export function connectAccountData() {
   function render() {
     if(closed)return;
     const cash=section('collateral'),pos=section('positions'),orders=section('open_orders');
-    row('#view-home','账户余额',cash&&finite(cash.value)?`${money(cash.value)} · CLOB 抵押资产余额（未扣挂单占用）`:`-- · ${error||'账户余额等待同步'}`);
+    const occupancy=cash&&orders?.complete?data?.occupancy:null;
+    const balanceLabel=cash&&finite(cash.value)?`${money(cash.value)} · CLOB 抵押资产余额${occupancy?.available&&finite(occupancy.open_buy_notional)?` · 未结买单占用 ${money(occupancy.open_buy_notional)}`:''}`:`-- · ${error||'账户余额等待同步'}`;
+    row('#view-home','账户余额',balanceLabel);
     row('#view-home','当前持仓',pos?`${pos.items.length} 项 · 真实账户${pos.complete?'':' · 未完整'}`:'-- · 持仓未获取或已过期');
     if(pos!==lastPositions){
       lastPositions=pos;
@@ -95,7 +99,8 @@ export function connectAccountData() {
   }
   function renderFinancial() {
     const closedPositions=section('closed_positions'),activity=section('activity'),period=document.querySelector<HTMLSelectElement>('#reward-period')?.selectedIndex||0;
-    const signature=[closedPositions,activity,period];
+    const fees=section('fees') as FinanceSection|null,rewardsData=section('rewards') as FinanceSection|null,reconciliation=section('reconciliation') as FinanceSection|null,trades=section('trades');
+    const signature=[closedPositions,activity,fees,rewardsData,reconciliation,trades,period];
     if(!changed(lastFinancial,signature)&&Date.now()<financialBoundary)return;
     lastFinancial=signature;
     const now=new Date();let since=0;
@@ -104,23 +109,53 @@ export function connectAccountData() {
     if(period===2)since=Date.now()/1000-30*86400;
     financialBoundary=period===0?Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()+1):period===1?Date.UTC(now.getUTCFullYear(),now.getUTCMonth()+1,1):Infinity;
     if(period===2){
-      const times=[...(closedPositions?.items||[]),...(activity?.items||[])].map(p=>numeric(p.timestamp)).filter((t):t is number=>t!==null&&t>=since);
+      const times=[...(closedPositions?.items||[]),...(activity?.items||[]),...(rewardsData?.items||[]),...(trades?.items||[]).map(t=>({timestamp:t.match_time}))].map(p=>numeric(p.timestamp)).filter((t):t is number=>t!==null&&t>=since);
       if(times.length)financialBoundary=times.reduce((a,b)=>Math.min(a,b),Infinity)*1000+30*86400000+1;
     }
     const items=(closedPositions?.items||[]).filter(p=>{const t=numeric(p.timestamp);return t!==null&&t>=since;});
     const values=items.map(p=>numeric(p.realizedPnl));
     const valid=closedPositions?.complete&&closedPositions.items.every(p=>numeric(p.timestamp)!==null)&&values.every(v=>v!==null);
     const pnl=valid?values.reduce<number>((sum,v)=>sum+(v||0),0):null;
+    // Fee receipts have no date. Use a unique source timestamp; ambiguous or
+    // undated transactions belong only to the all-fetched-history scope.
+    const txTimes=new Map<string,Set<number>>();
+    for(const r of [...(trades?.items||[]).map(t=>({hash:t.transaction_hash,time:t.match_time})),...(activity?.items||[]).map(a=>({hash:a.transactionHash,time:a.timestamp}))]){
+      const t=numeric(r.time),hash=String(r.hash||'').toLowerCase();
+      if(hash&&t!==null){const times=txTimes.get(hash)||new Set<number>();times.add(t);txTimes.set(hash,times);}
+    }
+    const inPeriod=(t:number|null)=>t!==null&&t>=since&&t<=Date.now()/1000;
+    const feeItems=(fees?.items||[]).filter(f=>{const times=txTimes.get(String(f.transaction_hash).toLowerCase());return period===3||times?.size===1&&inPeriod([...times][0]);});
+    const feeTotal=feeItems.length&&feeItems.every(f=>finite(f.amount))?feeItems.reduce((sum,f)=>sum+Number(f.amount),0):null;
+    const payments=(rewardsData?.items||[]).filter(p=>p.verified===true&&finite(p.received_amount)&&(period===3||inPeriod(numeric(p.timestamp))));
+    const byToken=new Map<string,number>();
+    for(const p of payments){const token=String(p.token);byToken.set(token,(byToken.get(token)||0)+Number(p.received_amount));}
+    const rewardTotal=byToken.size===1?[...byToken.values()][0]:null;
     for(const root of ['#income-summary','#reward-ledger-section .stats']){
       text(`${root} .stat:nth-child(1) label`,'已关闭持仓报告盈亏');
       text(`${root} .stat:nth-child(1) strong`,money(pnl));
       text(`${root} .stat:nth-child(1) small`,'Data API 已关闭持仓 reported realizedPnl · 非钱包净收益');
+      text(`${root} .stat:nth-child(2) label`,'已核对手续费');
+      text(`${root} .stat:nth-child(2) strong`,money(feeTotal));
+      text(`${root} .stat:nth-child(2) small`,'所选期间已知费用小计 · 历史不完整；日期不明仅列全部历史');
+      text(`${root} .stat:nth-child(3) label`,'已核对奖励到账');
+      text(`${root} .stat:nth-child(3) strong`,number(rewardTotal,6));
+      text(`${root} .stat:nth-child(3) small`,payments.length?byToken.size>1?'多个币种，请按到账明细分别核对':`资产 ${[...byToken.keys()][0]} · 所选期间已核对小计，非美元换算`:'所选期间未取得可核对到账凭证');
+      text(`${root} .stat:nth-child(4) label`,'钱包净收益对账');
+      text(`${root} .stat:nth-child(4) strong`,'未完成');
+      text(`${root} .stat:nth-child(4) small`,reconciliation?`回执已核对 ${reconciliation.receipts_checked??'--'} / 待核对 ${reconciliation.receipts_pending??'--'} · 缺少完整历史与基线`:'缺少完整历史与基线，不推断净收益');
     }
-    text('#reward-period-note',`${['今日 UTC','本月 UTC','近 30 天','全部已获取历史'][period]} · ${closedPositions?.complete?'已关闭持仓查询完整':'已关闭持仓未完整'}；费用和到账核对尚未完成`);
+    text('#reward-period-note',`${['今日 UTC','本月 UTC','近 30 天','全部已获取历史'][period]} · ${closedPositions?.complete?'已关闭持仓查询完整':'已关闭持仓未完整'}；手续费和奖励仅列已核对小计，钱包净收益未完成`);
     const body=document.querySelector('#reward-payments tbody');
-    const rewards=(activity?.items||[]).filter(a=>{const t=numeric(a.timestamp);return ['REWARD','MAKER_REBATE'].includes(String(a.type))&&t!==null&&t>=since;});
+    const rewards=(activity?.items||[]).filter(a=>{const t=numeric(a.timestamp);return ['REWARD','MAKER_REBATE','TAKER_REBATE'].includes(String(a.type))&&t!==null&&t>=since;});
     if(body)body.innerHTML=rewards.length?rewards.map(a=>`<tr><td>${esc(a.type)}</td><td>${date(numeric(a.timestamp))}</td><td>接口记账单位 USDC</td><td>${money(numeric(a.usdcSize))}</td><td>官方活动记录 · 链上归属待核对</td><td>${/^0x[0-9a-fA-F]{64}$/.test(String(a.transactionHash))?`<a target="_blank" rel="noopener noreferrer" href="https://polygonscan.com/tx/${esc(a.transactionHash)}">查看交易</a>`:'无交易凭证'}</td></tr>`).join(''):'<tr><td colspan="6">已接入账户活动查询；未取得可核对的奖励付款记录，不能据此认定没有奖励。</td></tr>';
-    text('#reward-payments .reward-status',activity?`账户活动 · ${['今日 UTC','本月 UTC','近 30 天','全部已获取历史'][period]} · ${activity.complete?'查询完整':'部分记录'}${activity.items.some(a=>['REWARD','MAKER_REBATE'].includes(String(a.type))&&numeric(a.timestamp)===null)?' · 存在日期不明记录，未计入所选期间':''}`:'账户活动等待同步');
+    // Replace matching claims with one receipt per transaction, preventing a
+    // multi-claim payment from being presented as several cash receipts.
+    if(body&&payments.length){
+      body.querySelectorAll('tr').forEach(tr=>{const href=tr.querySelector('a')?.getAttribute('href')||'';if(payments.some(p=>href.toLowerCase().endsWith('/'+String(p.transaction_hash).toLowerCase()))||tr.querySelector('[colspan]'))tr.remove();});
+      body.insertAdjacentHTML('afterbegin',payments.map(p=>`<tr><td>${esc(Array.isArray(p.types)?p.types.join(' / '):'奖励')}</td><td>${date(numeric(p.timestamp))}</td><td>${esc(p.token)}</td><td>${number(numeric(p.received_amount),6)}</td><td>链上到账与活动匹配 · 非完整历史</td><td><a target="_blank" rel="noopener noreferrer" href="https://polygonscan.com/tx/${esc(p.transaction_hash)}">查看交易</a></td></tr>`).join(''));
+    }
+    text('#reward-center .reward-banner','账户费用回执与奖励到账核对已接入；仅展示已获取范围，资格、完整账单及钱包净收益仍待核对。未知不视为零。');
+    text('#reward-payments .reward-status',activity||payments.length?`已核对到账 ${payments.length} 笔 · ${['今日 UTC','本月 UTC','近 30 天','全部已获取历史'][period]} · ${activity?.complete?'活动查询完整':'部分记录'}${activity?.items.some(a=>['REWARD','MAKER_REBATE','TAKER_REBATE'].includes(String(a.type))&&numeric(a.timestamp)===null)?' · 存在日期不明记录，未计入所选期间':''}`:'账户活动等待同步');
     // Neither fee rate nor an activity label proves the wallet's final net profit.
   }
   on(selector,'change',()=>{source=selector.value;page=0;renderOrders();});

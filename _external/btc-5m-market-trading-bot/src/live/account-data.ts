@@ -137,7 +137,7 @@ export class OrderHistoryReader {
       if (saved.version !== 1 || saved.wallet !== this.account || !Array.isArray(saved.entries) || saved.entries.length > maxKnown) throw new Error('invalid_history');
       const entries = new Map<string, ObservedOrder>();
       for (const [id, entry] of saved.entries) {
-        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,256}$/.test(id) || !entry || !Number.isFinite(entry.checked)) throw new Error('invalid_history');
+        if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,256}$/.test(id) || !entry || !Number.isSafeInteger(entry.checked) || entry.checked < 0 || !Number.isFinite(new Date(entry.checked).getTime())) throw new Error('invalid_history');
         entries.set(id, { checked: entry.checked, attempted: 0, failed: true,
           ...(entry.item ? { item: sanitize(entry.item, 'orders', this.account) } : {}) });
       }
@@ -210,7 +210,7 @@ export class OrderHistoryReader {
     const stale = (entry: ObservedOrder) => entry.failed || now - entry.checked > (terminal(entry) ? 86_400_000 : 120_000);
     const pending = [...this.known].filter(([id, entry]) => !current.has(id) && (!entry.item || stale(entry))).length;
     const unavailable = [...this.known].filter(([id, entry]) => !current.has(id) && entry.unavailable).length;
-    const items = [...this.known].flatMap(([id, entry]) => entry.item && !current.has(id) ? [{ ...entry.item, status_stale: stale(entry) }] : []);
+    const items = [...this.known].flatMap(([id, entry]) => entry.item && !current.has(id) ? [{ ...entry.item, status_stale: stale(entry), status_checked_at: new Date(entry.checked).toISOString() }] : []);
     this.persist();
     return {
       available: open.available || trades.available || items.length > 0, complete: pending === 0 && !this.truncated && !this.persistenceError && open.complete && trades.complete,
