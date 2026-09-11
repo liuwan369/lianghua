@@ -1,0 +1,35 @@
+{
+  "checked_at": "2026-09-11T19:25:00+08:00",
+  "trade_authorization": false,
+  "performance_scope": "本地合成盘口与分析负载；不代表交易所网络延迟或真实成交概率",
+  "engine_tests": {"passed": 230, "failed": 0},
+  "synthetic_benchmark": {
+    "book_events": 75000,
+    "decision_p50_ms_range": [0.0010, 0.0012],
+    "decision_p95_ms_range": [0.0023, 0.0027],
+    "decision_p99_ms_range": [0.0074, 0.0107],
+    "analysis_worker_decision_p95_ms_range": [0.0024, 0.0027],
+    "snapshot_read_p95_ms_range": [0.624, 0.676]
+  },
+  "reference_address": {
+    "address": "0x3048d65321be3497164cdfc2996f94f98a2e7537",
+    "history_windows": 361,
+    "observations": 237359,
+    "repair_share_when_one_side_heavier_pct": 53.2168,
+    "typical_fill_batch_shares": 30,
+    "typical_fill_gap_seconds": 3,
+    "first_fill_p25_seconds": 9,
+    "past_3s_alignment_excluding_flat_pct": 61.4027,
+    "history_complete": true
+  },
+  "interpretation": [
+    "当前代码性能足以支撑高频盘口决策，CPU 不是主要瓶颈。",
+    "参考地址数据显示短周期动量与轻重仓方向有关联，但公开成交无法恢复挂单队列和真实下单时刻。",
+    "该数据支持继续研究动量加权补仓和成交概率模型，不支持直接提高风险限额或保证盈利。"
+  ],
+  "next_research": [
+    "用都柏林真实盘口 SQLite 做按日留出回放并比较 target_clone/stable_live",
+    "记录深度、盘口年龄、队列代理、补仓滑点和尾盘残余风险",
+    "在费用和保守成交假设下评估净结果，保留未覆盖市场为未知"
+  ]
+}
