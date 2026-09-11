@@ -1,0 +1,36 @@
+{
+  "run_type": "local_dublin_clob_shadow_replay",
+  "source": {
+    "dates": ["2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10"],
+    "selected_markets": 100,
+    "complete_markets": 97,
+    "clob_events_replayed": 437664,
+    "replay_clock": "collector received_at_ns",
+    "activity_is_comparison_only": true
+  },
+  "results": {
+    "strict_pair": {
+      "simulated_fills": 11,
+      "paired_shares": 0.0,
+      "one_sided_markets": 11,
+      "worst_case_settlement_pnl_usdc": -94.2555
+    },
+    "calibrated_3048": {
+      "simulated_fills": 1239,
+      "paired_shares": 4347.8793,
+      "one_sided_markets": 71,
+      "taker_fees_usdc": 53.3807,
+      "guaranteed_paired_edge_usdc": 191.7465,
+      "worst_case_settlement_pnl_usdc": -51.41
+    },
+    "candidate_r19": {
+      "simulated_fills": 470,
+      "paired_shares": 1603.4721,
+      "one_sided_markets": 75,
+      "taker_fees_usdc": 14.4458,
+      "guaranteed_paired_edge_usdc": 153.278,
+      "worst_case_settlement_pnl_usdc": -57.6454
+    }
+  },
+  "conclusion": "在当前成交假设和最坏结算口径下，三种策略均未通过收益门槛；单边暴露仍是主要风险。不得据此开启实盘。"
+}
