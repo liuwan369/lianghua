@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-09-11T03:26:00Z",
+  "node": "都柏林节点",
+  "conditionId": "0xcd570cfc039c74db84ddc594dd6be6526e1dbfaf035266bb332c762fdb6310da",
+  "market": "btc-updown-5m-1789096500",
+  "liveFill": {
+    "tradeId": "f2d9d58a-c93f-452e-bed4-77b324ec51de",
+    "transactionHash": "0xcbd09072e746afc4283c8040596fcec2d2a1ff89fdb81898cd2994383d12a20b",
+    "side": "BUY",
+    "outcome": "Up",
+    "shares": 100,
+    "price": 0.01,
+    "activityUsdcSize": 1.0693,
+    "status": "CONFIRMED",
+    "openOrdersAfter": 0
+  },
+  "accountAfter": {
+    "collateralUsd": 107.659376,
+    "positions": 9,
+    "feesKnownUsd": 0.86631,
+    "rewardsAvailable": false,
+    "reconciliationComplete": false
+  },
+  "settlement": {
+    "redeemable": true,
+    "redeemed": false,
+    "reason": "资金钱包是 Deposit Wallet（签名类型 3）；Owner EOA 不能直接调用 CTF redeemPositions。需要已支持 Deposit Wallet 的 Relayer 批量执行，并且当前账户没有 Builder 凭据可供该 SDK 认证。"
+  },
+  "coverage": {
+    "verified": ["real fill", "trade ID", "on-chain transaction hash", "fee receipt parsing", "balance change", "open order cleanup"],
+    "notVerified": ["partial fill", "disconnect during an in-flight fill", "redemption payout", "wallet net profit baseline", "rebate or reward payout"]
+  }
+}
