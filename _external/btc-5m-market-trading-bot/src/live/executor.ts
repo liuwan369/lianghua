@@ -346,6 +346,31 @@ export class Executor {
     return this.trackSubmission(() => this.submitTakerOrder(side, token, price, shares), price);
   }
 
+  /** Reduce an existing position via FOK; this path never opens exposure. */
+  submitExit(side: Side, token: string, price: number, shares: number): Promise<SubmitResult> {
+    return this.trackSubmission(async () => {
+      if (!this.clob || this.stopping || this.paused || shares <= 0 || price <= 0 || price >= 1) {
+        return { ok: false, price, size: 0, notional: 0 };
+      }
+      const tick = await this.tick(token);
+      const px = tickRoundDown(price, tick);
+      const size = Math.floor(shares * 100) / 100;
+      const notional = px * size;
+      if (size <= 0 || !this.canSpend(notional)) return { ok: false, price: px, size, notional };
+      const resp = await this.clob.submitMarketSell(token, size, px, tick);
+      if (!resp.success && (resp.stateUnknown || resp.orderId)) {
+        this.paused = true;
+        throw new UnknownOrderStateError("exit ACK timeout; account reconciliation required", {
+          kind: "taker", side, token, price: px, size, notional, submittedAtUnix: Date.now() / 1000,
+        });
+      }
+      if (!resp.success) return { ok: false, price: px, size, notional };
+      this.sent += 1;
+      return { ok: true, orderId: resp.orderId, price: px, size, notional, tradeIds: resp.tradeIds,
+        signLatencyMs: resp.signLatencyMs, ackLatencyMs: resp.ackLatencyMs };
+    }, price);
+  }
+
   private async submitTakerOrder(
     side: Side,
     token: string,

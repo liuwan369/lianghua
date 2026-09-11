@@ -593,6 +593,33 @@ export class ClobWrapper {
       };
     }
   }
+
+  /** FOK sell used only to reduce an already-held residual position. */
+  async submitMarketSell(
+    tokenId: string,
+    shares: number,
+    price: number,
+    tickSize: number,
+  ): Promise<SubmitOrderResult> {
+    const started = performance.now();
+    let postAttempted = false;
+    try {
+      const negRisk = await withTimeout(this.client.getNegRisk(tokenId), this.requestTimeoutMs, "CLOB risk metadata");
+      const order = await withTimeout(this.client.createOrder({ tokenID: tokenId, size: shares, price, side: ClobSide.SELL },
+        { tickSize: sdkTickSize(tickSize), negRisk, version: this.orderVersion }), this.requestTimeoutMs, "CLOB order signing");
+      postAttempted = true;
+      const resp = await this.postSignedOrder(order, OrderType.FOK, false);
+      postAttempted = false;
+      const orderId = resp?.orderID;
+      const apiError = responseError(resp);
+      return { success: !apiError && Boolean(resp?.success ?? orderId), orderId,
+        status: resp?.status, errorMsg: apiError ?? resp?.errorMsg,
+        latencyMs: performance.now() - started, tradeIds: responseTradeIds(resp) };
+    } catch (e) {
+      return { success: false, errorMsg: e instanceof Error ? e.message : String(e),
+        latencyMs: performance.now() - started, stateUnknown: postAttempted && requestStateUnknown(e) };
+    }
+  }
 }
 
 // Official geoblock docs list these countries as close-only on the frontend;

@@ -52,8 +52,17 @@ CREATE TABLE IF NOT EXISTS market_details (
  last_time REAL NOT NULL DEFAULT 0, PRIMARY KEY(run_id,market)
 );
 CREATE INDEX IF NOT EXISTS latest_markets ON market_details(run_id,last_time DESC);
+CREATE TABLE IF NOT EXISTS latency_samples (
+ run_id TEXT NOT NULL REFERENCES runs(run_id), metric TEXT NOT NULL,
+ byte_offset INTEGER NOT NULL, time REAL NOT NULL, duration_ms REAL NOT NULL,
+ PRIMARY KEY(run_id,byte_offset)
+);
+CREATE INDEX IF NOT EXISTS latency_recent ON latency_samples(run_id,metric,time DESC);
 """
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error"})
+LATENCY_METRICS = ("market_age", "book_processing", "strategy_decision", "order_sign",
+                   "order_ack", "cancel_ack", "fill_report", "reaction")
+LATENCY_LIMIT = 5000
 
 
 def _number(value):
@@ -190,6 +199,7 @@ class Ledger:
                 source.seek(offset)
                 block = source.read(max_bytes)
                 cursor = 0
+                latency_metrics = set()
                 while result["records"] < max_records:
                     end = block.find(b"\n", cursor)
                     if end < 0:
@@ -206,6 +216,15 @@ class Ledger:
                         db.execute("UPDATE runs SET invalid_records=invalid_records+1 WHERE run_id=?", (run_id,))
                         continue
                     kind = record.get("event")
+                    if kind == "latency":
+                        metric, duration, at = record.get("metric"), _number(record.get("duration_ms")), _number(record.get("recv_ts"))
+                        if (metric in LATENCY_METRICS and duration is not None and duration >= 0
+                                and at is not None and at > 0
+                                and record.get("mode") == ("live" if run["mode"] == "live" else "paper")):
+                            db.execute("INSERT OR IGNORE INTO latency_samples VALUES(?,?,?,?,?)",
+                                       (run_id, metric, record_offset, at, duration))
+                            latency_metrics.add(metric)
+                        continue
                     if not isinstance(kind, str) or kind not in EVENT_KINDS:
                         continue
                     projected = _projection(record)
@@ -229,6 +248,11 @@ class Ledger:
                     result["inserted"] += 1
                     self._accumulate(db, run_id, projected)
                 new_offset = offset + cursor
+                for metric in latency_metrics:
+                    db.execute("""DELETE FROM latency_samples WHERE run_id=? AND byte_offset IN
+                        (SELECT byte_offset FROM latency_samples WHERE run_id=? AND metric=?
+                         ORDER BY time DESC,byte_offset DESC LIMIT -1 OFFSET ?)""",
+                               (run_id, run_id, metric, LATENCY_LIMIT))
                 if not cursor and len(block) == max_bytes and b"\n" not in block:
                     result["error"] = "Journal line exceeds ingestion byte budget"
                 prefix_length = min(new_offset, 256)
@@ -333,7 +357,8 @@ class Ledger:
                 "last_event": events[0]["event"] if events else None,
                 "error": ("交易日志待核对" if summary["error"] or summary["invalid_records"]
                           else "引擎报告异常，请检查运行状态" if counts.get("error", 0) else None),
-                "events": list(reversed(events)), "market_summaries": markets}
+                "events": list(reversed(events)), "market_summaries": markets,
+                "latency": summary.get("latency")}
 
     def summary(self, run_id):
         with self._connect() as db:
@@ -355,6 +380,21 @@ class Ledger:
             result.update(source_bytes=source_bytes, lag_bytes=lag,
                           completeness=("incomplete" if run["source_error"] or run["invalid_records"]
                                         else "waiting" if lag is None else "catching_up" if lag else "caught_up"))
+            now = time.time()
+            grouped = {}
+            for row in db.execute("""SELECT metric,time,duration_ms FROM latency_samples
+                    WHERE run_id=? AND time>? AND time<=? ORDER BY metric,time,byte_offset""", (run_id, now-300, now)):
+                grouped.setdefault(row["metric"], []).append((row["time"], float(row["duration_ms"])))
+            latency = {"run_id": run_id, "mode": run["mode"], "as_of": now,
+                       "window_seconds": 300, "sample_limit": LATENCY_LIMIT, "metrics": {}}
+            for metric, samples in grouped.items():
+                values = [sample[1] for sample in samples]
+                ordered = sorted(values)
+                latency["metrics"][metric] = {"latest_ms": values[-1], "p50_ms": ordered[(len(ordered)-1)//2],
+                    "p95_ms": ordered[math.ceil(len(ordered)*.95)-1], "samples": len(values),
+                    "latest_at": samples[-1][0], "expires_at": samples[0][0]+300,
+                    "limit_reached": len(values) == LATENCY_LIMIT}
+            result["latency"] = latency
             return result
 
     def list_runs_page(self, *, before_id=None, limit=50):

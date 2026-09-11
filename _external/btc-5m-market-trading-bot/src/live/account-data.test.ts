@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { cursorPages, offsetPages, sanitize, OrderHistoryReader, type Section } from "./account-data.js";
 const wallet = "0x1111111111111111111111111111111111111111";
 
@@ -62,6 +65,30 @@ describe("read-only account pagination", () => {
 
 const section = (items: Record<string, unknown>[] = []): Section => ({ available: true, complete: true, items, pages: 1, checked_at: "2026-09-10T00:00:00Z", source: "clob-v2" });
 describe("observed order history", () => {
+  it("restores account observations after restart and preserves last known facts on missing detail", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'account-history-'));
+    try {
+      const file = join(dir, 'orders.json');
+      await new OrderHistoryReader(wallet, 2000, 8, file).read(async () => null,
+        section([{ id: 'observed', status: 'LIVE', price: '0.2' }]), section(), 1_000_000);
+      const result = await new OrderHistoryReader(wallet, 2000, 8, file).read(async () => null, section(), section(), 1_030_000);
+      expect(result).toMatchObject({ persistence: 'account_file', historical_complete: false, unavailable_order_count: 1, complete: false });
+      expect(result.items[0]).toMatchObject({ id: 'observed', status: 'LIVE', status_stale: true });
+      const other = await new OrderHistoryReader('0x' + '2'.repeat(40), 2000, 8, file).read(async () => null, section(), section(), 1_040_000);
+      expect(other).toMatchObject({ known_order_count: 0, complete: false, error_code: 'order_history_persistence_failed' });
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+  it("rejects corrupt history and invalid resource limits", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'account-history-'));
+    try {
+      const file = join(dir, 'orders.json');
+      writeFileSync(file, '{not json');
+      const result = await new OrderHistoryReader(wallet, 2000, 8, file).read(async () => null, section(), section());
+      expect(result).toMatchObject({ known_order_count: 0, complete: false, error_code: 'order_history_persistence_failed' });
+      expect(() => new OrderHistoryReader(wallet, NaN)).toThrow('invalid_history_limit');
+      expect(() => new OrderHistoryReader(wallet, 2000, -1)).toThrow('invalid_query_limit');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
   it("reports a successful HTTP null detail as unavailable rather than canceled or still unqueried", async () => {
     const reader = new OrderHistoryReader(wallet);
     const result = await reader.read(async()=>null, section(), section([{trader_side:"TAKER",taker_order_id:"gone"}]), 1_000_000);

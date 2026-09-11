@@ -69,12 +69,17 @@ export function balanceOccupancy(collateral: Section, orders: Section) {
 
 export class AccountFinanceReader {
   private known = new Map<string, { checked: number; evidence?: Row }>();
+  private cursor = 0;
   constructor(private readonly wallet: string) {}
   async read(rpc: Rpc, trades: Section, activity: Section, now = Date.now()) {
     const candidates = new Set<string>();
     for (const row of trades.items) if (row.status === 'CONFIRMED' && /^0x[0-9a-f]{64}$/i.test(String(row.transaction_hash))) candidates.add(String(row.transaction_hash).toLowerCase());
     for (const row of activity.items) if (/^0x[0-9a-f]{64}$/i.test(String(row.transactionHash))) candidates.add(String(row.transactionHash).toLowerCase());
-    const due = [...candidates].filter(tx => !this.known.get(tx)?.checked || now - this.known.get(tx)!.checked > 300_000).slice(0, 4);
+    const dueAll = [...candidates].filter(tx => !this.known.get(tx)?.checked || now - this.known.get(tx)!.checked > 300_000);
+    // Rotate the bounded batch so a stable first page cannot starve later hashes.
+    const ordered = dueAll.slice(this.cursor).concat(dueAll.slice(0, this.cursor));
+    const due = ordered.slice(0, 4);
+    this.cursor = candidates.size ? (this.cursor + due.length) % candidates.size : 0;
     if (due.length) {
       try {
         const headRaw = await rpc('eth_blockNumber', []);

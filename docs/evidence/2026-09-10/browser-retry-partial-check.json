@@ -1,0 +1,35 @@
+{
+  "date": "2026-09-10",
+  "url": "https://34-242-206-196.sslip.io/console/",
+  "tested_commit": "4a3b352",
+  "overall": "incomplete",
+  "observed_browser_steps": [
+    {
+      "action": "Open fresh public console tab",
+      "result": "pass; six navigation controls and home rendered"
+    },
+    {
+      "action": "Click refresh status",
+      "result": "pass; Dublin label, collateral balance $108.73, idle paper status visible"
+    },
+    {
+      "action": "Click automatic trading navigation",
+      "result": "pass; trade page rendered current UP/DOWN quotes; unsaved configuration start/stop disabled"
+    }
+  ],
+  "finding": "Home positions temporarily unavailable; later separate HTTP check returned positions available/complete. Browser recovery of positions has not been verified.",
+  "not_tested": [
+    "remaining page navigation",
+    "settings input/save/reset",
+    "order filters/pagination/CSV",
+    "reward period/calculator",
+    "paper start/stop",
+    "responsive layout"
+  ],
+  "mutations": {
+    "account": false,
+    "config": false,
+    "trade_start": false
+  },
+  "limitation": "Browser action capability was no longer available in the callable tool set during this turn. No full interaction acceptance claim."
+}

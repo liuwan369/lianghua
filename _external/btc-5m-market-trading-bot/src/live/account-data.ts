@@ -124,18 +124,22 @@ export class OrderHistoryReader {
   private readonly known = new Map<string, ObservedOrder>();
   private truncated = false;
   private persistenceError = false;
-  constructor(private readonly wallet: string, private readonly maxKnown = 2000, private readonly maxQueries = 8, private readonly file?: string) {
+  private readonly account: string;
+  constructor(wallet: string, private readonly maxKnown = 2000, private readonly maxQueries = 8, private readonly file?: string) {
+    if (!Number.isSafeInteger(maxKnown) || maxKnown < 1 || maxKnown > 100_000) throw new Error('invalid_history_limit');
+    if (!Number.isSafeInteger(maxQueries) || maxQueries < 1 || maxQueries > 100) throw new Error('invalid_query_limit');
+    this.account = wallet.toLowerCase();
     if (!file) return;
     try {
       const raw = readFileSync(file);
       if (raw.length > 8_000_000) throw new Error('oversized_history');
       const saved = JSON.parse(raw.toString('utf8'));
-      if (saved.version !== 1 || saved.wallet !== wallet.toLowerCase() || !Array.isArray(saved.entries) || saved.entries.length > maxKnown) throw new Error('invalid_history');
+      if (saved.version !== 1 || saved.wallet !== this.account || !Array.isArray(saved.entries) || saved.entries.length > maxKnown) throw new Error('invalid_history');
       const entries = new Map<string, ObservedOrder>();
       for (const [id, entry] of saved.entries) {
         if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,256}$/.test(id) || !entry || !Number.isFinite(entry.checked)) throw new Error('invalid_history');
         entries.set(id, { checked: entry.checked, attempted: 0, failed: true,
-          ...(entry.item ? { item: sanitize(entry.item, 'orders', wallet) } : {}) });
+          ...(entry.item ? { item: sanitize(entry.item, 'orders', this.account) } : {}) });
       }
       for (const [id, entry] of entries) this.known.set(id, entry);
       this.truncated = saved.truncated === true;
@@ -149,7 +153,7 @@ export class OrderHistoryReader {
     try {
       mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
       const temp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(temp, JSON.stringify({ version: 1, wallet: this.wallet.toLowerCase(), truncated: this.truncated,
+      writeFileSync(temp, JSON.stringify({ version: 1, wallet: this.account, truncated: this.truncated,
         entries: [...this.known] }), { mode: 0o600 });
       renameSync(temp, this.file);
     } catch { this.persistenceError = true; }
@@ -194,8 +198,8 @@ export class OrderHistoryReader {
           const raw = await get(`/data/order/${encodeURIComponent(id)}`) as Row;
           entry.unavailable = raw === null;
           if (entry.unavailable) throw new Error("order_detail_not_returned");
-          if (!raw || raw.id !== id || typeof raw.maker_address !== "string" || raw.maker_address.toLowerCase() !== this.wallet.toLowerCase()) throw new Error("order_identity_mismatch");
-          const item = sanitize(raw, "orders", this.wallet);
+          if (!raw || raw.id !== id || typeof raw.maker_address !== "string" || raw.maker_address.toLowerCase() !== this.account) throw new Error("order_identity_mismatch");
+          const item = sanitize(raw, "orders", this.account);
           if (typeof item.status !== "string" || !item.status) throw new Error("invalid_order_status");
           entry.item = { ...item, status_checked_at: new Date(now).toISOString() };
           entry.checked = now;

@@ -122,7 +122,7 @@ export function recordLatency(journal: Journal, market: Market | undefined, metr
   durationMs: number | undefined, live: boolean, orderId?: string): void {
   if (durationMs == null || !Number.isFinite(durationMs) || durationMs < 0) return;
   journal.log("latency", market, nowUnix(), { metric, duration_ms: durationMs,
-    mode: live ? "live" : "paper", order_id: orderId ?? null });
+    mode: live ? "live" : "paper", live, order_id: orderId ?? null });
 }
 
 export function recordResidualExposure(engine: Engine, journal: Journal, market: Market,

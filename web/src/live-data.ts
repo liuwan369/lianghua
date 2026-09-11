@@ -81,6 +81,7 @@ export function connect() {
     },
   });
   let eventsReceivedAt=0, historyCursor:number|undefined;
+  let telemetrySummary:any=null;
   let events: Events|null=null, selectedRun:string|null=null, eventError:string|null=null;
   const note=document.querySelector('#view-orders .note')!;
   const controls=document.createElement('div'); controls.className='subnav';
@@ -197,6 +198,7 @@ export function connect() {
       await accountData.refresh();
       await loadRuns(undefined,true);
       if(selectedRun&&!runLoading)await loadEvents(selectedRun,historyCursor);
+      if(selectedRun){ try { telemetrySummary=(await api.summary(selectedRun)).summary; telemetry.renderServer(telemetrySummary); } catch { telemetrySummary=null; } }
     }finally{refreshing=false;renderEvents();if(fresh(status))telemetry.record(performance.now()-started);}
   }
   // refresh() owns the run/event refresh sequence. Triggering the paginated
