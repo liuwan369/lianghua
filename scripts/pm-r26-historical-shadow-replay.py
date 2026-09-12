@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
+import heapq
 import json
 import re
 import sqlite3
@@ -11,7 +12,7 @@ import zlib
 from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 import sys
 
@@ -99,32 +100,64 @@ def load_metadata(paths: list[Path]) -> dict[str, dict[str, Any]]:
     return metadata
 
 
-def iter_clob(paths: list[Path], windows: dict[str, tuple[int, int]]) -> Iterable[tuple[int, str, int, str, Any]]:
-    """Yield events globally ordered by receive time across all capture DBs.
+ReplayEvent = tuple[int, str, int, str, Any]
 
-    The collector writes one SQLite file per capture period.  Iterating files
-    one at a time can move events backwards in time when a replay spans files,
-    which changes queue and hedge behavior.  The bounded source-time window
-    keeps memory proportional to the selected markets; sort once here so all
-    callers receive deterministic cross-file order.
+
+def _event_sort_key(event: ReplayEvent) -> tuple[int, int, str, str]:
+    return event[0], event[2], event[1], event[3]
+
+
+def _iter_clob_file(path: Path, windows: dict[str, tuple[int, int]]) -> Iterator[ReplayEvent]:
+    """Yield one capture DB in receive order with bounded chunk memory.
+
+    Each ``event_chunks`` row covers one received second.  Sorting only the
+    current decompressed chunk preserves the old deterministic tie-breakers
+    while keeping memory bounded by the largest chunk in one file.
     """
-    pending: list[tuple[int, str, int, str, Any]] = []
-    for path in sorted(paths):
-        if not path.exists():
-            raise FileNotFoundError(path)
-        with sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True) as conn:
-            query = "SELECT received_second,payload_blob FROM event_chunks WHERE source='clob' ORDER BY received_second"
-            for received_second, blob in conn.execute(query):
-                rows = json.loads(zlib.decompress(blob).decode("utf-8"))
-                for event_type, received_ns, source_ms, _slug, token, payload in rows:
-                    if not token or source_ms is None or token not in windows:
-                        continue
-                    start_ms, end_ms = windows[token]
-                    if source_ms < start_ms - 30000 or source_ms > end_ms + 30000:
-                        continue
-                    pending.append((int(received_ns), str(event_type), int(source_ms), str(token), payload))
-    pending.sort(key=lambda event: (event[0], event[2], event[1], event[3]))
-    yield from pending
+    if not path.exists():
+        raise FileNotFoundError(path)
+    with sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True) as conn:
+        query = (
+            "SELECT received_second,payload_blob FROM event_chunks "
+            "WHERE source='clob' ORDER BY received_second,id"
+        )
+        for _received_second, blob in conn.execute(query):
+            chunk: list[ReplayEvent] = []
+            rows = json.loads(zlib.decompress(blob).decode("utf-8"))
+            for event_type, received_ns, source_ms, _slug, token, payload in rows:
+                if not token or source_ms is None or token not in windows:
+                    continue
+                start_ms, end_ms = windows[token]
+                if source_ms < start_ms - 30000 or source_ms > end_ms + 30000:
+                    continue
+                chunk.append((int(received_ns), str(event_type), int(source_ms), str(token), payload))
+            chunk.sort(key=_event_sort_key)
+            yield from chunk
+
+
+def iter_clob(paths: list[Path], windows: dict[str, tuple[int, int]]) -> Iterable[ReplayEvent]:
+    """Yield events globally ordered by receive time with bounded memory.
+
+    The collector writes one SQLite file per capture period.  A k-way merge
+    keeps one decompressed chunk per file plus one heap entry per file, rather
+    than materializing and sorting every event from a multi-day replay.
+    """
+    streams = [_iter_clob_file(path, windows) for path in sorted(paths)]
+    heap: list[tuple[tuple[int, int, str, str], int, ReplayEvent]] = []
+    for index, stream in enumerate(streams):
+        try:
+            event = next(stream)
+        except StopIteration:
+            continue
+        heapq.heappush(heap, (_event_sort_key(event), index, event))
+    while heap:
+        _key, index, event = heapq.heappop(heap)
+        yield event
+        try:
+            next_event = next(streams[index])
+        except StopIteration:
+            continue
+        heapq.heappush(heap, (_event_sort_key(next_event), index, next_event))
 
 
 def load_chain_links(paths: list[Path], address: str, activity_hashes: set[str]) -> dict[str, Any]:
@@ -276,10 +309,8 @@ def main() -> int:
         for engine in states[meta["slug"]]["engines"].values():
             engine.start_market(meta)
     windows = {token: (meta["start_at"] * 1000, meta["end_at"] * 1000) for meta in selected for token in (meta["up_token"], meta["down_token"])}
-    replay_events = list(iter_clob(dbs, windows))
-    replay_events.sort(key=lambda item: item[0])
     seen_events = 0
-    for received_ns, event_type, source_ms, token, payload in replay_events:
+    for received_ns, event_type, source_ms, token, payload in iter_clob(dbs, windows):
         match = by_token.get(token)
         if match is None:
             continue
