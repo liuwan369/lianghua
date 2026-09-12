@@ -1,0 +1,123 @@
+{
+  "run_type": "pm-r28_risk_gated_parameter_sweep",
+  "trade_authorization": false,
+  "account_connected": false,
+  "source": {
+    "sqlite": [
+      "data\\dublin-server\\pm-r25-live-days\\dublin-evidence-2026-09-06.sqlite3",
+      "data\\dublin-server\\pm-r25-live-days\\dublin-evidence-2026-09-07.sqlite3",
+      "data\\dublin-server\\pm-r25-live-days\\dublin-evidence-2026-09-08.sqlite3",
+      "data\\dublin-server\\pm-r25-live-days\\dublin-evidence-2026-09-09.sqlite3",
+      "data\\dublin-server\\pm-r25-live-days\\dublin-evidence-2026-09-10.sqlite3"
+    ],
+    "clock": "collector received_at_ns"
+  },
+  "split": {
+    "train_utc_days": [
+      "20702",
+      "20703",
+      "20704",
+      "20705",
+      "20706"
+    ],
+    "holdout_utc_day": "20707",
+    "train_markets": 25,
+    "holdout_markets": 1,
+    "max_markets_per_day": 5,
+    "clob_events": 125475
+  },
+  "assumptions": [
+    "安全补仓门槛只表示盘口当时有可见对手方卖单，不等于真实一定成交。",
+    "maker返佣和流动性奖励按0。",
+    "目标地址Activity不用于假设影子账户成交。"
+  ],
+  "selection_rule": "仅用训练日；有成交的运行优先于零成交运行，再按最坏结算盈亏和配对份数排序；留出日只做一次性检查，不参与选择",
+  "top10": [
+    {
+      "parameters": {
+        "order_size": 20.0,
+        "pair_cap": 0.97,
+        "queue_factor": 0.25,
+        "max_inventory": 50.0,
+        "max_imbalance": 10.0,
+        "hedge_after_ms": 10000,
+        "safe_hedge": true,
+        "hedge_max_ask": 0.3,
+        "taker_pair_cap": 1.03,
+        "align_cap": 0.97
+      },
+      "train": {
+        "fills": 0.0,
+        "fill_shares": 0.0,
+        "paired_shares": 0.0,
+        "guaranteed_paired_edge_usdc": 0.0,
+        "worst_case_settlement_pnl_usdc": 0.0,
+        "taker_fee_usdc": 0.0,
+        "total_cost_usdc": 0.0,
+        "markets_with_fills": 0,
+        "one_sided_markets": 0,
+        "complete_markets": 24,
+        "incomplete_markets": 1,
+        "active_trade_run": false,
+        "realized_settlement_pnl_usdc": null,
+        "settlement_outcome_status": "unavailable_in_capture_metadata",
+        "net_worst_case_after_taker_fee": 0.0
+      },
+      "holdout": {
+        "markets_with_fills": 0,
+        "one_sided_markets": 0,
+        "complete_markets": 0,
+        "incomplete_markets": 1,
+        "active_trade_run": false,
+        "realized_settlement_pnl_usdc": null,
+        "settlement_outcome_status": "unavailable_in_capture_metadata",
+        "net_worst_case_after_taker_fee": 0.0
+      },
+      "train_rank": 1
+    }
+  ],
+  "all_results": [
+    {
+      "parameters": {
+        "order_size": 20.0,
+        "pair_cap": 0.97,
+        "queue_factor": 0.25,
+        "max_inventory": 50.0,
+        "max_imbalance": 10.0,
+        "hedge_after_ms": 10000,
+        "safe_hedge": true,
+        "hedge_max_ask": 0.3,
+        "taker_pair_cap": 1.03,
+        "align_cap": 0.97
+      },
+      "train": {
+        "fills": 0.0,
+        "fill_shares": 0.0,
+        "paired_shares": 0.0,
+        "guaranteed_paired_edge_usdc": 0.0,
+        "worst_case_settlement_pnl_usdc": 0.0,
+        "taker_fee_usdc": 0.0,
+        "total_cost_usdc": 0.0,
+        "markets_with_fills": 0,
+        "one_sided_markets": 0,
+        "complete_markets": 24,
+        "incomplete_markets": 1,
+        "active_trade_run": false,
+        "realized_settlement_pnl_usdc": null,
+        "settlement_outcome_status": "unavailable_in_capture_metadata",
+        "net_worst_case_after_taker_fee": 0.0
+      },
+      "holdout": {
+        "markets_with_fills": 0,
+        "one_sided_markets": 0,
+        "complete_markets": 0,
+        "incomplete_markets": 1,
+        "active_trade_run": false,
+        "realized_settlement_pnl_usdc": null,
+        "settlement_outcome_status": "unavailable_in_capture_metadata",
+        "net_worst_case_after_taker_fee": 0.0
+      },
+      "train_rank": 1
+    }
+  ]
+}
