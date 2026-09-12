@@ -111,6 +111,12 @@ def run_one(event_factory, markets: dict[str, dict[str, Any]], params: dict[str,
         "one_sided_markets": one_sided,
         "complete_markets": len(complete),
         "incomplete_markets": len(slugs) - len(complete),
+        # A zero PnL here can mean that the strategy never entered any
+        # complete market.  Keep this explicit so selection cannot mistake
+        # an inactive run for a profitable one.
+        "active_trade_run": bool(totals["fills"] > 0),
+        "realized_settlement_pnl_usdc": None,
+        "settlement_outcome_status": "unavailable_in_capture_metadata",
         "net_worst_case_after_taker_fee": round(totals["worst_case_settlement_pnl_usdc"], 6),
     }
 
@@ -168,9 +174,15 @@ def main() -> int:
         results.append({"parameters": params, "train": run_one(event_factory, metadata, params, train_slugs), "holdout": run_one(event_factory, metadata, params, holdout_slugs)})
         if index % 10 == 0:
             print(f"tested {index}/{len(params_list)}", flush=True)
-    # Select parameters using train only.  Holdout is strictly for one
-    # out-of-sample check; ranking by it would leak the answer.
-    results.sort(key=lambda row: (row["train"]["net_worst_case_after_taker_fee"], row["train"]["paired_shares"]), reverse=True)
+    # Select parameters using train only. Holdout is strictly for one
+    # out-of-sample check; ranking by it would leak the answer. Active runs
+    # sort ahead of inactive runs: an inactive run has zero simulated PnL by
+    # construction and must never win merely because it placed no orders.
+    results.sort(key=lambda row: (
+        int(row["train"].get("active_trade_run", False)),
+        row["train"]["net_worst_case_after_taker_fee"],
+        row["train"]["paired_shares"],
+    ), reverse=True)
     for index, row in enumerate(results, 1):
         row["train_rank"] = index
     output = {
@@ -178,7 +190,7 @@ def main() -> int:
         "source": {"sqlite": [str(p) for p in dbs], "clock": "collector received_at_ns"},
         "split": {"train_utc_days": train_days, "holdout_utc_day": holdout_day, "train_markets": len(train_slugs), "holdout_markets": len(holdout_slugs), "clob_events": sum(1 for _ in event_factory())},
         "assumptions": ["安全补仓门槛只表示盘口当时有可见对手方卖单，不等于真实一定成交。", "maker返佣和流动性奖励按0。", "目标地址Activity不用于假设影子账户成交。"],
-        "selection_rule": "按训练日最差结算盈亏降序选前10，再查看留出日；不按留出日挑选",
+        "selection_rule": "仅用训练日；有成交的运行优先于零成交运行，再按最坏结算盈亏和配对份数排序；留出日只做一次性检查，不参与选择",
         "top10": results[:10], "all_results": results,
     }
     out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True); out.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
