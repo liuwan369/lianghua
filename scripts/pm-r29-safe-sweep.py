@@ -6,6 +6,7 @@ def main() -> int:
     ap=argparse.ArgumentParser(description='Memory-isolated local risk sweep')
     ap.add_argument('--sqlite', nargs='+', required=True); ap.add_argument('--history-dir', required=True); ap.add_argument('--out', required=True)
     ap.add_argument('--max-markets', type=int, default=20); ap.add_argument('--max-combinations', type=int, default=4)
+    ap.add_argument('--resolution-labels', help='Verified official resolution report passed to each replay')
     a=ap.parse_args(); results=[]
     # Each child handles one bounded replay and exits, returning all memory to OS.
     presets=[
@@ -17,6 +18,8 @@ def main() -> int:
     for i,p in enumerate(presets,1):
         with tempfile.NamedTemporaryFile(suffix='.json',delete=False) as f: tmp=Path(f.name)
         cmd=[sys.executable,'scripts/pm-r26-historical-shadow-replay.py','--sqlite',*a.sqlite,'--history-dir',a.history_dir,'--out',str(tmp),'--max-markets',str(a.max_markets),'--order-size',p['order_size'],'--pair-cap',p['pair_cap'],'--queue-factor',p.get('queue_factor','0.25'),'--max-inventory-imbalance',p['max_inventory_imbalance'],'--taker-fee-rate',p['taker_fee_rate']]
+        if a.resolution_labels:
+            cmd += ['--resolution-labels', a.resolution_labels]
         run=subprocess.run(cmd,capture_output=True,text=True)
         if run.returncode:
             tmp.unlink(missing_ok=True); raise SystemExit(run.stderr[-2000:])
