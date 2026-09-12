@@ -107,6 +107,22 @@ def _event_sort_key(event: ReplayEvent) -> tuple[int, int, str, str]:
     return event[0], event[2], event[1], event[3]
 
 
+def token_payloads(event_type: str, token: str | None, payload: Any) -> Iterable[tuple[str, Any]]:
+    if event_type != "price_change":
+        if token:
+            yield str(token), payload
+        return
+    if not isinstance(payload, list) or len(payload) != 2 or not isinstance(payload[1], list):
+        raise ValueError("invalid compact price_change payload")
+    changes: dict[str, list[Any]] = defaultdict(list)
+    for item in payload[1]:
+        if not isinstance(item, list) or len(item) < 4 or not isinstance(item[0], str) or not item[0]:
+            raise ValueError("price_change has no valid per-change token identity")
+        changes[item[0]].append(item)
+    for changed_token, items in changes.items():
+        yield changed_token, [payload[0], items]
+
+
 def _iter_clob_file(
     path: Path,
     windows: dict[str, tuple[int, int]],
@@ -130,12 +146,25 @@ def _iter_clob_file(
             chunk: list[ReplayEvent] = []
             rows = json.loads(zlib.decompress(blob).decode("utf-8"))
             for event_type, received_ns, source_ms, _slug, token, payload in rows:
-                if not token or source_ms is None or token not in windows:
+                if source_ms is None:
                     continue
-                start_ms, end_ms = windows[token]
-                if source_ms < start_ms - 30000 or source_ms > end_ms + 30000:
-                    continue
-                chunk.append((int(received_ns), str(event_type), int(source_ms), str(token), payload))
+                relevant = []
+                for changed_token, changed_payload in token_payloads(event_type, token, payload):
+                    if changed_token not in windows:
+                        continue
+                    start_ms, end_ms = windows[changed_token]
+                    if source_ms < start_ms - 30000 or source_ms > end_ms + 30000:
+                        continue
+                    relevant.append((changed_token, changed_payload))
+                if event_type == "price_change" and relevant:
+                    # Preserve the original message boundary, including when
+                    # separate messages share a timestamp. Decisions run only
+                    # after every selected book in this message is updated.
+                    merged = [payload[0], [item for _, part in relevant for item in part[1]]]
+                    chunk.append((int(received_ns), str(event_type), int(source_ms), "", merged))
+                else:
+                    for changed_token, changed_payload in relevant:
+                        chunk.append((int(received_ns), str(event_type), int(source_ms), changed_token, changed_payload))
             chunk.sort(key=_event_sort_key)
             yield from chunk
 
@@ -284,14 +313,68 @@ def new_engines(args: argparse.Namespace) -> dict[str, MakerShadowEngine]:
     }
 
 
-def summarize_market(engine: MakerShadowEngine, meta: dict[str, Any], first_ms: int | None, last_ms: int | None) -> dict[str, Any]:
-    snap = engine.snapshot()
-    snap["coverage"] = {
-        "first_source_ms": first_ms,
-        "last_source_ms": last_ms,
-        "complete_5m_window": bool(first_ms is not None and last_ms is not None and first_ms <= meta["start_at"] * 1000 + 30000 and last_ms >= meta["end_at"] * 1000 - 30000),
-    }
-    return snap
+def observe_book_coverage(
+    tokens: dict[str, dict[str, Any]], token: str, event_type: str, source_ms: int, received_ns: int,
+) -> None:
+    # Trades do not establish a usable book; deltas need an initial snapshot.
+    if event_type not in {"book", "price_change"}:
+        return
+    received_ms = received_ns // 1_000_000
+    if token not in tokens:
+        if event_type != "book":
+            return
+        tokens[token] = {"first_source_ms": source_ms, "last_source_ms": source_ms,
+                         "first_received_ms": received_ms, "last_received_ms": received_ms,
+                         "max_receive_gap_ms": 0, "book_events": 1}
+        return
+    state = tokens[token]
+    state["max_receive_gap_ms"] = max(state["max_receive_gap_ms"], received_ms - state["last_received_ms"])
+    state["last_received_ms"] = received_ms
+    state["last_source_ms"] = max(state["last_source_ms"], source_ms)
+    state["book_events"] += 1
+
+
+def market_book_coverage(meta: dict[str, Any], tokens: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    start_ms, end_ms = meta["start_at"] * 1000, meta["end_at"] * 1000
+    sides: dict[str, dict[str, Any]] = {}
+    for outcome, token in (("Up", meta["up_token"]), ("Down", meta["down_token"])):
+        state = tokens.get(token)
+        reasons = []
+        if state is None:
+            reasons.append("missing_initial_book")
+        else:
+            if state["first_source_ms"] > start_ms + 30_000 or state["first_received_ms"] > start_ms + 30_000:
+                reasons.append("late_initial_book")
+            if state["last_source_ms"] < end_ms - 30_000 or state["last_received_ms"] < end_ms - 30_000:
+                reasons.append("missing_tail")
+            if state["max_receive_gap_ms"] > 60_000:
+                reasons.append("book_receive_gap")
+        sides[outcome] = {**(state or {}), "token": token, "complete": not reasons, "reasons": reasons}
+    return {"policy": "per-token-book-v2", "complete_5m_window": all(side["complete"] for side in sides.values()),
+            "boundary_tolerance_ms": 30_000, "max_allowed_receive_gap_ms": 60_000, "sides": sides,
+            "note": "Observed book coverage only; does not prove lossless sequence or real fill quality."}
+
+
+def apply_price_change_message(
+    states: dict[str, dict[str, Any]], by_token: dict[str, tuple[str, str]],
+    payload: Any, source_ms: int, received_ns: int,
+) -> None:
+    affected: dict[str, dict[str, Any]] = {}
+    received_ms = received_ns // 1_000_000
+    for token, changes in token_payloads("price_change", None, payload):
+        match = by_token.get(token)
+        if match is None:
+            continue
+        state = states[match[0]]
+        observe_book_coverage(state["coverage_by_token"], token, "price_change", source_ms, received_ns)
+        book = state["books"].setdefault(token, {"bids": [], "asks": [], "tick_size": "0.01", "timestamp": ""})
+        apply_changes(book, changes)
+        for engine in state["engines"].values():
+            engine.update_book(token, dict(book), received_ms, refresh=False)
+        affected[match[0]] = state
+    for state in affected.values():
+        for engine in state["engines"].values():
+            engine.refresh_quotes(received_ms)
 
 
 def load_resolution_labels(path: Path | None) -> dict[str, dict[str, Any]]:
@@ -361,12 +444,16 @@ def main() -> int:
     by_token = {token: (meta["slug"], outcome) for meta in selected for token, outcome in ((meta["up_token"], "Up"), (meta["down_token"], "Down"))}
     states: dict[str, dict[str, Any]] = {}
     for meta in selected:
-        states[meta["slug"]] = {"meta": meta, "engines": new_engines(args), "first_ms": None, "last_ms": None, "last_received_ns": None, "max_gap_ms": 0.0, "tokens_seen": set(), "books": {}}
+        states[meta["slug"]] = {"meta": meta, "engines": new_engines(args), "coverage_by_token": {}, "books": {}}
         for engine in states[meta["slug"]]["engines"].values():
             engine.start_market(meta)
     windows = {token: (meta["start_at"] * 1000, meta["end_at"] * 1000) for meta in selected for token in (meta["up_token"], meta["down_token"])}
     seen_events = 0
     for received_ns, event_type, source_ms, token, payload in iter_clob(dbs, windows):
+        if event_type == "price_change":
+            apply_price_change_message(states, by_token, payload, source_ms, received_ns)
+            seen_events += 1
+            continue
         match = by_token.get(token)
         if match is None:
             continue
@@ -376,25 +463,13 @@ def main() -> int:
         if source_ms < meta["start_at"] * 1000 - 30000 or source_ms > meta["end_at"] * 1000 + 30000:
             continue
         received_ms = received_ns // 1_000_000
-        state["first_ms"] = source_ms if state["first_ms"] is None else min(state["first_ms"], source_ms)
-        state["last_ms"] = source_ms if state["last_ms"] is None else max(state["last_ms"], source_ms)
-        previous_received = state.get("last_received_ns")
-        if previous_received is not None:
-            state["max_gap_ms"] = max(state.get("max_gap_ms", 0), (received_ns - previous_received) / 1_000_000)
-        state["last_received_ns"] = received_ns
-        state["tokens_seen"].add(token)
+        observe_book_coverage(state["coverage_by_token"], token, event_type, source_ms, received_ns)
         seen_events += 1
         if event_type == "book":
             book = levels_from_compact(payload)
             state["books"][token] = book
             for engine in state["engines"].values():
                 engine.update_book(token, dict(book), received_ms)
-        elif event_type == "price_change":
-            book = state["books"].setdefault(token, {"bids": [], "asks": [], "tick_size": "0.01", "timestamp": ""})
-            apply_changes(book, payload)
-            for engine in state["engines"].values():
-                engine.update_book(token, dict(book), received_ms, refresh=False)
-                engine.refresh_quotes(received_ms)
         elif event_type == "last_trade_price":
             if not isinstance(payload, list) or len(payload) < 4:
                 continue
@@ -406,11 +481,11 @@ def main() -> int:
     complete_slugs: set[str] = set()
     for slug, state in states.items():
         meta = state["meta"]
-        complete = bool(state["first_ms"] is not None and state["last_ms"] is not None and len(state["tokens_seen"]) == 2 and state["first_ms"] <= meta["start_at"] * 1000 + 30000 and state["last_ms"] >= meta["end_at"] * 1000 - 30000 and state.get("max_gap_ms", 0) <= 60000)
-        if complete:
+        coverage = market_book_coverage(meta, state["coverage_by_token"])
+        if coverage["complete_5m_window"]:
             complete_slugs.add(slug)
         for name, engine in state["engines"].items():
-            snapshot = attach_resolution(summarize_market(engine, meta, state["first_ms"], state["last_ms"]), meta, resolution_labels.get(slug))
+            snapshot = attach_resolution({**engine.snapshot(), "coverage": coverage}, meta, resolution_labels.get(slug))
             rows[name].append({"slug": slug, "target": activity.get(slug, {"count": 0, "shares": 0, "usdc": 0}), "snapshot": snapshot})
     summary: dict[str, Any] = {}
     for name, items in rows.items():
@@ -446,7 +521,10 @@ def main() -> int:
         "source": {"server": "configured evidence collector", "sqlite": [str(path) for path in dbs], "history_dir": str(Path(args.history_dir)), "chain_links": chain_links},
         "resolution_evidence": {"path": str(args.resolution_labels) if args.resolution_labels else None,
                                 "sha256": hashlib.sha256(args.resolution_labels.read_bytes()).hexdigest() if args.resolution_labels else None},
-        "coverage": {"metadata_markets": len(metadata), "selected_markets": len(selected), "complete_markets": len(complete_slugs), "clob_events_replayed": seen_events, "activity_is_comparison_only": True, "replay_clock": "collector received_at_ns"},
+        "coverage": {"metadata_markets": len(metadata), "selected_markets": len(selected), "complete_markets": len(complete_slugs), "clob_events_replayed": seen_events, "activity_is_comparison_only": True, "replay_clock": "collector received_at_ns",
+                     "policy": "per-token-book-v2", "event_decoder": "compact-atomic-message-v2",
+                     "event_count_semantics": "selected source messages; multi-token deltas applied before one decision per market",
+                     "excluded_markets": sorted(set(states) - complete_slugs)},
         "assumptions": ["公开盘口只显示汇总数量，排队位置按可见同价位数量乘0.25/保守模型模拟。", "碰到价格不等于一定成交；只有公开last_trade且对手方为SELL才给影子挂单成交。", "maker返佣和流动性奖励暂记0，需逐笔结算数据核实后再加。", "历史Activity不能恢复未成交订单，所以不能证明历史下单参数。"],
         "summary": summary,
         "markets": {name: items for name, items in rows.items()},

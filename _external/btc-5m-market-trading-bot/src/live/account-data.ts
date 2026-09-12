@@ -1,7 +1,7 @@
 /** Read-only account data: GET and receipt RPC; no credential creation or order methods. */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { AccountFinanceReader, balanceOccupancy } from './account-finance.js';
+import { AccountFinanceReader, accountRiskContract, balanceOccupancy } from './account-finance.js';
 import { createL1Headers, createL2Headers, type ApiKeyCreds } from "@polymarket/clob-client-v2";
 import { createWalletClient, http, type WalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -265,8 +265,9 @@ export async function connectAccountReader() {
       try {
         const data = await get("/balance-allowance", { asset_type: "COLLATERAL", signature_type: String(signatureType) }) as Row;
         if (typeof data?.balance !== "string" || !/^\d+$/.test(data.balance)) throw new Error("invalid_balance");
-        const value = Number(data.balance) / 1e6;
-        if (!Number.isFinite(value)) throw new Error("invalid_balance");
+        const rawValue = Number(data.balance);
+        if (!Number.isSafeInteger(rawValue)) throw new Error("invalid_balance");
+        const value = rawValue / 1e6;
         return { ...output, available: true, complete: true, value, pages: 1, checked_at: new Date().toISOString() };
       } catch { return { ...output, error_code: "balance_fetch_failed" }; }
     })();
@@ -278,6 +279,6 @@ export async function connectAccountReader() {
     const finance = await financeReader.read(receiptRpc, trades, activity);
     return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began, collateral, open_orders, trades, positions, closed_positions, activity, order_history,
       pagination_atomic: false,
-      occupancy: balanceOccupancy(collateral, open_orders), ...finance };
+      occupancy: balanceOccupancy(collateral, open_orders, positions), risk_contract: accountRiskContract(), ...finance };
   };
 }

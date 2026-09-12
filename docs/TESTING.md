@@ -1,6 +1,6 @@
 # 测试与验收
 
-在仓库根目录执行：
+统一入口在仓库根目录执行 `python scripts/verify-project.py`。它生成 `.planning/tmp/verification/<run_id>/manifest.json`，包含各步结果及日志哈希。模块单独验证：
 
 ```powershell
 python -m pytest -q
@@ -10,7 +10,7 @@ npm --prefix web test
 npm --prefix web run build
 ```
 
-2026-09-10 最新账户接入回归：Python248 passed / 1 skipped，引擎全量212 passed / 22 files，随后新增HTTP 200/null回归的10项账户定向测试通过，前端39项通过；引擎与前端构建通过。六页原设计结构和样式回归保持通过。先前CPU批次243/201/23属于该批次记录。
+2026-09-13 本批统一验证通过，manifest 为 `20260912T193457Z-f1a5cb36`：Python 286 passed / 1 skipped、引擎 264 passed / 25 files、前端 49 passed，双方构建通过。随后完整消息解码修复的 Python 全量复跑为 289 passed / 1 skipped；回放定向 12 项通过。前端结果包含本地已有用户修改，这些修改不属于本批部署。以上时间戳为 UTC，风险日仍按 Asia/Shanghai。
 
 ## 测试覆盖
 

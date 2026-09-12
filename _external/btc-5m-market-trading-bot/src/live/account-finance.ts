@@ -13,6 +13,26 @@ const topicAddress = (v: unknown) => typeof v === 'string' && /^0x0{24}[0-9a-fA-
 const amount = (raw: bigint) => raw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(raw) / 1e6 : null;
 const number = (v: unknown) => (typeof v === 'number' || typeof v === 'string' && v.trim() !== '') && Number.isFinite(Number(v)) ? Number(v) : null;
 
+/** Hard account contract supplied by the owner for the first bounded validation. */
+export const ACCOUNT_RISK_LIMITS = Object.freeze({ capitalUsd: 50, dailyLossUsd: 30 });
+
+export interface AccountRiskContract {
+  capital_limit_usd: number;
+  daily_loss_limit_usd: number;
+  risk_timezone: 'Asia/Shanghai';
+  source: 'owner-bounded-validation';
+  read_only: true;
+  execution_ready: false;
+  required_before_execution: string[];
+}
+
+export function accountRiskContract(): AccountRiskContract {
+  return { capital_limit_usd: ACCOUNT_RISK_LIMITS.capitalUsd, daily_loss_limit_usd: ACCOUNT_RISK_LIMITS.dailyLossUsd,
+    risk_timezone: 'Asia/Shanghai', source: 'owner-bounded-validation', read_only: true, execution_ready: false,
+    required_before_execution: ['reconciled_account_snapshot', 'pending_submission_and_settlement_reservations',
+      'fee_and_allowance_validation', 'account_equity_daily_baseline_and_external_cash_flows', 'atomic_pre_submission_gate'] };
+}
+
 export function receiptEvidence(receipt: unknown, wallet: string, tx: string, confirmedHead: number): Row {
   const r = receipt as Row;
   if (!r || String(r.transactionHash).toLowerCase() !== tx.toLowerCase() || r.status !== '0x1'
@@ -50,21 +70,72 @@ export function receiptEvidence(receipt: unknown, wallet: string, tx: string, co
   return { transaction_hash: tx, block, block_hash: r.blockHash, transfers, fees };
 }
 
-export function balanceOccupancy(collateral: Section, orders: Section) {
+export function balanceOccupancy(collateral: Section, orders: Section, positions?: Section) {
   let reserved = 0;
-  let valid = collateral.available && collateral.complete && orders.available && orders.complete;
+  let ordersValid = orders.available && orders.complete;
+  let pendingBuyCount = 0;
+  const orderIds = new Set<string>();
   for (const order of orders.items) {
+    if (typeof order.id === 'string') {
+      if (orderIds.has(order.id)) ordersValid = false;
+      orderIds.add(order.id);
+    }
     if (String(order.side).toUpperCase() === 'SELL') continue;
     const size = number(order.original_size), matched = number(order.size_matched), price = number(order.price);
-    if (String(order.side).toUpperCase() !== 'BUY' || size === null || matched === null || price === null || size < matched || matched < 0 || price < 0 || price > 1) { valid = false; continue; }
+    if (String(order.side).toUpperCase() !== 'BUY' || size === null || matched === null || price === null || size < matched || matched < 0 || price < 0 || price > 1) { ordersValid = false; continue; }
     reserved += (size - matched) * price;
+    if (size > matched) pendingBuyCount++;
   }
+  ordersValid = ordersValid && Number.isFinite(reserved) && reserved <= Number.MAX_SAFE_INTEGER / 1e6;
+  let openPositionNotional = 0;
+  let positionCount = 0;
+  let positionsValid = !!(positions?.available && positions.complete);
+  const positionIds = new Set<string>();
+  if (positions) {
+    for (const position of positions.items) {
+      const key = JSON.stringify([position.conditionId, position.asset]);
+      if (typeof position.asset !== 'string' || !position.asset || typeof position.conditionId !== 'string'
+          || !position.conditionId || positionIds.has(key)) { positionsValid = false; continue; }
+      positionIds.add(key);
+      const size = number(position.size), avgPrice = number(position.avgPrice);
+      if (size === null || size < 0 || (size > 0 && (avgPrice === null || avgPrice < 0 || avgPrice > 1))) {
+        positionsValid = false; continue;
+      }
+      // Redeemable holdings are still occupied until the cash receipt is reconciled.
+      openPositionNotional += size > 0 ? size * avgPrice! : 0;
+      if (size > 0) positionCount++;
+    }
+  }
+  positionsValid = positionsValid && Number.isFinite(openPositionNotional) && openPositionNotional <= Number.MAX_SAFE_INTEGER / 1e6;
   const balance = collateral.value;
-  valid = !!(valid && typeof balance === 'number' && Number.isFinite(balance) && Number.isFinite(reserved));
-  return { available: valid, complete: false, open_buy_notional: valid ? reserved : null,
-    balance_after_open_buy_notional: valid ? Math.max(0, balance! - reserved) : null,
+  const collateralValid = collateral.available && collateral.complete && typeof balance === 'number'
+    && Number.isFinite(balance) && balance >= 0 && balance <= Number.MAX_SAFE_INTEGER / 1e6;
+  const cashOrdersValid = collateralValid && ordersValid;
+  const combinedCost = reserved + openPositionNotional;
+  const capitalOccupied = ordersValid && positionsValid && Number.isFinite(combinedCost)
+    && combinedCost <= Number.MAX_SAFE_INTEGER / 1e6 ? combinedCost : null;
+  const sources = [collateral, orders, ...(positions ? [positions] : [])];
+  const times = sources.map(s => Date.parse(s.checked_at));
+  const timesValid = times.every(Number.isFinite);
+  return { available: cashOrdersValid, complete: false, open_buy_notional: ordersValid ? reserved : null,
+    balance_after_open_buy_notional: cashOrdersValid ? Math.max(0, balance! - reserved) : null,
     spendable_balance: null, source: 'clob-balance-and-open-orders',
-    reason: '非原子快照；未含待确认成交、在途提交及未知费用预留，不作为可下单额度' };
+    observed: {
+      collateral_balance_usd: collateralValid ? balance : null,
+      open_buy_count: ordersValid ? pendingBuyCount : null,
+      position_cost_usd: positionsValid ? openPositionNotional : null,
+      position_count: positionsValid ? positionCount : null,
+      capital_occupied_estimate_usd: capitalOccupied,
+      capital_headroom_estimate_usd: capitalOccupied === null ? null : ACCOUNT_RISK_LIMITS.capitalUsd - capitalOccupied,
+      cash_shortfall_estimate_usd: cashOrdersValid ? Math.max(0, reserved - balance!) : null,
+      source_checks: { collateral: collateral.checked_at, open_orders: orders.checked_at, positions: positions?.checked_at ?? null },
+      source_skew_ms: timesValid ? Math.max(...times) - Math.min(...times) : null,
+      position_cost_basis: 'data-api-size-times-average-price-including-redeemable-holdings',
+      estimate_inputs_complete: collateralValid && capitalOccupied !== null && timesValid,
+    },
+    unaccounted: ['non_atomic_cross_source_snapshot', 'unknown_submission_acknowledgements',
+      'matched_trades_pending_chain_confirmation', 'unreconciled_fills_between_snapshots', 'fees_and_allowance_reservations'],
+    reason: '非原子快照；占用为观测估算，未覆盖在途提交、待确认成交与费用预留，不作为可下单额度' };
 }
 
 export class AccountFinanceReader {

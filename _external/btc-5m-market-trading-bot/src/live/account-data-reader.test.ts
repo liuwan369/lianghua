@@ -24,6 +24,10 @@ describe("authenticated account reader", () => {
     expect(result.collateral.value).toBe(108.728676);
     expect(result.open_orders.complete).toBe(true);
     expect(result.positions.complete).toBe(true);
+    expect(result.occupancy).toMatchObject({ complete: false, spendable_balance: null,
+      observed: { position_cost_usd: 0, capital_occupied_estimate_usd: 0 } });
+    expect(result.risk_contract).toMatchObject({ capital_limit_usd: 50, daily_loss_limit_usd: 30,
+      read_only: true, execution_ready: false });
     expect(result.fees.available).toBe(false);
     expect(result.rewards.available).toBe(false);
     expect(JSON.stringify(result)).not.toMatch(/secret|passphrase|allowances/);
@@ -37,5 +41,20 @@ describe("authenticated account reader", () => {
     vi.stubGlobal("fetch", fetcher);
     await expect(connectAccountReader()).rejects.toThrow("unsupported_protocol");
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+  it.each(['9007199254740993', '-1', 'invalid', null])('keeps malformed or imprecise collateral %s unknown', async balance => {
+    vi.stubGlobal('fetch', vi.fn(async input => {
+      const url = new URL(input);
+      const payload = url.pathname === '/version' ? { version: 2 }
+        : url.pathname === '/auth/derive-api-key' ? { apiKey: 'test-key', secret: 'test-secret', passphrase: 'test-passphrase' }
+        : url.pathname === '/balance-allowance' ? { balance }
+        : ['/data/orders', '/data/trades'].includes(url.pathname) ? { data: [], next_cursor: 'LTE=' } : [];
+      return { ok: true, json: async () => payload };
+    }));
+    const result = await (await connectAccountReader())();
+    expect(result.collateral).toMatchObject({ available: false, complete: false, error_code: 'balance_fetch_failed' });
+    expect(result.collateral.value).toBeUndefined();
+    expect(result.occupancy).toMatchObject({ available: false, spendable_balance: null,
+      balance_after_open_buy_notional: null, observed: { collateral_balance_usd: null, estimate_inputs_complete: false } });
   });
 });

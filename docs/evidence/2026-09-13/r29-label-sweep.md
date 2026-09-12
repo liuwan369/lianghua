@@ -2,6 +2,8 @@
 
 日期：2026-09-13（Asia/Shanghai）。输入为 2026-09-10 都柏林采集库的 30 个最近市场，28 个完整窗口；官方标签报告为 `data/research/r33/report.json`，1,235 个市场全部已确认终态。每组使用影子成交、队列因子和 0.07 taker fee 假设，未加入返佣或 LP 奖励。
 
+历史口径说明：本报告采用旧的双边合并覆盖判定，并跳过外层 token 为空的多 token 增量消息。2026-09-13 后续已定位并修复；下表仅保留为修复前证据，不作为现行策略参数或完整盘口覆盖的依据。修复后的扫描另附证据。
+
 结果如下，金额为模拟 USDC：
 
 | order size | pair cap | queue | strict official / worst | calibrated official / worst | candidate official / worst |
