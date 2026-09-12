@@ -16,6 +16,11 @@ def levels(book: dict[str, Any], side: str) -> list[tuple[float, float]]:
     return sorted(rows, reverse=side == "bids")
 
 
+def best_price(book: dict[str, Any], side: str) -> float | None:
+    prices = (float(row["price"]) for row in book.get(side, []) if float(row.get("size", 0)) > 0)
+    return (max if side == "bids" else min)(prices, default=None)
+
+
 def quote_prices(
     up_book: dict[str, Any],
     down_book: dict[str, Any],
@@ -23,13 +28,12 @@ def quote_prices(
     max_pair_cost: float,
     quote_offset_ticks: int = 0,
 ) -> tuple[float, float] | None:
-    up_bids, down_bids = levels(up_book, "bids"), levels(down_book, "bids")
-    up_asks, down_asks = levels(up_book, "asks"), levels(down_book, "asks")
-    if not up_bids or not down_bids or not up_asks or not down_asks:
+    up, down = best_price(up_book, "bids"), best_price(down_book, "bids")
+    up_ask, down_ask = best_price(up_book, "asks"), best_price(down_book, "asks")
+    if up is None or down is None or up_ask is None or down_ask is None:
         return None
-    up, down = up_bids[0][0], down_bids[0][0]
     ticks = [float(up_book.get("tick_size") or 0.01), float(down_book.get("tick_size") or 0.01)]
-    asks = [up_asks[0][0], down_asks[0][0]]
+    asks = [up_ask, down_ask]
     quotes = [up, down]
     spreads = [asks[0] - up, asks[1] - down]
     while True:
@@ -52,7 +56,7 @@ def quote_prices(
     offset = max(0, int(quote_offset_ticks))
     if offset:
         for index in (0, 1):
-            floor = (up_bids[0][0], down_bids[0][0])[index]
+            floor = (up, down)[index]
             quotes[index] = round(max(floor, quotes[index] - offset * ticks[index]), 10)
         if sum(quotes) > max_pair_cost + EPSILON:
             return None

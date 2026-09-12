@@ -21,8 +21,11 @@
 | 账户配置 | /root/.config/pm-system/account.json（不进仓库） |
 | 非秘密配置、账本与投影 | 引擎 results/dashboard/ |
 | 日行情库 | data/pm-r25-live/days/dublin-evidence-YYYY-MM-DD.sqlite3 |
+| Codex 开发接续 | 本机 `btc` heartbeat，每 30 分钟接续当前任务；配置已启用，首个定时完成结果待核验 |
 
 实例为 AWS eu-west-1 的 t3.small，2 vCPU、约 2 GB 内存。增量盘口和账本空闲跳过已上线，云端 CPU 等待仍偏高，见 [CPU 诊断](CPU-DIAGNOSIS-2026-09-10.md)。小时分析是研究任务，不是下单所必需的实时组件。
+
+Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏林。2026-09-13 已将原东京预测维护任务原位改为当前做市任务 heartbeat，避免重复维护目标。任务职责、通知和冲突规避见 [协作约定第 7 节](AGENT-WORKFLOW.md#7-数据ai-与运行自动化)；配置成功不代表首轮已运行，也不表示交易已启动。
 
 ## 发布流程
 

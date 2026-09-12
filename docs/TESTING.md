@@ -12,6 +12,8 @@ npm --prefix web run build
 
 2026-09-13 本批统一验证通过，manifest 为 `20260912T193457Z-f1a5cb36`：Python 286 passed / 1 skipped、引擎 264 passed / 25 files、前端 49 passed，双方构建通过。随后完整消息解码修复的 Python 全量复跑为 289 passed / 1 skipped；回放定向 12 项通过。前端结果包含本地已有用户修改，这些修改不属于本批部署。以上时间戳为 UTC，风险日仍按 Asia/Shanghai。
 
+随后报价最优价扫描优化：Python 全量 **293 passed / 1 skipped**，其中 shadow 定向 **37 passed**；独立审查另做 25,000 次对原 `345dc21` 源码的报价差分，结果一致且输入未修改。200 档深度微基准约提速 1.40 倍，只表示报价函数耗时变化，不能代表整段回放或实盘延迟。证据及复现方法见 [自动接续与回放优化](evidence/2026-09-13/automation-replay-progress.md)。本批不涉及 TypeScript 或前端代码，没有重复双方构建。
+
 ## 测试覆盖
 
 - Python：配置版本/类型/损坏恢复、账本增量摄取、API、账户错误分类与公开 HTTPS 来源规则、采集和历史分析。新增覆盖盘口同键修订、日切/替换、异常恢复及无效变更不续鲜；账本空闲跳过、日志追加/替换与心跳失效。

@@ -1,7 +1,10 @@
+import random
+
 import pytest
 
 from pm_maker.multilevel import MultiLevelMakerShadowEngine, create_shadow_engine
-from pm_maker.shadow import MakerShadowEngine, quote_prices
+from pm_maker import shadow
+from pm_maker.shadow import MakerShadowEngine, best_price, levels, quote_prices
 
 
 def book(bid: float, ask: float, bid_size: float = 20.0) -> dict:
@@ -29,6 +32,52 @@ def test_quote_prices_improves_without_crossing_pair_cap() -> None:
 
 def test_quote_prices_rejects_expensive_pair() -> None:
     assert quote_prices(book(0.51, 0.52), book(0.49, 0.50), max_pair_cost=0.98) is None
+
+
+def test_best_price_matches_sorted_depth_and_observes_in_place_updates() -> None:
+    rng = random.Random(20260913)
+    for side in ("bids", "asks"):
+        for count in (0, 1, 10, 100):
+            for _ in range(20):
+                depth = {side: [{"price": str(rng.randrange(1, 100) / 100),
+                                 "size": str(rng.randrange(-2, 100))} for _ in range(count)]}
+                expected = levels(depth, side)
+                assert best_price(depth, side) == (expected[0][0] if expected else None)
+                depth[side].append({"price": "0.999" if side == "bids" else "0.001", "size": "10"})
+                assert best_price(depth, side) == levels(depth, side)[0][0]
+                depth[side][-1]["size"] = "0"
+                assert best_price(depth, side) == (expected[0][0] if expected else None)
+
+
+@pytest.mark.parametrize("side", ["bids", "asks"])
+def test_quote_prices_requires_positive_depth_on_each_side(side: str) -> None:
+    up = book(0.47, 0.50)
+    up[side][0]["size"] = "0"
+    assert quote_prices(up, book(0.48, 0.51), max_pair_cost=0.98) is None
+
+
+def test_quote_decisions_match_sorting_reference(monkeypatch) -> None:
+    rng = random.Random(314159)
+
+    def sorted_best(depth, side):
+        rows = levels(depth, side)
+        return rows[0][0] if rows else None
+
+    for _ in range(200):
+        books = []
+        for _side in range(2):
+            midpoint = rng.randrange(20, 80)
+            depth = {"tick_size": rng.choice(["0.001", "0.01"])}
+            for side in ("bids", "asks"):
+                prices = range(max(1, midpoint - 10), midpoint) if side == "bids" else range(midpoint + 1, min(100, midpoint + 11))
+                depth[side] = [{"price": str(price / 100), "size": str(rng.randrange(-1, 100))} for price in prices]
+                rng.shuffle(depth[side])
+            books.append(depth)
+        for cap, offset in ((0.97, 0), (1.02, 0), (1.02, 2)):
+            actual = quote_prices(*books, max_pair_cost=cap, quote_offset_ticks=offset)
+            with monkeypatch.context() as context:
+                context.setattr(shadow, "best_price", sorted_best)
+                assert actual == quote_prices(*books, max_pair_cost=cap, quote_offset_ticks=offset)
 
 
 def test_same_price_trade_consumes_queue_before_shadow_fill() -> None:
