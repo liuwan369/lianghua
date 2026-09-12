@@ -1,0 +1,124 @@
+{
+  "measured_at": "2026-09-12T13:55:41.647Z",
+  "hostname": "ip-172-26-5-249",
+  "samples": 30,
+  "ws_seconds": 90,
+  "dns": {
+    "clob.polymarket.com": {
+      "ipv4": [
+        "104.18.34.205",
+        "172.64.153.51"
+      ],
+      "ipv6": [
+        "2606:4700:440d::6812:22cd",
+        "2606:4700:4408::ac40:9933"
+      ]
+    },
+    "ws-subscriptions-clob.polymarket.com": {
+      "ipv4": [
+        "104.18.34.205",
+        "172.64.153.51"
+      ],
+      "ipv6": [
+        "2606:4700:4408::ac40:9933",
+        "2606:4700:440d::6812:22cd"
+      ]
+    }
+  },
+  "outbound_ip_family": "ipv6",
+  "clock_sync": {
+    "source": "chrony",
+    "synchronized": true,
+    "local_minus_ntp_ms": 0.000029999999999999997,
+    "detail": "Normal"
+  },
+  "geoblock": {
+    "blocked": true,
+    "ip": "2a05:d018:158:5800:4363:fa06:8100:d92",
+    "country": "IE",
+    "region": "L"
+  },
+  "api_region": {
+    "allowed": true,
+    "basis": "official docs list this country as frontend-only restricted; API remains available"
+  },
+  "clob_rest": {
+    "count": 30,
+    "min_ms": 21.45,
+    "p50_ms": 25.9,
+    "p95_ms": 31.77,
+    "p99_ms": 40.42,
+    "max_ms": 40.42,
+    "cloudflare_colos": [
+      "DUB"
+    ]
+  },
+  "websocket": {
+    "markets": [
+      "btc-updown-5m-1789221300"
+    ],
+    "connect": {
+      "count": 1,
+      "min_ms": 39.57,
+      "p50_ms": 39.57,
+      "p95_ms": 39.57,
+      "p99_ms": 39.57,
+      "max_ms": 39.57
+    },
+    "first_book": {
+      "count": 1,
+      "min_ms": 18.25,
+      "p50_ms": 18.25,
+      "p95_ms": 18.25,
+      "p99_ms": 18.25,
+      "max_ms": 18.25
+    },
+    "message_age": {
+      "count": 27704,
+      "min_ms": 6,
+      "p50_ms": 8,
+      "p95_ms": 20,
+      "p99_ms": 128,
+      "max_ms": 190
+    },
+    "steady_message_age": {
+      "count": 27144,
+      "min_ms": 6,
+      "p50_ms": 8,
+      "p95_ms": 16,
+      "p99_ms": 130,
+      "max_ms": 190
+    },
+    "adjusted_message_age": {
+      "count": 27704,
+      "min_ms": 6,
+      "p50_ms": 8,
+      "p95_ms": 20,
+      "p99_ms": 128,
+      "max_ms": 190
+    },
+    "adjusted_steady_message_age": {
+      "count": 27144,
+      "min_ms": 6,
+      "p50_ms": 8,
+      "p95_ms": 16,
+      "p99_ms": 130,
+      "max_ms": 190
+    },
+    "receive_gap": {
+      "count": 27703,
+      "min_ms": 0,
+      "p50_ms": 1.41,
+      "p95_ms": 11.75,
+      "p99_ms": 20.44,
+      "max_ms": 663.44
+    },
+    "messages": 27703,
+    "timestamped_events": 27704,
+    "stale_events": 0,
+    "completed_samples": 1
+  },
+  "errors": [],
+  "completed_at": "2026-09-12T13:57:12.932Z",
+  "elapsed_ms": 91285.134751
+}

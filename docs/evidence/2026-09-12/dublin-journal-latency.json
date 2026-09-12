@@ -1,0 +1,323 @@
+{
+  "generated_at": "2026-09-12T13:56:42.343091+00:00",
+  "evidence_type": "historical_journal_measurements",
+  "new_orders_submitted": 0,
+  "sources": [
+    {
+      "path": "live/controlled-20260911.jsonl",
+      "rows": 5849,
+      "latency_rows": 5846,
+      "first_latency_epoch": 1789095303.699,
+      "last_latency_epoch": 1789095314.889
+    },
+    {
+      "path": "live/controlled-traded.jsonl",
+      "rows": 1,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/audit-20260910-0609.jsonl",
+      "rows": 8,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/audit-20260910-0609.traded.jsonl",
+      "rows": 3,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/audit-tick-final-20260910.jsonl",
+      "rows": 39,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/audit-tick-final-20260910.traded.jsonl",
+      "rows": 1,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260907-052835.jsonl",
+      "rows": 4,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260907-053734.jsonl",
+      "rows": 6,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260907-055152.jsonl",
+      "rows": 6,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260907-055743.jsonl",
+      "rows": 4,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260907-060021.jsonl",
+      "rows": 2,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260908-104928.jsonl",
+      "rows": 8,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    },
+    {
+      "path": "paper/dashboard-20260911-025310-acb3e6eab3a7.jsonl",
+      "rows": 2522,
+      "latency_rows": 2516,
+      "first_latency_epoch": 1789095201.934,
+      "last_latency_epoch": 1789095207.135
+    },
+    {
+      "path": "paper/traded.jsonl",
+      "rows": 8,
+      "latency_rows": 0,
+      "first_latency_epoch": null,
+      "last_latency_epoch": null
+    }
+  ],
+  "event_counts": {
+    "reset": 13,
+    "latency": 8362,
+    "inventory_exposure": 2,
+    "stopped": 10,
+    "resolved": 3,
+    "quote": 12,
+    "fill": 6,
+    "decision_rejected": 35,
+    "cancel": 5
+  },
+  "rejected_rows": {},
+  "metrics": {
+    "live": {
+      "market_age": {
+        "samples": 1929,
+        "p50_ms": 50.0,
+        "p95_ms": 253.0,
+        "p99_ms": 411.0,
+        "min_ms": 10.0,
+        "max_ms": 505.0
+      },
+      "book_processing": {
+        "samples": 1929,
+        "p50_ms": 0.027254,
+        "p95_ms": 0.076222,
+        "p99_ms": 0.171868,
+        "min_ms": 0.005850000001373701,
+        "max_ms": 67.54564799999935
+      },
+      "strategy_decision": {
+        "samples": 1988,
+        "p50_ms": 0.089395,
+        "p95_ms": 0.23376,
+        "p99_ms": 2.269484,
+        "min_ms": 0.003625999997893814,
+        "max_ms": 121.66940299999987
+      },
+      "order_sign": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "order_ack": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "cancel_ack": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "fill_report": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "reaction": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      }
+    },
+    "paper": {
+      "market_age": {
+        "samples": 812,
+        "p50_ms": 53.0,
+        "p95_ms": 234.0,
+        "p99_ms": 258.0,
+        "min_ms": 7.0,
+        "max_ms": 269.0
+      },
+      "book_processing": {
+        "samples": 812,
+        "p50_ms": 0.037437,
+        "p95_ms": 0.105562,
+        "p99_ms": 1.00583,
+        "min_ms": 0.006964000000152737,
+        "max_ms": 68.80249700000059
+      },
+      "strategy_decision": {
+        "samples": 892,
+        "p50_ms": 0.081993,
+        "p95_ms": 0.453155,
+        "p99_ms": 3.132267,
+        "min_ms": 0.007767000000967528,
+        "max_ms": 69.4569190000002
+      },
+      "order_sign": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "order_ack": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "cancel_ack": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "fill_report": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "reaction": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      }
+    },
+    "unknown": {
+      "market_age": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "book_processing": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "strategy_decision": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "order_sign": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "order_ack": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "cancel_ack": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "fill_report": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      },
+      "reaction": {
+        "samples": 0,
+        "p50_ms": null,
+        "p95_ms": null,
+        "p99_ms": null,
+        "min_ms": null,
+        "max_ms": null
+      }
+    }
+  },
+  "limitations": [
+    "Journal mode is recorded evidence, not independently verified execution.",
+    "ACK latency is not fill waiting time or proof of resting visibility.",
+    "Historical execution timings do not establish current network latency.",
+    "Quantiles from small samples do not establish tail reliability."
+  ]
+}
