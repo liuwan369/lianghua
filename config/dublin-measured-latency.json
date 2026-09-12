@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-09-12T14:01:33Z",
+  "node": "dublin",
+  "source": "docs/evidence/2026-09-12/dublin-public-switch-latency.json",
+  "clock_synchronized": true,
+  "public_clob_rest_ms": {"samples": 30, "p50": 23.08, "p95": 34.01, "p99": 40.29},
+  "market_websocket_event_age_ms": {"samples": 39060, "p50": 10, "p95": 38, "p99": 110, "max": 822},
+  "websocket_receive_gap_ms": {"samples": 39058, "p50": 1.54, "p95": 17.81, "p99": 37.45, "max": 4570.11},
+  "websocket_connect_ms": {"samples": 2, "p50": 42.97, "p95": 54.11, "p99": 54.11},
+  "first_book_ms": {"samples": 2, "p50": 15.65, "p95": 43.43, "p99": 43.43},
+  "unmeasured": {
+    "order_ack_ms": null,
+    "cancel_ack_ms": null,
+    "fill_report_ms": null,
+    "partial_fill_probability": null,
+    "hedge_completion_ms": null,
+    "queue_ahead_factor": null,
+    "maker_order_lifetime_sec": null,
+    "decision_interval_sec": null
+  },
+  "use": "transport_observation_only",
+  "warning": "Do not use public REST/WS timings as order fill, cancel, hedge, or queue timings. Unknown values must remain null."
+}

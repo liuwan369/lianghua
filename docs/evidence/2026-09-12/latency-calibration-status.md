@@ -58,6 +58,11 @@ timestamps. Its values must not be substituted for paired-book freshness.
 
 ## Replay Treatment
 
+The measured transport profile is stored in `config/dublin-measured-latency.json`.
+It is observation metadata only. The replay must not replace order lifetime,
+queue position, fill waiting time, cancellation confirmation, or hedge timing
+with REST/WS latency numbers.
+
 These observations support separate empirical timing scenarios, not a certified
 single execution delay. Do not add standalone P95 values and call the sum an
 end-to-end P95. Do not infer complete hedge latency from a REST GET or an ACK.
