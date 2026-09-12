@@ -106,7 +106,7 @@ The future adapter is responsible for verifying those referenced receipts.
 
 | Command, from the engine directory | Result |
 | --- | --- |
-| `npm test -- --run src/live/account-equity.test.ts src/risk-store.test.ts src/live/account-finance.test.ts` | 3 files; 51 tests passed, including 21 new equity tests |
+| `npm test -- --run src/live/account-equity.test.ts src/risk-store.test.ts src/live/account-finance.test.ts` | 3 files; 53 tests passed, including 23 new equity tests |
 | `npm run typecheck` | Passed, exit 0 |
 
 Coverage includes pre-existing holdings, USD 50 allocation independent from

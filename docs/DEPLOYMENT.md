@@ -44,6 +44,8 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 ## 2026-09-13 增量发布
 
+提交 `029948d` 增加离线 EXEC-02 权益核算契约和 23 项回归。它只包含引擎源码/测试和证据文档，尚未接入运行入口或执行器，因此没有部署到都柏林；部署前后线上仍以已核对的 `cbbdcee` 文档/回放版本和 stopped paper 状态为准。接入权威账户适配、持久化预留和下单门禁后，必须作为新的代码发布批次重新构建、备份和核对。
+
 发布 `4a8a9c1` 已推送 `origin/master`，并将引擎源码与构建产物部署到 `/root/pm-system/_external/btc-5m-market-trading-bot`。线上备份为 `/root/.pm-system-release-4a8a9c1/engine-before-4a8a9c1.tar.gz`。部署前线上交易未运行，部署后未启动交易；控制台和采集器均保持 `active`，`/api/v1/status` 为 `running=false`、`mode=paper`、`live_unlocked=false`。
 
 关键文件哈希（本地与线上一致）：`src/risk-store.ts` `fda4fb7596509de90c02b4575f20367e623db1b842b2649644dfeff471d7d6ed`；`dist/risk-store.js` `9694230ae8de080dd5baa73c53c73ff9dfbd49a94cc5e43d5670b90b89b053cc`；`dist/live/engine.js` `01500527c83db0bcadf02827a6056014f32db817fc52b48363c13d17dbdd1994`；`dist/live/orchestrator.js` `90d5859cec36a5e18582398d9fabcb74f6fe410ce2fe11db50e6a49d942a02f3`。这是引擎增量发布核对，不代表服务器全部项目文件与本地工作树无差异；前端用户改动和未归属服务仍未纳入本批发布。
