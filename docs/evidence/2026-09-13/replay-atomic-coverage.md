@@ -61,11 +61,33 @@ an input to production parameter promotion. Two intermediate reruns were stopped
 when reviews found the decoder and message-boundary issues; incomplete runs are
 not reported as strategy results.
 
-The final decoder is being checked with this bounded three-strategy smoke:
+The final decoder completed this bounded three-strategy smoke:
 
 ```powershell
 python scripts/pm-r26-historical-shadow-replay.py --sqlite data/dublin-server/pm-r25-live-days/dublin-evidence-2026-09-10.sqlite3 --history-dir data/research/r33 --out data/research/r33/r26-atomic-12.json --max-markets 12 --order-size 10 --pair-cap 0.97 --queue-factor 0.25 --max-inventory-imbalance 10 --taker-fee-rate 0.07 --resolution-labels data/research/r33/report.json
 ```
+
+Result (generated 2026-09-12 19:59:51 UTC): 12 selected markets, 11 complete,
+1,406,579 replayed source messages, 11/11 eligible markets with official labels.
+The excluded market is `btc-updown-5m-1789084800`. `strict_pair`,
+`calibrated_3048`, and `candidate_r19` each produced zero simulated fills and
+zero simulated PnL. Status: INSUFFICIENT_ACTIVITY, not profitability evidence.
+The history directory in this command has no reference-wallet activity input;
+zero target comparison counts do not mean the reference address did not trade.
+
+These are exploratory low-participation parameters. The next comparison must
+diagnose quote eligibility, quote resets and queue lifetime, then vary pair cap
+while holding size and queue assumptions fixed. A zero-fill result does not
+reject the overall market-making direction or establish a production default.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Collector SQLite | `0094519909222b29e036cdf187715493f0a1ce90f2e73bf5be2ded526df1c2ff` |
+| Official resolution report | `9369ccd56a7bb1f34c7ad82f4d6799d7295c1c45426efa1839d86b4ca76ab434` |
+| Corrected smoke report | `2f69a528e4479b20916c3b9fecc58fa39198333881040f6275de88b7c8de1f93` |
+
+The replay source is release `aff7d5378b56d96fcdedd5593bcebc757a628f60`,
+with worktree SHA-256 `7b3eac5cb733ef9e312dd02e9bb579b6249e86dd705dd95b3985ee174d414037`.
 
 Current decoder checks do not certify production-strategy parity, lossless feed
 sequencing, real queue position, account-wide capital reuse or reward income.

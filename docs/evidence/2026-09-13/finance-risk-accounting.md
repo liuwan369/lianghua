@@ -76,3 +76,15 @@ the reviewer's checks. Integrated verification also passed; see TESTING.md.
 Release synchronization is recorded separately in DEPLOYMENT.md. Live account
 equity reconciliation and profitability verification are not completed by this
 evidence.
+
+## Deployed Observation
+
+Release `aff7d5378b56` was published on 2026-09-13 and the public account-data
+endpoint returned `available=true`, `stale=false`, `read_only=true`, the new
+50/30 risk contract and observed occupancy. At source timestamps around
+2026-09-12 20:00:41 UTC, reported collateral was USD 120.699416, unmatched BUY
+count 0 and 10 position records had combined cost approximately USD 19.99583237.
+These are a timestamped account observation, not an atomic balance or realized
+PnL. Existing positions must be reconciled when constructing EXEC-02's initial
+equity. The larger wallet balance does not increase the user's USD 50 mandate.
+`spendable_balance` remains null and `execution_ready` remains false.
