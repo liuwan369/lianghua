@@ -1,0 +1,78 @@
+{
+  "run_type": "pm-r29_memory_isolated_sweep",
+  "results": [
+    {
+      "parameters": {
+        "order_size": "10",
+        "pair_cap": "0.97",
+        "queue_factor": "0.25",
+        "max_inventory_imbalance": "10",
+        "taker_fee_rate": "0.07"
+      },
+      "summary": {
+        "strict_pair": {
+          "markets_seen": 20,
+          "complete_markets": 18,
+          "simulated_fills": 1,
+          "simulated_fill_shares": 10.0,
+          "paired_shares": 0.0,
+          "one_sided_markets": 1,
+          "max_single_market_cash_required_usdc": 5.5,
+          "maker_fees_usdc": 0.0,
+          "taker_fees_usdc": 0.0,
+          "maker_rebate_usdc": 0.0,
+          "liquidity_reward_usdc": 0.0,
+          "guaranteed_paired_edge_usdc": 0.0,
+          "worst_case_settlement_pnl_usdc": -5.5,
+          "target_activity_shares_same_markets": 0.0,
+          "target_activity_trades_same_markets": 0,
+          "settlement_note": "到期兑付按Up/Down最差结果计算；没有把平台返佣或奖励算进收益。"
+        },
+        "calibrated_3048": {
+          "markets_seen": 20,
+          "complete_markets": 18,
+          "simulated_fills": 2,
+          "simulated_fill_shares": 20.0,
+          "paired_shares": 10.0,
+          "one_sided_markets": 0,
+          "max_single_market_cash_required_usdc": 10.2739,
+          "maker_fees_usdc": 0.0,
+          "taker_fees_usdc": 0.1739,
+          "maker_rebate_usdc": 0.0,
+          "liquidity_reward_usdc": 0.0,
+          "guaranteed_paired_edge_usdc": -0.2739,
+          "worst_case_settlement_pnl_usdc": -0.2739,
+          "target_activity_shares_same_markets": 0.0,
+          "target_activity_trades_same_markets": 0,
+          "settlement_note": "到期兑付按Up/Down最差结果计算；没有把平台返佣或奖励算进收益。"
+        },
+        "candidate_r19": {
+          "markets_seen": 20,
+          "complete_markets": 18,
+          "simulated_fills": 2,
+          "simulated_fill_shares": 20.0,
+          "paired_shares": 10.0,
+          "one_sided_markets": 0,
+          "max_single_market_cash_required_usdc": 8.647,
+          "maker_fees_usdc": 0.0,
+          "taker_fees_usdc": 0.147,
+          "maker_rebate_usdc": 0.0,
+          "liquidity_reward_usdc": 0.0,
+          "guaranteed_paired_edge_usdc": 1.353,
+          "worst_case_settlement_pnl_usdc": 1.353,
+          "target_activity_shares_same_markets": 0.0,
+          "target_activity_trades_same_markets": 0,
+          "settlement_note": "到期兑付按Up/Down最差结果计算；没有把平台返佣或奖励算进收益。"
+        }
+      },
+      "coverage": {
+        "metadata_markets": 1235,
+        "selected_markets": 20,
+        "complete_markets": 18,
+        "clob_events_replayed": 88980,
+        "activity_is_comparison_only": true,
+        "replay_clock": "collector received_at_ns"
+      }
+    }
+  ]
+}

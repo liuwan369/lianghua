@@ -107,7 +107,11 @@ def _event_sort_key(event: ReplayEvent) -> tuple[int, int, str, str]:
     return event[0], event[2], event[1], event[3]
 
 
-def _iter_clob_file(path: Path, windows: dict[str, tuple[int, int]]) -> Iterator[ReplayEvent]:
+def _iter_clob_file(
+    path: Path,
+    windows: dict[str, tuple[int, int]],
+    receive_bounds: tuple[int, int],
+) -> Iterator[ReplayEvent]:
     """Yield one capture DB in receive order with bounded chunk memory.
 
     Each ``event_chunks`` row covers one received second.  Sorting only the
@@ -119,9 +123,10 @@ def _iter_clob_file(path: Path, windows: dict[str, tuple[int, int]]) -> Iterator
     with sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True) as conn:
         query = (
             "SELECT received_second,payload_blob FROM event_chunks "
-            "WHERE source='clob' ORDER BY received_second,id"
+            "WHERE source='clob' AND received_second BETWEEN ? AND ? "
+            "ORDER BY received_second,id"
         )
-        for _received_second, blob in conn.execute(query):
+        for _received_second, blob in conn.execute(query, receive_bounds):
             chunk: list[ReplayEvent] = []
             rows = json.loads(zlib.decompress(blob).decode("utf-8"))
             for event_type, received_ns, source_ms, _slug, token, payload in rows:
@@ -142,7 +147,15 @@ def iter_clob(paths: list[Path], windows: dict[str, tuple[int, int]]) -> Iterabl
     keeps one decompressed chunk per file plus one heap entry per file, rather
     than materializing and sorting every event from a multi-day replay.
     """
-    streams = [_iter_clob_file(path, windows) for path in sorted(paths)]
+    if not windows:
+        return
+    source_start = min(start for start, _end in windows.values()) // 1000
+    source_end = max(end for _start, end in windows.values()) // 1000
+    # Collector receive time normally tracks source time closely. Keep a
+    # generous ten-minute buffer for reconnects and clock skew while avoiding
+    # decompression of unrelated days in a multi-day evidence archive.
+    receive_bounds = (source_start - 600, source_end + 600)
+    streams = [_iter_clob_file(path, windows, receive_bounds) for path in sorted(paths)]
     heap: list[tuple[tuple[int, int, str, str], int, ReplayEvent]] = []
     for index, stream in enumerate(streams):
         try:

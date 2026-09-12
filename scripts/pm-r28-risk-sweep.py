@@ -127,6 +127,11 @@ def main() -> int:
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-combinations", type=int, default=64, help="limit combinations for a quicker, bounded sweep")
     parser.add_argument("--holdout-utc-day", help="UTC day key (epoch days) to reserve for holdout")
+    parser.add_argument(
+        "--max-markets-per-day",
+        type=int,
+        help="optional deterministic cap for a staged local run; newest markets per day are selected",
+    )
     args = parser.parse_args()
     dbs = [Path(x) for x in args.sqlite]
     metadata = load_metadata(dbs)
@@ -146,8 +151,16 @@ def main() -> int:
     train_days = [day for day in days if day < holdout_day]
     if not train_days:
         raise SystemExit("need at least one UTC day before holdout")
-    train_slugs = set().union(*(by_day[day] for day in train_days))
-    holdout_slugs = by_day[holdout_day]
+    def cap_day(day: str) -> set[str]:
+        slugs = sorted(by_day[day], key=lambda slug: next(m["start_at"] for m in selected if m["slug"] == slug))
+        if args.max_markets_per_day is None:
+            return set(slugs)
+        if args.max_markets_per_day < 1:
+            raise SystemExit("--max-markets-per-day must be >= 1")
+        return set(slugs[-args.max_markets_per_day:])
+
+    train_slugs = set().union(*(cap_day(day) for day in train_days))
+    holdout_slugs = cap_day(holdout_day)
     eligible_slugs = train_slugs | holdout_slugs
     windows = {token: (m["start_at"] * 1000, m["end_at"] * 1000) for m in selected if m["slug"] in eligible_slugs for token in (m["up_token"], m["down_token"])}
     event_factory = lambda: iter_clob(dbs, windows)
@@ -188,7 +201,7 @@ def main() -> int:
     output = {
         "run_type": "pm-r28_risk_gated_parameter_sweep", "trade_authorization": False, "account_connected": False,
         "source": {"sqlite": [str(p) for p in dbs], "clock": "collector received_at_ns"},
-        "split": {"train_utc_days": train_days, "holdout_utc_day": holdout_day, "train_markets": len(train_slugs), "holdout_markets": len(holdout_slugs), "clob_events": sum(1 for _ in event_factory())},
+        "split": {"train_utc_days": train_days, "holdout_utc_day": holdout_day, "train_markets": len(train_slugs), "holdout_markets": len(holdout_slugs), "max_markets_per_day": args.max_markets_per_day, "clob_events": sum(1 for _ in event_factory())},
         "assumptions": ["安全补仓门槛只表示盘口当时有可见对手方卖单，不等于真实一定成交。", "maker返佣和流动性奖励按0。", "目标地址Activity不用于假设影子账户成交。"],
         "selection_rule": "仅用训练日；有成交的运行优先于零成交运行，再按最坏结算盈亏和配对份数排序；留出日只做一次性检查，不参与选择",
         "top10": results[:10], "all_results": results,
