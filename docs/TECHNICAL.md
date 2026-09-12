@@ -4,7 +4,7 @@
 
 ## 页面保存与后台参数
 
-页面 `web/src/forms.ts` 只提交以下六项映射：
+现有页面 `web/src/forms.ts` 提交以下九项映射；这是当前实现，基本硬条件与动态参数的后续改造见 [交付规划](STRATEGY-DELIVERY-PLAN-2026-09-13.md)。
 
 | 页面字段 ID 后缀 | 后台参数 | 含义 |
 |---|---|---|
@@ -14,8 +14,11 @@
 | `duration` | `duration_min` | 运行时长，分钟 |
 | `submitted` | `max_total_usd` | 累计提交名义金额上限，不是当前净持仓 |
 | `maxOrders` | `max_orders` | 订单数上限 |
+| `pairCost` | `pair_cost_max` | 配对及加仓成本参数 |
+| `decisionInterval` | `decision_interval_ms` | 最短决策间隔 |
+| `defensiveCancel` | `defensive_cancel_bps` | 防御撤单阈值 |
 
-其他高级输入仅保留本页草稿，不持久化、不生效。后台完整配置模式另支持以下范围；后台支持不代表存在相应正式页面绑定：
+其他高级输入仅保留本页草稿，不持久化、不生效。当前后台配置范围如下；本轮规划尚未改变这些校验或生产参数：
 
 | 参数 | 默认值 | 校验范围 |
 |---|---|---|
@@ -63,11 +66,11 @@
 
 ## 策略与风险约束
 
-在线 `Engine` 默认 `target_clone`，不是 `stableLive` 锁定预设。默认启用 `dynamicHedgeSizing`；`target_clone` 的补仓配对最终上限 `hedgePairCostCeiling=0.99`。CLI `--pair-cost-max` 改变 `pairCostMax` 与 `pairAddCostMax`，不是所有风险阈值的通用替换。
+在线 `Engine` 默认 `target_clone`，不是 `stableLive` 锁定预设。默认启用 `dynamicHedgeSizing`；基础补腿参数 `hedgePairCostCeiling=0.99`，当前源码的实际阶段门槛由 `hedgeLimit()` 统一计算。CLI `--pair-cost-max` 改变 `pairCostMax` 与 `pairAddCostMax`，不是所有风险阈值的通用替换。
 
 每边 maker 价格先按该 token 的真实 tick 向下量化；缺少有效 tick 则拒绝挂单，不使用 0.01 猜测值。数量经过预算、单边限制、最坏结算亏损及挂单未成交负债检查，至少满足策略 5 份门槛；执行器再校验市场真实最小数量，不能扩大已批准数量。估算手续费计入成本，返佣奖励不抵扣下单成本。
 
-缺边修复有两层门槛：maker 候选门槛随裸露时长从约 0.99 放宽至最多 0.999；裸露达 30 秒或距结束不超过 75 秒的强制候选分支检查含费 taker 成本不超过 `pairCostEmergencyStop=1.05`。但当前启用的动态补仓构建仍检查最终 0.99 上限。因此候选通过 1.05 并不意味着允许以 1.05 最终提交，更不保证补齐。
+2026-09-13 源码核对：`strategy.ts` 的 `hedgeLimit()` 让决策和最终动态份数使用同一配置政策。单边裸露在普通阶段从基础值逐步调整至最多 0.999；达到 `maxUnhedgedSecs` 或进入 `forceFlattenSec` 时使用 `pairCostEmergencyStop`，当前 target_clone 继承的值分别为 30 秒、75 秒和 1.05。最终构建仍核对资金、份数、不平衡和最坏损失；通过成本门槛不等于保证成交。旧文档“最终始终限制 0.99”的说明已失效。
 
 例如已持 DOWN 均价 0.18，UP ask 为 0.95，模型费用为 `0.07 × 0.95 × 0.05 = 0.003325`，候选总成本 1.133325，超过 1.05 会拒绝。这是模型估计，不是交易所真实费用凭证。小于最小数量的残余、预算不足或缺边过贵均可能留有未配对库存；尚无已验证的强制亏损平仓政策或盈利保证。
 

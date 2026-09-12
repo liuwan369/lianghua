@@ -32,12 +32,7 @@ export class RiskState {
     this.marketFillsWhileHot = 0;
     this.marketPeakPairCost = 0.0;
 
-    const day = utcDayKey(marketStartUnix);
-    if (this.dailyDate !== day) {
-      this.dailyDate = day;
-      this.dailyPnl = 0.0;
-      this.dailyMode = DailyMode.Normal;
-    }
+    this.advanceRiskDay(marketStartUnix);
 
     if (this.dailyMode === DailyMode.Halted) return;
     if (this.dailyMode === DailyMode.Cautious) {
@@ -46,17 +41,13 @@ export class RiskState {
   }
 
   onMarketEnd(pnl: number, marketStartUnix: number, cfg: StrategyConfig): void {
+    if (!Number.isFinite(pnl)) throw new Error("invalid market PnL");
+    this.advanceRiskDay(marketStartUnix);
     this.sessionPnl += pnl;
     if (cfg.maxSessionLossUsd > 0.0 && this.sessionPnl <= -cfg.maxSessionLossUsd) {
       this.sessionHalted = true;
     }
 
-    const day = utcDayKey(marketStartUnix);
-    if (this.dailyDate !== day) {
-      this.dailyDate = day;
-      this.dailyPnl = 0.0;
-      this.dailyMode = DailyMode.Normal;
-    }
     this.dailyPnl += pnl;
     this.updateDailyMode(cfg);
 
@@ -81,6 +72,18 @@ export class RiskState {
     }
   }
 
+  advanceRiskDay(tsUnix: number): void {
+    const day = riskDayKey(tsUnix);
+    if (this.dailyDate && day < this.dailyDate) {
+      throw new Error("risk clock moved to an earlier day; refusing to reset loss state");
+    }
+    if (this.dailyDate !== day) {
+      this.dailyDate = day;
+      this.dailyPnl = 0;
+      this.dailyMode = DailyMode.Normal;
+    }
+  }
+
   onFill(inv: Inventory, cfg: StrategyConfig): void {
     const pc = inv.pairCost();
     if (inv.bothSidesOpened && pc >= cfg.repairOnlyAbovePairCost) {
@@ -96,6 +99,8 @@ export class RiskState {
   }
 
   canTrade(cfg: StrategyConfig): boolean {
+    this.updateDailyMode(cfg);
+    if (cfg.maxSessionLossUsd > 0 && this.sessionPnl <= -cfg.maxSessionLossUsd) this.sessionHalted = true;
     if (this.sessionHalted || this.dailyMode === DailyMode.Halted) return false;
     if (this.marketMode === MarketMode.Halted) return false;
     if (cfg.maxConsecutiveLosses > 0 && this.consecutiveMarketLosses >= cfg.maxConsecutiveLosses) {
@@ -115,8 +120,9 @@ export class RiskState {
   }
 }
 
-function utcDayKey(unix: number): string {
-  return new Date(unix * 1000).toISOString().slice(0, 10);
+export function riskDayKey(unix: number): string {
+  if (!Number.isFinite(unix)) throw new Error("invalid risk timestamp");
+  return new Date(unix * 1000 + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 export function worstCaseLossUsd(inv: Inventory): number {

@@ -1,5 +1,7 @@
 # 都柏林部署
 
+当前自主发布与三端同步要求按 [交付规划 v2](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 和 [Agent 协作约定](AGENT-WORKFLOW.md) 执行。用户已授权服务器维护、部署和问题修复，以下历史记录不构成重复等待授权的要求。每批核对本地/Git/服务器发布清单；版本回滚保留新交易、账本与风险状态。
+
 核对日期：2026-09-11。正式入口：[https://34-242-206-196.sslip.io/console/](https://34-242-206-196.sslip.io/console/)。HTTP 80 跳转 HTTPS 443，后端仅监听 127.0.0.1:18766。
 
 最新账户财务与历史恢复修复 `b9880eb` 已部署，34个发布文件内容一致，公网JS与构建SHA-256一致，账户接口通过前端实际严格校验。账户文件未改变，只重启控制台以刷新常驻账户读取进程，采集器未重启；交易未运行且实盘锁关闭：[公网验证](evidence/2026-09-11/finance-release-check.json)。本批回滚备份位于 `/root/.local/share/pm-system-recovery/20260911-finance-b9880eb.tar.gz`，只备份被替换的文件。
@@ -25,7 +27,7 @@
 ## 发布流程
 
 1. 先运行 [回归与构建](TESTING.md)。源码提交不包含 node_modules、dist、docs/console、原始数据库或账户秘密。
-2. 核对服务器运行状态。运行中的实盘引擎不得用普通进程强杀或重启来替代撤单/对账；当前实际运行模式为 paper，实盘锁关闭。
+2. 核对服务器当时运行状态。运行中的实盘引擎先停止新增委托并完成撤单/对账，再按具体故障处理进程；不能用文档中的历史 paper 状态代替上线前检查。
 3. 备份本次将替换的非秘密运行文件，上传对应源码、引擎 dist 与前端 docs/console，并校验内容。重命名时清掉准确对应的旧产物，避免编译残留。
 4. 服务单元使用 config 中的都柏林模板。账户公开来源/RPC/编译缓存 drop-in 来自 pm-system-dashboard-dublin-public-account.conf；秘密环境文件在服务器单独管理。单元变更执行 systemctl daemon-reload，仅重启涉及的服务。分析资源隔离需同步安装 pm-analysis.slice 和分析 service，并重新启动分析任务以迁入新 cgroup；不要重启未改动的采集器。
 5. Nginx 配置变更先运行 nginx -t，再 reload。证书更新使用仓库 certbot hooks 与 renew-http 配置。

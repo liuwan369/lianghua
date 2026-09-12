@@ -1,0 +1,52 @@
+name: Verify Project
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            _external/btc-5m-market-trading-bot/package-lock.json
+            web/package-lock.json
+      - name: Install Python dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.lock
+      - name: Validate Python dependencies
+        run: python -m pip check
+      - name: Install engine dependencies
+        working-directory: _external/btc-5m-market-trading-bot
+        run: npm ci --no-audit --no-fund
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+      - name: Verify offline tests and builds
+        run: python scripts/verify-project.py
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-${{ matrix.os }}
+          path: .planning/tmp/verification/
+          if-no-files-found: warn
+          retention-days: 14

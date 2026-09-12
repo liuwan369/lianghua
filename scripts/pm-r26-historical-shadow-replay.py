@@ -294,6 +294,47 @@ def summarize_market(engine: MakerShadowEngine, meta: dict[str, Any], first_ms: 
     return snap
 
 
+def load_resolution_labels(path: Path | None) -> dict[str, dict[str, Any]]:
+    if path is None:
+        return {}
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if report.get("schema_version") != 1 or not isinstance(report.get("labels"), list):
+        raise ValueError("invalid official resolution report")
+    labels: dict[str, dict[str, Any]] = {}
+    for row in report["labels"]:
+        if not isinstance(row, dict) or not MARKET_RE.fullmatch(str(row.get("slug", ""))):
+            raise ValueError("invalid resolution label identity")
+        slug = row["slug"]
+        if slug in labels:
+            raise ValueError(f"duplicate official label: {slug}")
+        if row.get("status") == "resolved" and (
+            row.get("winner") not in {"Up", "Down"}
+            or row.get("official_closed") is not True
+            or row.get("official_resolution_status") != "resolved"
+            or row.get("reported_payouts") != {"Up": int(row.get("winner") == "Up"), "Down": int(row.get("winner") == "Down")}
+            or not re.fullmatch(r"[0-9a-f]{64}", str(row.get("snapshot_sha256", "")))
+            or row.get("source_url") != f"https://gamma-api.polymarket.com/events?slug={slug}"
+        ):
+            raise ValueError(f"invalid final resolution evidence: {slug}")
+        labels[slug] = row
+    return labels
+
+
+def attach_resolution(snapshot: dict[str, Any], meta: dict[str, Any], label: dict[str, Any] | None) -> dict[str, Any]:
+    result = {**snapshot, "official_winner": None, "simulated_official_settlement_pnl_usdc": None,
+              "settlement_semantics": "simulated fills at official payout, net of modeled fees; not wallet profit"}
+    if label is None or label.get("status") != "resolved":
+        return result
+    expected = {"slug": meta["slug"], "condition_id": meta["market_id"],
+                "up_token": meta["up_token"], "down_token": meta["down_token"]}
+    if any(str(label.get(key, "")).lower() != str(value).lower() for key, value in expected.items()):
+        raise ValueError(f"resolution label does not match replay market: {meta['slug']}")
+    winner = label["winner"]
+    value = snapshot[f"settlement_pnl_if_{winner.lower()}_usdc"]
+    return {**result, "official_winner": winner, "simulated_official_settlement_pnl_usdc": value,
+            "resolution_snapshot_sha256": label["snapshot_sha256"]}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Collector SQLite CLOB historical read-only shadow replay")
     parser.add_argument("--sqlite", nargs="+", required=True)
@@ -308,9 +349,11 @@ def main() -> int:
     parser.add_argument("--taker-fee-rate", type=float, default=0.07)
     parser.add_argument("--pair-cap", type=float, default=1.02)
     parser.add_argument("--queue-factor", type=float, default=0.25)
+    parser.add_argument("--resolution-labels", type=Path, help="Verified r33 official resolution report")
     args = parser.parse_args()
     dbs = [Path(item) for item in args.sqlite]
     metadata = load_metadata(dbs)
+    resolution_labels = load_resolution_labels(args.resolution_labels)
     activity = load_activity(Path(args.history_dir), args.address)
     activity_hashes = load_activity_hashes(Path(args.history_dir), args.address)
     chain_links = load_chain_links(dbs, args.address, activity_hashes)
@@ -367,12 +410,14 @@ def main() -> int:
         if complete:
             complete_slugs.add(slug)
         for name, engine in state["engines"].items():
-            rows[name].append({"slug": slug, "target": activity.get(slug, {"count": 0, "shares": 0, "usdc": 0}), "snapshot": summarize_market(engine, meta, state["first_ms"], state["last_ms"])})
+            snapshot = attach_resolution(summarize_market(engine, meta, state["first_ms"], state["last_ms"]), meta, resolution_labels.get(slug))
+            rows[name].append({"slug": slug, "target": activity.get(slug, {"count": 0, "shares": 0, "usdc": 0}), "snapshot": snapshot})
     summary: dict[str, Any] = {}
     for name, items in rows.items():
         eligible = [item for item in items if item["slug"] in complete_slugs]
         def total(key: str) -> float:
             return sum(float(item["snapshot"].get(key) or 0) for item in eligible)
+        resolved = [item for item in eligible if item["snapshot"]["official_winner"] is not None]
         summary[name] = {
             "markets_seen": len(items),
             "complete_markets": len(eligible),
@@ -387,15 +432,20 @@ def main() -> int:
             "liquidity_reward_usdc": 0.0,
             "guaranteed_paired_edge_usdc": round(total("guaranteed_paired_edge_usdc"), 4),
             "worst_case_settlement_pnl_usdc": round(total("worst_case_settlement_pnl_usdc"), 4),
+            "officially_labeled_complete_markets": len(resolved),
+            "unlabeled_complete_markets": len(eligible) - len(resolved),
+            "simulated_official_settlement_pnl_usdc": round(sum(float(item["snapshot"]["simulated_official_settlement_pnl_usdc"]) for item in resolved), 4) if resolved else None,
             "target_activity_shares_same_markets": round(sum(float(item["target"]["shares"]) for item in eligible), 4),
             "target_activity_trades_same_markets": int(sum(float(item["target"]["count"]) for item in eligible)),
-            "settlement_note": "到期兑付按Up/Down最差结果计算；没有把平台返佣或奖励算进收益。",
+            "settlement_note": "最坏结算情景与按官方结果计算的模拟结算分别列示；无官方标签不确认模拟结算收益，返佣和奖励未计入。",
         }
     output = {
         "run_type": "pm-r26_historical_clob_shadow_replay",
         "trade_authorization": False,
         "account_connected": False,
         "source": {"server": "configured evidence collector", "sqlite": [str(path) for path in dbs], "history_dir": str(Path(args.history_dir)), "chain_links": chain_links},
+        "resolution_evidence": {"path": str(args.resolution_labels) if args.resolution_labels else None,
+                                "sha256": hashlib.sha256(args.resolution_labels.read_bytes()).hexdigest() if args.resolution_labels else None},
         "coverage": {"metadata_markets": len(metadata), "selected_markets": len(selected), "complete_markets": len(complete_slugs), "clob_events_replayed": seen_events, "activity_is_comparison_only": True, "replay_clock": "collector received_at_ns"},
         "assumptions": ["公开盘口只显示汇总数量，排队位置按可见同价位数量乘0.25/保守模型模拟。", "碰到价格不等于一定成交；只有公开last_trade且对手方为SELL才给影子挂单成交。", "maker返佣和流动性奖励暂记0，需逐笔结算数据核实后再加。", "历史Activity不能恢复未成交订单，所以不能证明历史下单参数。"],
         "summary": summary,

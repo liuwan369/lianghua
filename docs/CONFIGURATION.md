@@ -2,6 +2,8 @@
 
 核对日期：2026-09-10。配置实现见 `scripts/dashboard/config.py`、账户实现见 `scripts/dashboard_account.py`，引擎预设见 `_external/btc-5m-market-trading-bot/src/config.ts`。
 
+2026-09-13 更新：用户已授权主 Agent 自主维护与部署，基本条件为本金 50 美元和单日最大亏损 30 美元。现有前端与配置入口保留，策略测试后再接入推荐默认值及必要防错；动态参数按 [交付规划 v2](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 增量实现。下文现有配置字段不等于新的默认参数或自适应能力已经接线。
+
 ## 页面与引擎参数
 
 新版六页设置中已接入保存的字段共九项：
@@ -22,7 +24,7 @@
 
 默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改，作用于下次启动；版本化启动仅支持 paper。当前为单服务器配置，不按账户隔离。
 
-`pair_cost_max` 不应解释为所有预设的统一硬上限。本次 `target_clone` 的动态补腿最终受 `hedgePairCostCeiling=0.99` 约束，候选放宽及紧急阈值不保证能完成对冲。
+`pair_cost_max` 不应解释为所有预设的统一硬上限。当前 `target_clone` 以 `hedgePairCostCeiling=0.99` 为基础，`strategy.ts` 的 `hedgeLimit()` 随裸仓/尾盘阶段计算实际门槛，候选与最终份数计算共用该政策。完整说明见 [技术实现](TECHNICAL.md)，不能把基础值描述为所有阶段的固定最终上限。
 
 ## 部署环境
 

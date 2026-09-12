@@ -9,7 +9,7 @@ import {
 } from "./models.js";
 import type { StrategyConfig } from "./config.js";
 import { PairCostMarketMaker, type DecisionRejection } from "./strategy.js";
-import { MarketMode } from "./risk.js";
+import { MarketMode, type RiskState } from "./risk.js";
 
 /** Incremental 1-second BTC spot price ring. */
 export class BtcRing {
@@ -91,8 +91,10 @@ export class MakerSession {
     decisionIntervalSec: number,
     defensiveCancelBps: number,
     liveMode = false,
+    riskState?: RiskState,
   ) {
     this.strat = new PairCostMarketMaker(cfg);
+    if (riskState) this.strat.risk = riskState;
     this.makerLifeSec = Math.max(0.1, makerLifeSec);
     this.decisionIntervalSec = Math.max(0, decisionIntervalSec);
     this.defensiveCancelBps = Math.max(0, defensiveCancelBps);
@@ -110,7 +112,7 @@ export class MakerSession {
   }
 
   onMarketEnd(pnl: number): void {
-    this.strat.onMarketEnd(pnl, this.marketStart);
+    this.strat.onMarketEnd(pnl, this.marketEnd || this.marketStart);
   }
 
   dailyHalted(): boolean {

@@ -39,6 +39,9 @@ import {
 import { Journal, r2, r4, recordTraded } from "./journal.js";
 import { preflight } from "./onchain.js";
 import { ownerSignerPrivateKey } from "./account.js";
+import { envWalletOverrides } from "./clob/wallet.js";
+import { fileURLToPath } from "node:url";
+import { RiskStore } from "../risk-store.js";
 
 export const LIVE_BOOK_MAX_AGE_MS = 250;
 const OFFICIAL_CLOB_HEALTH = "https://clob.polymarket.com/";
@@ -108,6 +111,9 @@ export interface RunConfig {
   /** Run wallet preflight before live connect (default true). */
   preflight?: boolean;
 
+  /** Stable account/mode state location, never derived from a session log path. */
+  riskStateDirectory?: string;
+
 }
 
 /** Skip markets with less than this many seconds left — need time to rest GTD quotes. */
@@ -131,7 +137,7 @@ export function recordResidualExposure(engine: Engine, journal: Journal, market:
   journal.log("inventory_exposure", market, nowUnix(), { ...exposure, reason,
     state: exposure.residualShares > 1e-8 ? "unhedged" : exposure.cost > 0 ? "matched_unsettled" : "flat" });
   if (live && exposure.cost > 0) {
-    engine.session.haltNew = true;
+    engine.requireReconciliation("live inventory requires official settlement and account reconciliation");
     throw new Error("live inventory remains unsettled; refusing next market until official settlement and account reconciliation");
   }
 }
@@ -154,6 +160,7 @@ export async function applyEvents(
         if (live && !canSubmit?.()) {
           throw new Error("live feeds became unhealthy before quote submission");
         }
+        engine.prepareSubmission();
         const res = await executor.submit(
           ev.side,
           marketToken(mkt, ev.side),
@@ -184,6 +191,7 @@ export async function applyEvents(
         if (live && !canSubmit?.()) {
           throw new Error("live feeds became unhealthy before hedge submission");
         }
+        engine.prepareSubmission();
 
         const res = await executor.submitTaker(
 
@@ -745,7 +753,10 @@ async function runOneMarket(
       if (!reachedMarketEnd) await attemptResidualExit("duration_stop");
       await finalizeMarketAccount(executor, engine, mkt, user,
       event => handleUserEvent(engine, executor, mkt, journal, event.kind === "exchangeFill" ? event.fill.tsUnix : nowUnix(), event, journaledFills), journaledFills);
-    } else await executor.cancelAll();
+    } else {
+      await executor.cancelAll();
+      engine.onOrderCancelled();
+    }
   } catch (error) {
     await executor.pauseSubmissions();
     if (cfg.live && user && !(error instanceof UnknownOrderStateError)) {
@@ -896,6 +907,24 @@ async function runOneMarket(
 /** Top-level entry for live run loop. */
 
 export async function run(cfg: RunConfig): Promise<void> {
+  const accountId = envWalletOverrides().funder ?? (cfg.live ? undefined : "default-paper");
+  if (!accountId) throw new Error("persistent live risk requires an explicit public trading wallet address");
+  const riskStore = new RiskStore(cfg.riskStateDirectory ?? process.env.PM_RISK_STATE_DIR ??
+    fileURLToPath(new URL("../../results/risk/", import.meta.url)), accountId, cfg.live ? "live" : "paper");
+  let engine: Engine | undefined;
+  try {
+    engine = new Engine({ ...cfg.engine, liveMode: cfg.live,
+      dailyLossLimitUsd: Math.min(30, cfg.engine.dailyLossLimitUsd ?? 30) }, riskStore);
+    await runWithRiskState(cfg, engine, accountId);
+  } catch (error) {
+    engine?.requireReconciliation("run failed before complete reconciliation");
+    throw error;
+  } finally {
+    try { engine?.finishRiskRun(); } finally { riskStore.close(); }
+  }
+}
+
+async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: string): Promise<void> {
   try {
     const healthMs = await assertOfficialClobHealth();
     console.info(`official CLOB health ${healthMs.toFixed(1)}ms`);
@@ -909,10 +938,6 @@ export async function run(cfg: RunConfig): Promise<void> {
   const sessionId = String(Math.floor(nowUnix()));
 
   const journal = Journal.open(cfg.logPath, sessionId);
-
-  const engine = new Engine({ ...cfg.engine, liveMode: cfg.live });
-
-
 
   console.info(
 
@@ -932,8 +957,6 @@ export async function run(cfg: RunConfig): Promise<void> {
   };
   const onSigint = () => void gracefulStop();
   const onSigterm = () => void gracefulStop();
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
 
   if (cfg.live) {
     const key = ownerSignerPrivateKey();
@@ -952,6 +975,10 @@ export async function run(cfg: RunConfig): Promise<void> {
       cfg.maxTotalUsd,
       key,
     );
+    if (executor.accountAddress()?.toLowerCase() !== accountId.toLowerCase()) {
+      await executor.shutdown();
+      throw new Error("executor account differs from the locked risk account");
+    }
 
   } else {
 
@@ -970,6 +997,9 @@ export async function run(cfg: RunConfig): Promise<void> {
   }
 
 
+
+  process.once("SIGINT", onSigint);
+  process.once("SIGTERM", onSigterm);
 
   const queue = new FeedQueue();
 

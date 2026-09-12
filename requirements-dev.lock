@@ -1,0 +1,16 @@
+# Python 3.11+ runtime, test, and build dependencies.
+# Direct requirements match pyproject.toml; transitive versions are pinned here.
+# See docs/evidence/2026-09-13/base-01-verification.md for regeneration and limits.
+certifi==2025.11.12
+charset-normalizer==3.4.4
+colorama==0.4.6; sys_platform == "win32"
+idna==3.11
+iniconfig==2.3.0
+packaging==25.0
+pluggy==1.6.0
+pygments==2.19.2
+pytest==9.0.2
+requests==2.32.5
+setuptools==80.9.0
+urllib3==2.6.2
+websocket-client==1.9.0

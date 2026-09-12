@@ -1,9 +1,23 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pm-btc5m-system"
 version = "0.1.0"
 description = "Polymarket BTC 5-minute paper trading and evidence system"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "requests==2.32.5",
+    "websocket-client==1.9.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.0.2"]
+
+[tool.setuptools.packages.find]
+include = ["pm_maker", "pm_maker.*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,6 +1,7 @@
 import { passiveBudgetClone, targetClone } from "../config.js";
 import { MakerSession, type MakerEvent } from "../live-maker.js";
 import { Side, type Fill } from "../models.js";
+import type { RiskExposure, RiskStore } from "../risk-store.js";
 import {
   MakerMicrostructureGate,
   type EngineBookMicrostructure,
@@ -17,6 +18,8 @@ export interface EngineConfig {
   makerQueueConservatism?: number;
   minimumMakerShares?: number;
   tradeRateWindowSec?: number;
+  /** Realized daily-loss gate; account-equity accounting is a separate requirement. */
+  dailyLossLimitUsd?: number;
 }
 
 export interface ResolveResult {
@@ -38,9 +41,17 @@ export class Engine {
   preset: string;
   private lastBookTs = Number.NEGATIVE_INFINITY;
   private microstructure: MakerMicrostructureGate;
+  private settled = false;
 
-  constructor(c: EngineConfig = {}) {
+  constructor(c: EngineConfig = {}, private readonly riskStore?: RiskStore) {
     const cfg = c.passiveBudget ? passiveBudgetClone() : targetClone();
+    if (c.dailyLossLimitUsd != null) {
+      if (!Number.isFinite(c.dailyLossLimitUsd) || c.dailyLossLimitUsd <= 0) {
+        throw new Error("daily loss limit must be positive and finite");
+      }
+      cfg.dailyHardLossUsd = c.dailyLossLimitUsd;
+      cfg.maxDailyLossUsd = c.dailyLossLimitUsd;
+    }
     if (c.pairCostMax != null) {
       cfg.pairCostMax = c.pairCostMax;
       cfg.pairAddCostMax = c.pairCostMax;
@@ -48,12 +59,21 @@ export class Engine {
     const preset = c.passiveBudget ? "passive_budget_clone" : "target_clone";
     const makerLifeSec = c.makerLifeSec ?? 15;
     const liveMode = c.liveMode ?? false;
+    const risk = riskStore?.restore();
+    if (risk) {
+      risk.advanceRiskDay(Date.now() / 1000);
+      const allowed = risk.canTrade(cfg);
+      riskStore!.checkpoint(risk);
+      if (!allowed) throw new Error("persisted risk halt prevents a new run");
+      riskStore!.begin(risk);
+    }
     this.session = new MakerSession(
       cfg,
       makerLifeSec,
       (c.decisionIntervalMs ?? 0) / 1000,
       c.defensiveCancelBps ?? 0,
       liveMode,
+      risk,
     );
     const minimumProbability = clamp01(
       c.minMakerFillProbability ?? (liveMode ? 0.05 : 0),
@@ -73,9 +93,17 @@ export class Engine {
   }
 
   reset(start: number, end: number): void {
+    const exposure = this.session.exposure();
+    if (this.riskStore && (exposure.pendingOrders > 0 || (!this.settled &&
+      (exposure.upShares > 0 || exposure.downShares > 0 || exposure.cost > 0)))) {
+      this.requireReconciliation("market rollover has unsettled exposure");
+      throw new Error("cannot reset unreconciled market exposure");
+    }
     this.session.reset(start, end);
+    this.settled = false;
     this.lastBookTs = Number.NEGATIVE_INFINITY;
     this.microstructure.reset();
+    this.checkpoint();
   }
 
   onBtc(ts: number, price: number): void {
@@ -117,7 +145,7 @@ export class Engine {
       (side) => this.session.onOrderCancelled(side),
       (side, shares, price) => this.session.resizePendingQuote(side, shares, price),
     );
-    return [
+    const result = [
       ...filtered,
       ...this.microstructure.filterPending(
         this.session.pendingQuotes(false),
@@ -125,12 +153,16 @@ export class Engine {
         (side) => this.session.requestOrderCancellation(side),
       ),
     ];
+    this.checkpoint();
+    return result;
   }
 
   resolve(winner: Side): ResolveResult {
     const [pnl, fees, up, dn, cost, n] = this.session.resolve(winner);
     const pairCost = this.session.pairCost();
     this.session.onMarketEnd(pnl);
+    this.settled = true;
+    this.checkpoint();
     return {
       winner,
       pnl,
@@ -154,20 +186,66 @@ export class Engine {
   }
 
   confirmExchangeFill(fill: Fill, pendingFillShares = fill.shares): MakerEvent {
-    return this.session.confirmExchangeFill(fill, pendingFillShares);
+    const event = this.session.confirmExchangeFill(fill, pendingFillShares);
+    this.settled = false;
+    this.checkpoint();
+    return event;
   }
 
   replaceCurrentMarketFills(fills: Fill[]): void {
     this.session.replaceCurrentMarketFills(fills);
     this.lastBookTs = Number.NEGATIVE_INFINITY;
+    this.settled = false;
+    this.checkpoint();
   }
 
   onOrderCancelled(side?: Side): void {
     this.session.onOrderCancelled(side);
+    this.checkpoint();
   }
 
   resizePendingQuote(side: Side, shares: number, price?: number): void {
     this.session.resizePendingQuote(side, shares, price);
+    this.checkpoint();
+  }
+
+  private riskExposure(): RiskExposure {
+    const exposure = this.session.exposure();
+    return { marketStart: this.session.marketStart, marketEnd: this.session.marketEnd,
+      upShares: exposure.upShares, downShares: exposure.downShares, cost: exposure.cost,
+      fees: exposure.fees, pendingOrders: exposure.pendingOrders, settled: this.settled };
+  }
+
+  checkpoint(): void {
+    try {
+      this.riskStore?.checkpoint(this.session.strat.risk, this.riskExposure());
+    } catch (error) {
+      this.session.haltNew = true;
+      throw error;
+    }
+  }
+
+  prepareSubmission(): void {
+    try {
+      this.riskStore?.verifyBeforeSubmission();
+      if (this.session.haltNew || !this.session.strat.risk.canTrade(this.session.strat.config)) {
+        this.checkpoint();
+        throw new Error("risk stop prevents new order submission");
+      }
+      this.checkpoint();
+    } catch (error) {
+      this.session.haltNew = true;
+      throw error;
+    }
+  }
+
+  requireReconciliation(reason: string): void {
+    this.session.haltNew = true;
+    this.riskStore?.requireReconciliation(reason);
+  }
+
+  finishRiskRun(): void {
+    this.riskStore?.finish(this.session.strat.risk, this.riskExposure());
   }
 }
 
