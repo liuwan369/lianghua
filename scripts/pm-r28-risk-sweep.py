@@ -4,6 +4,7 @@ import argparse
 import importlib.util
 import itertools
 import json
+import pickle
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -21,6 +22,25 @@ load_metadata = _MOD.load_metadata
 iter_clob = _MOD.iter_clob
 levels_from_compact = _MOD.levels_from_compact
 apply_changes = _MOD.apply_changes
+
+
+def build_event_cache(path: Path, event_factory) -> None:
+    """Materialize the filtered, ordered stream once for local sweeps."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    with temp.open("wb") as handle:
+        for event in event_factory():
+            pickle.dump(event, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    temp.replace(path)
+
+
+def cached_events(path: Path):
+    with path.open("rb") as handle:
+        while True:
+            try:
+                yield pickle.load(handle)
+            except EOFError:
+                return
 
 
 def make_engine(p: dict[str, Any]) -> MakerShadowEngine:
@@ -132,6 +152,7 @@ def main() -> int:
         type=int,
         help="optional deterministic cap for a staged local run; newest markets per day are selected",
     )
+    parser.add_argument("--event-cache", type=Path, help="optional local pickle stream reused across parameter runs")
     args = parser.parse_args()
     dbs = [Path(x) for x in args.sqlite]
     metadata = load_metadata(dbs)
@@ -163,7 +184,14 @@ def main() -> int:
     holdout_slugs = cap_day(holdout_day)
     eligible_slugs = train_slugs | holdout_slugs
     windows = {token: (m["start_at"] * 1000, m["end_at"] * 1000) for m in selected if m["slug"] in eligible_slugs for token in (m["up_token"], m["down_token"])}
-    event_factory = lambda: iter_clob(dbs, windows)
+    source_event_factory = lambda: iter_clob(dbs, windows)
+    if args.event_cache:
+        if not args.event_cache.exists():
+            print(f"building event cache: {args.event_cache}", flush=True)
+            build_event_cache(args.event_cache, source_event_factory)
+        event_factory = lambda: cached_events(args.event_cache)
+    else:
+        event_factory = source_event_factory
     params_list: list[dict[str, Any]] = []
     for order_size, pair_cap, queue_factor, max_inventory, max_imbalance, hedge_after, safe_hedge, hedge_max_ask in itertools.product(
         [10.0, 20.0], [0.97, 1.02], [0.10, 0.25], [50.0], [10.0, 30.0], [10000, 15000], [False, True], [0.30],
