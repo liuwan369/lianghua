@@ -147,4 +147,4 @@ The execution owner fixed the type mismatch and the integrated runner was rerun
 with `python scripts/verify-project.py --timeout 900`. That run completed with
 Python 272 passed/1 skipped, engine tests and build passed, frontend tests and
 build passed, and exit code 0. Evidence:
-`.planning/tmp/verification/20260912T183601Z-ddd3dd72/manifest.json`.
+`.planning/tmp/verification/20260912T185804Z-a0da2d39/manifest.json`.
