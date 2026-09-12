@@ -38,3 +38,9 @@
 本轮回滚文件备份：`/root/.local/share/pm-system-recovery/20260910-072809-cpu`。账本 schema 2 的 ledger.py、projection_worker.py、read_model.py 必须成套部署；heartbeat.json 自动生成。
 
 账户读取的 Python模块、Node入口和实现及前端构建需同步部署；后台自动启动常驻只读进程。当前备份：`/root/.local/share/pm-system-recovery/20260910-094339-account-data`。浏览器操作因工具不能识别URL而停止，公网API核验不能替代该项验收。
+
+## 2026-09-13 增量发布
+
+发布 `4a8a9c1` 已推送 `origin/master`，并将引擎源码与构建产物部署到 `/root/pm-system/_external/btc-5m-market-trading-bot`。线上备份为 `/root/.pm-system-release-4a8a9c1/engine-before-4a8a9c1.tar.gz`。部署前线上交易未运行，部署后未启动交易；控制台和采集器均保持 `active`，`/api/v1/status` 为 `running=false`、`mode=paper`、`live_unlocked=false`。
+
+关键文件哈希（本地与线上一致）：`src/risk-store.ts` `fda4fb7596509de90c02b4575f20367e623db1b842b2649644dfeff471d7d6ed`；`dist/risk-store.js` `9694230ae8de080dd5baa73c53c73ff9dfbd49a94cc5e43d5670b90b89b053cc`；`dist/live/engine.js` `01500527c83db0bcadf02827a6056014f32db817fc52b48363c13d17dbdd1994`；`dist/live/orchestrator.js` `90d5859cec36a5e18582398d9fabcb74f6fe410ce2fe11db50e6a49d942a02f3`。这是引擎增量发布核对，不代表服务器全部项目文件与本地工作树无差异；前端用户改动和未归属服务仍未纳入本批发布。
