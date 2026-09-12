@@ -1,0 +1,140 @@
+{
+  "audit_type": "reference_address_ledger_audit",
+  "generated_at": "2026-09-12",
+  "trade_authorization": false,
+  "address": "0x3048d65321be3497164cdfc2996f94f98a2e7537",
+  "scope": "Historical, read-only audit of the reference address. It is not the current Dublin account and no production settings are changed.",
+  "history": {
+    "source_files": [
+      "data/pm-r25-history-30d-verified/index.json",
+      "data/pm-r25-state-machine-30d-verified.json",
+      "data/pm-r25-binance-signal-30d-verified.json"
+    ],
+    "requested_window_utc": {
+      "start": "2026-07-29T18:59:05Z",
+      "end": "2026-08-28T18:59:05Z",
+      "archive_dates": "2026-07-30 through 2026-08-28",
+      "days": 30
+    },
+    "activity_windows": 361,
+    "activity_window_records": 386947,
+    "activity_windows_with_records": 347,
+    "activity_windows_without_records": 14,
+    "pagination_complete": true,
+    "checksums_and_boundaries_valid": true,
+    "btc_5m_markets_observed": 7680,
+    "btc_5m_markets_with_reference_activity": 7680,
+    "observed_market_participation_rate": 1.0,
+    "participation_definition": "The denominator is the 7,680 BTC 5-minute markets represented by the address-specific state-machine result, not every market listed on the platform. Every one of those observed markets has at least one reference Activity record/batch.",
+    "btc_5m_buy_records": 374169,
+    "timestamp_decision_batches": 237359,
+    "binance_price_points_loaded": 1338666,
+    "five_second_clustered_markets": 7605
+  },
+  "observed_behavior": {
+    "action_counts": {
+      "both_sides": 25046,
+      "expand_heavy_side": 95449,
+      "repair_light_side": 108575,
+      "start_down": 4166,
+      "start_up": 4123
+    },
+    "action_share_of_decision_batches": {
+      "both_sides": 0.105519,
+      "expand_heavy_side": 0.402129,
+      "repair_light_side": 0.457429,
+      "start_down": 0.01755,
+      "start_up": 0.01737
+    },
+    "repair_pct_when_one_side_heavier": 0.532168,
+    "batch_shares": {
+      "p05": 4.993075,
+      "p25": 15.62,
+      "median": 30.0,
+      "p75": 60.0,
+      "p95": 105.425212
+    },
+    "wait_to_next_batch_seconds": {
+      "p05": 1,
+      "p25": 2,
+      "median": 3,
+      "p75": 6,
+      "p95": 20
+    },
+    "first_trade_offset_seconds": {
+      "p05": 4,
+      "p25": 9,
+      "median": 15,
+      "p75": 27,
+      "p95": 92
+    },
+    "last_trade_offset_seconds": {
+      "p05": 72,
+      "p25": 149,
+      "median": 213,
+      "p75": 253,
+      "p95": 289
+    },
+    "inventory": {
+      "max_abs_imbalance_shares": {
+        "p05": 52.308152,
+        "p25": 119.993912,
+        "median": 188.485222,
+        "p75": 280.106659,
+        "p95": 482.057
+      },
+      "max_one_side_inventory_shares": {
+        "p05": 90.0,
+        "p25": 294.601594,
+        "median": 569.010163,
+        "p75": 991.169605,
+        "p95": 1825.827605
+      },
+      "aggregate_final_up_shares": 5033488.852109,
+      "aggregate_final_down_shares": 4948049.152166,
+      "aggregate_final_shares": 9981538.004275
+    },
+    "momentum_observation": {
+      "three_second_aligned_excluding_flat_pct": 0.614027,
+      "five_second_cluster_equal_weight_alignment_pct": 0.566869,
+      "warning": "These are post-trade historical correlations. They do not prove the reference bot used Binance momentum or that the signal is predictive after costs."
+    }
+  },
+  "verified_rewards": {
+    "source_file": "data/pm-r32-verify-incentive-transfers-30d.json",
+    "source": "Polygon eth_getTransactionReceipt Transfer logs cross-checked against public Activity reward records",
+    "unique_transactions": 77,
+    "verified_exact": 77,
+    "failed_or_mismatched": 0,
+    "duplicate_rows": 0,
+    "by_type": {
+      "TAKER_REBATE": {"transactions": 29, "verified_usdc": 42740.1913},
+      "MAKER_REBATE": {"transactions": 29, "verified_usdc": 6016.7037},
+      "REWARD": {"transactions": 19, "verified_usdc": 774.9322}
+    },
+    "verified_total_usdc": 49531.8272,
+    "block_range": {"min": 91167724, "max": 92785108},
+    "date_coverage_status": "incomplete",
+    "date_coverage_reason": "The local reward artifact stores block numbers and exact transfer amounts but no block timestamps or per-transfer calendar dates. The 30-day Activity history window must not be treated as proof that every reward transfer falls inside the same calendar window without a block-timestamp crosswalk.",
+    "amount_scope": "These rewards belong to the reference address only and are not current Dublin-account revenue."
+  },
+  "current_account_separation": {
+    "dublin_account": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+    "reference_rewards_apply_to_dublin_account": false,
+    "current_account_reward_transactions_verified": 0,
+    "evidence": "docs/evidence/2026-09-11/reward-history-address-check.json"
+  },
+  "what_is_confirmed": [
+    "Within the address-specific BTC 5-minute Activity set, all 7,680 observed markets have at least one recorded trade batch.",
+    "The address frequently traded in small batches, with a 30-share median and a 3-second median gap.",
+    "When one side was heavier, the next observed batch repaired the light side 53.2168% of the time.",
+    "All 77 historical reward transfers were exactly matched on-chain, with 49,531.8272 USDC total across the three labeled types."
+  ],
+  "what_is_not_confirmed": [
+    "Participation in every platform BTC 5-minute market, because the denominator is the address-specific observed set rather than a platform-wide market catalog.",
+    "Unrealized or realized trading profit after entry price, exit price, fees, and settlement; the available state-machine artifact is behavior/inventory evidence, not a complete PnL ledger.",
+    "Exact reward calendar dates from the local reward artifact.",
+    "Whether the reference address earned rewards because of a particular quote width, queue position, or unobserved resting order; public Activity does not expose those orders."
+  ],
+  "implication_for_local_testing": "Use the 7680-market observed coverage and the 30-share/3-second/repair behavior as behavioral targets. Do not copy the 49,531.8272 USDC reward total into a current-account backtest. Model reward income as a separately verified, parameterized sensitivity until current-account reward eligibility and dated transfers are available."
+}
