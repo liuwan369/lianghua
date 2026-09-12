@@ -9,14 +9,14 @@ def main() -> int:
     a=ap.parse_args(); results=[]
     # Each child handles one bounded replay and exits, returning all memory to OS.
     presets=[
-      {'order_size':'10','pair_cap':'0.97','max_inventory_imbalance':'10','taker_fee_rate':'0.07'},
-      {'order_size':'10','pair_cap':'0.99','max_inventory_imbalance':'10','taker_fee_rate':'0.07'},
-      {'order_size':'20','pair_cap':'0.97','max_inventory_imbalance':'30','taker_fee_rate':'0.07'},
-      {'order_size':'20','pair_cap':'0.99','max_inventory_imbalance':'30','taker_fee_rate':'0.07'},
+      {'order_size':'10','pair_cap':'0.97','queue_factor':'0.25','max_inventory_imbalance':'10','taker_fee_rate':'0.07'},
+      {'order_size':'10','pair_cap':'0.99','queue_factor':'0.50','max_inventory_imbalance':'10','taker_fee_rate':'0.07'},
+      {'order_size':'20','pair_cap':'0.97','queue_factor':'0.25','max_inventory_imbalance':'30','taker_fee_rate':'0.07'},
+      {'order_size':'20','pair_cap':'0.99','queue_factor':'0.50','max_inventory_imbalance':'30','taker_fee_rate':'0.07'},
     ][:max(1,a.max_combinations)]
     for i,p in enumerate(presets,1):
         with tempfile.NamedTemporaryFile(suffix='.json',delete=False) as f: tmp=Path(f.name)
-        cmd=[sys.executable,'scripts/pm-r26-historical-shadow-replay.py','--sqlite',*a.sqlite,'--history-dir',a.history_dir,'--out',str(tmp),'--max-markets',str(a.max_markets),'--order-size',p['order_size'],'--max-inventory-imbalance',p['max_inventory_imbalance'],'--taker-fee-rate',p['taker_fee_rate']]
+        cmd=[sys.executable,'scripts/pm-r26-historical-shadow-replay.py','--sqlite',*a.sqlite,'--history-dir',a.history_dir,'--out',str(tmp),'--max-markets',str(a.max_markets),'--order-size',p['order_size'],'--pair-cap',p['pair_cap'],'--queue-factor',p.get('queue_factor','0.25'),'--max-inventory-imbalance',p['max_inventory_imbalance'],'--taker-fee-rate',p['taker_fee_rate']]
         run=subprocess.run(cmd,capture_output=True,text=True)
         if run.returncode:
             tmp.unlink(missing_ok=True); raise SystemExit(run.stderr[-2000:])

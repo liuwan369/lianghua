@@ -219,18 +219,18 @@ def new_engines(args: argparse.Namespace) -> dict[str, MakerShadowEngine]:
         "min_order_live_ms": args.min_order_live_ms,
     }
     return {
-        "strict_pair": MakerShadowEngine(order_size=args.order_size, max_pair_cost=0.98, strategy_name="strict_pair", **common),
+        "strict_pair": MakerShadowEngine(order_size=args.order_size, max_pair_cost=args.pair_cap, strategy_name="strict_pair", **common),
         "calibrated_3048": MakerShadowEngine(
-            order_size=20, max_pair_cost=1.02, preserve_hedge_order=True,
+            order_size=args.order_size, max_pair_cost=args.pair_cap, preserve_hedge_order=True,
             pause_heavy_side_when_unpaired=True, taker_hedge_after_ms=10000,
             taker_fee_rate=args.taker_fee_rate, max_taker_pair_cost=1.03,
-            queue_ahead_factor=0.25, strategy_name="calibrated_3048", **common,
+            queue_ahead_factor=args.queue_factor, strategy_name="calibrated_3048", **common,
         ),
         "candidate_r19": MakerShadowEngine(
-            order_size=20, max_pair_cost=1.02, preserve_hedge_order=True,
+            order_size=args.order_size, max_pair_cost=args.pair_cap, preserve_hedge_order=True,
             pause_heavy_side_when_unpaired=True, taker_hedge_after_ms=15000,
             taker_fee_rate=args.taker_fee_rate, max_taker_pair_cost=1.05,
-            queue_ahead_factor=0.25, quote_start_delay_ms=15000,
+            queue_ahead_factor=args.queue_factor, quote_start_delay_ms=15000,
             align_after_ms=240000, stop_new_quotes_after_ms=270000,
             alignment_pair_cost=0.98, hedge_order_size=5,
             max_hedge_ask=0.30, strategy_name="candidate_r19", **common,
@@ -260,6 +260,8 @@ def main() -> int:
     parser.add_argument("--max-inventory-imbalance", type=float, default=100)
     parser.add_argument("--min-order-live-ms", type=int, default=250)
     parser.add_argument("--taker-fee-rate", type=float, default=0.07)
+    parser.add_argument("--pair-cap", type=float, default=1.02)
+    parser.add_argument("--queue-factor", type=float, default=0.25)
     args = parser.parse_args()
     dbs = [Path(item) for item in args.sqlite]
     metadata = load_metadata(dbs)
