@@ -42,7 +42,14 @@ def main() -> int:
         if run.returncode:
             tmp.unlink(missing_ok=True); raise SystemExit(run.stderr[-2000:])
         payload=json.loads(tmp.read_text(encoding='utf-8')); tmp.unlink(missing_ok=True)
-        results.append({'parameters':p,'summary':payload.get('summary',{}),'coverage':payload.get('coverage',{})})
+        # Preserve replay-level diagnostic counters in the sweep artifact so
+        # every parameter row explains zero fills without reopening temp JSON.
+        results.append({'parameters':p,'summary':payload.get('summary',{}),
+                        'diagnostic_rejections': {
+                            strategy: data.get('diagnostic_rejections', {})
+                            for strategy, data in payload.get('summary', {}).items()
+                        },
+                        'coverage':payload.get('coverage',{})})
         print(f'completed {i}/{len(presets)}',flush=True); gc.collect()
     Path(a.out).parent.mkdir(parents=True,exist_ok=True); Path(a.out).write_text(json.dumps({
         'run_type':'pm-r29_memory_isolated_sweep', 'experiment': a.experiment,

@@ -485,8 +485,18 @@ def main() -> int:
             for name, engine in state["engines"].items():
                 diag = state["diagnostics"][name]
                 order = engine.market.orders.get(token) if engine.market else None
-                if order is None or taker_side.upper() != "SELL" or size <= 0:
+                # Keep the legacy aggregate for continuity, while splitting
+                # the mutually exclusive gates so zero-fill causes are
+                # measurable (direction, order lifetime, price, queue).
+                if order is None:
                     diag["trade_not_eligible:no_working_sell_order"] += 1
+                    diag["trade_skipped:no_working_order"] += 1
+                elif taker_side.upper() != "SELL":
+                    diag["trade_not_eligible:no_working_sell_order"] += 1
+                    diag["trade_skipped:taker_side_not_sell"] += 1
+                elif size <= 0:
+                    diag["trade_not_eligible:no_working_sell_order"] += 1
+                    diag["trade_skipped:nonpositive_size"] += 1
                 elif received_ms < order.eligible_at_ms:
                     diag["trade_rejected:not_eligible"] += 1
                 elif order.expires_at_ms is not None and received_ms >= order.expires_at_ms:
@@ -541,6 +551,14 @@ def main() -> int:
             "simulated_official_settlement_pnl_usdc": round(sum(float(item["snapshot"]["simulated_official_settlement_pnl_usdc"]) for item in resolved), 4) if resolved else None,
             "target_activity_shares_same_markets": round(sum(float(item["target"]["shares"]) for item in eligible), 4),
             "target_activity_trades_same_markets": int(sum(float(item["target"]["count"]) for item in eligible)),
+            "diagnostic_rejections": {
+                reason: int(sum(int((item["snapshot"].get("diagnostic_rejections") or {}).get(reason, 0)) for item in eligible))
+                for reason in sorted({
+                    reason
+                    for item in eligible
+                    for reason in (item["snapshot"].get("diagnostic_rejections") or {})
+                })
+            },
             "settlement_note": "最坏结算情景与按官方结果计算的模拟结算分别列示；无官方标签不确认模拟结算收益，返佣和奖励未计入。",
         }
     output = {

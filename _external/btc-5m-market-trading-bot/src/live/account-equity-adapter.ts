@@ -27,7 +27,7 @@ export function accountDataToEquitySnapshot(value: unknown, account: string, atM
     if (!row(item) || typeof item.conditionId !== 'string' || typeof item.asset !== 'string'
         || item.size == null || item.valuation !== 'liquidation_bid') throw new Error('incomplete_position_snapshot');
     const quantityMicros = amount(item.size, 'position_size');
-    const rawPrice = item.liquidation_bid ?? item.liquidationBid ?? item.liquidation_bid_price ?? item.price ?? item.curPrice;
+    const rawPrice = item.liquidation_bid;
     if (rawPrice == null) throw new Error('missing_liquidation_bid');
     const priceMicrousd = amount(rawPrice, 'position_price');
     if (priceMicrousd > SCALE) throw new Error('invalid_position_price');

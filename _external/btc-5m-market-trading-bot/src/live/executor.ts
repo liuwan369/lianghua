@@ -393,14 +393,41 @@ export class Executor {
       const size = Math.floor(shares * 100) / 100;
       const notional = px * size;
       if (size <= 0 || !this.canSpend(notional)) return { ok: false, price: px, size, notional };
-      const resp = await this.clob.submitMarketSell(token, size, px, tick);
-      if (!resp.success && (resp.stateUnknown || resp.orderId)) {
+      const reservationId = `exit-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}`;
+      this.reservationCoordinator?.prepare(reservationId, notional, 0);
+      this.reservationCoordinator?.transition(reservationId, 'submitted');
+      this.activeReservationIds.add(reservationId);
+      const submittedAtUnix = Date.now() / 1000;
+      let resp: Awaited<ReturnType<ClobWrapper['submitMarketSell']>>;
+      try {
+        resp = await this.clob.submitMarketSell(token, size, px, tick);
+      } catch {
+        this.reservationCoordinator?.transition(reservationId, 'unknown');
         this.paused = true;
-        throw new UnknownOrderStateError("exit ACK timeout; account reconciliation required", {
-          kind: "taker", side, token, price: px, size, notional, submittedAtUnix: Date.now() / 1000,
+        throw new UnknownOrderStateError('exit submission failed with unknown exchange state', {
+          kind: 'taker', side, token, price: px, size, notional, submittedAtUnix,
         });
       }
-      if (!resp.success) return { ok: false, price: px, size, notional };
+      if (!resp.success && (resp.stateUnknown || resp.orderId)) {
+        this.reservationCoordinator?.transition(reservationId, 'unknown');
+        if (resp.orderId) this.reservationByOrderId.set(resp.orderId, reservationId);
+        this.paused = true;
+        throw new UnknownOrderStateError("exit ACK timeout; account reconciliation required", {
+          kind: "taker", side, token, price: px, size, notional, submittedAtUnix,
+        });
+      }
+      if (!resp.success) {
+        this.reservationCoordinator?.transition(reservationId, 'reconciled');
+        this.activeReservationIds.delete(reservationId);
+        return { ok: false, price: px, size, notional };
+      }
+      this.reservationCoordinator?.transition(reservationId, 'acknowledged');
+      this.activeReservationIds.add(reservationId);
+      if (resp.orderId) {
+        this.reservationByOrderId.set(resp.orderId, reservationId);
+        this.allOrderIds.add(resp.orderId);
+        this.knownOrderIds.add(resp.orderId);
+      }
       this.sent += 1;
       return { ok: true, orderId: resp.orderId, price: px, size, notional, tradeIds: resp.tradeIds,
         signLatencyMs: resp.signLatencyMs, ackLatencyMs: resp.ackLatencyMs };

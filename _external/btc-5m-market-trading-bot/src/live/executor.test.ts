@@ -269,4 +269,22 @@ describe("uncertain ACK circuit breaker", () => {
     executor.confirmAccountReconciled();
     expect(events.at(-1)).toBe("reconciled");
   });
+
+  it("tracks a residual exit through reservation reconciliation", async () => {
+    const events: string[] = [];
+    const coordinator = {
+      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled') => events.push(status)),
+    };
+    const executor = new Executor(true, 10, 10, 100, coordinator);
+    (executor as unknown as { clob: Record<string, unknown> }).clob = {
+      tickSize: async () => 0.01,
+      submitMarketSell: async () => ({ success: true, orderId: 'exit-order', tradeIds: ['trade-1'] }),
+    };
+    const result = await executor.submitExit(Side.Up, 'up', 0.4, 5);
+    expect(result).toMatchObject({ ok: true, orderId: 'exit-order' });
+    expect(events.slice(1)).toEqual(['submitted', 'acknowledged']);
+    executor.confirmAccountReconciled();
+    expect(events.at(-1)).toBe('reconciled');
+  });
 });

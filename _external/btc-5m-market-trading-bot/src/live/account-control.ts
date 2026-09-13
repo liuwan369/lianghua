@@ -17,6 +17,14 @@ function money(value: number, name: string): number {
   return micros;
 }
 
+function feeMoney(value: number): number {
+  if (!Number.isFinite(value) || value < 0) throw new Error('fee must be finite and non-negative');
+  if (value === 0) return 0;
+  const micros = Math.ceil(value * SCALE - 1e-9);
+  if (!Number.isSafeInteger(micros)) throw new Error('fee is outside accounting precision');
+  return micros;
+}
+
 /** Live submission gate. It persists a reservation before the caller touches the network. */
 export class AccountExecutionGate implements ReservationCoordinator {
   constructor(private readonly store: AccountStateStore, private readonly maxAgeMs = 30_000) {}
@@ -32,7 +40,7 @@ export class AccountExecutionGate implements ReservationCoordinator {
   prepare(id: string, amountUsd: number, feeReserveUsd: number, nowMs = Date.now()): void {
     this.verifyBeforeSubmission();
     const state = this.store.read();
-    const result = prepareReservation(state.reservation, id, money(amountUsd, 'amount'), money(feeReserveUsd, 'fee'), nowMs);
+    const result = prepareReservation(state.reservation, id, money(amountUsd, 'amount'), feeMoney(feeReserveUsd), nowMs);
     if (!result.applied) throw new Error(`reservation rejected: ${result.reason}`);
     this.store.write({ ...state, reservation: result.state });
   }
@@ -52,13 +60,11 @@ export class AccountExecutionGate implements ReservationCoordinator {
     }
     const sequence = (before.equity.day?.latest.sequence ?? 0) + 1;
     const snapshot = accountDataToEquitySnapshot(reader ? await reader() : undefined, before.account, nowMs, sequence);
-    const current = { snapshot, previousSnapshotId: before.equity.day?.latest.id ?? snapshot.id,
-      cashFlows: { fromMs: before.equity.day?.latest.atMs ?? snapshot.atMs, toMs: snapshot.atMs, complete: true, items: [] },
+    const previous = before.equity.day.latest;
+    const current = { snapshot, previousSnapshotId: previous.id,
+      cashFlows: { fromMs: previous.atMs, toMs: snapshot.atMs, complete: true, items: [] },
       positionReleases: [] };
-    const event = before.equity.day === null
-      ? { type: 'initialize' as const, opening: snapshot, current }
-      : { type: 'reconcile' as const, current };
-    const result = reduceAccountEquity(before.equity, event, nowMs, this.maxAgeMs);
+    const result = reduceAccountEquity(before.equity, { type: 'reconcile', current }, nowMs, this.maxAgeMs);
     if (!result.applied) {
       this.store.write({ ...before, equity: result.state });
       throw new Error(`account reconciliation rejected: ${result.state.reconciliationIssue ?? 'unknown'}`);

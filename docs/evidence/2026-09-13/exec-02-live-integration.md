@@ -10,7 +10,7 @@ The account adapter accepts only complete, available collateral and positions Se
 
 Validation performed:
 
-- `npm test -- --run src/live/account-equity-adapter.test.ts src/live/executor.test.ts` (28 tests passed)
+- `npm test -- --run src/live/account-control.test.ts src/live/account-equity-adapter.test.ts src/live/account-state-store.test.ts src/live/account-reservation.test.ts src/live/executor.test.ts src/live/orchestrator.test.ts` (54 tests passed)
 - `npm run typecheck` (passed)
 
-No live connection or real-money submission was started. The runtime continues to require explicit `live=true`, an owner signer, a persisted authoritative day baseline, and the existing 50 USD capital / 30 USD daily-loss limits.
+The currently deployed read-only account reader still reports `pagination_atomic=false` and provides no verified liquidation-bid/as-of evidence. Therefore it is intentionally rejected by the adapter; a fresh live run has no supported bootstrap path and remains fail-closed until an atomic account source and a persisted Beijing-day opening baseline are supplied. No live connection or real-money submission was started. The runtime continues to require explicit `live=true`, an owner signer, a persisted authoritative day baseline, and the existing 50 USD capital / 30 USD daily-loss limits.

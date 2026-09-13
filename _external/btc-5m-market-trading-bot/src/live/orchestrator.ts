@@ -519,6 +519,7 @@ async function runOneMarket(
       return;
     }
     try {
+      engine.prepareSubmission();
       const result = await executor.submitExit(side, token, bid, exposure.residualShares);
       journal.log(result.ok ? "exit_submitted" : "exit_rejected", mkt, nowUnix(), {
         reason, side: Side.asStr(side), price: result.price, shares: result.size,
@@ -1000,10 +1001,15 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
       throw new Error("executor account differs from the locked risk account");
     }
     if (!accountGate) throw new Error("live account execution gate is unavailable");
-    const reader = cfg.accountReader ?? await connectAccountReader();
-    accountReader = reader;
-    await accountGate.refresh(reader);
-    executor.attachReservationCoordinator(accountGate);
+    try {
+      const reader = cfg.accountReader ?? await connectAccountReader();
+      accountReader = reader;
+      await accountGate.refresh(reader);
+      executor.attachReservationCoordinator(accountGate);
+    } catch (error) {
+      await executor.shutdown().catch(() => undefined);
+      throw error;
+    }
 
   } else {
 
