@@ -310,7 +310,9 @@ export function reduceAccountEquity(state: AccountEquityState, event: unknown, n
     if (current.atMs > nowMs || nowMs - current.atMs > maxAgeMs) fail('stale_or_future_reconciliation');
     if (event.type === 'initialize') {
       if (next.day !== null) fail('opening_already_initialized');
-      const opening = snapshot(event.opening, next.account, next.mode, maxAgeMs);
+      // The opening cut is intentionally historical within the current risk day.
+      // Only the current cut is subject to the live freshness window.
+      const opening = snapshot(event.opening, next.account, next.mode, Number.MAX_SAFE_INTEGER);
       if (opening.atMs !== dayStart(opening.atMs) || riskDayKey(opening.atMs / 1000) !== riskDayKey(current.atMs / 1000)) fail('missing_day_opening');
       next.day = { riskDay: riskDayKey(opening.atMs / 1000), opening: clone(opening), latest: clone(opening), pnlMicrousd: 0, lossLimitReached: false };
       next.seenSnapshotIds.push(opening.id);

@@ -43,8 +43,9 @@ import { envWalletOverrides } from "./clob/wallet.js";
 import { fileURLToPath } from "node:url";
 import { RiskStore } from "../risk-store.js";
 import { connectAccountReader } from "./account-data.js";
-import { AccountExecutionGate } from "./account-control.js";
-import { AccountStateStore } from "./account-state-store.js";
+import { AccountExecutionGate, type AuthoritativeOpeningReader } from "./account-control.js";
+import { accountStateEnvelope, AccountStateStore } from "./account-state-store.js";
+import { createReservationState } from "./account-reservation.js";
 
 export const LIVE_BOOK_MAX_AGE_MS = 250;
 const OFFICIAL_CLOB_HEALTH = "https://clob.polymarket.com/";
@@ -119,6 +120,8 @@ export interface RunConfig {
 
   accountStateDirectory?: string;
   accountReader?: Awaited<ReturnType<typeof connectAccountReader>>;
+  /** Optional provider-owned atomic opening/current cut for first live bootstrap. */
+  accountBootstrapReader?: AuthoritativeOpeningReader;
 
 }
 
@@ -924,17 +927,18 @@ export async function run(cfg: RunConfig): Promise<void> {
   try {
     if (cfg.live) {
       accountStore = new AccountStateStore(
-        cfg.accountStateDirectory ?? process.env.PM_ACCOUNT_STATE_DIR ??
+      cfg.accountStateDirectory ?? process.env.PM_ACCOUNT_STATE_DIR ??
         fileURLToPath(new URL("../../results/account-state/", import.meta.url)),
         accountId,
         "live",
+        accountStateEnvelope(accountId, "live", AccountExecutionGate.emptyEquity(accountId, "live"), createReservationState()),
       );
       accountGate = new AccountExecutionGate(accountStore);
     }
     engine = new Engine({ ...cfg.engine, liveMode: cfg.live,
       accountGate,
       dailyLossLimitUsd: Math.min(30, cfg.engine.dailyLossLimitUsd ?? 30) }, riskStore);
-    await runWithRiskState(cfg, engine, accountId, accountGate);
+    await runWithRiskState(cfg, engine, accountId, accountGate, accountStore);
   } catch (error) {
     engine?.requireReconciliation("run failed before complete reconciliation");
     throw error;
@@ -944,7 +948,7 @@ export async function run(cfg: RunConfig): Promise<void> {
 }
 
 async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: string,
-  accountGate?: AccountExecutionGate): Promise<void> {
+  accountGate?: AccountExecutionGate, accountStore?: AccountStateStore): Promise<void> {
   try {
     const healthMs = await assertOfficialClobHealth();
     console.info(`official CLOB health ${healthMs.toFixed(1)}ms`);
@@ -1004,6 +1008,12 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
     try {
       const reader = cfg.accountReader ?? await connectAccountReader();
       accountReader = reader;
+      if (accountStore?.read().equity.day === null) {
+        if (!cfg.accountBootstrapReader) {
+          throw new Error("实盘已拒绝：缺少权威北京时间日初账户快照");
+        }
+        await accountGate.initialize(cfg.accountBootstrapReader);
+      }
       await accountGate.refresh(reader);
       executor.attachReservationCoordinator(accountGate);
     } catch (error) {

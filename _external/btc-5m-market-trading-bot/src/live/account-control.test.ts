@@ -18,6 +18,51 @@ let roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 describe('account execution gate', () => {
+  it('initializes from an explicit atomic opening/current account cut', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
+    const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(
+      account, 'live', createAccountEquityState(account, 'live'), createReservationState()));
+    const gate = new AccountExecutionGate(store, 30_000);
+    const data = (checked_at: string, value = 50) => ({ wallet: account, read_only: true, pagination_atomic: true,
+      checked_at, collateral: { available: true, complete: true, value }, positions: { available: true, complete: true, items: [] } });
+    await gate.initialize(() => Promise.resolve({
+      opening: data('2026-09-12T16:00:00.000Z'), current: data('2026-09-12T16:00:01.000Z'),
+      cashFlows: { fromMs: openingAt, toMs: currentAt, complete: true, items: [] }, positionReleases: [],
+    }), currentAt);
+    expect(store.read().equity.day).toMatchObject({ riskDay: '2026-09-13', pnlMicrousd: 0 });
+    store.close();
+  });
+
+  it('rejects an opening cut without its authoritative timestamp', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
+    const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(
+      account, 'live', createAccountEquityState(account, 'live'), createReservationState()));
+    const gate = new AccountExecutionGate(store, 30_000);
+    const data = { wallet: account, read_only: true, pagination_atomic: true,
+      collateral: { available: true, complete: true, value: 50 }, positions: { available: true, complete: true, items: [] } };
+    await expect(gate.initialize(() => Promise.resolve({ opening: data, current: data,
+      cashFlows: { fromMs: openingAt, toMs: currentAt, complete: true, items: [] }, positionReleases: [] }), currentAt)).rejects.toThrow('checked_at');
+    store.close();
+  });
+
+  it('rejects a normal account read without a complete cash-flow evidence window', async () => {
+    const opening = snapshot('opening', 1, openingAt);
+    const current = snapshot('current', 2, currentAt);
+    const equity = createAccountEquityState(account, 'live');
+    const initialized = reduceAccountEquity(equity, {
+      type: 'initialize', opening,
+      current: { snapshot: current, previousSnapshotId: opening.id,
+        cashFlows: { fromMs: openingAt, toMs: currentAt, complete: true, items: [] }, positionReleases: [] },
+    }, currentAt, 30_000);
+    const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
+    const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(account, 'live', initialized.state, createReservationState()));
+    const gate = new AccountExecutionGate(store, 30_000);
+    const data = { wallet: account, read_only: true, pagination_atomic: true, checked_at: new Date(currentAt).toISOString(),
+      collateral: { available: true, complete: true, value: 50 }, positions: { available: true, complete: true, items: [] } };
+    await expect(gate.refresh(() => Promise.resolve(data), currentAt)).rejects.toThrow('reconciliation evidence');
+    store.close();
+  });
+
   it('accepts a zero fee reserve while preserving the principal reservation', () => {
     const opening = snapshot('opening', 1, openingAt);
     const current = snapshot('current', 2, currentAt);
