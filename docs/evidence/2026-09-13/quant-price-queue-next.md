@@ -59,6 +59,12 @@ python scripts/pm-r29-safe-sweep.py --sqlite data/dublin-server/pm-r25-live-days
 原始输出：`data/research/r33/r26-holdout-0909-baseline-20260913.json`、
 `data/research/r33/r29-holdout-0909-live-sweep-20260913.json`。
 
+链上交叉核对补充：同一 09-09 数据库中，按六个完整市场的 token 和
+`maker=0x3048...94f98a2e7537` 过滤到 310 条 `order_filled(role=maker)`（逐市场
+60、50、70、56、49、25）。这些记录能提供交易所确认的成交时间和成交价范围，
+但采集物没有对应的 `order_placed/order_cancelled` 生命周期事件，且历史活动哈希未能与
+链上哈希关联；因此它们只能作为身份/价格核对，不能直接改写影子成交或推导队列位置。
+
 跨日判定：报价生命周期会改变“强制方向”上界的成交量，但观察方向下仍为零；
 `force_sell` 与 `min_order_live_ms=0` 继续禁止进入生产默认值。下一实验必须采集交易所确认的逐订单
 `placed_at / cancel_at / trade_at / matched_price`，并在第三个独立日期验证真实 maker 成交，否则保持

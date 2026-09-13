@@ -170,6 +170,13 @@ export async function applyEvents(
           throw new Error("live feeds became unhealthy before quote submission");
         }
         engine.prepareSubmission();
+        journal.log("order_submit", mkt, ts, {
+          side: Side.asStr(ev.side),
+          token_id: marketToken(mkt, ev.side),
+          price: r4(ev.price),
+          shares: r2(ev.shares),
+          submit_started_at_unix: Date.now() / 1000,
+        });
         const res = await executor.submit(
           ev.side,
           marketToken(mkt, ev.side),
@@ -201,6 +208,15 @@ export async function applyEvents(
           throw new Error("live feeds became unhealthy before hedge submission");
         }
         engine.prepareSubmission();
+
+        journal.log("order_submit", mkt, ts, {
+          order_kind: "taker",
+          side: Side.asStr(ev.side),
+          token_id: marketToken(mkt, ev.side),
+          price: r4(ev.price),
+          shares: r2(ev.shares),
+          submit_started_at_unix: Date.now() / 1000,
+        });
 
         const res = await executor.submitTaker(
 
@@ -252,6 +268,11 @@ export async function applyEvents(
       case "cancel": {
         const cancelStarted = performance.now();
         const cancelledOrderId = executor.restingId(ev.side);
+        journal.log("cancel_requested", mkt, ts, {
+          order_id: cancelledOrderId ?? null,
+          side: Side.asStr(ev.side),
+          cancel_requested_at_unix: Date.now() / 1000,
+        });
         journal.logEvent(ev, mkt, ts);
 
         await executor.cancelSide(ev.side);
@@ -313,6 +334,8 @@ export async function handleUserEvent(
         shares: r2(fillEv.shares),
         is_maker: fillEv.isMaker,
         fee: r4(fillEv.fee),
+        trade_at_exchange_unix: event.fill.tsUnix,
+        matched_price: r4(fillEv.price),
       });
       journaledFills.add(eventId);
       recordLatency(journal,mkt,"fill_report",event.reportLatencyMs,executor.live,event.orderId);
@@ -330,6 +353,10 @@ export async function handleUserEvent(
         order_id: event.orderId ?? null,
 
         trade_id: event.tradeId ?? null,
+
+        trade_at_exchange_unix: event.fill.tsUnix,
+
+        matched_price: r4(event.fill.price),
 
       });
 
