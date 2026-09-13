@@ -20,6 +20,8 @@ export interface EngineConfig {
   tradeRateWindowSec?: number;
   /** Realized daily-loss gate; account-equity accounting is a separate requirement. */
   dailyLossLimitUsd?: number;
+  /** Optional authoritative account gate. Live callers must provide one. */
+  accountGate?: { verifyBeforeSubmission(): void };
 }
 
 export interface ResolveResult {
@@ -42,8 +44,10 @@ export class Engine {
   private lastBookTs = Number.NEGATIVE_INFINITY;
   private microstructure: MakerMicrostructureGate;
   private settled = false;
+  private readonly accountGate?: { verifyBeforeSubmission(): void };
 
   constructor(c: EngineConfig = {}, private readonly riskStore?: RiskStore) {
+    this.accountGate = c.accountGate;
     const cfg = c.passiveBudget ? passiveBudgetClone() : targetClone();
     if (c.dailyLossLimitUsd != null) {
       if (!Number.isFinite(c.dailyLossLimitUsd) || c.dailyLossLimitUsd <= 0) {
@@ -228,6 +232,10 @@ export class Engine {
   prepareSubmission(): void {
     try {
       this.riskStore?.verifyBeforeSubmission();
+      if (this.session.liveMode && !this.accountGate) {
+        throw new Error("live submission requires an authoritative account gate");
+      }
+      this.accountGate?.verifyBeforeSubmission();
       if (this.session.haltNew || !this.session.strat.risk.canTrade(this.session.strat.config)) {
         this.checkpoint();
         throw new Error("risk stop prevents new order submission");

@@ -28,7 +28,9 @@ export function token(mkt: Market, side: Side): string {
 export { OrderBook } from "./orderbook.js";
 export { Journal, r2, r4, recordTraded } from "./journal.js";
 export { Engine, type EngineConfig, type ResolveResult, bookOk } from "./engine.js";
-export { Executor, type SubmitResult } from "./executor.js";
+export { Executor, type SubmitResult, type ReservationCoordinator } from "./executor.js";
+export { AccountExecutionGate } from "./account-control.js";
+export { AccountStateStore, accountStateEnvelope, type AccountStateEnvelope } from "./account-state-store.js";
 export { run, type RunConfig } from "./orchestrator.js";
 export { analyze, monitor } from "./analysis.js";
 export * from "./feeds/index.js";

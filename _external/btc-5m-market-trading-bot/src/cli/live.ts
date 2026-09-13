@@ -73,6 +73,18 @@ program
     const maxTotalUsd = opts.maxTotalUsd
       ? parseFloat(opts.maxTotalUsd)
       : undefined;
+    const orderUsd = parseFloat(opts.orderUsd);
+    const maxOrders = parseInt(opts.maxOrders, 10);
+    const effectiveTotalUsd = maxTotalUsd ?? (live ? 10 : undefined);
+    if (!Number.isFinite(orderUsd) || orderUsd <= 0 || orderUsd > 50) {
+      throw new Error("--order-usd must be > 0 and <= 50 under the account capital limit");
+    }
+    if (!Number.isInteger(maxOrders) || maxOrders <= 0) {
+      throw new Error("--max-orders must be a positive integer");
+    }
+    if (effectiveTotalUsd != null && (!Number.isFinite(effectiveTotalUsd) || effectiveTotalUsd <= 0 || effectiveTotalUsd > 50)) {
+      throw new Error("--max-total-usd must be > 0 and <= 50 under the account capital limit");
+    }
     if (live && maxTotalUsd == null) {
       console.warn(
         "live: no MAX_TOTAL_USD — defaulting session cap to $10 (override with --max-total-usd or env)",
@@ -91,9 +103,9 @@ program
         decisionIntervalMs: parseFloat(opts.decisionIntervalMs),
         defensiveCancelBps: parseFloat(opts.defensiveCancelBps),
       },
-      orderUsd: parseFloat(opts.orderUsd),
-      maxOrders: parseInt(opts.maxOrders, 10),
-      maxTotalUsd: maxTotalUsd ?? (live ? 10 : undefined),
+      orderUsd,
+      maxOrders,
+      maxTotalUsd: effectiveTotalUsd,
       heartbeatMs: parseInt(opts.heartbeatMs, 10),
       btcMoveBps: parseFloat(opts.btcMoveBps),
       bookPollHz: parseFloat(opts.bookPollHz),

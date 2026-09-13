@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { availableMicrousd, createReservationState, parseReservationState, prepareReservation,
-  recordDailyLoss, serializeReservationState, transitionReservation } from './account-reservation.js';
+  recordDailyLoss, recordDailyLossEvent, serializeReservationState, transitionReservation } from './account-reservation.js';
 
 describe('atomic account reservation contract', () => {
   it('reserves amount plus fee atomically within the fixed 50 dollar allocation', () => {
@@ -35,6 +35,14 @@ describe('atomic account reservation contract', () => {
     expect(first.state.reservations[0].status).toBe('prepared');
   });
 
+  it('rejects exchange lifecycle jumps that have no submission evidence', () => {
+    const state = prepareReservation(createReservationState(), 'a', 1_000_000, 0, 1).state;
+    expect(transitionReservation(state, 'a', 'acknowledged', 2).reason).toBe('reservation_status_regression');
+    expect(transitionReservation(state, 'a', 'partially_filled', 2).reason).toBe('reservation_status_regression');
+    const submitted = transitionReservation(state, 'a', 'submitted', 2).state;
+    expect(transitionReservation(submitted, 'a', 'settlement_pending', 3).reason).toBe('reservation_status_regression');
+  });
+
   it('sticks the 30 dollar daily loss stop and preserves it through serialization', () => {
     let state = createReservationState();
     state = recordDailyLoss(state, 29_999_999).state;
@@ -44,6 +52,15 @@ describe('atomic account reservation contract', () => {
     expect(prepareReservation(state, 'blocked', 1, 0, 3).reason).toBe('daily_loss_limit_reached');
     const restored = parseReservationState(JSON.parse(serializeReservationState(state)));
     expect(restored).toEqual(state);
+  });
+
+  it('deduplicates authoritative loss events across retries', () => {
+    let state = createReservationState();
+    state = recordDailyLossEvent(state, 'settlement-1', 10_000_000).state;
+    const duplicate = recordDailyLossEvent(state, 'settlement-1', 10_000_000);
+    expect(duplicate.applied).toBe(false);
+    expect(duplicate.reason).toBe('duplicate_daily_loss');
+    expect(duplicate.state.dailyLossMicrousd).toBe(10_000_000);
   });
 
   it('rejects tampered limits, duplicate records and over-allocated state', () => {

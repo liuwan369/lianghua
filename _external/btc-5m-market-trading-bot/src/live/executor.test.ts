@@ -214,4 +214,22 @@ describe("uncertain ACK circuit breaker", () => {
     const result=await paper.submit(Side.Up,"up",0.4,5);
     expect(result.ackLatencyMs).toBeUndefined();
   });
+
+  it("persists a reservation before a live network submission and closes rejected orders", async () => {
+    const events: string[] = [];
+    const coordinator = {
+      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'reconciled') => events.push(status)),
+    };
+    const executor = new Executor(true, 10, 10, 100, coordinator);
+    const submitOrder = vi.fn().mockResolvedValue({ success: false, status: 400, errorMsg: "rejected" });
+    (executor as unknown as {clob: Record<string, unknown>}).clob = {
+      tickSize: async()=>0.01, minOrderSize:()=>5, submitOrder,
+    };
+    const result = await executor.submit(Side.Up, "up", 0.4, 5);
+    expect(result.ok).toBe(false);
+    expect(events[0]).toMatch(/^prepare:order-/);
+    expect(events.slice(1)).toEqual(["submitted", "reconciled"]);
+    expect(submitOrder).toHaveBeenCalledOnce();
+  });
 });

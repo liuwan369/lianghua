@@ -28,6 +28,11 @@ export interface UnknownOrderContext {
   submittedAtUnix: number;
 }
 
+export interface ReservationCoordinator {
+  prepare(id: string, amountUsd: number, feeReserveUsd: number): void;
+  transition(id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'reconciled'): void;
+}
+
 export class UnknownOrderStateError extends Error {
   constructor(message: string, readonly context: UnknownOrderContext) {
     super(message);
@@ -100,17 +105,24 @@ export class Executor {
   private stopClobHeartbeat?: () => void;
   private tickCache = new Map<string, number>();
   private tickUpdatedAt = new Map<string, number>();
+  private reservationCoordinator?: ReservationCoordinator;
 
   constructor(
     live: boolean,
     maxOrderUsd: number,
     maxOrders: number,
     maxTotalUsd?: number,
+    reservationCoordinator?: ReservationCoordinator,
   ) {
     this.live = live;
     this.maxOrderUsd = maxOrderUsd;
     this.maxOrders = maxOrders;
     this.maxTotalUsd = maxTotalUsd ?? maxOrders * maxOrderUsd;
+    this.reservationCoordinator = reservationCoordinator;
+  }
+
+  attachReservationCoordinator(coordinator: ReservationCoordinator): void {
+    this.reservationCoordinator = coordinator;
   }
 
   static async newLive(
@@ -295,15 +307,22 @@ export class Executor {
       return { ok: true, orderId: id, price: px, size, notional };
     }
 
+    const reservationId = `order-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}`;
+    this.reservationCoordinator?.prepare(reservationId, notional, 0);
+    this.reservationCoordinator?.transition(reservationId, 'submitted');
     const submittedAtUnix = Date.now() / 1000;
-    const resp = await this.clob.submitOrder({
-      tokenId: token,
-      price: px,
-      size,
-      tickSize: tick,
-    });
+    let resp: Awaited<ReturnType<ClobWrapper['submitOrder']>>;
+    try {
+      resp = await this.clob.submitOrder({ tokenId: token, price: px, size, tickSize: tick });
+    } catch {
+      this.reservationCoordinator?.transition(reservationId, 'unknown');
+      this.paused = true;
+      throw new UnknownOrderStateError('order submission failed with unknown exchange state',
+        { kind: 'maker', side, token, price: px, size, notional, submittedAtUnix });
+    }
 
     if (resp.success && resp.orderId) {
+      this.reservationCoordinator?.transition(reservationId, 'acknowledged');
       this.sent += 1;
       this.spentUsd += notional;
       if (resp.orderId) {
@@ -328,6 +347,7 @@ export class Executor {
     }
 
     if (resp.stateUnknown || resp.success || resp.orderId) {
+      this.reservationCoordinator?.transition(reservationId, 'unknown');
       this.paused = true;
       this.sent += 1;
       this.spentUsd += notional;
@@ -338,6 +358,7 @@ export class Executor {
     }
 
     console.error(`LIVE order rejected: ${resp.errorMsg ?? resp.status ?? "unknown"}`);
+    this.reservationCoordinator?.transition(reservationId, 'reconciled');
     return none;
   }
 
@@ -412,9 +433,21 @@ export class Executor {
       return { ok: true, orderId: id, price: px, size, notional };
     }
 
+    const reservationId = `order-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}-taker`;
+    this.reservationCoordinator?.prepare(reservationId, notional, 0);
+    this.reservationCoordinator?.transition(reservationId, 'submitted');
     const submittedAtUnix = Date.now() / 1000;
-    const resp = await this.clob.submitMarketBuy(token, notional, px, tick);
+    let resp: Awaited<ReturnType<ClobWrapper['submitMarketBuy']>>;
+    try {
+      resp = await this.clob.submitMarketBuy(token, notional, px, tick);
+    } catch {
+      this.reservationCoordinator?.transition(reservationId, 'unknown');
+      this.paused = true;
+      throw new UnknownOrderStateError('taker submission failed with unknown exchange state',
+        { kind: 'taker', side, token, price: px, size, notional, submittedAtUnix });
+    }
     if (resp.success && resp.orderId) {
+      this.reservationCoordinator?.transition(reservationId, 'acknowledged');
       this.sent += 1;
       this.spentUsd += notional;
       this.takerInFlight.set(side, {orderId:resp.orderId,remaining:size});
@@ -438,6 +471,7 @@ export class Executor {
     }
 
     if (resp.stateUnknown || resp.success || resp.orderId) {
+      this.reservationCoordinator?.transition(reservationId, 'unknown');
       this.paused = true;
       this.sent += 1;
       this.spentUsd += notional;
@@ -449,6 +483,7 @@ export class Executor {
     }
 
     console.error(`LIVE taker rejected: ${resp.errorMsg ?? resp.status ?? "unknown"}`);
+    this.reservationCoordinator?.transition(reservationId, 'reconciled');
     return none;
   }
 

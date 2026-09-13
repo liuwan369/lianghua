@@ -21,6 +21,7 @@ export interface ReservationState {
   dailyLossLimitMicrousd: number;
   dailyLossMicrousd: number;
   halted: boolean;
+  seenLossIds: string[];
   reservations: Reservation[];
 }
 
@@ -45,10 +46,16 @@ function validStatus(value: unknown): value is ReservationStatus {
 function validate(state: ReservationState): ReservationState {
   if (!state || state.schemaVersion !== 1 || state.capitalLimitMicrousd !== CAPITAL_LIMIT
       || state.dailyLossLimitMicrousd !== DAILY_LOSS_LIMIT || !integer(state.dailyLossMicrousd)
-      || state.dailyLossMicrousd < 0 || typeof state.halted !== 'boolean' || !Array.isArray(state.reservations)) {
+      || state.dailyLossMicrousd < 0 || typeof state.halted !== 'boolean' || !Array.isArray(state.seenLossIds)
+      || !Array.isArray(state.reservations)) {
     throw new Error('invalid_reservation_state');
   }
   const ids = new Set<string>();
+  const lossIds = new Set<string>();
+  for (const id of state.seenLossIds) {
+    if (typeof id !== 'string' || id.length < 1 || id.length > 256 || lossIds.has(id)) throw new Error('invalid_loss_history');
+    lossIds.add(id);
+  }
   let activeTotal = 0n;
   for (const item of state.reservations) {
     if (!item || typeof item.id !== 'string' || item.id.length < 1 || item.id.length > 256 || ids.has(item.id)
@@ -68,7 +75,7 @@ function validate(state: ReservationState): ReservationState {
 
 export function createReservationState(): ReservationState {
   return { schemaVersion: 1, capitalLimitMicrousd: CAPITAL_LIMIT, dailyLossLimitMicrousd: DAILY_LOSS_LIMIT,
-    dailyLossMicrousd: 0, halted: false, reservations: [] };
+    dailyLossMicrousd: 0, halted: false, seenLossIds: [], reservations: [] };
 }
 
 export function availableMicrousd(state: ReservationState): number {
@@ -105,7 +112,16 @@ export function transitionReservation(state: ReservationState, id: string, statu
   if (nowMs < item.updatedAtMs) return { state: previous, applied: false, reason: 'reservation_time_regression' };
   if (item.status === 'reconciled') return status === 'reconciled'
     ? { state: previous, applied: true, reason: null } : { state: previous, applied: false, reason: 'reservation_already_reconciled' };
-  if (status !== item.status && (status === 'prepared' || statuses.indexOf(status) < statuses.indexOf(item.status))) {
+  const allowed: Record<ReservationStatus, ReservationStatus[]> = {
+    prepared: ['submitted', 'unknown', 'reconciled'],
+    submitted: ['unknown', 'acknowledged', 'reconciled'],
+    unknown: ['acknowledged', 'partially_filled', 'settlement_pending', 'reconciled'],
+    acknowledged: ['partially_filled', 'settlement_pending', 'reconciled'],
+    partially_filled: ['settlement_pending', 'reconciled'],
+    settlement_pending: ['reconciled'],
+    reconciled: ['reconciled'],
+  };
+  if (status !== item.status && !allowed[item.status].includes(status)) {
     return { state: previous, applied: false, reason: 'reservation_status_regression' };
   }
   const next = clone(previous);
@@ -114,12 +130,22 @@ export function transitionReservation(state: ReservationState, id: string, statu
 }
 
 export function recordDailyLoss(state: ReservationState, lossMicrousd: number): ReservationResult {
+  return recordDailyLossEvent(state, `legacy-${state.seenLossIds.length}-${lossMicrousd}`, lossMicrousd);
+}
+
+/** Idempotent loss accounting; adapters must provide a stable settlement/event ID. */
+export function recordDailyLossEvent(state: ReservationState, eventId: string,
+  lossMicrousd: number): ReservationResult {
   const previous = validate(state);
-  if (!positive(lossMicrousd)) return { state: previous, applied: false, reason: 'invalid_daily_loss' };
+  if (typeof eventId !== 'string' || eventId.length < 1 || eventId.length > 256 || !positive(lossMicrousd)) {
+    return { state: previous, applied: false, reason: 'invalid_daily_loss' };
+  }
+  if (previous.seenLossIds.includes(eventId)) return { state: previous, applied: false, reason: 'duplicate_daily_loss' };
   const next = clone(previous);
   const total = BigInt(next.dailyLossMicrousd) + BigInt(lossMicrousd);
   if (total > BigInt(Number.MAX_SAFE_INTEGER)) return { state: previous, applied: false, reason: 'daily_loss_overflow' };
   next.dailyLossMicrousd = Number(total);
+  next.seenLossIds.push(eventId);
   if (next.dailyLossMicrousd >= DAILY_LOSS_LIMIT) next.halted = true;
   return { state: validate(next), applied: true, reason: null };
 }
