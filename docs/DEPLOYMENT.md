@@ -29,6 +29,12 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 ## 发布流程
 
+### `d03a179` account scan hardening (2026-09-14)
+
+本地提交 `d03a179` 已发布到都柏林 `/root/pm-system`。发布前短暂停止 dashboard 以生成一致的引擎回滚包 `/root/.pm-system-release-d03a179/engine-before-d03a179.tar.gz`，替换后重新构建并启动服务。远端源码/产物哈希已在发布输出核对：`account-finance.ts` `3de7bbe0173b45ecdf2acd3b8cf160aa407ed006deb2d7e2fd6a0404d1e1b4f5`、`account-control.ts` `0b67a7d711b49f0e115642299bd6a80b6d617510dc69e9974aa07bc670cca062`、`orchestrator.ts` `d87048633cb6418b2110ff531b0d773b50f32321617b27ece3998f63bdd1949c`。两个 systemd 服务恢复为 `active`，状态接口确认 `mode=paper`、`running=false`、`live_unlocked=false`。发布过程中没有提交真实订单。
+
+本批新增区块资金流扫描仍是只读证据：需要明确 `PM_FINANCE_SCAN_FROM_BLOCK`，默认保留确认深度；扫描完整不等于历史账本、opening 基线或权益 reconciliation 完整，因此不会改变实盘门禁。
+
 1. 先运行 [回归与构建](TESTING.md)。源码提交不包含 node_modules、dist、docs/console、原始数据库或账户秘密。
 2. 核对服务器当时运行状态。运行中的实盘引擎先停止新增委托并完成撤单/对账，再按具体故障处理进程；不能用文档中的历史 paper 状态代替上线前检查。
 3. 备份本次将替换的非秘密运行文件，上传对应源码、引擎 dist 与前端 docs/console，并校验内容。重命名时清掉准确对应的旧产物，避免编译残留。
