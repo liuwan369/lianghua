@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import type { ApiKeyCreds } from "../clob/client.js";
 import { Side, type Fill } from "../../models.js";
 import { type FeedSink, num, nowUnix, sleep } from "./index.js";
+import type { AccountEventLedger } from "../account-event-ledger.js";
 
 const USER_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 const DEFAULT_PENDING_EVENT_TTL_MS = 10_000;
@@ -20,6 +21,8 @@ export interface UserFeedOptions {
   fetchRecentTrades?: (afterUnix: number) => Promise<unknown[]>;
   /** Proxy/funder address used to identify our maker leg in authenticated trades. */
   accountAddress?: string;
+  /** Optional durable ledger for idempotent event processing and continuity gates. */
+  ledger?: AccountEventLedger;
   /** Returns true if this order id belongs to our executor. */
   isOurOrder: (orderId: string) => boolean;
 }
@@ -34,6 +37,7 @@ export interface UserFeedControl {
   isHealthy: (maxStaleMs?: number) => boolean;
   registerOrder: (orderId: string, tradeIds?: string[]) => void;
   reconcileRecentTrades: (afterUnix: number) => Promise<UserFeedEvent[]>;
+  isContinuous?: () => boolean;
 }
 
 function sideOfToken(
@@ -413,10 +417,15 @@ export function runUserFeed(
   const orderMatched = new Map<string, number>();
   const seenTrades = new Set<string>();
   const readyWaiters = new Set<() => void>();
+  let connectedOnce = false;
+  let discontinuity = false;
 
   const emitRaw = (raw: unknown) => {
     for (const ev of parseUserMessage(raw, opts, orderMatched, seenTrades)) {
-      sink({ kind: "user", event: ev });
+      const id = ev.kind === "exchangeFill"
+        ? `fill:${ev.tradeId ?? "unknown"}:${ev.orderId ?? "unknown"}`
+        : `cancel:${ev.orderId}`;
+      if (opts.ledger?.append(id, ev)) sink({ kind: "user", event: ev });
     }
   };
 
@@ -431,7 +440,10 @@ export function runUserFeed(
       const rows = await opts.fetchTrades(missing).catch(() => []);
       for (const row of rows) {
         for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) {
-          sink({ kind: "user", event });
+          const id = event.kind === "exchangeFill"
+            ? `fill:${event.tradeId ?? "unknown"}:${event.orderId ?? "unknown"}`
+            : `cancel:${event.orderId}`;
+          if (opts.ledger?.append(id, event)) sink({ kind: "user", event });
         }
       }
     }
@@ -460,11 +472,30 @@ export function runUserFeed(
         activeWs = ws;
         ws.send(authPayload(opts.creds, opts.conditionId));
         lastTransportAtMs = Date.now();
-        // The official user channel is silent while an account has no order
-        // events. Startup cancel-all has already proven these L2 credentials;
-        // an open socket with the subscription frame sent is therefore the
-        // usable readiness signal. Any later close immediately disables live.
-        setReady(true);
+        if (connectedOnce) {
+          discontinuity = true;
+          opts.ledger?.markDiscontinuous("user websocket reconnect");
+          setReady(false);
+          if (opts.fetchRecentTrades) {
+            const rows = await opts.fetchRecentTrades(lastTransportAtMs / 1000 - 5).catch(() => null);
+            if (rows) {
+              for (const row of rows) {
+                for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) {
+                  const id = event.kind === "exchangeFill"
+                    ? `fill:${event.tradeId ?? "unknown"}:${event.orderId ?? "unknown"}`
+                    : `cancel:${event.orderId}`;
+                  if (opts.ledger?.append(id, event)) sink({ kind: "user", event });
+                }
+              }
+              discontinuity = false;
+              opts.ledger?.markResynced("authenticated REST trade compensation");
+              setReady(true);
+            }
+          }
+        } else {
+          setReady(true);
+          connectedOnce = true;
+        }
         console.info("user feed connected + subscription sent");
 
         const ping = setInterval(() => {
@@ -619,8 +650,12 @@ export function runUserFeed(
         throw new Error("authenticated trade snapshot did not stabilize in 5 seconds");
       }
       const snapshotSeen = new Set<string>();
-      return finalRows.flatMap((row) => parseAuthenticatedTrade(row, opts, snapshotSeen));
+      const events = finalRows.flatMap((row) => parseAuthenticatedTrade(row, opts, snapshotSeen));
+      discontinuity = false;
+      opts.ledger?.markResynced("explicit authenticated REST reconciliation");
+      return events;
     },
+    isContinuous: () => !discontinuity && (opts.ledger?.status().continuous ?? true),
   };
 }
 

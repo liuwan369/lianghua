@@ -46,6 +46,7 @@ import { connectAccountReader, connectAuthoritativeOpeningReader } from "./accou
 import { AccountExecutionGate, type AuthoritativeOpeningReader } from "./account-control.js";
 import { accountStateEnvelope, AccountStateStore } from "./account-state-store.js";
 import { createReservationState } from "./account-reservation.js";
+import { AccountEventLedger } from "./account-event-ledger.js";
 
 export const LIVE_BOOK_MAX_AGE_MS = 250;
 const OFFICIAL_CLOB_HEALTH = "https://clob.polymarket.com/";
@@ -122,6 +123,8 @@ export interface RunConfig {
   accountReader?: Awaited<ReturnType<typeof connectAccountReader>>;
   /** Optional provider-owned atomic opening/current cut for first live bootstrap. */
   accountBootstrapReader?: AuthoritativeOpeningReader;
+  /** Durable user event sequence; injected by run() for live and paper. */
+  accountEventLedger?: AccountEventLedger;
 
 }
 
@@ -149,6 +152,10 @@ export function recordResidualExposure(engine: Engine, journal: Journal, market:
     engine.requireReconciliation("live inventory requires official settlement and account reconciliation");
     throw new Error("live inventory remains unsettled; refusing next market until official settlement and account reconciliation");
   }
+}
+
+function userStreamContinuous(user: UserFeedControl | undefined): boolean {
+  return user?.isContinuous?.() ?? true;
 }
 
 export async function applyEvents(
@@ -410,7 +417,7 @@ export async function finalizeMarketAccount(
   if (emptyReads < 2) throw new Error("market stop could not confirm all orders cancelled");
   // Keep the authenticated feed alive while settlement-time fills are read.
   const snapshot = await user.reconcileRecentTrades(market.start - 5);
-  if (!user.isHealthy()) throw new Error("user feed unhealthy during final account reconciliation");
+  if (!user.isHealthy() || !userStreamContinuous(user)) throw new Error("user feed is not continuous during final account reconciliation");
   const recovered = snapshot.filter(event => {
     if (event.kind !== "exchangeFill") return false;
     if (!event.orderId || !event.tradeId) throw new Error("final trade snapshot has incomplete fill identity");
@@ -516,6 +523,7 @@ async function runOneMarket(
             fetchRecentTrades: (afterUnix) =>
               executor.getRecentTrades(mkt.conditionId, afterUnix),
             accountAddress: executor.accountAddress(),
+            ledger: cfg.accountEventLedger,
 
           },
 
@@ -567,7 +575,7 @@ async function runOneMarket(
   const decideAndApply = async (ts: number, b: BookSnapshot) => {
 
     if (cfg.live && !liveBookIsFresh(b)) return;
-    if (cfg.live && (!user?.isHealthy() || !pm.isHealthy(5_000))) return;
+    if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) return;
 
     const decisionStarted = performance.now();
     const ev = engine.onBook(
@@ -606,7 +614,7 @@ async function runOneMarket(
 
     // Health can change while the strategy computes. Never submit a real
     // order unless both authenticated events and both book sides are fresh.
-    if (cfg.live && (!user?.isHealthy() || !pm.isHealthy(5_000))) return;
+    if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) return;
     await applyEvents(
       ev,
       executor,
@@ -617,7 +625,7 @@ async function runOneMarket(
       cfg.live,
       user,
       () => Boolean(
-        liveBookIsFresh(b) && user?.isHealthy() && pm.isHealthy(5_000),
+        liveBookIsFresh(b) && user?.isHealthy() && userStreamContinuous(user) && pm.isHealthy(5_000),
       ),
       b.receivedAtMonoMs,
     );
@@ -635,7 +643,7 @@ async function runOneMarket(
     if (cfg.live) {
       if (!user) throw new Error("live mode requires the authenticated user websocket");
       await user.waitUntilReady(10_000);
-      if (!user.isHealthy()) throw new Error("authenticated user websocket is not healthy");
+      if (!user.isHealthy() || !userStreamContinuous(user)) throw new Error("authenticated user event stream is not continuous");
       const bookReadyDeadline = Date.now() + 10_000;
       while (!pm.isHealthy(5_000) && Date.now() < bookReadyDeadline) {
         await sleep(25);
@@ -646,7 +654,7 @@ async function runOneMarket(
 
   while (nowUnix() < deadline && !shouldStop()) {
 
-    if (cfg.live && !user?.isHealthy()) {
+      if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user))) {
       console.error("authenticated order/fill feed stale — cancelling and stopping");
       await executor.cancelAll();
       throw new Error("authenticated order/fill feed is not healthy");
@@ -844,7 +852,7 @@ async function runOneMarket(
           { cause: cancelFailure ?? error },
         );
       }
-      if (!user.isHealthy()) {
+      if (!user.isHealthy() || !userStreamContinuous(user)) {
         throw new Error("user websocket became unhealthy during account reconciliation", {
           cause: error,
         });
@@ -948,6 +956,12 @@ export async function run(cfg: RunConfig): Promise<void> {
   // exposure checkpoint. Live remains keyed to the configured funding wallet.
   const accountId = cfg.live ? envWalletOverrides().funder : "default-paper";
   if (!accountId) throw new Error("persistent live risk requires an explicit public trading wallet address");
+  cfg.accountEventLedger ??= new AccountEventLedger(
+    cfg.accountStateDirectory ?? process.env.PM_ACCOUNT_STATE_DIR ??
+      fileURLToPath(new URL("../../results/account-state/", import.meta.url)),
+    accountId,
+    cfg.live ? "live" : "paper",
+  );
   const riskStore = new RiskStore(cfg.riskStateDirectory ?? process.env.PM_RISK_STATE_DIR ??
     fileURLToPath(new URL("../../results/risk/", import.meta.url)), accountId, cfg.live ? "live" : "paper");
   let accountStore: AccountStateStore | undefined;
