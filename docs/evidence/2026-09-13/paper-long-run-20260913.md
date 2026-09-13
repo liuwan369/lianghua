@@ -66,3 +66,8 @@ The intermediate run was stopped after confirming that its 1 USD size was
 below the venue's 5-share minimum at observed prices. Revision 3 uses 2 USD
 orders; the first check produced one quote and one simulated maker fill
 (`fill_notional=1.9994`) while the process remained running.
+
+The active JSONL contains repeated `order_submit` records from the paper
+executor. Paper execution intentionally does not emit exchange `order_ack`,
+`cancel_ack`, `trade_at_exchange_unix`, or queue-position evidence; those
+fields must come from an authenticated maker run on an independent date.
