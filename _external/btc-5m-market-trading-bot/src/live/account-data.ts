@@ -8,16 +8,17 @@ import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { loadAccountConfig } from "./account.js";
 import { inspectWalletAddress } from "./clob/wallet.js";
+import type { ExternalCashFlow, PositionRelease } from "./account-equity.js";
 
 type Row = Record<string, unknown>;
-export interface Section { available: boolean; complete: boolean; items: Row[]; pages: number; checked_at: string; error_code?: string; value?: number; source: string }
+export interface Section { available: boolean; complete: boolean; items: Row[]; pages: number; checked_at: string; error_code?: string; value?: number; source: string; snapshot_token?: string }
 type Getter = (path: string, params?: Record<string, string>) => Promise<unknown>;
 const endCursor = "LTE=";
 const scalar = (v: unknown): v is string | number | boolean | null => v === null || typeof v === "string" || typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v));
 const fields: Record<string, string[]> = {
   orders: ["id", "status", "market", "asset_id", "side", "original_size", "size_matched", "price", "outcome", "expiration", "order_type", "created_at"],
   trades: ["id", "taker_order_id", "market", "asset_id", "side", "size", "fee_rate_bps", "price", "status", "match_time", "last_update", "outcome", "transaction_hash", "trader_side"],
-  positions: ["asset", "conditionId", "size", "avgPrice", "initialValue", "currentValue", "cashPnl", "percentPnl", "totalBought", "realizedPnl", "percentRealizedPnl", "curPrice", "redeemable", "mergeable", "title", "slug", "eventSlug", "outcome", "outcomeIndex", "oppositeOutcome", "oppositeAsset", "endDate", "negativeRisk"],
+  positions: ["asset", "conditionId", "size", "avgPrice", "initialValue", "currentValue", "cashPnl", "percentPnl", "totalBought", "realizedPnl", "percentRealizedPnl", "curPrice", "liquidation_bid", "valuation", "redeemable", "mergeable", "title", "slug", "eventSlug", "outcome", "outcomeIndex", "oppositeOutcome", "oppositeAsset", "endDate", "negativeRisk"],
   closed_positions: ["asset", "conditionId", "avgPrice", "totalBought", "realizedPnl", "curPrice", "timestamp", "title", "slug", "eventSlug", "outcome", "outcomeIndex", "oppositeOutcome", "oppositeAsset", "endDate"],
   activity: ["timestamp", "conditionId", "type", "size", "usdcSize", "transactionHash", "price", "asset", "side", "outcomeIndex", "title", "slug", "eventSlug", "outcome"],
 };
@@ -282,3 +283,104 @@ export async function connectAccountReader() {
       occupancy: balanceOccupancy(collateral, open_orders, positions), risk_contract: accountRiskContract(), ...finance };
   };
 }
+
+type AtomicCut = Row;
+export interface AuthoritativeOpeningPacket {
+  opening: AtomicCut;
+  current: AtomicCut;
+  cashFlows: { fromMs: number; toMs: number; complete: boolean; items: ExternalCashFlow[] };
+  positionReleases: PositionRelease[];
+}
+
+const token = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9._:-]{8,512}$/.test(value);
+const checkedAt = (value: unknown): value is string => typeof value === 'string' && Number.isSafeInteger(Date.parse(value));
+
+function atomicSection(value: unknown, name: string, cutToken: string): Section {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`atomic_${name}_missing`);
+  const section = value as Section;
+  if (section.available !== true || section.complete !== true || !Array.isArray(section.items)
+      || !checkedAt(section.checked_at) || section.snapshot_token !== cutToken) throw new Error(`atomic_${name}_incomplete`);
+  return section;
+}
+
+/**
+ * Validate one provider-owned account cut. The provider must attach one
+ * immutable token to every section returned by its snapshot transaction.
+ * Public CLOB/Data API reads do not carry this token and cannot pass here.
+ */
+export function validateAtomicAccountCut(value: unknown, wallet: string): AtomicCut {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('atomic_cut_missing');
+  const cut = value as AtomicCut;
+  if (typeof cut.wallet !== 'string' || cut.wallet.toLowerCase() !== wallet.toLowerCase()
+      || cut.read_only !== true || cut.pagination_atomic !== true || !checkedAt(cut.checked_at)
+      || !token(cut.atomic_snapshot_token)) throw new Error('atomic_cut_untrusted');
+  const cutToken = cut.atomic_snapshot_token as string;
+  atomicSection(cut.collateral, 'collateral', cutToken);
+  const positions = atomicSection(cut.positions, 'positions', cutToken);
+  const ids = new Set<string>();
+  for (const item of positions.items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('atomic_position_invalid');
+    const row = item as Row;
+    const id = `${String(row.conditionId)}:${String(row.asset)}`;
+    if (typeof row.conditionId !== 'string' || !row.conditionId || typeof row.asset !== 'string' || !row.asset || ids.has(id)
+        || row.valuation !== 'liquidation_bid' || (typeof row.liquidation_bid !== 'number' && typeof row.liquidation_bid !== 'string')) {
+      throw new Error('atomic_position_invalid');
+    }
+    const price = typeof row.liquidation_bid === 'number' ? row.liquidation_bid : Number(row.liquidation_bid);
+    if (!Number.isFinite(price) || price < 0 || price > 1) throw new Error('atomic_position_invalid');
+    ids.add(id);
+  }
+  // Optional sections are accepted only when they carry the same immutable cut token.
+  for (const name of ['open_orders', 'trades', 'closed_positions', 'activity']) {
+    if (cut[name] !== undefined) atomicSection(cut[name], name, cutToken);
+  }
+  return cut;
+}
+
+function authoritativePacket(value: unknown, wallet: string): AuthoritativeOpeningPacket {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('atomic_bootstrap_missing');
+  const raw = value as Row;
+  if (typeof raw.wallet !== 'string' || raw.wallet.toLowerCase() !== wallet.toLowerCase()
+      || !token(raw.bootstrap_token) || !raw.opening || !raw.current || !raw.cashFlows || !Array.isArray(raw.positionReleases)) {
+    throw new Error('atomic_bootstrap_incomplete');
+  }
+  const opening = validateAtomicAccountCut(raw.opening, wallet);
+  const current = validateAtomicAccountCut(raw.current, wallet);
+  if (opening.atomic_snapshot_token === current.atomic_snapshot_token) throw new Error('atomic_bootstrap_cuts_not_distinct');
+  const cashFlows = raw.cashFlows as AuthoritativeOpeningPacket['cashFlows'];
+  const fromMs = cashFlows.fromMs;
+  const toMs = cashFlows.toMs;
+  if (cashFlows.complete !== true || !Number.isSafeInteger(fromMs) || !Number.isSafeInteger(toMs)
+      || (fromMs as number) < 0 || (toMs as number) < (fromMs as number) || !Array.isArray(cashFlows.items)) {
+    throw new Error('atomic_cash_flow_evidence_missing');
+  }
+  return { opening, current, cashFlows, positionReleases: raw.positionReleases as PositionRelease[] };
+}
+
+/**
+ * Connect to a provider-owned atomic snapshot endpoint for live bootstrap.
+ * The endpoint is deliberately opt-in: no configured source is a typed
+ * failure, leaving the execution gate closed instead of falling back to
+ * non-atomic public APIs.
+ */
+export async function connectAtomicAccountReader(walletOverride?: string) {
+  const configured = walletOverride ?? loadAccountConfig().depositWallet;
+  const wallet = typeof configured === 'string' ? configured.trim() : '';
+  if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) throw new Error('invalid_account');
+  const source = process.env.PM_ATOMIC_ACCOUNT_URL?.trim();
+  if (!source) throw new Error('atomic_account_source_unavailable');
+  let endpoint: URL;
+  try { endpoint = new URL(source); } catch { throw new Error('atomic_account_source_invalid'); }
+  if (!['http:', 'https:'].includes(endpoint.protocol)) throw new Error('atomic_account_source_invalid');
+  endpoint.searchParams.set('wallet', wallet);
+  return async (): Promise<AuthoritativeOpeningPacket> => {
+    const response = await fetch(endpoint, { method: 'GET', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error('atomic_account_source_failed');
+    let payload: unknown;
+    try { payload = await response.json(); } catch { throw new Error('atomic_account_source_invalid_json'); }
+    return authoritativePacket(payload, wallet);
+  };
+}
+
+/** Alias matching the execution gate's injected bootstrap terminology. */
+export const connectAuthoritativeOpeningReader = connectAtomicAccountReader;

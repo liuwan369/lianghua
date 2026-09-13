@@ -42,7 +42,7 @@ import { ownerSignerPrivateKey } from "./account.js";
 import { envWalletOverrides } from "./clob/wallet.js";
 import { fileURLToPath } from "node:url";
 import { RiskStore } from "../risk-store.js";
-import { connectAccountReader } from "./account-data.js";
+import { connectAccountReader, connectAuthoritativeOpeningReader } from "./account-data.js";
 import { AccountExecutionGate, type AuthoritativeOpeningReader } from "./account-control.js";
 import { accountStateEnvelope, AccountStateStore } from "./account-state-store.js";
 import { createReservationState } from "./account-reservation.js";
@@ -1009,10 +1009,14 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
       const reader = cfg.accountReader ?? await connectAccountReader();
       accountReader = reader;
       if (accountStore?.read().equity.day === null) {
-        if (!cfg.accountBootstrapReader) {
+        const bootstrapReader = cfg.accountBootstrapReader
+          ?? (process.env.PM_ATOMIC_ACCOUNT_URL?.trim()
+            ? await connectAuthoritativeOpeningReader(accountId)
+            : undefined);
+        if (!bootstrapReader) {
           throw new Error("实盘已拒绝：缺少权威北京时间日初账户快照");
         }
-        await accountGate.initialize(cfg.accountBootstrapReader);
+        await accountGate.initialize(bootstrapReader);
       }
       await accountGate.refresh(reader);
       executor.attachReservationCoordinator(accountGate);
