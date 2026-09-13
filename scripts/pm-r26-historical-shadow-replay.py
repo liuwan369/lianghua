@@ -305,7 +305,7 @@ def new_engines(args: argparse.Namespace) -> dict[str, MakerShadowEngine]:
             order_size=args.order_size, max_pair_cost=args.pair_cap, preserve_hedge_order=True,
             pause_heavy_side_when_unpaired=True, taker_hedge_after_ms=15000,
             taker_fee_rate=args.taker_fee_rate, max_taker_pair_cost=1.05,
-            queue_ahead_factor=args.queue_factor, quote_start_delay_ms=15000,
+            queue_ahead_factor=args.queue_factor, quote_start_delay_ms=args.quote_start_delay_ms,
             align_after_ms=240000, stop_new_quotes_after_ms=270000,
             alignment_pair_cost=0.98, hedge_order_size=5,
             max_hedge_ask=0.30, strategy_name="candidate_r19", **common,
@@ -432,6 +432,7 @@ def main() -> int:
     parser.add_argument("--taker-fee-rate", type=float, default=0.07)
     parser.add_argument("--pair-cap", type=float, default=1.02)
     parser.add_argument("--queue-factor", type=float, default=0.25)
+    parser.add_argument("--quote-start-delay-ms", type=int, default=15000)
     parser.add_argument("--resolution-labels", type=Path, help="Verified r33 official resolution report")
     args = parser.parse_args()
     dbs = [Path(item) for item in args.sqlite]
@@ -444,7 +445,9 @@ def main() -> int:
     by_token = {token: (meta["slug"], outcome) for meta in selected for token, outcome in ((meta["up_token"], "Up"), (meta["down_token"], "Down"))}
     states: dict[str, dict[str, Any]] = {}
     for meta in selected:
-        states[meta["slug"]] = {"meta": meta, "engines": new_engines(args), "coverage_by_token": {}, "books": {}}
+        engines = new_engines(args)
+        states[meta["slug"]] = {"meta": meta, "engines": engines, "coverage_by_token": {}, "books": {},
+                                 "diagnostics": {name: defaultdict(int) for name in engines}}
         for engine in states[meta["slug"]]["engines"].values():
             engine.start_market(meta)
     windows = {token: (meta["start_at"] * 1000, meta["end_at"] * 1000) for meta in selected for token in (meta["up_token"], meta["down_token"])}
@@ -468,15 +471,39 @@ def main() -> int:
         if event_type == "book":
             book = levels_from_compact(payload)
             state["books"][token] = book
-            for engine in state["engines"].values():
-                engine.update_book(token, dict(book), received_ms)
+            for name, engine in state["engines"].items():
+                events = engine.update_book(token, dict(book), received_ms)
+                for event in events:
+                    reason = event.get("reason")
+                    if reason:
+                        state["diagnostics"][name][f"quote_cancelled:{reason}"] += 1
         elif event_type == "last_trade_price":
             if not isinstance(payload, list) or len(payload) < 4:
                 continue
             price, size, taker_side = float(payload[1] or 0), float(payload[2] or 0), str(payload[3] or "")
             tx = payload[5] if len(payload) > 5 else None
-            for engine in state["engines"].values():
-                engine.process_trade(token=token, price=price, size=size, taker_side=taker_side, timestamp_ms=received_ms, transaction_hash=tx)
+            for name, engine in state["engines"].items():
+                diag = state["diagnostics"][name]
+                order = engine.market.orders.get(token) if engine.market else None
+                if order is None or taker_side.upper() != "SELL" or size <= 0:
+                    diag["trade_not_eligible:no_working_sell_order"] += 1
+                elif received_ms < order.eligible_at_ms:
+                    diag["trade_rejected:not_eligible"] += 1
+                elif order.expires_at_ms is not None and received_ms >= order.expires_at_ms:
+                    diag["trade_rejected:expired"] += 1
+                elif received_ms >= meta["end_at"] * 1000:
+                    diag["trade_rejected:market_stopped"] += 1
+                else:
+                    tick = float(engine.market.books.get(token, {}).get("tick_size") or 0.01)
+                    if tick > EPSILON and round(price / tick) != round(order.price / tick):
+                        diag["trade_rejected:price_mismatch"] += 1
+                    elif size <= order.queue_ahead + EPSILON:
+                        diag["trade_rejected:queue_only"] += 1
+                events = engine.process_trade(token=token, price=price, size=size, taker_side=taker_side, timestamp_ms=received_ms, transaction_hash=tx)
+                for event in events:
+                    reason = event.get("reason")
+                    if reason:
+                        diag[f"quote_cancelled:{reason}"] += 1
     rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     complete_slugs: set[str] = set()
     for slug, state in states.items():
@@ -485,7 +512,9 @@ def main() -> int:
         if coverage["complete_5m_window"]:
             complete_slugs.add(slug)
         for name, engine in state["engines"].items():
-            snapshot = attach_resolution({**engine.snapshot(), "coverage": coverage}, meta, resolution_labels.get(slug))
+            snapshot = attach_resolution({**engine.snapshot(), "coverage": coverage,
+                                           "diagnostic_rejections": dict(state["diagnostics"][name])},
+                                          meta, resolution_labels.get(slug))
             rows[name].append({"slug": slug, "target": activity.get(slug, {"count": 0, "shares": 0, "usdc": 0}), "snapshot": snapshot})
     summary: dict[str, Any] = {}
     for name, items in rows.items():
