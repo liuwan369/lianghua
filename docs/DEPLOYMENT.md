@@ -29,6 +29,10 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 ## 发布流程
 
+### `c61f82b` atomic source transport hardening (2026-09-14)
+
+`c61f82b` 已发布并构建成功。权威账户 URL 现在只允许 HTTPS；配置 provider 时 live 编排延迟普通 CLOB reader，避免无关凭据或网络故障阻塞权威 bootstrap。发布回滚包位于 `/root/.pm-system-release-c61f82b/engine-before-c61f82b.tar.gz`。远端两个服务均为 `active`，状态接口复核 `mode=paper`、`running=false`、`live_unlocked=false`，未提交真实订单。
+
 ### `d03a179` account scan hardening (2026-09-14)
 
 本地提交 `d03a179` 已发布到都柏林 `/root/pm-system`。发布前短暂停止 dashboard 以生成一致的引擎回滚包 `/root/.pm-system-release-d03a179/engine-before-d03a179.tar.gz`，替换后重新构建并启动服务。远端源码/产物哈希已在发布输出核对：`account-finance.ts` `3de7bbe0173b45ecdf2acd3b8cf160aa407ed006deb2d7e2fd6a0404d1e1b4f5`、`account-control.ts` `0b67a7d711b49f0e115642299bd6a80b6d617510dc69e9974aa07bc670cca062`、`orchestrator.ts` `d87048633cb6418b2110ff531b0d773b50f32321617b27ece3998f63bdd1949c`。两个 systemd 服务恢复为 `active`，状态接口确认 `mode=paper`、`running=false`、`live_unlocked=false`。发布过程中没有提交真实订单。
