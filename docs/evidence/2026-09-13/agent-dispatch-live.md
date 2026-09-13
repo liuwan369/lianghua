@@ -9,7 +9,7 @@
 | 量化 Agent | REPLAY-01/RESEARCH-01：价格、方向、队列和报价生命周期诊断；维护参考地址假设 | `scripts/pm-r26*`、`pm_maker/`、策略与回放报告 | 固定数据实验表、失败原因、候选参数包 | REVIEW（固定 4 市场窗口完成；价格匹配和生命周期是主阻塞，队列未触发；54 项相关测试通过，默认参数继续冻结） |
 | 数据 Agent | DATA-01/REF-01：结算、费用、奖励和账户快照来源核对 | `scripts/dashboard/`、数据清单、奖励/结算证据 | 来源版本、覆盖率、快照完整性报告 | REVIEW（已交付零成交原因诊断） |
 | 产品/API Agent | UI-01：只读检查现有前端实际字段和默认值接入缺口 | `web/src/`、dashboard read model | 不重构页面的防误配/状态展示补丁 | REVIEW（自动库存联动、跨字段金额校验，51 tests/build passed） |
-| QA/发布 Agent | 每批独立审查、全量验证、三端 hash、失败回滚 | `scripts/verify-project.py`、`.deploy/`、证据文档 | REVIEW、测试清单、发布/回滚结论 | DONE（`ebbab58` 已推送并发布；远端备份、服务状态、paper smoke 投影 `ready` 已核对；live 仍因非原子账户源 fail-closed） |
+| QA/发布 Agent | 每批独立审查、全量验证、三端 hash、失败回滚 | `scripts/verify-project.py`、`.deploy/`、证据文档 | REVIEW、测试清单、发布/回滚结论 | DONE（`875b488` 已推送并发布；源/构建哈希、远端备份、服务状态、paper smoke 投影 `ready` 已核对；live 仍因非原子账户源 fail-closed） |
 
 并行规则：同一文件只有一个 Agent 写入；主 Agent 统一合并和提交；关键交易代码由独立 QA 审查。Agent 完成后状态转为 REVIEW，主 Agent 集成后才转 DONE。任务失败不会静默结束，必须留下原因、复现命令和下一次可执行动作。
 

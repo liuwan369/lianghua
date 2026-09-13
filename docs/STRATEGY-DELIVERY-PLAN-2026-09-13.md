@@ -218,7 +218,7 @@ P0 基线与验收规则
 | EXEC-02 原子预留与持久化 | 50 美元额度、费用预留、显式状态图、损失事件去重、账户/模式锁、原子状态信封和 Executor reservation 生命周期已实现；未知 ACK/部分成交/撤单竞态保持占用，权威对账后才释放，见 `docs/evidence/2026-09-13/exec-02-live-integration.md` |
 | 回放覆盖/解码 | 逐边覆盖与完整消息应用修复通过回归；基线 12 市场中 11 个覆盖合格、1,406,579 条消息；下一轮固定 4 市场窗口完成价格/方向/队列/生命周期诊断，见 `docs/evidence/2026-09-13/quant-price-queue-next.md` |
 | 回放性能 | 最优价扫描替代报价路径的整本排序；293 项 Python 测试及独立 25,000 次原版报价差分通过，微基准约提速 1.40 倍；端到端耗时及零成交诊断仍待下一轮验证 |
-| 本地/Git/服务器同步 | `ebbab58` 已推送 Git 并完成引擎/文档发布；远端回滚备份、服务状态和 paper 锁状态已核对。旧空日志导致的 projection `incomplete` 已通过保留历史、生成新 paper smoke run 修复为 `ready`；三端记录见 `docs/DEPLOYMENT.md` |
+| 本地/Git/服务器同步 | `875b488` 已推送 Git 并完成 EXEC-02 引擎发布；关键源/构建哈希、远端回滚备份、服务状态和 paper 锁状态已核对。旧空日志导致的 projection `incomplete` 已通过保留历史、生成新 paper smoke run 修复为 `ready`；三端记录见 `docs/DEPLOYMENT.md` |
 
 每批结束由主 Agent 更新此表及各阶段验收状态，明确当前同步差异和下一项可执行任务。
 

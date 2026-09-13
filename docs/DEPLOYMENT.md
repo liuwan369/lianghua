@@ -44,6 +44,12 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 ## 2026-09-13 增量发布
 
+### 875b488 EXEC-02 bootstrap hardening 发布
+
+提交 `875b488` 已推送 `origin/master`，并将账户 bootstrap 证据校验、来源时间戳、异步状态保护和对应测试发布到都柏林引擎。发布归档 `.deploy/engine-875b488.tar.gz` SHA-256 为 `6214748084f1e556487a82f48d90f4b7f3dfc0aac91b3b295b447b383524ddf7`；线上回滚备份为 `/root/.pm-system-release-875b488/engine-before-875b488.tar.gz`。本地与线上关键文件 SHA-256 一致：`account-control.ts` `f70ebbfdc2d87b2a1b4384736b7c885e8992f310cd912c9a63ad721ffe34503d`、`dist/live/account-control.js` `cc34e97a920c9a83f57101fa3ae68e1fdd07ca6a0a9ea7a3aa36f0bc85d2f4ee`、`dist/live/orchestrator.js` `b08558d6d862573504afa654639fc9498c67d4f4e9f4945b3d2dc05af20e585d`、`dist/live/account-equity.js` `e4c099a4ccfa0f3228f086441834ed85e98355c6d3dab1274bdde6b0e165340b`。
+
+发布前后控制台和采集器均为 `active`，API 均核对 `running=false`、`mode=paper`、`live_unlocked=false`、projection `ready`。该发布没有启用真实交易；由于线上 `connectAccountReader` 仍不提供原子资金流和 opening/current bootstrap evidence，live 继续 fail-closed。
+
 ### ebbab58 EXEC-02/replay 集成发布
 
 提交 `ebbab58e7a00f4bd53e5ee456d341216ec72bab4` 已推送 `origin/master`，并于 2026-09-13 16:00 左右（北京时间）将本批引擎、回放诊断和证据文档发布到都柏林。发布归档 `.deploy/release-ebbab58.tar.gz` 的本地 SHA-256 为 `c4b64622c013cc8be7460129ef7815fbe99359f70419fc01f499d4f6eadb21a3`；线上回滚备份为 `/root/.pm-system-release-ebbab58/before.tar.gz`，备份 SHA-256 为 `19761fb3bd8d40a0efe55a564da563bb5ccca5f601d5990d821f3f26dd963079`。发布脚本在替换前确认交易已停止、paper 模式和实盘锁关闭，失败路径保留恢复备份。
