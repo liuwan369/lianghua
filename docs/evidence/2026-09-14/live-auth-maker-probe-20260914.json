@@ -1,0 +1,29 @@
+{
+  "kind": "live_auth_maker_probe",
+  "executed_at": "2026-09-14",
+  "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+  "market": "btc-updown-5m-1789322400",
+  "condition_id": "0xab85dcc9659ff167348d0a19e033b1ead89b3c675967fbdb7639d300ae85cd4a",
+  "size": 5,
+  "price": 0.01,
+  "notional_usd": 0.05,
+  "order_ack": {
+    "success": true,
+    "order_id": "0x2f11c30dd80369b6d19fea82c7851f2337edc53d03a372bc00e6c51d1778cba7",
+    "status": "live",
+    "ack_latency_ms": 64.19265199999973
+  },
+  "cancel_ack": {
+    "confirmed": true
+  },
+  "websocket_cancel_event": true,
+  "fills": [],
+  "still_open": false,
+  "probe_safe": true,
+  "user_feed_initial_ready": false,
+  "notes": [
+    "CLOB L2 authentication and POLY_1271 signing succeeded.",
+    "The authenticated user websocket delivered the cancellation event, but did not emit an explicit subscription confirmation during the initial readiness window.",
+    "No live engine unlock was changed; this was an isolated bounded probe."
+  ]
+}

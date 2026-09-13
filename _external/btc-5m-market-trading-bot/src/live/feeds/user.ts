@@ -495,6 +495,7 @@ export function runUserFeed(
               for (const row of rows) for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) emitEvent(event);
               opts.ledger?.markResynced("authenticated REST trade compensation");
               discontinuity = false;
+              gapStartUnix = undefined;
               if (authenticated) setReady(true);
             }
           }
@@ -667,6 +668,7 @@ export function runUserFeed(
       const snapshotSeen = new Set<string>();
       const events = finalRows.flatMap((row) => parseAuthenticatedTrade(row, opts, snapshotSeen));
       discontinuity = false;
+      gapStartUnix = undefined;
       opts.ledger?.markResynced("explicit authenticated REST reconciliation");
       return events;
     },
