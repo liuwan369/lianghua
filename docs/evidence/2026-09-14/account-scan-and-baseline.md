@@ -7,6 +7,7 @@
 - Missing scan start, invalid ranges, RPC failures, duplicate logs, malformed logs and an unsafe confirmation depth keep the result incomplete. A short-lived reader cache prevents a full backfill on every account poll.
 - `AccountFinanceReader` exposes `transfer_scan` and `transfer_range_complete`, but keeps `historical_complete=false` and `reconciliation.complete=false`. A block-range scan alone is not an opening baseline, complete order/trade ledger, or wallet PnL proof.
 - Live startup uses the provider-owned atomic bootstrap source for subsequent current refreshes when `PM_ATOMIC_ACCOUNT_URL` is configured. Ordinary CLOB/Data API reads remain non-atomic and cannot unlock live execution.
+- The provider URL is HTTPS-only and requires `PM_ATOMIC_ACCOUNT_BEARER_TOKEN` (minimum length enforced) before any response can be considered. The token is read from protected service configuration and is never logged.
 
 ## Current gate
 

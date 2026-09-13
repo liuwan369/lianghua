@@ -39,15 +39,17 @@ describe('provider-owned atomic account source', () => {
 
   it('fetches and validates the provider bootstrap packet while binding the wallet', async () => {
     vi.stubEnv('PM_ATOMIC_ACCOUNT_URL', 'https://provider.example/atomic-bootstrap');
-    const calls: { url: URL; method?: string }[] = [];
+    vi.stubEnv('PM_ATOMIC_ACCOUNT_BEARER_TOKEN', 'test-provider-token');
+    const calls: { url: URL; method?: string; headers?: Record<string, string> }[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input, options) => {
-      calls.push({ url: new URL(input as string), method: options?.method });
+      calls.push({ url: new URL(input as string), method: options?.method, headers: options?.headers });
       return { ok: true, json: async () => packet() };
     }));
     const read = await connectAtomicAccountReader(wallet);
     const result = await read();
     expect(result).toMatchObject({ opening: { atomic_snapshot_token: 'opening-20260913' }, current: { atomic_snapshot_token: 'current-20260913' } });
     expect(calls[0]).toMatchObject({ method: 'GET' });
+    expect(calls[0].headers?.authorization).toBe('Bearer test-provider-token');
     expect(calls[0].url.searchParams.get('wallet')).toBe(wallet);
   });
 
@@ -56,8 +58,14 @@ describe('provider-owned atomic account source', () => {
     await expect(connectAtomicAccountReader(wallet)).rejects.toThrow('atomic_account_source_invalid');
   });
 
+  it('fails closed when provider authentication is absent', async () => {
+    vi.stubEnv('PM_ATOMIC_ACCOUNT_URL', 'https://provider.example/atomic-bootstrap');
+    await expect(connectAtomicAccountReader(wallet)).rejects.toThrow('atomic_account_source_auth_unavailable');
+  });
+
   it('rejects a provider packet with missing cash-flow evidence', async () => {
     vi.stubEnv('PM_ATOMIC_ACCOUNT_URL', 'https://provider.example/atomic-bootstrap');
+    vi.stubEnv('PM_ATOMIC_ACCOUNT_BEARER_TOKEN', 'test-provider-token');
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ ...packet(), cashFlows: { complete: false, items: [] } }) })));
     const read = await connectAtomicAccountReader(wallet);
     await expect(read()).rejects.toThrow('atomic_cash_flow_evidence_missing');

@@ -372,9 +372,11 @@ export async function connectAtomicAccountReader(walletOverride?: string) {
   let endpoint: URL;
   try { endpoint = new URL(source); } catch { throw new Error('atomic_account_source_invalid'); }
   if (endpoint.protocol !== 'https:') throw new Error('atomic_account_source_invalid');
+  const bearer = process.env.PM_ATOMIC_ACCOUNT_BEARER_TOKEN?.trim();
+  if (!bearer || bearer.length < 16) throw new Error('atomic_account_source_auth_unavailable');
   endpoint.searchParams.set('wallet', wallet);
   return async (): Promise<AuthoritativeOpeningPacket> => {
-    const response = await fetch(endpoint, { method: 'GET', headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+    const response = await fetch(endpoint, { method: 'GET', headers: { accept: 'application/json', authorization: `Bearer ${bearer}` }, signal: AbortSignal.timeout(8000) });
     if (!response.ok) throw new Error('atomic_account_source_failed');
     let payload: unknown;
     try { payload = await response.json(); } catch { throw new Error('atomic_account_source_invalid_json'); }
