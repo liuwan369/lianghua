@@ -1001,7 +1001,7 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
 
 
   let executor: Executor | undefined;
-  let accountReader: Awaited<ReturnType<typeof connectAccountReader>> | undefined;
+  let accountReader: (() => Promise<unknown>) | undefined;
   let stopping = false;
   const gracefulStop = () => {
     if (stopping) return;
@@ -1035,19 +1035,27 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
     }
     if (!accountGate) throw new Error("live account execution gate is unavailable");
     try {
-      const reader = cfg.accountReader ?? await connectAccountReader();
-      accountReader = reader;
-      if (accountStore?.read().equity.day === null) {
-        const bootstrapReader = cfg.accountBootstrapReader
-          ?? (process.env.PM_ATOMIC_ACCOUNT_URL?.trim()
-            ? await connectAuthoritativeOpeningReader(accountId)
-            : undefined);
-        if (!bootstrapReader) {
-          throw new Error("实盘已拒绝：缺少权威北京时间日初账户快照");
+      const ordinaryReader = cfg.accountReader ?? await connectAccountReader();
+      const bootstrapReader = cfg.accountBootstrapReader
+        ?? (process.env.PM_ATOMIC_ACCOUNT_URL?.trim()
+          ? await connectAuthoritativeOpeningReader(accountId)
+          : undefined);
+      if (bootstrapReader) {
+        accountReader = async () => {
+          const packet = await bootstrapReader();
+          if (!packet.current || typeof packet.current !== 'object' || Array.isArray(packet.current)) throw new Error('authoritative current cut is incomplete');
+          return { ...(packet.current as Record<string, unknown>), cashFlows: packet.cashFlows, positionReleases: packet.positionReleases };
+        };
+        if (accountStore?.read().equity.day === null) {
+          await accountGate.initialize(bootstrapReader);
         }
-        await accountGate.initialize(bootstrapReader);
+      } else if (accountStore?.read().equity.day === null) {
+        throw new Error("实盘已拒绝：缺少权威北京时间日初账户快照");
+      } else {
+        accountReader = ordinaryReader;
       }
-      await accountGate.refresh(reader);
+      if (!accountReader) throw new Error('live account reader is unavailable');
+      await accountGate.refresh(accountReader);
       executor.attachReservationCoordinator(accountGate);
     } catch (error) {
       await executor.shutdown().catch(() => undefined);

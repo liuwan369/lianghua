@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { AccountFinanceReader, accountRiskContract, balanceOccupancy, receiptEvidence } from './account-finance.js';
+import { AccountFinanceReader, accountRiskContract, balanceOccupancy, receiptEvidence, scanConfirmedTransfers } from './account-finance.js';
 import { PUSD } from './contracts.js';
 import type { Section } from './account-data.js';
 
 const wallet = `0x${'1'.repeat(40)}`, other = `0x${'2'.repeat(40)}`, tx = `0x${'a'.repeat(64)}`;
 const topic = (a: string) => `0x${'0'.repeat(24)}${a.slice(2)}`;
 const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-const log = (token: string = PUSD, to = wallet, logIndex = '0x0') => ({ transactionHash: tx, blockNumber: '0x10', logIndex,
+const log = (token: string = PUSD, to = wallet, logIndex = '0x0') => ({ transactionHash: tx, blockNumber: '0x10', blockHash: `0x${'b'.repeat(64)}`, logIndex,
   address: token, topics: [transferTopic, topic(other), topic(to)], data: `0x${(2_000_000).toString(16).padStart(64, '0')}` });
 const receipt = (logs = [log()]) => ({ transactionHash: tx, blockNumber: '0x10', blockHash: `0x${'b'.repeat(64)}`, status: '0x1', logs });
 const section = (items: Record<string, unknown>[] = []): Section => ({ available: true, complete: true, items, pages: 1, source: 'test', checked_at: new Date().toISOString() });
@@ -87,6 +87,16 @@ describe('account cash evidence', () => {
     expect(() => receiptEvidence({...receipt(),status:'0x0'}, wallet, tx, 20)).toThrow();
     expect(() => receiptEvidence(receipt([log(),log()]), wallet, tx, 20)).toThrow('receipt_duplicate_log');
     expect(receiptEvidence(receipt([log(other)]),wallet,tx,20).transfers).toEqual([]);
+  });
+  it('scans confirmed blocks and retains an explicit range-complete status', async () => {
+    const rpc = async (method: string, params: unknown[]) => {
+      if (method === 'eth_blockNumber') return '0x30';
+      const filter = params[0] as Record<string, string>;
+      return Number.parseInt(filter.fromBlock.slice(2), 16) === 0x10 ? [log(PUSD, wallet)] : [];
+    };
+    const result = await scanConfirmedTransfers(rpc, wallet, { fromBlock: 0x10, confirmations: 2, chunkSize: 0x10 });
+    expect(result).toMatchObject({ complete: true, from_block: 0x10, to_block: 0x2e });
+    expect(result.transfers[0]).toMatchObject({ transaction_hash: tx, amount: 2, net_amount: 2 });
   });
   it('verifies reward amount against the wallet receipt, not the activity label', async () => {
     const rpc = async (method: string) => method === 'eth_blockNumber' ? '0x30' : receipt();

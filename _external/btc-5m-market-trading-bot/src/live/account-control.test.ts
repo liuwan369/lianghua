@@ -103,7 +103,7 @@ describe('account execution gate', () => {
     const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(account, 'live', initialized.state, createReservationState()));
     try {
       const gate = new AccountExecutionGate(store, Number.MAX_SAFE_INTEGER);
-      gate.prepare('order-1', 2, 0);
+      gate.prepare('order-1', 2, 0, currentAt + 500);
       expect(store.read().reservation.reservations[0]).toMatchObject({ id: 'order-1', amountMicrousd: 2_000_000, feeReserveMicrousd: 0 });
     } finally { store.close(); }
   });

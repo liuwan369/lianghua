@@ -53,16 +53,16 @@ function reconciliationEvidence(value: unknown): Pick<EquityReconciliation, 'cas
 export class AccountExecutionGate implements ReservationCoordinator {
   constructor(private readonly store: AccountStateStore, private readonly maxAgeMs = 30_000) {}
 
-  verifyBeforeSubmission(): void {
+  verifyBeforeSubmission(nowMs = Date.now()): void {
     const state = this.store.read();
-    const view = accountEquityView(state.equity, Date.now(), this.maxAgeMs);
+    const view = accountEquityView(state.equity, nowMs, this.maxAgeMs);
     if (!view.accounting_ready || view.paused) throw new Error(`accounting gate closed: ${view.reason ?? 'paused'}`);
     if (availableMicrousd(state.reservation) <= 0) throw new Error('accounting gate closed: capital reservation exhausted');
     this.store.verifyBeforeSubmission();
   }
 
   prepare(id: string, amountUsd: number, feeReserveUsd: number, nowMs = Date.now()): void {
-    this.verifyBeforeSubmission();
+    this.verifyBeforeSubmission(nowMs);
     const state = this.store.read();
     const result = prepareReservation(state.reservation, id, money(amountUsd, 'amount'), feeMoney(feeReserveUsd), nowMs);
     if (!result.applied) throw new Error(`reservation rejected: ${result.reason}`);
