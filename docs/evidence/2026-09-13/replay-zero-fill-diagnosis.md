@@ -44,4 +44,11 @@
 python scripts/pm-r26-historical-shadow-replay.py --sqlite data/dublin-server/pm-r25-live-days/dublin-evidence-2026-09-10.sqlite3 --history-dir data/research/r33 --out data/research/r33/r26-followup-20260913.json --max-markets 12 --order-size 10 --pair-cap 0.97 --queue-factor 0.25 --max-inventory-imbalance 10 --taker-fee-rate 0.07 --resolution-labels data/research/r33/report.json
 ```
 
+脚本现已支持可复现实验：`pm-r26-historical-shadow-replay.py`
+接受 `--quote-start-delay-ms`，只影响候选 `candidate_r19` 的报价启动延迟；
+`pm-r29-safe-sweep.py --experiment quote_start_delay` 会固定订单大小、pair cap、
+排队因子、库存限制和费用，只比较 0/5/15/30 秒四档。每个市场/策略快照还附带
+`diagnostic_rejections`，记录未就绪、过期、市场停止、价格不匹配、仅消耗可见队列，
+以及引擎返回的报价取消原因。该计数是模型诊断，不是交易所拒单或真实成交证明。
+
 状态：`INSUFFICIENT_ACTIVITY`。本报告不改变策略晋级状态。
