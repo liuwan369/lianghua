@@ -22,7 +22,7 @@ describe('account execution gate', () => {
     const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
     const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(
       account, 'live', createAccountEquityState(account, 'live'), createReservationState()));
-    const gate = new AccountExecutionGate(store, 30_000);
+    const gate = new AccountExecutionGate(store, Number.MAX_SAFE_INTEGER);
     const data = (checked_at: string, value = 50) => ({ wallet: account, read_only: true, pagination_atomic: true,
       checked_at, collateral: { available: true, complete: true, value }, positions: { available: true, complete: true, items: [] } });
     await gate.initialize(() => Promise.resolve({
@@ -60,6 +60,32 @@ describe('account execution gate', () => {
     const data = { wallet: account, read_only: true, pagination_atomic: true, checked_at: new Date(currentAt).toISOString(),
       collateral: { available: true, complete: true, value: 50 }, positions: { available: true, complete: true, items: [] } };
     await expect(gate.refresh(() => Promise.resolve(data), currentAt)).rejects.toThrow('reconciliation evidence');
+    store.close();
+  });
+
+  it('preserves a reservation created while account reconciliation is awaiting the reader', async () => {
+    const opening = snapshot('opening', 1, openingAt);
+    const current = snapshot('current', 2, currentAt);
+    const equity = createAccountEquityState(account, 'live');
+    const initialized = reduceAccountEquity(equity, {
+      type: 'initialize', opening,
+      current: { snapshot: current, previousSnapshotId: opening.id,
+        cashFlows: { fromMs: openingAt, toMs: currentAt, complete: true, items: [] }, positionReleases: [] },
+    }, currentAt, 30_000);
+    const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
+    const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(account, 'live', initialized.state, createReservationState()));
+    const gate = new AccountExecutionGate(store, Number.MAX_SAFE_INTEGER);
+    const data = { wallet: account, read_only: true, pagination_atomic: true,
+      checked_at: new Date(currentAt + 1000).toISOString(), collateral: { available: true, complete: true, value: 50 },
+      positions: { available: true, complete: true, items: [] },
+      cashFlows: { fromMs: openingAt, toMs: currentAt + 1000, complete: true, items: [] }, positionReleases: [] };
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const refreshing = gate.refresh(async () => { await pending; return data; }, currentAt + 1000);
+    gate.prepare('during-refresh', 2, 0, currentAt + 500);
+    release();
+    await refreshing;
+    expect(store.read().reservation.reservations[0]).toMatchObject({ id: 'during-refresh', amountMicrousd: 2_000_000 });
     store.close();
   });
 
