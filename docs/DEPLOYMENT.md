@@ -50,6 +50,8 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 发布前后控制台和采集器均为 `active`，API 均核对 `running=false`、`mode=paper`、`live_unlocked=false`、projection `ready`。该发布没有启用真实交易；由于线上 `connectAccountReader` 仍不提供原子资金流和 opening/current bootstrap evidence，live 继续 fail-closed。
 
+文档补充提交 `ae73618` 已单独同步 `docs/` 和 `scripts/`，归档 SHA-256 为 `8d8bfe0081ba68ee7380aca633b11ac2e6cf1cc4ddc5503dfb06e251e584617c`，回滚目录为 `/root/.pm-system-release-ae73618`；该批不重启服务、不替换引擎和运行数据。
+
 ### ebbab58 EXEC-02/replay 集成发布
 
 提交 `ebbab58e7a00f4bd53e5ee456d341216ec72bab4` 已推送 `origin/master`，并于 2026-09-13 16:00 左右（北京时间）将本批引擎、回放诊断和证据文档发布到都柏林。发布归档 `.deploy/release-ebbab58.tar.gz` 的本地 SHA-256 为 `c4b64622c013cc8be7460129ef7815fbe99359f70419fc01f499d4f6eadb21a3`；线上回滚备份为 `/root/.pm-system-release-ebbab58/before.tar.gz`，备份 SHA-256 为 `19761fb3bd8d40a0efe55a564da563bb5ccca5f601d5990d821f3f26dd963079`。发布脚本在替换前确认交易已停止、paper 模式和实盘锁关闭，失败路径保留恢复备份。
