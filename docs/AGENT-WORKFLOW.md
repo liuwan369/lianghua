@@ -129,6 +129,8 @@ AI 可辅助查资料、产生假设、写代码、解释异常、比较实验�
 
 ### 当前执行交接
 
+实时派工见 `docs/evidence/2026-09-13/agent-dispatch-live.md`。每次 heartbeat 恢复先读取该表；角色不是只写在规划里的名义分工，必须有 RUNNING/REVIEW/DONE 状态和对应交付物。
+
 - 财务 Agent 已交付 FIN-01 的只读占用估算和约束契约，独立财务审查通过。完整权益日损失、充值提款和在途预留列入 EXEC-02，不能用展示字段代替执行层验收。
 - 主 Agent 持有 `scripts/pm-r26-historical-shadow-replay.py` 及覆盖/解码回归；独立回放审查发现多 token 增量被跳过后，修复纳入同批并重新扫描。旧扫描保留为有时期标注的证据，不作为当前参数晋级依据。
 - EXEC-02 已增加离线权益 reducer、显式资金预留状态图、损失事件去重和账户/模式隔离的原子状态信封；相关定向测试与类型检查通过。`Engine.prepareSubmission()` 已要求 live 调用提供账户门禁，但权威账户快照适配和 Executor 具体 reservation ID 仍由执行 Agent 接入，不能以离线状态机替代真实对账。

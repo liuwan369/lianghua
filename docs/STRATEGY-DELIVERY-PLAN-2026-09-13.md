@@ -4,6 +4,7 @@
 版本：v2，已纳入用户最新的自主实施、奖励做市、动态参数、保留现有前端和三端同步要求。
 状态：执行路线已更新；具体能力以源码、部署清单和验收证据为准，本文不表示所有能力已实现。
 执行分工见 [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md)。
+当前实时派工见 [agent-dispatch-live.md](evidence/2026-09-13/agent-dispatch-live.md)，每个角色必须有明确文件归属和交付状态。
 
 ## 0. 本轮决定与执行方式
 
