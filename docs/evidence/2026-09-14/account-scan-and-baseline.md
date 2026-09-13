@@ -12,6 +12,8 @@
 
 The production account is not execution-ready. The remaining evidence is a provider-owned immutable opening/current packet for the actual wallet, with complete cash-flow and position-release sections, followed by a Beijing `00:00` boundary packet and a third-date authenticated maker lifecycle probe. No historical block scan is promoted to that contract.
 
+The server account check still reports ordinary CLOB/Data API sections only: collateral and positions are individually complete, while cross-source pagination is non-atomic, order history is incomplete, and the receipt-based cash-flow window is not historical-complete. `PM_ATOMIC_ACCOUNT_URL` is not configured. This is an external source dependency, not a reason to loosen the gate or synthesize an opening balance from the current balance.
+
 ## Verification
 
 - `npm test -- --run src/live/account-finance.test.ts src/live/account-control.test.ts src/live/orchestrator-risk.test.ts`: 21 tests passed.
