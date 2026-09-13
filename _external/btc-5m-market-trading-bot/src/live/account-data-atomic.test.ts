@@ -51,6 +51,11 @@ describe('provider-owned atomic account source', () => {
     expect(calls[0].url.searchParams.get('wallet')).toBe(wallet);
   });
 
+  it('rejects an unsigned plain-http provider endpoint', async () => {
+    vi.stubEnv('PM_ATOMIC_ACCOUNT_URL', 'http://provider.example/atomic-bootstrap');
+    await expect(connectAtomicAccountReader(wallet)).rejects.toThrow('atomic_account_source_invalid');
+  });
+
   it('rejects a provider packet with missing cash-flow evidence', async () => {
     vi.stubEnv('PM_ATOMIC_ACCOUNT_URL', 'https://provider.example/atomic-bootstrap');
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ ...packet(), cashFlows: { complete: false, items: [] } }) })));

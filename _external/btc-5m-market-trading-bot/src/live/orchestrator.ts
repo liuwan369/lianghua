@@ -1035,7 +1035,7 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
     }
     if (!accountGate) throw new Error("live account execution gate is unavailable");
     try {
-      const ordinaryReader = cfg.accountReader ?? await connectAccountReader();
+      const ordinaryReader = cfg.accountReader;
       const bootstrapReader = cfg.accountBootstrapReader
         ?? (process.env.PM_ATOMIC_ACCOUNT_URL?.trim()
           ? await connectAuthoritativeOpeningReader(accountId)
@@ -1052,7 +1052,7 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
       } else if (accountStore?.read().equity.day === null) {
         throw new Error("实盘已拒绝：缺少权威北京时间日初账户快照");
       } else {
-        accountReader = ordinaryReader;
+        accountReader = ordinaryReader ?? await connectAccountReader();
       }
       if (!accountReader) throw new Error('live account reader is unavailable');
       await accountGate.refresh(accountReader);
