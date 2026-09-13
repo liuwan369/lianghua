@@ -944,7 +944,9 @@ async function runOneMarket(
 /** Top-level entry for live run loop. */
 
 export async function run(cfg: RunConfig): Promise<void> {
-  const accountId = envWalletOverrides().funder ?? (cfg.live ? undefined : "default-paper");
+  // Paper uses simulated fills and must not inherit a real wallet's durable
+  // exposure checkpoint. Live remains keyed to the configured funding wallet.
+  const accountId = cfg.live ? envWalletOverrides().funder : "default-paper";
   if (!accountId) throw new Error("persistent live risk requires an explicit public trading wallet address");
   const riskStore = new RiskStore(cfg.riskStateDirectory ?? process.env.PM_RISK_STATE_DIR ??
     fileURLToPath(new URL("../../results/risk/", import.meta.url)), accountId, cfg.live ? "live" : "paper");

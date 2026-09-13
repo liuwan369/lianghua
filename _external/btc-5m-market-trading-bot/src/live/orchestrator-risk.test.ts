@@ -42,16 +42,30 @@ describe("run entry risk gate", () => {
   });
 
   it("rejects a persisted daily stop before health requests or feeds start", async () => {
-    const store = new RiskStore(root, account, "paper"); const risk = store.restore();
+    const store = new RiskStore(root, "default-paper", "paper"); const risk = store.restore();
     risk.dailyDate = "2026-09-13"; risk.dailyPnl = -30; risk.dailyMode = DailyMode.Halted;
     store.finish(risk, null); store.close();
     await expect(run(config())).rejects.toThrow(/persisted risk halt/);
     expect(fetch).not.toHaveBeenCalled(); expect(runBtcFeed).not.toHaveBeenCalled();
   });
 
+  it("keeps paper risk isolated from a configured wallet identity", async () => {
+    const store = new RiskStore(root, account, "paper"); const risk = store.restore();
+    risk.dailyDate = "2026-09-13"; risk.dailyPnl = -30; risk.dailyMode = DailyMode.Halted;
+    store.finish(risk, null); store.close();
+
+    const running = run(config());
+    await vi.advanceTimersByTimeAsync(11_000);
+    await expect(running).resolves.toBeUndefined();
+
+    const realWalletState = new RiskStore(root, account, "paper");
+    expect(realWalletState.restore().dailyMode).toBe(DailyMode.Halted);
+    realWalletState.close();
+  });
+
   it("finishes a flat run and releases the account lock", async () => {
     const running = run(config()); await vi.advanceTimersByTimeAsync(11000); await running;
-    const next = new RiskStore(root, account, "paper");
+    const next = new RiskStore(root, "default-paper", "paper");
     expect(next.restore().dailyPnl).toBe(0); next.close();
   });
 
