@@ -31,6 +31,7 @@ export { Engine, type EngineConfig, type ResolveResult, bookOk } from "./engine.
 export { Executor, type SubmitResult, type ReservationCoordinator } from "./executor.js";
 export { AccountExecutionGate } from "./account-control.js";
 export { AccountStateStore, accountStateEnvelope, type AccountStateEnvelope } from "./account-state-store.js";
+export { accountDataToEquitySnapshot } from "./account-equity-adapter.js";
 export { run, type RunConfig } from "./orchestrator.js";
 export { analyze, monitor } from "./analysis.js";
 export * from "./feeds/index.js";
