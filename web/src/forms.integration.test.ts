@@ -131,6 +131,27 @@ it('confirms supported config saves, excludes unsupported drafts, and updates th
   expect(capital.value).toBe('200');
 });
 
+it('disables the manual inventory draft while automatic sizing is selected',async()=>{
+  await setup();
+  const mode=document.querySelector<HTMLSelectElement>('#setting-inventoryMode')!;
+  const inventory=document.querySelector<HTMLInputElement>('#setting-inventory')!;
+  expect(inventory.disabled).toBe(true);
+  mode.value='manual';mode.dispatchEvent(new Event('change',{bubbles:true}));
+  expect(inventory.disabled).toBe(false);
+  mode.value='auto';mode.dispatchEvent(new Event('change',{bubbles:true}));
+  expect(inventory.disabled).toBe(true);
+});
+
+it('rejects a per-order amount above the cumulative submission limit before posting',async()=>{
+  const {requests}=await setup();
+  input('#setting-order','12');
+  input('#setting-submitted','10');
+  click('#settings-strategy [data-settings-save]');
+  await vi.advanceTimersByTimeAsync(100);
+  expect(requests).toHaveLength(0);
+  expect(document.querySelector('[data-settings-message]')!.textContent).toContain('金额关系');
+});
+
 it('discovers new runs while preserving the selected historical run and pagination',async()=>{
   const {fetch}=await setup();const original=fetch.getMockImplementation()!;
   const source=document.querySelector<HTMLSelectElement>('#orders-source')!;

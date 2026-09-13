@@ -17,6 +17,9 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   }
   const accountFields = Array.from(document.querySelectorAll<HTMLInputElement>('#settings-account input'));
   const accountButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#settings-account button'));
+  const liveAuthButton = document.querySelector<HTMLButtonElement>('[data-live-auth-check]');
+  const liveAuthState = document.querySelector<HTMLElement>('[data-live-auth-state]');
+  const liveAuthMessage = document.querySelector<HTMLElement>('[data-live-auth-message]');
   const globalSave = document.querySelector<HTMLButtonElement>('[data-save]')!;
   const saves = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-save]'));
   const resets = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-reset]'));
@@ -25,6 +28,7 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   const bindings: Array<() => void> = [];
   let latest: Config | null = null, baseline: Config | null = null;
   let savedWallet = '', configBusy = false, accountBusy = false, closed = false;
+  let liveAuthBusy = false;
   let configError: string | null = null, configMessage = '';
   const key = (field: Control) => field.id.slice('setting-'.length);
   const supported = (field: Control) => !!fieldMap[key(field)];
@@ -49,6 +53,7 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     globalSave.disabled = active === 'system' || (active === 'account' ? accountBusy : configBusy);
     globalSave.title = active === 'system' ? '系统诊断没有可保存的配置' : '';
     globalSave.textContent = active === 'account' ? '保存账户' : '保存设置';
+    if (liveAuthButton) liveAuthButton.disabled = liveAuthBusy || closed;
   }
   for (const field of fields) {
     field.disabled = false;
@@ -86,6 +91,38 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     if (index === 0) field.required = true;
     on(field, 'input', () => { accountDirty.add(field); accountMessage('账户修改尚未保存。请通过当前 HTTPS 页面提交；保存不会启动交易。'); });
   });
+  const inventoryMode = document.querySelector<HTMLSelectElement>('#setting-inventoryMode');
+  const inventory = document.querySelector<HTMLInputElement>('#setting-inventory');
+  function syncInventoryMode() {
+    if (!inventoryMode || !inventory) return;
+    // An empty value is the read-only/unknown state; keep the manual control
+    // locked until the user explicitly selects manual sizing.
+    const automatic = inventoryMode.value !== 'manual';
+    inventory.disabled = automatic;
+    inventory.setAttribute('aria-disabled', String(automatic));
+    inventory.title = automatic
+      ? '自动模式根据单场预算和成本上限计算；手动份数不会生效。'
+      : '手动模式下使用此份数；仍需通过启动前风险检查。';
+  }
+  if (inventoryMode) on(inventoryMode, 'change', syncInventoryMode);
+  syncInventoryMode();
+  function validateCrossFields(modified: Control[]) {
+    const order = document.querySelector<HTMLInputElement>('#setting-order');
+    const submitted = document.querySelector<HTMLInputElement>('#setting-submitted');
+    const orderValue = order ? Number(order.value) : NaN;
+    const submittedValue = submitted ? Number(submitted.value) : NaN;
+    if (order) order.setCustomValidity('');
+    if (submitted) submitted.setCustomValidity('');
+    if (Number.isFinite(orderValue) && Number.isFinite(submittedValue) && orderValue > submittedValue) {
+      const message = '每笔投入不能超过本次累计提交金额上限。';
+      if (order) order.setCustomValidity(message);
+      if (submitted) submitted.setCustomValidity(message);
+      const target = modified.find(field => field === order || field === submitted);
+      if (target) target.focus();
+      return false;
+    }
+    return true;
+  }
   async function saveSettings() {
     if (configBusy || closed) return;
     if (!latest || configError) { configMessage = '配置读取失败或尚未完成，请刷新后再保存；草稿已保留。'; feedback(); return; }
@@ -94,6 +131,7 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     for (const field of modified) {
       if (!field.reportValidity()) { configMessage = '请修正已接入字段的格式或范围，尚未保存。'; feedback(); return; }
     }
+    if (!validateCrossFields(modified)) { configMessage = '请修正已接入字段之间的金额关系，尚未保存。'; feedback(); return; }
     const base = baseline || latest;
     const params: Obj = { ...base.params };
     const submitted = new Map(modified.map(field => [field, field.value]));
@@ -166,6 +204,25 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   }
   on(accountButtons[0], 'click', () => void accountAction(false));
   on(accountButtons[1], 'click', () => void accountAction(true));
+  if (liveAuthButton) on(liveAuthButton, 'click', async () => {
+    if (liveAuthBusy || closed) return;
+    liveAuthBusy = true; buttons();
+    if (liveAuthState) liveAuthState.textContent = '检查中';
+    if (liveAuthMessage) liveAuthMessage.textContent = '正在读取服务器授权状态，不会下单。';
+    try {
+      const status = await api.status();
+      if (closed) return;
+      const unlocked = status.live_unlocked === true;
+      if (liveAuthState) liveAuthState.textContent = unlocked ? '服务器已解锁' : '服务器仍锁定';
+      if (liveAuthMessage) liveAuthMessage.textContent = unlocked
+        ? '服务器允许进入下一步账户检查；仍需账户就绪和明确的实盘确认，检查本身不会下单。'
+        : '服务器实盘锁定。页面授权开启与实盘测量流程尚未接入，本次只完成状态查询。';
+    } catch (error) {
+      if (closed) return;
+      if (liveAuthState) liveAuthState.textContent = '检查失败';
+      if (liveAuthMessage) liveAuthMessage.textContent = `${error instanceof Error ? error.message : '服务器状态读取失败'}；未改变授权或交易状态。`;
+    } finally { liveAuthBusy = false; if (!closed) buttons(); }
+  });
   on(globalSave, 'click', () => {
     const active = document.querySelector('[data-setting].active')?.getAttribute('data-setting');
     if (active === 'account') void accountAction(true);
