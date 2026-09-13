@@ -30,7 +30,7 @@ export interface UnknownOrderContext {
 
 export interface ReservationCoordinator {
   prepare(id: string, amountUsd: number, feeReserveUsd: number): void;
-  transition(id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'reconciled'): void;
+  transition(id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled'): void;
 }
 
 export class UnknownOrderStateError extends Error {
@@ -106,6 +106,8 @@ export class Executor {
   private tickCache = new Map<string, number>();
   private tickUpdatedAt = new Map<string, number>();
   private reservationCoordinator?: ReservationCoordinator;
+  private reservationByOrderId = new Map<string, string>();
+  private activeReservationIds = new Set<string>();
 
   constructor(
     live: boolean,
@@ -172,6 +174,15 @@ export class Executor {
 
   confirmAccountReconciled(): void {
     this.takerInFlight.clear();
+    const unresolved = new Set<string>();
+    for (const reservationId of this.activeReservationIds) {
+      try { this.reservationCoordinator?.transition(reservationId, 'reconciled'); }
+      catch { unresolved.add(reservationId); }
+    }
+    this.activeReservationIds = unresolved;
+    for (const [orderId, reservationId] of this.reservationByOrderId) {
+      if (!unresolved.has(reservationId)) this.reservationByOrderId.delete(orderId);
+    }
   }
 
   apiCreds(): ApiKeyCreds | undefined {
@@ -310,6 +321,7 @@ export class Executor {
     const reservationId = `order-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}`;
     this.reservationCoordinator?.prepare(reservationId, notional, 0);
     this.reservationCoordinator?.transition(reservationId, 'submitted');
+    this.activeReservationIds.add(reservationId);
     const submittedAtUnix = Date.now() / 1000;
     let resp: Awaited<ReturnType<ClobWrapper['submitOrder']>>;
     try {
@@ -323,6 +335,7 @@ export class Executor {
 
     if (resp.success && resp.orderId) {
       this.reservationCoordinator?.transition(reservationId, 'acknowledged');
+      this.reservationByOrderId.set(resp.orderId, reservationId);
       this.sent += 1;
       this.spentUsd += notional;
       if (resp.orderId) {
@@ -348,6 +361,7 @@ export class Executor {
 
     if (resp.stateUnknown || resp.success || resp.orderId) {
       this.reservationCoordinator?.transition(reservationId, 'unknown');
+      if (resp.orderId) this.reservationByOrderId.set(resp.orderId, reservationId);
       this.paused = true;
       this.sent += 1;
       this.spentUsd += notional;
@@ -359,6 +373,7 @@ export class Executor {
 
     console.error(`LIVE order rejected: ${resp.errorMsg ?? resp.status ?? "unknown"}`);
     this.reservationCoordinator?.transition(reservationId, 'reconciled');
+    this.activeReservationIds.delete(reservationId);
     return none;
   }
 
@@ -436,6 +451,7 @@ export class Executor {
     const reservationId = `order-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}-taker`;
     this.reservationCoordinator?.prepare(reservationId, notional, 0);
     this.reservationCoordinator?.transition(reservationId, 'submitted');
+    this.activeReservationIds.add(reservationId);
     const submittedAtUnix = Date.now() / 1000;
     let resp: Awaited<ReturnType<ClobWrapper['submitMarketBuy']>>;
     try {
@@ -448,6 +464,7 @@ export class Executor {
     }
     if (resp.success && resp.orderId) {
       this.reservationCoordinator?.transition(reservationId, 'acknowledged');
+      this.reservationByOrderId.set(resp.orderId, reservationId);
       this.sent += 1;
       this.spentUsd += notional;
       this.takerInFlight.set(side, {orderId:resp.orderId,remaining:size});
@@ -472,6 +489,7 @@ export class Executor {
 
     if (resp.stateUnknown || resp.success || resp.orderId) {
       this.reservationCoordinator?.transition(reservationId, 'unknown');
+      if (resp.orderId) this.reservationByOrderId.set(resp.orderId, reservationId);
       this.paused = true;
       this.sent += 1;
       this.spentUsd += notional;
@@ -484,10 +502,22 @@ export class Executor {
 
     console.error(`LIVE taker rejected: ${resp.errorMsg ?? resp.status ?? "unknown"}`);
     this.reservationCoordinator?.transition(reservationId, 'reconciled');
+    this.activeReservationIds.delete(reservationId);
     return none;
   }
 
   noteFill(side: Side, orderId?: string, shares?: number): void {
+    if (orderId) {
+      const reservationId = this.reservationByOrderId.get(orderId);
+      if (reservationId && shares != null && Number.isFinite(shares) && shares > 0) {
+        const remaining = this.restingRemaining.get(orderId)
+          ?? [...this.takerInFlight.values()].find(item => item.orderId === orderId)?.remaining;
+        try {
+          this.reservationCoordinator?.transition(reservationId,
+            remaining != null && remaining - shares > 1e-8 ? 'partially_filled' : 'settlement_pending');
+        } catch { /* account reconciliation will keep the reservation active */ }
+      }
+    }
     const taker = this.takerInFlight.get(side);
     if (taker && (orderId != null ? taker.orderId === orderId : !this.live)) {
       if (!this.live || (shares != null && Number.isFinite(shares) && shares > 0)) {
@@ -536,6 +566,8 @@ export class Executor {
       const ok = await this.clob.cancel(id);
       console.info(`LIVE CANCEL ${Side.asStr(side)} id=…${tail(id, 8)} confirmed=${ok}`);
       if (!ok) throw new Error(`cancel not confirmed for ${id}`);
+      // A cancellation ACK does not prove that no fill raced with the cancel.
+      // Keep the reservation bound to the order until authoritative reconciliation.
       this.resting.take(side);
       this.restingRemaining.delete(id);
       this.allOrderIds.delete(id);

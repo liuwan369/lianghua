@@ -232,4 +232,41 @@ describe("uncertain ACK circuit breaker", () => {
     expect(events.slice(1)).toEqual(["submitted", "reconciled"]);
     expect(submitOrder).toHaveBeenCalledOnce();
   });
+
+  it("advances the bound reservation through partial fill and final reconciliation", async () => {
+    const events: string[] = [];
+    const coordinator = {
+      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled') => events.push(status)),
+    };
+    const executor = new Executor(true, 10, 10, 100, coordinator);
+    (executor as unknown as {clob: Record<string, unknown>}).clob = {
+      tickSize: async()=>0.01, minOrderSize:()=>5,
+      submitOrder: async()=>({ success: true, orderId: "bound-order" }),
+    };
+    await executor.submit(Side.Up, "up", 0.4, 10);
+    executor.noteFill(Side.Up, "bound-order", 2);
+    executor.noteFill(Side.Up, "bound-order", 8);
+    executor.confirmAccountReconciled();
+    expect(events.slice(1)).toEqual(["submitted", "acknowledged", "partially_filled", "settlement_pending", "reconciled"]);
+  });
+
+  it("keeps a cancelled order reservation active until account reconciliation", async () => {
+    const events: string[] = [];
+    const coordinator = {
+      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled') => events.push(status)),
+    };
+    const executor = new Executor(true, 10, 10, 100, coordinator);
+    (executor as unknown as {clob: Record<string, unknown>}).clob = {
+      tickSize: async()=>0.01, minOrderSize:()=>5,
+      submitOrder: async()=>({ success: true, orderId: "cancel-race" }),
+      cancel: async()=>true,
+    };
+    await executor.submit(Side.Up, "up", 0.4, 5);
+    await executor.cancelSide(Side.Up);
+    expect(events.slice(1)).toEqual(["submitted", "acknowledged"]);
+    executor.confirmAccountReconciled();
+    expect(events.at(-1)).toBe("reconciled");
+  });
 });

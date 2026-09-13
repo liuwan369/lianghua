@@ -44,7 +44,8 @@ export class Engine {
   private lastBookTs = Number.NEGATIVE_INFINITY;
   private microstructure: MakerMicrostructureGate;
   private settled = false;
-  private readonly accountGate?: { verifyBeforeSubmission(): void };
+  private accountGate?: { verifyBeforeSubmission(): void };
+  private accountGateCloser?: () => void;
 
   constructor(c: EngineConfig = {}, private readonly riskStore?: RiskStore) {
     this.accountGate = c.accountGate;
@@ -246,6 +247,13 @@ export class Engine {
       throw error;
     }
   }
+
+  attachAccountGate(gate: { verifyBeforeSubmission(): void }, close?: () => void): void {
+    this.accountGate = gate;
+    this.accountGateCloser = close;
+  }
+
+  closeAccountGate(): void { this.accountGateCloser?.(); this.accountGateCloser = undefined; }
 
   requireReconciliation(reason: string): void {
     this.session.haltNew = true;

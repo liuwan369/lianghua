@@ -42,6 +42,9 @@ import { ownerSignerPrivateKey } from "./account.js";
 import { envWalletOverrides } from "./clob/wallet.js";
 import { fileURLToPath } from "node:url";
 import { RiskStore } from "../risk-store.js";
+import { connectAccountReader } from "./account-data.js";
+import { AccountExecutionGate } from "./account-control.js";
+import { AccountStateStore } from "./account-state-store.js";
 
 export const LIVE_BOOK_MAX_AGE_MS = 250;
 const OFFICIAL_CLOB_HEALTH = "https://clob.polymarket.com/";
@@ -113,6 +116,9 @@ export interface RunConfig {
 
   /** Stable account/mode state location, never derived from a session log path. */
   riskStateDirectory?: string;
+
+  accountStateDirectory?: string;
+  accountReader?: Awaited<ReturnType<typeof connectAccountReader>>;
 
 }
 
@@ -911,20 +917,33 @@ export async function run(cfg: RunConfig): Promise<void> {
   if (!accountId) throw new Error("persistent live risk requires an explicit public trading wallet address");
   const riskStore = new RiskStore(cfg.riskStateDirectory ?? process.env.PM_RISK_STATE_DIR ??
     fileURLToPath(new URL("../../results/risk/", import.meta.url)), accountId, cfg.live ? "live" : "paper");
+  let accountStore: AccountStateStore | undefined;
+  let accountGate: AccountExecutionGate | undefined;
   let engine: Engine | undefined;
   try {
+    if (cfg.live) {
+      accountStore = new AccountStateStore(
+        cfg.accountStateDirectory ?? process.env.PM_ACCOUNT_STATE_DIR ??
+        fileURLToPath(new URL("../../results/account-state/", import.meta.url)),
+        accountId,
+        "live",
+      );
+      accountGate = new AccountExecutionGate(accountStore);
+    }
     engine = new Engine({ ...cfg.engine, liveMode: cfg.live,
+      accountGate,
       dailyLossLimitUsd: Math.min(30, cfg.engine.dailyLossLimitUsd ?? 30) }, riskStore);
-    await runWithRiskState(cfg, engine, accountId);
+    await runWithRiskState(cfg, engine, accountId, accountGate);
   } catch (error) {
     engine?.requireReconciliation("run failed before complete reconciliation");
     throw error;
   } finally {
-    try { engine?.finishRiskRun(); } finally { riskStore.close(); }
+    try { engine?.finishRiskRun(); } finally { accountStore?.close(); riskStore.close(); }
   }
 }
 
-async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: string): Promise<void> {
+async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: string,
+  accountGate?: AccountExecutionGate): Promise<void> {
   try {
     const healthMs = await assertOfficialClobHealth();
     console.info(`official CLOB health ${healthMs.toFixed(1)}ms`);
@@ -948,6 +967,7 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
 
 
   let executor: Executor | undefined;
+  let accountReader: Awaited<ReturnType<typeof connectAccountReader>> | undefined;
   let stopping = false;
   const gracefulStop = () => {
     if (stopping) return;
@@ -979,6 +999,11 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
       await executor.shutdown();
       throw new Error("executor account differs from the locked risk account");
     }
+    if (!accountGate) throw new Error("live account execution gate is unavailable");
+    const reader = cfg.accountReader ?? await connectAccountReader();
+    accountReader = reader;
+    await accountGate.refresh(reader);
+    executor.attachReservationCoordinator(accountGate);
 
   } else {
 
@@ -1046,6 +1071,10 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
       }
 
       engine.reset(mkt.start, mkt.end);
+
+      if (cfg.live && accountGate && accountReader) {
+        await accountGate.refresh(accountReader);
+      }
 
       try {
         await executor.prepareMarket(mkt.conditionId, [mkt.upToken, mkt.downToken]);
