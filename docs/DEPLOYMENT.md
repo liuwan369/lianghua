@@ -88,3 +88,4 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 本机直连 GitHub 失败后，本批通过已有都柏林 SSH 的临时 SOCKS 通道推送，Git 配置未永久修改；SSH 密钥、密码及账户凭据未进入发布文件。后续证据文档的提交单独以 docs 清单同步，不重启服务，也不替换上述已核对代码。
 发布 `724f80f` 已完成执行引擎批次同步。归档 `.deploy/engine-724f80f.tar.gz` SHA-256 为 `8236148adf90945559e5a78d5d3cc4cd60b1163e7746a15148032fae552b2243`，线上回滚备份为 `/root/.pm-system-release-724f80f/engine-before-724f80f.tar.gz`。发布前后两个服务均为 `active`，公网 `/api/v1/status` 均核对 `running=false`、`mode=paper`、`live_unlocked=false`，projection 为 `ready`。本批新增 provider-owned 原子账户源适配器，但线上未配置 `PM_ATOMIC_ACCOUNT_URL`，因此没有解锁真实交易。
+发布 `b7bca8d` 已加入订单生命周期证据字段并完成都柏林部署。引擎归档 SHA-256 为 `8da9e66b00f07e58cac17d66c32a0303532e3af82debc344a8ca169ab2deb4a2`，线上回滚备份为 `/root/.pm-system-release-b7bca8d/engine-before-b7bca8d.tar.gz`；文档/证据同步归档 SHA-256 为 `c645f7f6f55a0e6a6c9beb8a84896f2e6ae94b11854320bc0235b8264e7d1389`。发布后服务均 `active`，`running=false`、`mode=paper`、`live_unlocked=false`，projection `ready`。
