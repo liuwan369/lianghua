@@ -433,6 +433,18 @@ def main() -> int:
     parser.add_argument("--pair-cap", type=float, default=1.02)
     parser.add_argument("--queue-factor", type=float, default=0.25)
     parser.add_argument("--quote-start-delay-ms", type=int, default=15000)
+    parser.add_argument(
+        "--direction-mode",
+        choices=("observed", "force_sell"),
+        default="observed",
+        help="研究诊断：force_sell 将所有公开成交方向映射为 SELL，仅用于方向门槛上界",
+    )
+    parser.add_argument(
+        "--price-mode",
+        choices=("observed", "force_order"),
+        default="observed",
+        help="研究诊断：force_order 将价格不匹配的成交映射到当前订单价，仅用于价格门槛上界",
+    )
     parser.add_argument("--resolution-labels", type=Path, help="Verified r33 official resolution report")
     args = parser.parse_args()
     dbs = [Path(item) for item in args.sqlite]
@@ -485,13 +497,23 @@ def main() -> int:
             for name, engine in state["engines"].items():
                 diag = state["diagnostics"][name]
                 order = engine.market.orders.get(token) if engine.market else None
+                observed_side = taker_side.upper()
+                effective_side = "SELL" if args.direction_mode == "force_sell" else observed_side
+                effective_price = price
+                if args.price_mode == "force_order" and order is not None:
+                    tick = float(engine.market.books.get(token, {}).get("tick_size") or 0.01)
+                    if tick > EPSILON and round(price / tick) != round(order.price / tick):
+                        effective_price = order.price
+                        diag["diagnostic_override:price_forced_to_order"] += 1
+                if args.direction_mode == "force_sell" and observed_side != "SELL":
+                    diag["diagnostic_override:direction_forced_sell"] += 1
                 # Keep the legacy aggregate for continuity, while splitting
                 # the mutually exclusive gates so zero-fill causes are
                 # measurable (direction, order lifetime, price, queue).
                 if order is None:
                     diag["trade_not_eligible:no_working_sell_order"] += 1
                     diag["trade_skipped:no_working_order"] += 1
-                elif taker_side.upper() != "SELL":
+                elif effective_side != "SELL":
                     diag["trade_not_eligible:no_working_sell_order"] += 1
                     diag["trade_skipped:taker_side_not_sell"] += 1
                 elif size <= 0:
@@ -505,11 +527,11 @@ def main() -> int:
                     diag["trade_rejected:market_stopped"] += 1
                 else:
                     tick = float(engine.market.books.get(token, {}).get("tick_size") or 0.01)
-                    if tick > EPSILON and round(price / tick) != round(order.price / tick):
+                    if tick > EPSILON and round(effective_price / tick) != round(order.price / tick):
                         diag["trade_rejected:price_mismatch"] += 1
                     elif size <= order.queue_ahead + EPSILON:
                         diag["trade_rejected:queue_only"] += 1
-                events = engine.process_trade(token=token, price=price, size=size, taker_side=taker_side, timestamp_ms=received_ms, transaction_hash=tx)
+                events = engine.process_trade(token=token, price=effective_price, size=size, taker_side=effective_side, timestamp_ms=received_ms, transaction_hash=tx)
                 for event in events:
                     reason = event.get("reason")
                     if reason:
@@ -572,7 +594,8 @@ def main() -> int:
                      "policy": "per-token-book-v2", "event_decoder": "compact-atomic-message-v2",
                      "event_count_semantics": "selected source messages; multi-token deltas applied before one decision per market",
                      "excluded_markets": sorted(set(states) - complete_slugs)},
-        "assumptions": ["公开盘口只显示汇总数量，排队位置按可见同价位数量乘0.25/保守模型模拟。", "碰到价格不等于一定成交；只有公开last_trade且对手方为SELL才给影子挂单成交。", "maker返佣和流动性奖励暂记0，需逐笔结算数据核实后再加。", "历史Activity不能恢复未成交订单，所以不能证明历史下单参数。"],
+        "assumptions": ["公开盘口只显示汇总数量，排队位置按可见同价位数量乘0.25/保守模型模拟。", "默认 observed 模式只接受公开last_trade且对手方为SELL；force_sell/force_order 是解除单一门槛的研究上界，不代表交易所成交语义。", "maker返佣和流动性奖励暂记0，需逐笔结算数据核实后再加。", "历史Activity不能恢复未成交订单，所以不能证明历史下单参数。"],
+        "diagnostic_modes": {"direction_mode": args.direction_mode, "price_mode": args.price_mode},
         "summary": summary,
         "markets": {name: items for name, items in rows.items()},
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
