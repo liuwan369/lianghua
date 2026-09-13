@@ -4,6 +4,12 @@ import type { Section } from './account-data.js';
 
 type Row = Record<string, unknown>;
 type Rpc = (method: string, params: unknown[]) => Promise<unknown>;
+export interface TransferScanOptions {
+  /** First block to include. A missing value deliberately makes the scan incomplete. */
+  fromBlock?: number;
+  confirmations?: number;
+  chunkSize?: number;
+}
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 const FILLED = '0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2ea84d8ee';
 const moneyTokens = new Set([PUSD.toLowerCase(), USDC_E.toLowerCase()]);
@@ -12,6 +18,127 @@ const address = (v: unknown) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.t
 const topicAddress = (v: unknown) => typeof v === 'string' && /^0x0{24}[0-9a-fA-F]{40}$/.test(v) ? `0x${v.slice(-40)}`.toLowerCase() : null;
 const amount = (raw: bigint) => raw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(raw) / 1e6 : null;
 const number = (v: unknown) => (typeof v === 'number' || typeof v === 'string' && v.trim() !== '') && Number.isFinite(Number(v)) ? Number(v) : null;
+
+export interface TransferScan {
+  fromBlock: number;
+  toBlock: number;
+  confirmedHead: number;
+  chunkSize: number;
+  complete: boolean;
+  items: Row[];
+  scannedChunks: number;
+  failedChunks: number[];
+  source: 'polygon-eth_getLogs';
+  checked_at: string;
+  reason?: string;
+}
+
+/** Scan the complete requested Polygon block interval for wallet money-token transfers. */
+export async function scanAccountTransfers(rpc: Rpc, wallet: string, fromBlock: number, toBlock: number,
+  options: { confirmations?: number; chunkSize?: number } = {}): Promise<TransferScan> {
+  const normalized = address(wallet);
+  const confirmations = options.confirmations ?? 12;
+  const chunkSize = options.chunkSize ?? 2_000;
+  const checked_at = new Date().toISOString();
+  if (!normalized || !Number.isSafeInteger(fromBlock) || !Number.isSafeInteger(toBlock) || fromBlock < 0 || toBlock < fromBlock
+      || !Number.isSafeInteger(confirmations) || confirmations < 0 || !Number.isSafeInteger(chunkSize) || chunkSize < 1) {
+    throw new Error('transfer_scan_range_invalid');
+  }
+  let rawHead: unknown;
+  try { rawHead = await rpc('eth_blockNumber', []); } catch { throw new Error('transfer_scan_head_failed'); }
+  if (typeof rawHead !== 'string' || !/^0x[0-9a-f]+$/i.test(rawHead)) throw new Error('transfer_scan_head_invalid');
+  const confirmedHead = Number.parseInt(rawHead, 16) - confirmations;
+  if (!Number.isSafeInteger(confirmedHead) || toBlock > confirmedHead) throw new Error('transfer_scan_unconfirmed_range');
+  const items: Row[] = [], failedChunks: number[] = [];
+  let scannedChunks = 0;
+  for (let start = fromBlock; start <= toBlock; start += chunkSize) {
+    const end = Math.min(toBlock, start + chunkSize - 1);
+    try {
+      const raw = await rpc('eth_getLogs', [{ address: [...moneyTokens], topics: [TRANSFER], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}` }]);
+      if (!Array.isArray(raw)) throw new Error('transfer_scan_logs_invalid');
+      const seen = new Set<string>();
+      for (const value of raw) {
+        const log = value as Row;
+        const topics = Array.isArray(log?.topics) ? log.topics.map(String) : [];
+        const block = typeof log?.blockNumber === 'string' && /^0x[0-9a-f]+$/i.test(log.blockNumber) ? Number.parseInt(log.blockNumber, 16) : NaN;
+        const logIndex = typeof log?.logIndex === 'string' && /^0x[0-9a-f]+$/i.test(log.logIndex) ? Number.parseInt(log.logIndex, 16) : NaN;
+        const txHash = typeof log?.transactionHash === 'string' && /^0x[0-9a-f]{64}$/i.test(log.transactionHash) ? log.transactionHash.toLowerCase() : null;
+        const token = address(log?.address);
+        const from = topics.length === 3 ? topicAddress(topics[1].toLowerCase()) : null;
+        const to = topics.length === 3 ? topicAddress(topics[2].toLowerCase()) : null;
+        if (!txHash || !token || !moneyTokens.has(token) || topics[0]?.toLowerCase() !== TRANSFER || !from || !to
+            || !Number.isSafeInteger(block) || block < start || block > end || !Number.isSafeInteger(logIndex)
+            || typeof log?.data !== 'string' || !/^0x[0-9a-f]{64}$/i.test(log.data)) throw new Error('transfer_scan_log_invalid');
+        const id = `${txHash}:${logIndex}`;
+        if (seen.has(id)) throw new Error('transfer_scan_duplicate_log');
+        seen.add(id);
+        const rawAmount = BigInt(log.data);
+        const valueUsd = amount(rawAmount);
+        if (valueUsd === null) throw new Error('transfer_scan_amount_overflow');
+        if (from === normalized || to === normalized) items.push({ id, transaction_hash: txHash, block, log_index: logIndex,
+          token, from, to, amount: valueUsd, net_amount: (to === normalized ? valueUsd : 0) - (from === normalized ? valueUsd : 0), confirmed: true });
+      }
+      scannedChunks++;
+    } catch { failedChunks.push(start); }
+  }
+  const complete = failedChunks.length === 0 && scannedChunks === Math.ceil((toBlock - fromBlock + 1) / chunkSize);
+  return { fromBlock, toBlock, confirmedHead, chunkSize, complete, items, scannedChunks, failedChunks,
+    source: 'polygon-eth_getLogs', checked_at, ...(complete ? {} : { reason: 'one_or_more_block_chunks_failed' }) };
+}
+
+/** Scan confirmed PUSD/USDC Transfer logs. The result is complete only when the
+ * supplied range was fully covered; RPC errors and an unknown start remain incomplete. */
+export async function scanConfirmedTransfers(rpc: Rpc, wallet: string, options: TransferScanOptions = {}) {
+  const normalizedWallet = address(wallet);
+  if (!normalizedWallet) throw new Error('wallet_invalid');
+  const confirmations = Number.isSafeInteger(options.confirmations) && (options.confirmations as number) >= 0 ? options.confirmations as number : 12;
+  const chunkSize = Number.isSafeInteger(options.chunkSize) && (options.chunkSize as number) > 0 ? Math.min(options.chunkSize as number, 10_000) : 5_000;
+  const from = options.fromBlock;
+  const validFrom = Number.isSafeInteger(from) && (from as number) >= 0 ? from as number : null;
+  const base = { source: 'polygon-confirmed-transfer-logs', token_contracts: [...moneyTokens], confirmation_depth: confirmations,
+    from_block: validFrom, to_block: null as number | null };
+  if (validFrom === null) return { ...base, transfers: [] as Row[], complete: false, reason: 'scan_start_block_required' };
+  try {
+    const headRaw = await rpc('eth_blockNumber', []);
+    if (typeof headRaw !== 'string' || !/^0x[0-9a-f]+$/i.test(headRaw)) throw new Error('head_invalid');
+    const head = Number.parseInt(headRaw, 16);
+    const to = head - confirmations;
+    base.to_block = to;
+    if (to < validFrom) return { ...base, transfers: [] as Row[], complete: false, reason: 'confirmation_window_empty' };
+    const seen = new Set<string>();
+    const transfers: Row[] = [];
+    for (let start = validFrom; start <= to; start += chunkSize) {
+      const end = Math.min(to, start + chunkSize - 1);
+      const logs = await rpc('eth_getLogs', [{ address: [...moneyTokens], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}`, topics: [TRANSFER] }]);
+      if (!Array.isArray(logs)) throw new Error('logs_invalid');
+      for (const raw of logs) {
+        const log = raw as Row;
+        const tx = typeof log.transactionHash === 'string' ? log.transactionHash.toLowerCase() : '';
+        const idx = typeof log.logIndex === 'string' ? log.logIndex.toLowerCase() : '';
+        const blockRaw = typeof log.blockNumber === 'string' ? log.blockNumber : '';
+        const token = address(log.address);
+        const topics = Array.isArray(log.topics) ? log.topics.map(t => String(t).toLowerCase()) : [];
+        if (!/^0x[0-9a-f]{64}$/.test(tx) || !/^0x[0-9a-f]+$/.test(idx) || !/^0x[0-9a-f]+$/.test(blockRaw)
+            || !token || !moneyTokens.has(token) || topics[0] !== TRANSFER || topics.length !== 3
+            || !/^0x[0-9a-f]{64}$/.test(String(log.data || '').toLowerCase())) throw new Error('transfer_log_invalid');
+        const block = Number.parseInt(blockRaw, 16), fromAddress = topicAddress(topics[1]), toAddress = topicAddress(topics[2]);
+        if (!Number.isSafeInteger(block) || block < start || block > end || (!fromAddress && !toAddress)) throw new Error('transfer_log_invalid');
+        if (fromAddress !== normalizedWallet && toAddress !== normalizedWallet) continue;
+        const id = `${tx}:${idx}`;
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const value = amount(BigInt(String(log.data)));
+        if (value === null) throw new Error('amount_overflow');
+        transfers.push({ transfer_id: id, transaction_hash: tx, log_index: idx, block, block_hash: log.blockHash,
+          token, from: fromAddress, to: toAddress, amount: value,
+          net_amount: (toAddress === normalizedWallet ? value : 0) - (fromAddress === normalizedWallet ? value : 0) });
+      }
+    }
+    return { ...base, transfers, complete: true, reason: 'confirmed_block_range_scanned' };
+  } catch (error) {
+    return { ...base, transfers: [] as Row[], complete: false, reason: error instanceof Error ? error.message : 'scan_failed' };
+  }
+}
 
 /** Hard account contract supplied by the owner for the first bounded validation. */
 export const ACCOUNT_RISK_LIMITS = Object.freeze({ capitalUsd: 50, dailyLossUsd: 30 });
@@ -168,8 +295,11 @@ export class AccountFinanceReader {
       const entry = this.known.get(tx);
       return entry?.evidence && now - entry.checked <= 600_000 ? [entry.evidence] : [];
     });
+    const scanStart = Number.parseInt(process.env.PM_FINANCE_SCAN_FROM_BLOCK || '', 10);
+    const scan = await scanConfirmedTransfers(rpc, this.wallet, { fromBlock: Number.isSafeInteger(scanStart) ? scanStart : undefined,
+      confirmations: Number.parseInt(process.env.PM_FINANCE_CONFIRMATIONS || '12', 10) });
+    const allTransfers = scan.complete ? scan.transfers : evidence.flatMap(row => row.transfers as Row[]);
     const fees = evidence.flatMap(row => row.fees as Row[]);
-    const transfers = evidence.flatMap(row => row.transfers as Row[]);
     const payments: Row[] = [];
     // One receipt is matched once to the sum of the activity claims for that token transfer.
     for (const tx of candidates) {
@@ -177,7 +307,7 @@ export class AccountFinanceReader {
       if (!claims.length) continue;
       const values = claims.map(a => number(a.usdcSize));
       const expected = values.every(v => v !== null && v >= 0) ? values.reduce<number>((sum, v) => sum + v!, 0) : null;
-      const incoming = transfers.filter(t => t.transaction_hash === tx && t.to === this.wallet.toLowerCase() && t.from !== this.wallet.toLowerCase());
+      const incoming = allTransfers.filter(t => t.transaction_hash === tx && t.to === this.wallet.toLowerCase() && t.from !== this.wallet.toLowerCase());
       const tokens = new Set(incoming.map(t => t.token));
       const actual = incoming.reduce((sum, t) => sum + Number(t.amount), 0);
       const verified = expected !== null && expected > 0 && tokens.size === 1 && Math.abs(expected - actual) < 0.000001;
@@ -185,14 +315,14 @@ export class AccountFinanceReader {
         received_amount: verified ? actual : null, token: verified ? [...tokens][0] : null, verified,
         status: verified ? 'confirmed_transfer_matches_activity' : 'unverified_or_mismatched' });
     }
-    const base = { checked_at: new Date(now).toISOString(), source: 'polygon-confirmed-receipts', scope: 'transactions_in_fetched_account_data', historical_complete: false };
+    const base = { checked_at: new Date(now).toISOString(), source: 'polygon-confirmed-receipts', scope: 'transactions_in_fetched_account_data', historical_complete: scan.complete };
     return {
       fees: { ...base, available: fees.length > 0, complete: false, items: fees,
         known_amount: fees.length ? fees.reduce((sum, row) => sum + Number(row.amount), 0) : null, reason: '仅本钱包 OrderFilled 事件实际费用；未覆盖全部历史及所有收费路径' },
       rewards: { ...base, available: payments.some(p => p.verified), complete: false, items: payments, reason: '到账转账与活动金额核对；活动标签不证明项目资格或全历史完整' },
-      reconciliation: { ...base, available: evidence.length > 0, complete: false, receipts_checked: evidence.length,
-        receipts_pending: candidates.size - evidence.length, transfers, wallet_net_profit: null,
-        reason: '只核对已获取交易哈希；尚无全历史资金转入转出及期初资产基线，不能生成钱包净收益' },
+      reconciliation: { ...base, available: evidence.length > 0 || allTransfers.length > 0, complete: scan.complete, receipts_checked: evidence.length,
+        receipts_pending: candidates.size - evidence.length, transfers: allTransfers, transfer_scan: scan, wallet_net_profit: null,
+        reason: scan.complete ? 'confirmed PUSD/USDC block range scanned' : '只核对已获取交易哈希；全历史区块范围未完成，不能生成钱包净收益' },
     };
   }
 }
