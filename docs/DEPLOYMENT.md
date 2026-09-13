@@ -48,7 +48,7 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 提交 `ebbab58e7a00f4bd53e5ee456d341216ec72bab4` 已推送 `origin/master`，并于 2026-09-13 16:00 左右（北京时间）将本批引擎、回放诊断和证据文档发布到都柏林。发布归档 `.deploy/release-ebbab58.tar.gz` 的本地 SHA-256 为 `c4b64622c013cc8be7460129ef7815fbe99359f70419fc01f499d4f6eadb21a3`；线上回滚备份为 `/root/.pm-system-release-ebbab58/before.tar.gz`，备份 SHA-256 为 `19761fb3bd8d40a0efe55a564da563bb5ccca5f601d5990d821f3f26dd963079`。发布脚本在替换前确认交易已停止、paper 模式和实盘锁关闭，失败路径保留恢复备份。
 
-随后文档提交 `d4e8c37` 已单独同步 `docs/` 和 `scripts/`，归档 SHA-256 为 `d1d6f1e2cfaf8d43b63fc7f3c107789f59a56067aa2ff9199ebf03cd2e376e83`，线上回滚目录为 `/root/.pm-system-release-d4e8c37`（备份 `/root/.pm-system-release-d4e8c37/docs-and-scripts-before.tar.gz`）。该批不重启服务，不替换引擎、账本、行情库或账户文件；同步后两个服务仍为 `active`，状态和投影再次核对为 stopped paper / `ready`。
+随后文档提交 `d4e8c37` 已单独同步 `docs/` 和 `scripts/`，归档 SHA-256 为 `d1d6f1e2cfaf8d43b63fc7f3c107789f59a56067aa2ff9199ebf03cd2e376e83`，线上回滚目录为 `/root/.pm-system-release-d4e8c37`（备份 `/root/.pm-system-release-d4e8c37/docs-and-scripts-before.tar.gz`）。补充记录提交 `ead5f09` 又同步一次，归档 SHA-256 为 `9f6fb8d303056695c3539a4a37399583e3516755565e0650404b845e1d341f40`，仍使用该发布目录并更新备份。两批均不重启服务，不替换引擎、账本、行情库或账户文件；同步后两个服务仍为 `active`，状态和投影再次核对为 stopped paper / `ready`。
 
 发布后只重启了控制台，采集器未重启；两个服务均为 `active`。线上引擎重建哈希与本地重建一致。公网状态核对为 `running=false`、`mode=paper`、`live_unlocked=false`。发布不代表 EXEC-02 已满足实盘条件：当前账户 reader 仍为非原子快照，执行门禁继续拒绝 live。
 
