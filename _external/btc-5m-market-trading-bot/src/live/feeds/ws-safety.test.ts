@@ -53,6 +53,7 @@ describe("live websocket safety", () => {
       }, Date.now()/1000+60);
       stop = feed.stop;
       const socket = await openSocket();
+      socket.emit("message", "authenticated");
       expect(feed.isHealthy()).toBe(true);
       socket.emit("message", rejection);
       expect(feed.isHealthy()).toBe(false);
@@ -63,12 +64,15 @@ describe("live websocket safety", () => {
   it("waits for the built-in reconnect before taking the final trade snapshot", async () => {
     const events: FeedEvent[] = [];
     const fetchRecentTrades = vi.fn().mockResolvedValue([]);
+    const fetchOpenOrders = vi.fn().mockResolvedValue([]);
     const feed = runUserFeed((event) => events.push(event), {
       creds:{key:"test",secret:"test",passphrase:"test"}, conditionId:"market",
       upToken:"up", downToken:"down", isOurOrder:()=>false, fetchRecentTrades,
+      fetchOpenOrders,
     }, Date.now()/1000+60);
     stop = feed.stop;
     const first = await openSocket();
+    first.emit("message", "authenticated");
     expect(feed.isHealthy()).toBe(true);
 
     first.emit("close");
@@ -77,6 +81,8 @@ describe("live websocket safety", () => {
     await vi.waitFor(() => expect(mocks.sockets).toHaveLength(2));
     const second = mocks.sockets[1];
     second.emit("open");
+    await vi.advanceTimersByTimeAsync(500);
+    second.emit("message", "authenticated");
     await vi.waitFor(() => expect(feed.isHealthy()).toBe(true));
     await vi.advanceTimersByTimeAsync(5_000);
 

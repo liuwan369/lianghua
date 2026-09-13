@@ -19,6 +19,8 @@ export interface UserFeedOptions {
   fetchTrades?: (tradeIds: string[]) => Promise<unknown[]>;
   /** Authenticated account query used only after an order ACK becomes unknown. */
   fetchRecentTrades?: (afterUnix: number) => Promise<unknown[]>;
+  /** Authoritative open-order read used to prove a reconnect sweep covered cancels. */
+  fetchOpenOrders?: () => Promise<unknown[]>;
   /** Proxy/funder address used to identify our maker leg in authenticated trades. */
   accountAddress?: string;
   /** Optional durable ledger for idempotent event processing and continuity gates. */
@@ -418,14 +420,21 @@ export function runUserFeed(
   const seenTrades = new Set<string>();
   const readyWaiters = new Set<() => void>();
   let connectedOnce = false;
-  let discontinuity = false;
+  let discontinuity = !(opts.ledger?.status().continuous ?? true);
+  let authenticated = false;
+  let gapStartUnix: number | undefined;
+
+  const emitEvent = (event: UserFeedEvent): void => {
+    const id = event.kind === "exchangeFill"
+      ? (event.tradeId && event.orderId ? `fill:${event.tradeId}:${event.orderId}` : undefined)
+      : `cancel:${event.orderId}`;
+    if (opts.ledger && id && !opts.ledger.append(id, event)) return;
+    sink({ kind: "user", event });
+  };
 
   const emitRaw = (raw: unknown) => {
     for (const ev of parseUserMessage(raw, opts, orderMatched, seenTrades)) {
-      const id = ev.kind === "exchangeFill"
-        ? `fill:${ev.tradeId ?? "unknown"}:${ev.orderId ?? "unknown"}`
-        : `cancel:${ev.orderId}`;
-      if (opts.ledger?.append(id, ev)) sink({ kind: "user", event: ev });
+      emitEvent(ev);
     }
   };
 
@@ -440,10 +449,7 @@ export function runUserFeed(
       const rows = await opts.fetchTrades(missing).catch(() => []);
       for (const row of rows) {
         for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) {
-          const id = event.kind === "exchangeFill"
-            ? `fill:${event.tradeId ?? "unknown"}:${event.orderId ?? "unknown"}`
-            : `cancel:${event.orderId}`;
-          if (opts.ledger?.append(id, event)) sink({ kind: "user", event });
+          emitEvent(event);
         }
       }
     }
@@ -470,30 +476,30 @@ export function runUserFeed(
       try {
         const ws = await connectWs(USER_WS);
         activeWs = ws;
+        authenticated = false;
         ws.send(authPayload(opts.creds, opts.conditionId));
         lastTransportAtMs = Date.now();
         if (connectedOnce) {
           discontinuity = true;
           opts.ledger?.markDiscontinuous("user websocket reconnect");
           setReady(false);
-          if (opts.fetchRecentTrades) {
-            const rows = await opts.fetchRecentTrades(lastTransportAtMs / 1000 - 5).catch(() => null);
-            if (rows) {
-              for (const row of rows) {
-                for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) {
-                  const id = event.kind === "exchangeFill"
-                    ? `fill:${event.tradeId ?? "unknown"}:${event.orderId ?? "unknown"}`
-                    : `cancel:${event.orderId}`;
-                  if (opts.ledger?.append(id, event)) sink({ kind: "user", event });
-                }
-              }
-              discontinuity = false;
+          if (opts.fetchRecentTrades && opts.fetchOpenOrders) {
+            const afterUnix = Math.max(0, (gapStartUnix ?? lastTransportAtMs / 1000) - 5);
+            const first = await opts.fetchRecentTrades(afterUnix).catch(() => null);
+            const firstOpen = await opts.fetchOpenOrders().catch(() => null);
+            await sleep(250);
+            const rows = await opts.fetchRecentTrades(afterUnix).catch(() => null);
+            const secondOpen = await opts.fetchOpenOrders().catch(() => null);
+            const key = (value: unknown[] | null) => value?.map((row) => JSON.stringify(row)).sort().join("|");
+            if (first && rows && firstOpen && secondOpen && key(first) === key(rows) && key(firstOpen) === key(secondOpen)) {
+              for (const row of rows) for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) emitEvent(event);
               opts.ledger?.markResynced("authenticated REST trade compensation");
-              setReady(true);
+              discontinuity = false;
+              if (authenticated) setReady(true);
             }
           }
         } else {
-          setReady(true);
+          if (!discontinuity && authenticated) setReady(true);
           connectedOnce = true;
         }
         console.info("user feed connected + subscription sent");
@@ -507,6 +513,11 @@ export function runUserFeed(
             const t = String(data);
             lastTransportAtMs = Date.now();
             if (t === "PONG" || t === "pong") return;
+            if (isUserChannelEvidence(t, opts)) {
+              authenticated = true;
+              if (!discontinuity) setReady(true);
+              return;
+            }
             if (isUserChannelFailure(t)) {
               setReady(false);
               ws.terminate();
@@ -521,6 +532,10 @@ export function runUserFeed(
                 return;
               }
               for (const raw of batch) {
+                if (isUserChannelEvidence(raw, opts)) {
+                  authenticated = true;
+                  if (!discontinuity) setReady(true);
+                }
                 if (raw && typeof raw === "object") {
                   (raw as Record<string, unknown>).__receivedAtUnix = lastTransportAtMs / 1000;
                 }
@@ -530,7 +545,7 @@ export function runUserFeed(
               /* ignore */
             }
           });
-          ws.on("close", () => resolve());
+          ws.on("close", () => { gapStartUnix ??= lastTransportAtMs / 1000; resolve(); });
           ws.on("error", () => resolve());
         });
 

@@ -1,4 +1,4 @@
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface AccountLedgerRecord {
@@ -33,6 +33,7 @@ function parseRecord(value: unknown): AccountLedgerRecord {
 /** Durable, idempotent account event log used alongside REST and chain reconciliation. */
 export class AccountEventLedger {
   readonly path: string;
+  private readonly continuityPath: string;
   private nextSeq = 1;
   private continuous = true;
   private reason: string | undefined;
@@ -42,7 +43,12 @@ export class AccountEventLedger {
   constructor(directory: string, account: string, mode: "live" | "paper") {
     const suffix = account === "default-paper" ? "default-paper" : account.toLowerCase().replace(/[^0-9a-fx]/g, "_");
     this.path = join(directory, `account-events-${mode}-${suffix}.jsonl`);
+    this.continuityPath = `${this.path}.continuity`;
     mkdirSync(dirname(this.path), { recursive: true, mode: 0o700 });
+    if (existsSync(this.continuityPath)) {
+      const marker = readFileSync(this.continuityPath, "utf8").trim();
+      if (marker) { this.continuous = false; this.reason = marker; }
+    }
     if (!existsSync(this.path)) return;
     let expected = 1;
     for (const line of readFileSync(this.path, "utf8").split(/\r?\n/)) {
@@ -51,6 +57,7 @@ export class AccountEventLedger {
       if (record.seq !== expected) throw new Error("account ledger sequence gap");
       expected += 1;
       if (record.kind === "event") {
+        if (this.ids.has(record.id)) throw new Error("duplicate account ledger event id");
         this.ids.add(record.id);
         this.eventCount += 1;
       } else {
@@ -76,12 +83,14 @@ export class AccountEventLedger {
   markDiscontinuous(reason: string): void {
     this.continuous = false;
     this.reason = reason;
+    writeFileSync(this.continuityPath, reason, { mode: 0o600 });
   }
 
   markResynced(source: string, receivedAtUnix = Date.now() / 1000): void {
     this.write({ seq: this.nextSeq, id: `resync:${this.nextSeq}`, kind: "resync", receivedAtUnix, reason: source });
     this.continuous = true;
     this.reason = undefined;
+    writeFileSync(this.continuityPath, "", { mode: 0o600 });
   }
 
   private write(record: AccountLedgerRecord): void {

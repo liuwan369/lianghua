@@ -28,4 +28,12 @@ describe("account event ledger", () => {
     ledger.markResynced("REST compensation");
     expect(ledger.status()).toMatchObject({ continuous: true, reason: undefined, nextSeq: 2 });
   });
+
+  it("restores a discontinuity marker after restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "pm-ledger-")); roots.push(root);
+    const first = new AccountEventLedger(root, "default-paper", "paper");
+    first.markDiscontinuous("process interrupted during reconnect");
+    const second = new AccountEventLedger(root, "default-paper", "paper");
+    expect(second.status()).toMatchObject({ continuous: false, reason: "process interrupted during reconnect" });
+  });
 });

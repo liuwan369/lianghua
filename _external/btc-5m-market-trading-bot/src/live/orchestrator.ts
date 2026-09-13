@@ -522,6 +522,7 @@ async function runOneMarket(
             fetchTrades: (ids) => executor.getTradesByIds(ids),
             fetchRecentTrades: (afterUnix) =>
               executor.getRecentTrades(mkt.conditionId, afterUnix),
+            fetchOpenOrders: () => executor.getOpenOrders(mkt.conditionId),
             accountAddress: executor.accountAddress(),
             ledger: cfg.accountEventLedger,
 
