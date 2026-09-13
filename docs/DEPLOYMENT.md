@@ -29,6 +29,12 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 ## 发布流程
 
+### `d517119` account event continuity ledger (2026-09-14)
+
+本批已部署到都柏林 `/root/pm-system/_external/btc-5m-market-trading-bot`，并生成回滚包 `/root/.pm-system-release-2ad45d0/engine-before-2ad45d0.tar.gz`。远端完成 `npm run build`，并核对事件账本、认证用户流和编排器源码/产物哈希；`pm-system-dashboard-dublin.service` 与 `pm-r25-dublin-collector.service` 均为 `active`。状态接口复核为 `mode=paper`、`running=false`、`live_unlocked=false`，未提交真实订单。
+
+本批运行路径改为事件流优先：认证/订阅证据、持久化事件序列、断线 marker、成交与开放订单双 REST 补偿、周期对账；原子账户 provider 仍只用于高保证启动/恢复。GitHub `origin/master` 推送在本机连续两次因远端连接重置失败，不能把该次失败误报为 GitHub 已同步；服务器发布和本地提交已核对，待网络恢复后补推 `2ad45d0`、`d517119`。
+
 ### `c61f82b` atomic source transport hardening (2026-09-14)
 
 `c61f82b` 已发布并构建成功。权威账户 URL 现在只允许 HTTPS；配置 provider 时 live 编排延迟普通 CLOB reader，避免无关凭据或网络故障阻塞权威 bootstrap。发布回滚包位于 `/root/.pm-system-release-c61f82b/engine-before-c61f82b.tar.gz`。远端两个服务均为 `active`，状态接口复核 `mode=paper`、`running=false`、`live_unlocked=false`，未提交真实订单。
