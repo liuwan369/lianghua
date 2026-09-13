@@ -87,3 +87,4 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 只重启了控制台，采集器未重启。发布前后两个服务均为 `active`，交易状态均为 `running=false`、`mode=paper`、`live_unlocked=false`。公网账户接口随后返回新 `risk_contract`、占用估算和来源时间差，`available=true`、`stale=false`，`spendable_balance=null`、`execution_ready=false`。没有启动实盘或调整保存的前端配置。
 
 本机直连 GitHub 失败后，本批通过已有都柏林 SSH 的临时 SOCKS 通道推送，Git 配置未永久修改；SSH 密钥、密码及账户凭据未进入发布文件。后续证据文档的提交单独以 docs 清单同步，不重启服务，也不替换上述已核对代码。
+发布 `724f80f` 已完成执行引擎批次同步。归档 `.deploy/engine-724f80f.tar.gz` SHA-256 为 `8236148adf90945559e5a78d5d3cc4cd60b1163e7746a15148032fae552b2243`，线上回滚备份为 `/root/.pm-system-release-724f80f/engine-before-724f80f.tar.gz`。发布前后两个服务均为 `active`，公网 `/api/v1/status` 均核对 `running=false`、`mode=paper`、`live_unlocked=false`，projection 为 `ready`。本批新增 provider-owned 原子账户源适配器，但线上未配置 `PM_ATOMIC_ACCOUNT_URL`，因此没有解锁真实交易。
