@@ -46,7 +46,7 @@ def main() -> int:
         print(f'completed {i}/{len(presets)}',flush=True); gc.collect()
     Path(a.out).parent.mkdir(parents=True,exist_ok=True); Path(a.out).write_text(json.dumps({
         'run_type':'pm-r29_memory_isolated_sweep', 'experiment': a.experiment,
-        'single_variable': a.experiment == 'pair_cap',
+        'single_variable': a.experiment in {'pair_cap', 'quote_start_delay'},
         'fixed_assumptions': ({'order_size':'10','queue_factor':'0.25',
                               'max_inventory_imbalance':'10','taker_fee_rate':'0.07'}
                              if a.experiment in {'pair_cap', 'quote_start_delay'} else None),
