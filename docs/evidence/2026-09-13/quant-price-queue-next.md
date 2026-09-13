@@ -44,4 +44,24 @@ python scripts/pm-r29-safe-sweep.py --sqlite data/dublin-server/pm-r25-live-days
 4. `min_order_live_ms=0` 的少量成交说明报价生命周期值得继续研究；需要下一批独立留出窗口和真实订单/撤单时间戳验证。
 5. 所有策略仍标记 `INSUFFICIENT_ACTIVITY`/研究状态；不晋级任何生产默认值，不启用 live。后续优先采集逐报价生命周期、订单方向和交易所确认价格，再评估参数。
 
+## 独立留出复核（09-09）
+
+为排除单日采集偏差，使用未参与上表实验的 `dublin-evidence-2026-09-09.sqlite3`，按同一
+`received_at_ns` 回放，最多 8 个市场（其中 6 个盘口窗口完整，2 个因覆盖不足排除）。官方标签仍来自
+同一份已校验的 `data/research/r33/report.json`，不把目标地址活动当成交标签。
+
+| 实验 | 条件 | fills / shares | 关键拒绝计数 | 解释 |
+| --- | --- | ---: | --- | --- |
+| holdout baseline | observed direction + observed price，`min_order_live_ms=250` | 0 / 0 | no working SELL 6,142；no working order 5,857；taker 非 SELL 285 | 真实方向/价格在独立日仍无成交 |
+| lifecycle upper bound | force SELL + observed price，`min_order_live_ms=250` | 4 / 22.8169（candidate_r19） | forced direction 5,533；no working SELL 5,976；not eligible 156；price mismatch 16 | 只解除方向门槛，仍是诊断上界 |
+| lifecycle relaxed upper bound | force SELL + observed price，`min_order_live_ms=0` | 18 / 140.0（candidate_r19） | forced direction 5,533；no working SELL 5,067；price mismatch 1,056 | 放宽存活门槛增加反事实成交，不能证明真实可成交 |
+
+原始输出：`data/research/r33/r26-holdout-0909-baseline-20260913.json`、
+`data/research/r33/r29-holdout-0909-live-sweep-20260913.json`。
+
+跨日判定：报价生命周期会改变“强制方向”上界的成交量，但观察方向下仍为零；
+`force_sell` 与 `min_order_live_ms=0` 继续禁止进入生产默认值。下一实验必须采集交易所确认的逐订单
+`placed_at / cancel_at / trade_at / matched_price`，并在第三个独立日期验证真实 maker 成交，否则保持
+`INSUFFICIENT_ACTIVITY` 和 live 锁定。
+
 验证：`python -m py_compile scripts/pm-r26-historical-shadow-replay.py scripts/pm-r29-safe-sweep.py` 通过。
