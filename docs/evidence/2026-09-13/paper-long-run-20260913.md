@@ -4,12 +4,13 @@
 
 - Node: Dublin `34.242.206.196`
 - First attempt: `20260913-145826-5db77ca89e57` (failed before engine start because it reused an unreconciled wallet-keyed paper ledger)
-- Active run: `20260913-150541-624a3c0c16f2`
+- Superseded run: `20260913-150541-624a3c0c16f2` (started successfully but produced no quotes because the 1 USD order was below the 5-share minimum)
+- Active run: `20260913-151223-9a2416627c14`
 - Mode: `paper`
 - Config revision: `2`
-- Started: `2026-09-13T15:05:41Z` (server API timestamp)
+- Started: `2026-09-13T15:12:23Z` (server API timestamp)
 - Duration: `0` (manual stop; no automatic time limit)
-- `order_usd`: `1.00`
+- `order_usd`: `2.00`
 - `max_total_usd`: `10.00` (paper-only submitted notional cap)
 - `max_orders`: `20`
 - `maker_life_sec`: `15`
@@ -60,3 +61,8 @@ The first attempt was retained as a failure artifact. The engine was corrected
 to key paper risk state to `default-paper`, independently of the configured
 wallet; the active run started successfully after that change and remained
 `running=true` at the first 20-second check.
+
+The intermediate run was stopped after confirming that its 1 USD size was
+below the venue's 5-share minimum at observed prices. Revision 3 uses 2 USD
+orders; the first check produced one quote and one simulated maker fill
+(`fill_notional=1.9994`) while the process remained running.
