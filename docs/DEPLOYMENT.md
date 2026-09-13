@@ -54,6 +54,8 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 发布后发现 dashboard 选择的历史 run `20260911-054956-e30715299735` 日志已被替换为空文件，投影层按设计报告 `incomplete`，未删除账本或历史数据。使用已保存的 paper 配置（`revision=1`、`duration_min=0.1`、`max_total_usd=2`）完成一次约 6 秒的只读/模拟 smoke run，生成 run `20260913-082538-b7262e8e56aa`；自动停止后投影为 `ready`，0 fills，376 个行情年龄/盘口处理样本和 462 个策略决策样本，`stats.error=null`。该修复未启用真实交易、未改动账户或风险额度；旧损坏 run 保留在 `/api/v1/runs` 供历史审计。
 
+研究提交 `837f3a3` 已完成 Git 推送，并以 docs/scripts-only 方式同步到服务器；归档 SHA-256 为 `52836945ed54c35d5ddbcd0830acf2dc7ea44932860bb13f84502ecd8ec429af`，回滚目录为 `/root/.pm-system-release-837f3a3`。该批新增价格/方向/队列/报价生命周期诊断，仅更新离线研究脚本和证据，不重启服务、不改变线上引擎、账户、账本或交易状态。
+
 ### 52b1d68 执行门禁发布尝试
 
 本地提交 `52b1d68` 已完成引擎全量测试、构建和统一验证，生成 `.deploy/engine-52b1d68.tar.gz`。2026-09-13 尝试向都柏林服务器发布两次，均在 Paramiko SSH 握手阶段以 `SSHException: No existing session` 失败；远端未执行上传、解压、重启或交易操作，线上仍保持此前版本、两个服务 active、`running=false`、`mode=paper`、`live_unlocked=false`。发布包和本地回滚证据保留，网络恢复后重新运行 `.deploy/deploy-engine.py`，成功后补充远端哈希清单；当前不能报告三端同步完成。
