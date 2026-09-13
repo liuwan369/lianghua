@@ -215,9 +215,9 @@ P0 基线与验收规则
 | 账户财务观测 | FIN-01 已实现、独立审查、部署和公网读取核对；已有 10 条存量持仓记录需纳入 EXEC-02 期初对账，见 `docs/evidence/2026-09-13/finance-risk-accounting.md` |
 | EXEC-02 权益核心 | 离线权益/充值提款/北京时间结转 reducer 与测试通过；独立审查修复已合入。权威适配仍未接入，见 `docs/evidence/2026-09-13/exec-02-equity-contract.md` |
 | EXEC-02 原子预留与持久化 | 50 美元额度、费用预留、显式状态图、损失事件去重、账户/模式锁和原子状态信封已实现；live 门禁接口已接入 Engine。CLOB/RPC 权威快照及 Executor 具体 reservation ID 仍待接入，见 `docs/evidence/2026-09-13/exec-02-persistence-gate.md` |
-| 回放覆盖/解码 | 逐边覆盖与完整消息应用修复通过回归；12 市场 smoke 中 11 个覆盖合格、140.66 万条消息、三组策略零成交，状态 INSUFFICIENT_ACTIVITY，见 `docs/evidence/2026-09-13/replay-atomic-coverage.md` |
+| 回放覆盖/解码 | 逐边覆盖与完整消息应用修复通过回归；复跑 12 市场中 11 个覆盖合格、1,406,579 条消息，三组策略仍零成交，状态 INSUFFICIENT_ACTIVITY，见 `docs/evidence/2026-09-13/automation-replay-progress.md` |
 | 回放性能 | 最优价扫描替代报价路径的整本排序；293 项 Python 测试及独立 25,000 次原版报价差分通过，微基准约提速 1.40 倍；端到端耗时及零成交诊断仍待下一轮验证 |
-| 本地/Git/服务器同步 | 本批 `52b1d68` 已推送 Git，构建和本地验证通过；服务器发布尝试在 SSH 握手阶段失败两次，未写入远端，保留发布包和回滚路径，不能计为三端完成，见 `docs/DEPLOYMENT.md` |
+| 本地/Git/服务器同步 | 本批 `52b1d68` 已推送 Git，后续本地提交尚待网络恢复后推送；构建和本地验证通过；服务器发布尝试在 SSH 握手阶段失败两次，未写入远端，保留发布包和回滚路径，不能计为三端完成，见 `docs/DEPLOYMENT.md` |
 
 每批结束由主 Agent 更新此表及各阶段验收状态，明确当前同步差异和下一项可执行任务。
 

@@ -51,6 +51,18 @@ for label, quote in (("baseline", namespace["quote_prices"]), ("optimized", shad
 
 ## 下一项验证
 
+### Follow-up replay 2026-09-13 11:11-11:23
+
+复跑命令：
+
+```text
+python scripts/pm-r26-historical-shadow-replay.py --sqlite data/dublin-server/pm-r25-live-days/dublin-evidence-2026-09-10.sqlite3 --history-dir data/research/r33 --out data/research/r33/r26-followup-20260913.json --max-markets 12 --order-size 10 --pair-cap 0.97 --queue-factor 0.25 --max-inventory-imbalance 10 --taker-fee-rate 0.07 --resolution-labels data/research/r33/report.json
+```
+
+结果：289 个元数据市场，选取 12 个，11 个完整，回放 1,406,579 条 CLOB 消息；`strict_pair`、`calibrated_3048`、`candidate_r19` 均为 0 simulated fills、0 paired shares、0 simulated settlement PnL。结果文件为 `data/research/r33/r26-followup-20260913.json`。结论仍为 `INSUFFICIENT_ACTIVITY`，没有生成默认参数，也没有把策略标记为盈利。
+
+该复跑确认报价优化没有改变零成交结论。下一步优先拆解报价可行时间、最小份数、队列寿命和成交来源，再做单变量门槛对照；不直接放宽全部限制或用零成交排名候选。
+
 本批没有重跑完整 12 市场回放；旧完整消息 smoke 的零成交结论未改变，不生成策略默认参数。下一次相同数据对照先测端到端耗时，再检查报价可行时间、队列寿命和成交来源，不能把函数提速当作策略有效。
 
 EXEC-02 的日初权益、外部资金流及持久化预留任务卡已补入当前交付规划，尚未接入执行层。FIN-01 仍是只读观测，当前交易保持 stopped paper。
