@@ -18,7 +18,10 @@ export type BaselineCut = {
 
 const SHANGHAI = 'Asia/Shanghai';
 const isoMs = (v: string) => { const n = Date.parse(v); if (!Number.isFinite(n)) throw new Error('invalid_checked_at'); return n; };
-const digest = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+// Read timestamps are observation metadata and naturally differ between two
+// sequential calls. Compare the account payload while retaining timestamps in
+// the emitted evidence and enforcing their ordering/window separately.
+const digest = (v: unknown) => createHash('sha256').update(JSON.stringify(v, (key, value) => key === 'checked_at' ? undefined : value)).digest('hex');
 
 function dayOf(ms: number): string { return new Intl.DateTimeFormat('en-CA', { timeZone: SHANGHAI, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms)); }
 function dayStart(ms: number): number { const p = new Intl.DateTimeFormat('en-US', { timeZone: SHANGHAI, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(ms)); const y = Number(p.find(x => x.type === 'year')!.value), m = Number(p.find(x => x.type === 'month')!.value), d = Number(p.find(x => x.type === 'day')!.value); return Date.parse(`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}T00:00:00+08:00`); }
@@ -37,7 +40,7 @@ export async function buildCompositeAccountBaseline(read: () => Promise<Composit
   const a = await read(); const b = await read(); validateRead(a, wallet); validateRead(b, wallet);
   if (digest(a) !== digest(b)) throw new Error('account_read_not_stable');
   const openingMs = isoMs(a.checked_at); const currentMs = isoMs(b.checked_at);
-  if (currentMs < openingMs || currentMs > nowMs + 5_000) throw new Error('account_time_order');
+  if (currentMs < openingMs || currentMs > nowMs + 5_000 || currentMs - openingMs > openingWindowMs) throw new Error('account_time_order');
   const start = dayStart(nowMs);
   if (openingMs < start || openingMs > start + openingWindowMs) throw new Error('opening_outside_beijing_day_start_window');
   const skew = Math.max(...[a.checked_at, a.collateral.checked_at, a.positions.checked_at, a.cashFlows.checked_at, a.transfers.checked_at].map(isoMs)) - Math.min(...[a.checked_at, a.collateral.checked_at, a.positions.checked_at, a.cashFlows.checked_at, a.transfers.checked_at].map(isoMs));

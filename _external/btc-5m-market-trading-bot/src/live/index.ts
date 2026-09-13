@@ -30,6 +30,8 @@ export { Journal, r2, r4, recordTraded } from "./journal.js";
 export { Engine, type EngineConfig, type ResolveResult, bookOk } from "./engine.js";
 export { Executor, type SubmitResult, type ReservationCoordinator } from "./executor.js";
 export { AccountExecutionGate } from "./account-control.js";
+export { beijingMidnightMs, captureMidnightBaseline, msUntilNextBeijingMidnight } from "./midnight-baseline.js";
+export { buildCompositeAccountBaseline } from "./composite-account-baseline.js";
 export { AccountStateStore, accountStateEnvelope, type AccountStateEnvelope } from "./account-state-store.js";
 export { accountDataToEquitySnapshot } from "./account-equity-adapter.js";
 export { run, type RunConfig } from "./orchestrator.js";

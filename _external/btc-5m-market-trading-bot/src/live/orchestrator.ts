@@ -523,6 +523,10 @@ async function runOneMarket(
             fetchRecentTrades: (afterUnix) =>
               executor.getRecentTrades(mkt.conditionId, afterUnix),
             fetchOpenOrders: () => executor.getOpenOrders(mkt.conditionId),
+            verifyAuthenticated: async () => {
+              await executor!.getOpenOrders(mkt.conditionId);
+              return true;
+            },
             accountAddress: executor.accountAddress(),
             ledger: cfg.accountEventLedger,
 

@@ -52,6 +52,10 @@ async function main(): Promise<void> {
     isOurOrder: (id) => events.some((event) => event.kind === "orderCancelled" && event.orderId === id) || id === orderId,
     fetchRecentTrades: (afterUnix) => clob.getRecentTrades(market.conditionId, afterUnix),
     fetchOpenOrders: () => clob.getOpenOrders(market.conditionId),
+    verifyAuthenticated: async () => {
+      await clob.getOpenOrders(market.conditionId);
+      return true;
+    },
     fetchTrades: (ids) => clob.getTradesByIds(ids),
   }, deadline);
   try {

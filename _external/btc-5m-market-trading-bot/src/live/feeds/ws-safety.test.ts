@@ -91,4 +91,21 @@ describe("live websocket safety", () => {
     expect(events).toContainEqual(expect.objectContaining({kind:"userStatus",healthy:false}));
     expect(events).toContainEqual(expect.objectContaining({kind:"userStatus",healthy:true}));
   });
+
+  it("accepts a successful signed account read when WS omits an auth confirmation", async () => {
+    const events: FeedEvent[] = [];
+    const verifyAuthenticated = vi.fn().mockResolvedValue(true);
+    const feed = runUserFeed((event) => events.push(event), {
+      creds:{key:"test",secret:"test",passphrase:"test"}, conditionId:"market",
+      upToken:"up", downToken:"down", isOurOrder:()=>false,
+      fetchOpenOrders: vi.fn().mockResolvedValue([]),
+      fetchRecentTrades: vi.fn().mockResolvedValue([]),
+      verifyAuthenticated,
+    }, Date.now()/1000+60);
+    stop = feed.stop;
+    await openSocket();
+    await vi.waitFor(() => expect(feed.isHealthy()).toBe(true));
+    expect(verifyAuthenticated).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual(expect.objectContaining({kind:"userStatus", healthy:true}));
+  });
 });

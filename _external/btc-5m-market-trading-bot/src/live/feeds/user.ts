@@ -21,6 +21,8 @@ export interface UserFeedOptions {
   fetchRecentTrades?: (afterUnix: number) => Promise<unknown[]>;
   /** Authoritative open-order read used to prove a reconnect sweep covered cancels. */
   fetchOpenOrders?: () => Promise<unknown[]>;
+  /** Signed L2 account read used as authentication evidence when WS omits a ready event. */
+  verifyAuthenticated?: () => Promise<boolean>;
   /** Proxy/funder address used to identify our maker leg in authenticated trades. */
   accountAddress?: string;
   /** Optional durable ledger for idempotent event processing and continuity gates. */
@@ -479,6 +481,18 @@ export function runUserFeed(
         authenticated = false;
         ws.send(authPayload(opts.creds, opts.conditionId));
         lastTransportAtMs = Date.now();
+        if (opts.verifyAuthenticated) {
+          try {
+            authenticated = (await opts.verifyAuthenticated()) === true;
+          } catch {
+            authenticated = false;
+          }
+          if (!authenticated) {
+            setReady(false);
+            ws.terminate();
+            throw new Error("authenticated L2 account verification failed");
+          }
+        }
         if (connectedOnce) {
           discontinuity = true;
           opts.ledger?.markDiscontinuous("user websocket reconnect");
