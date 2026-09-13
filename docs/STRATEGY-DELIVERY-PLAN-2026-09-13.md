@@ -224,9 +224,9 @@ P0 基线与验收规则
 
 `OPS-01 RUNNING`：调度已配置，原东京预测服务指令已替换，当前阶段为持续触发开发与修复。自动化按本文继续开发与修复，50/30 硬条件、保留现有前端和发布回滚流程持续有效。本地定时任务需要电脑开机且 Codex app 运行，不等同于已交付服务器端全天候开发或自动交易。
 
-本批任务状态：`BASE-01 DONE`（统一验证与 CI 配置，远端 CI 运行不以本地测试替代）；`DATA-01 DONE`（官方标签子任务，费用/奖励覆盖另验收）；`EXEC-01 DONE`（风险持久化与入口门禁）；`FIN-01 DONE`（只读财务观测，非权益风控）；`EXEC-02 REVIEW`（新增显式原子 bootstrap contract、来源时间戳校验、资金流证据要求和异步状态保护；52 项相关测试通过；生产原子账户源/日初基线仍阻塞 live 解锁）；`REPLAY-01 REVIEW`（价格、方向、队列和生命周期诊断完成，54 项回放/影子测试通过，生产语义基线尚未冻结）；`RESEARCH-01 REVIEW`（固定 4 市场窗口：observed/force_sell 为 0 fills，force_order 价格上界 10 fills/50 shares，队列因子不变，0ms 生命周期上界 6 fills/45 shares；证据见 `docs/evidence/2026-09-13/quant-price-queue-next.md`，不生成默认参数）；`UI-01 REVIEW`（自动库存联动与跨字段金额校验已验证，默认参数仍待策略证据）；`SYNC-01 DONE`（`ebbab58` 本地/Git/服务器发布与回滚核对完成，旧 projection 损坏已恢复为新 paper run `ready`）。
+本批任务状态：`BASE-01 DONE`（统一验证与 CI 配置，远端 CI 运行不以本地测试替代）；`DATA-01 DONE`（官方标签子任务，费用/奖励覆盖另验收）；`EXEC-01 DONE`（风险持久化与入口门禁）；`FIN-01 DONE`（只读财务观测，非权益风控）；`EXEC-02 REVIEW`（provider-owned 原子账户源适配器已完成并接入 live bootstrap，37 项账户/权益测试与类型检查通过；线上未配置 provider，日初基线仍阻塞 live 解锁）；`REPLAY-01 REVIEW`（价格、方向、队列和生命周期诊断完成，独立 09-09 留出回放通过 12 项回归，生产语义基线尚未冻结）；`RESEARCH-01 REVIEW`（09-09 留出 observed direction/price 仍为 0 fills；force_sell 与 0ms 生命周期只形成反事实上界，不生成默认参数）；`UI-01 REVIEW`（自动库存联动与跨字段金额校验已验证，默认参数仍待策略证据）；`SYNC-01 DONE`（执行 release `724f80f` 已部署并回滚核对，文档 release `7295ecc` 已同步；paper projection `ready`）。
 
-当前下一步并行推进：补充可验证的原子账户快照和北京日初基线导入路径；量化/QA 继续采集逐报价生命周期、订单方向和交易所确认价格，在独立留出窗口验证价格匹配假设，并证明优化前后决策一致，再冻结按时间分组的数据清单及对照实验。当前实验表明队列因子尚未进入有效成交分支；不把 force 模式上界或 0ms 生命周期结果转成生产参数。金融观测字段新增或回放测试通过，都不能代替完整账户对账与生产策略语义差分验收。
+当前下一步并行推进：为 provider-owned 原子账户源接入真实可核对的 opening/current 数据和北京日初基线；量化/QA 采集逐报价 `placed_at/cancel_at/trade_at/matched_price`，在第三个独立日期验证真实 maker 成交并冻结数据清单。当前实验表明队列因子尚未进入有效成交分支；不把 force 模式上界或 0ms 生命周期结果转成生产参数。金融观测字段新增或回放测试通过，都不能代替完整账户对账与生产策略语义差分验收。
 
 EXEC-02 实施任务卡：主 Agent 负责接口与集成；执行 Agent 独占新权益/预留模块及自身测试，已接入 `risk-store.ts`、`live/executor.ts` 和 `live/orchestrator.ts`；产品/API Agent 接只读输出，QA 已独立核验。当前实现状态为 REVIEW，原子账户源与北京日初基线仍未满足，因此 live 继续 fail-closed。
 
