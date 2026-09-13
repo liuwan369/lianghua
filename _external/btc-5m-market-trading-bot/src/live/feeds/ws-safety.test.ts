@@ -103,7 +103,8 @@ describe("live websocket safety", () => {
       verifyAuthenticated,
     }, Date.now()/1000+60);
     stop = feed.stop;
-    await openSocket();
+    const socket = await openSocket();
+    socket.emit("message", JSON.stringify({ event_type: "order", type: "PLACEMENT", id: "order-1", asset_id: "up", market: "market" }));
     await vi.waitFor(() => expect(feed.isHealthy()).toBe(true));
     expect(verifyAuthenticated).toHaveBeenCalledTimes(1);
     expect(events).toContainEqual(expect.objectContaining({kind:"userStatus", healthy:true}));

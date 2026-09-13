@@ -482,12 +482,13 @@ export function runUserFeed(
         ws.send(authPayload(opts.creds, opts.conditionId));
         lastTransportAtMs = Date.now();
         if (opts.verifyAuthenticated) {
+          let credentialsValid = false;
           try {
-            authenticated = (await opts.verifyAuthenticated()) === true;
+            credentialsValid = (await opts.verifyAuthenticated()) === true;
           } catch {
-            authenticated = false;
+            credentialsValid = false;
           }
-          if (!authenticated) {
+          if (!credentialsValid) {
             setReady(false);
             ws.terminate();
             throw new Error("authenticated L2 account verification failed");

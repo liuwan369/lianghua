@@ -18,7 +18,13 @@ export interface MidnightBaselinePacket {
   source: 'provider-atomic-midnight-window';
 }
 
-type Reader = () => Promise<unknown>;
+export interface MidnightBaselineInput {
+  opening: unknown;
+  current: unknown;
+  cashFlows: { fromMs: number; toMs: number; complete: boolean; items: unknown[] };
+  positionReleases: unknown[];
+}
+
 type Row = Record<string, unknown>;
 
 function row(value: unknown): value is Row {
@@ -60,7 +66,7 @@ export function beijingMidnightMs(atMs: number): number {
 
 /** Capture an opening cut only in a bounded window around Beijing 00:00. */
 export async function captureMidnightBaseline(
-  reader: Reader,
+  reader: () => Promise<MidnightBaselineInput>,
   nowMs = Date.now(),
   options: MidnightBaselineOptions = {},
 ): Promise<MidnightBaselinePacket> {
@@ -68,20 +74,23 @@ export async function captureMidnightBaseline(
   const delayMs = options.confirmationDelayMs ?? 250;
   if (!Number.isSafeInteger(windowMs) || windowMs < 1 || windowMs > 300_000) throw new Error('baseline_window_invalid');
   if (!Number.isSafeInteger(delayMs) || delayMs < 0 || delayMs > 10_000) throw new Error('baseline_delay_invalid');
-  const opening = await reader();
+  const packet = await reader();
+  if (!row(packet) || !packet.cashFlows || packet.cashFlows.complete !== true || !Array.isArray(packet.cashFlows.items)
+      || !Number.isSafeInteger(packet.cashFlows.fromMs) || !Number.isSafeInteger(packet.cashFlows.toMs)
+      || !Array.isArray(packet.positionReleases)) throw new Error('baseline_reconciliation_evidence_missing');
+  const opening = packet.opening;
   const openingAtMs = completeAtomicCut(opening);
   const target = dayStartMs(openingAtMs);
   if (Math.abs(openingAtMs - target) > windowMs) throw new Error('baseline_outside_beijing_midnight_window');
   if (delayMs > 0) await new Promise<void>(resolve => setTimeout(resolve, delayMs));
-  const current = await reader();
+  const current = packet.current;
   const currentAtMs = completeAtomicCut(current);
   if (currentAtMs <= openingAtMs) throw new Error('baseline_current_not_after_opening');
   if (currentAtMs > nowMs + windowMs + delayMs + 5_000) throw new Error('baseline_current_in_future');
   const riskDay = riskDayKey(openingAtMs / 1000);
   return {
     opening, current, riskDay, openingAtMs, currentAtMs,
-    cashFlows: { fromMs: openingAtMs, toMs: currentAtMs, complete: true, items: [] },
-    positionReleases: [], source: 'provider-atomic-midnight-window',
+    cashFlows: packet.cashFlows, positionReleases: packet.positionReleases, source: 'provider-atomic-midnight-window',
   };
 }
 
