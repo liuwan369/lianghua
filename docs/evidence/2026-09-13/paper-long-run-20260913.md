@@ -3,10 +3,11 @@
 ## Runtime
 
 - Node: Dublin `34.242.206.196`
-- Run: `20260913-145826-5db77ca89e57`
+- First attempt: `20260913-145826-5db77ca89e57` (failed before engine start because it reused an unreconciled wallet-keyed paper ledger)
+- Active run: `20260913-150541-624a3c0c16f2`
 - Mode: `paper`
 - Config revision: `2`
-- Started: `2026-09-13T14:58:26Z` (server API timestamp)
+- Started: `2026-09-13T15:05:41Z` (server API timestamp)
 - Duration: `0` (manual stop; no automatic time limit)
 - `order_usd`: `1.00`
 - `max_total_usd`: `10.00` (paper-only submitted notional cap)
@@ -55,3 +56,7 @@ evidence above is present and independently reviewed; otherwise the run is
 continued or the missing source is integrated. No paper result is converted
 into a production default or live unlock by itself.
 
+The first attempt was retained as a failure artifact. The engine was corrected
+to key paper risk state to `default-paper`, independently of the configured
+wallet; the active run started successfully after that change and remained
+`running=true` at the first 20-second check.
