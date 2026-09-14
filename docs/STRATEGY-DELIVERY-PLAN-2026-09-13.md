@@ -248,7 +248,7 @@ P0 基线与验收规则
 | 官方结算标签 | DATA-01 首轮 1,235/1,235 已解析，见 `docs/evidence/2026-09-13/data-r33-resolution.md` |
 | 账户财务观测 | FIN-01 已实现、独立审查、部署和公网读取核对；当前保留窗口从区块 `93716480` 到确认头 `93769856` 已双读发现 90 条转账，仍不代表钱包自创建以来的历史账本；归档 RPC/原子账户源仍是高保证启动依赖，见 `docs/evidence/2026-09-14/account-scan-and-baseline.md` |
 | EXEC-02 权益核心 | 离线权益/充值提款/北京时间结转 reducer 与测试通过；live 编排接入账户门禁、显式 bootstrap contract，并在配置权威源时用同一来源刷新 current。用户流已增加签名 L2 open-orders 认证证据；普通 reader composite baseline 已实现两次稳定读取、完整现金流/转账覆盖和北京时间 5 分钟窗口校验，但尚未采到真实日初 cut，实盘仍 fail-closed，见 `docs/evidence/2026-09-14/account-scan-and-baseline.md` |
-| EXEC-02 原子预留与持久化 | 50 美元额度、费用预留、显式状态图、损失事件去重、账户/模式锁、原子状态信封和 Executor reservation 生命周期已实现；未知 ACK/部分成交/撤单竞态保持占用，权威对账后才释放，见 `docs/evidence/2026-09-13/exec-02-live-integration.md` |
+| EXEC-02 原子预留与持久化 | 50 美元额度、费用预留、显式状态图、损失事件去重、账户/模式锁、原子状态信封和 Executor reservation 生命周期已实现；maker/taker/exit 均执行单笔与累计额度核算，未知 ACK/部分成交/撤单竞态保持占用，权威对账后才释放，见 `docs/evidence/2026-09-13/exec-02-live-integration.md` |
 | 回放覆盖/解码 | 逐边覆盖与完整消息应用修复通过回归；基线 12 市场中 11 个覆盖合格、1,406,579 条消息；下一轮固定 4 市场窗口完成价格/方向/队列/生命周期诊断，见 `docs/evidence/2026-09-13/quant-price-queue-next.md` |
 | 回放性能 | 最优价扫描替代报价路径的整本排序；293 项 Python 测试及独立 25,000 次原版报价差分通过，微基准约提速 1.40 倍；端到端耗时及零成交诊断仍待下一轮验证 |
 | 本地/Git/服务器同步 | 当前服务器 paper 配置 revision 6，活动 run 为 `20260914-084336-6831da9cc88c`；已核对引擎构建哈希、进程、有效 quote/fill 和 `live_unlocked=false`。旧 runs 仅保留为历史证据；当前记录见 `docs/evidence/2026-09-14/paper-long-run-20260914.md`。后续真实探针前再做一次构建哈希、配置和回滚核对。 |
