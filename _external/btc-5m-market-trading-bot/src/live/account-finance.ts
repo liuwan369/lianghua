@@ -245,7 +245,8 @@ export class AccountFinanceReader {
       && now - this.transferScanCache.checked < 15_000
       ? this.transferScanCache.result
       : await scanConfirmedTransfers(rpc, this.wallet, { fromBlock: configuredFrom,
-        confirmations: Number.parseInt(process.env.PM_FINANCE_CONFIRMATIONS || '12', 10) });
+        confirmations: Number.parseInt(process.env.PM_FINANCE_CONFIRMATIONS || '12', 10),
+        chunkSize: Number.parseInt(process.env.PM_FINANCE_SCAN_CHUNK_SIZE || '5000', 10) });
     if (configuredFrom !== undefined && (!this.transferScanCache || now - this.transferScanCache.checked >= 15_000)) {
       this.transferScanCache = { fromBlock: configuredFrom, checked: now, result: scan };
     }
