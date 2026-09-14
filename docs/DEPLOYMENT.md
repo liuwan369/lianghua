@@ -29,6 +29,8 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 发布 `81d0f4c`（部署归档沿用发布脚本标识 `b327fa1`）已完成引擎三端同步。部署前备份位于 `/root/.pm-system-release-b327fa1/engine-before-b327fa1.tar.gz`；远端重新构建后 `src/live/orchestrator.ts`、`dist/live/orchestrator.js` 与本地 SHA-256 一致。此次包含签名 L2 账户查询与 WebSocket 用户频道证据分离、composite 日初基线校验器、北京时间午夜窗口校验和对应回归测试。两个服务均为 `active`，状态接口核对为 `mode=paper`、`running=false`、`live_unlocked=false`；未提交真实订单。composite 基线尚未采到真实日初完整 cut，因此实盘门禁继续锁定。
 
+发布 `74db9d3` 将 live 认证探针的市场发现固定为官方 Gamma，避免服务器缺少本地 collector 时误阻塞。服务器实际探针证据：`5 shares @ 0.01`、名义金额 `$0.05`，order ACK、cancel ACK、真实用户频道撤单事件、无成交、无开放订单、余额变化 0，退出码 0；证据文件为 `docs/evidence/2026-09-14/live-auth-maker-probe-20260914.json`。随后发布 `4a2c476` 加入只读账户基线采集器，`541f673` 修正 Node 路径并启用 `pm-account-baseline.timer`。定时器下一次触发为 UTC 16:00（北京时间次日 00:00），试运行已生成 `/root/pm-system/results/account-baseline/beijing-2026-09-14.json`，因采集时为北京时间 09:37 且确认区块扫描起点未配置，文件明确标记 `eligible_for_live_bootstrap=false`。服务与交易状态仍为 `active`、`paper`、`stopped`、`live_unlocked=false`。
+
 ## 发布流程
 
 ### `d517119` account event continuity ledger (2026-09-14)
