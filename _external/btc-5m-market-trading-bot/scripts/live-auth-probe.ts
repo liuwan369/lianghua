@@ -30,7 +30,9 @@ async function main(): Promise<void> {
   const key = process.env.POLYMARKET_OWNER_PRIVATE_KEY;
   const wallet = process.env.POLYMARKET_WALLET_ADDRESS;
   if (!key || !wallet) throw new Error("owner signer or wallet is not configured");
-  const market = await findMarket(nowUnix());
+  // Live probe must use the official Gamma market source directly. The local
+  // collector is an optional paper-mode fallback and may not run on this host.
+  const market = await findMarket(nowUnix(), false);
   if (!market) throw new Error("no current btc-updown-5m market");
 
   const clob = await ClobWrapper.connect({ key, funder: wallet as `0x${string}` });
