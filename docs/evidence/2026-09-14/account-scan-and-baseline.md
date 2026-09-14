@@ -13,6 +13,13 @@
 
 The production account is not execution-ready. The remaining evidence is a provider-owned immutable opening/current packet for the actual wallet, with complete cash-flow and position-release sections, followed by a Beijing `00:00` boundary packet and a third-date authenticated maker lifecycle probe. No historical block scan is promoted to that contract.
 
+## Live verification update (2026-09-14 12:24 Beijing)
+
+- The Dublin baseline service now uses the wallet's retained Polygon RPC window starting at block `93716480`, with `5000`-block windows and `12` confirmations.
+- Both reads completed the range through confirmed head `93769856` and found `90` wallet-related PUSD/USDC transfers. The result is useful for current-window reconciliation and the two reads were consistent.
+- The deposit-wallet code first appears at block `93280522`; PublicNode rejects older history as pruned. Therefore `historical_complete` remains false. The retained-window result must not be treated as a wallet-lifetime cash-flow proof.
+- A full archive RPC (or provider-owned atomic account service) is still required for lifetime cash-flow coverage and for the live bootstrap contract. The service remains read-only and live remains locked.
+
 The server account check still reports ordinary CLOB/Data API sections only: collateral and positions are individually complete, while cross-source pagination is non-atomic, order history is incomplete, and the receipt-based cash-flow window is not historical-complete. `PM_ATOMIC_ACCOUNT_URL` is not configured. This is an external source dependency, not a reason to loosen the gate or synthesize an opening balance from the current balance.
 
 ## Verification

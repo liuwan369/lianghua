@@ -9,6 +9,13 @@ User=root
 WorkingDirectory=/root/pm-system/_external/btc-5m-market-trading-bot
 Environment=PM_ACCOUNT_PROFILE=/root/.config/pm-system/account.json
 Environment=PM_ACCOUNT_BASELINE_DIR=/root/pm-system/results/account-baseline
+# PublicNode's retained history currently begins at this confirmed block window.
+# This proves the retained window only; historical_complete remains false until an archive RPC is supplied.
+Environment=PM_FINANCE_SCAN_FROM_BLOCK=93716480
+Environment=PM_FINANCE_CONFIRMATIONS=12
+Environment=POLYGON_RPC=https://polygon-bor-rpc.publicnode.com
+Environment=PM_ACCOUNT_RPC_FALLBACK_URL=https://polygon.rpc.thirdweb.com
+Environment=PM_FINANCE_SCAN_CHUNK_SIZE=1000
 ExecStart=/usr/local/bin/node /root/pm-system/_external/btc-5m-market-trading-bot/dist/cli/capture-account-baseline.js
 NoNewPrivileges=true
 PrivateTmp=true

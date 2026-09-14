@@ -213,7 +213,7 @@ P0 基线与验收规则
 | 服务器连接 | Python Paramiko 使用已有 SSH 密钥成功，2026-09-13 北京时间检查两个核心服务 active |
 | 工程基线/策略实现 | BASE-01 integrated runner 已通过；EXEC-01 风险持久化已通过定向回归与独立审查修复；策略仍未晋级 |
 | 官方结算标签 | DATA-01 首轮 1,235/1,235 已解析，见 `docs/evidence/2026-09-13/data-r33-resolution.md` |
-| 账户财务观测 | FIN-01 已实现、独立审查、部署和公网读取核对；新增 PUSD/USDC 确认区块 Transfer 扫描、确认深度、区块哈希/removed 校验、幂等键和短缓存；扫描只证明区块范围覆盖，不标记历史账本或权益对账完成，见 `docs/evidence/2026-09-14/account-scan-and-baseline.md` |
+| 账户财务观测 | FIN-01 已实现、独立审查、部署和公网读取核对；当前保留窗口从区块 `93716480` 到确认头 `93769856` 已双读发现 90 条转账，仍不代表钱包自创建以来的历史账本；归档 RPC/原子账户源仍是高保证启动依赖，见 `docs/evidence/2026-09-14/account-scan-and-baseline.md` |
 | EXEC-02 权益核心 | 离线权益/充值提款/北京时间结转 reducer 与测试通过；live 编排接入账户门禁、显式 bootstrap contract，并在配置权威源时用同一来源刷新 current。用户流已增加签名 L2 open-orders 认证证据；普通 reader composite baseline 已实现两次稳定读取、完整现金流/转账覆盖和北京时间 5 分钟窗口校验，但尚未采到真实日初 cut，实盘仍 fail-closed，见 `docs/evidence/2026-09-14/account-scan-and-baseline.md` |
 | EXEC-02 原子预留与持久化 | 50 美元额度、费用预留、显式状态图、损失事件去重、账户/模式锁、原子状态信封和 Executor reservation 生命周期已实现；未知 ACK/部分成交/撤单竞态保持占用，权威对账后才释放，见 `docs/evidence/2026-09-13/exec-02-live-integration.md` |
 | 回放覆盖/解码 | 逐边覆盖与完整消息应用修复通过回归；基线 12 市场中 11 个覆盖合格、1,406,579 条消息；下一轮固定 4 市场窗口完成价格/方向/队列/生命周期诊断，见 `docs/evidence/2026-09-13/quant-price-queue-next.md` |
@@ -224,7 +224,7 @@ P0 基线与验收规则
 
 `OPS-01 RUNNING`：调度已配置，原东京预测服务指令已替换，当前阶段为持续触发开发与修复。自动化按本文继续开发与修复，50/30 硬条件、保留现有前端和发布回滚流程持续有效。本地定时任务需要电脑开机且 Codex app 运行，不等同于已交付服务器端全天候开发或自动交易。
 
-本批任务状态：`BASE-01 DONE`（统一验证与 CI 配置，远端 CI 运行不以本地测试替代）；`DATA-01 DONE`（官方标签子任务，费用/奖励覆盖另验收）；`EXEC-01 DONE`（风险持久化与入口门禁）；`FIN-01 REVIEW`（PUSD/USDC 区块扫描已实现并通过回归，但任意配置起点只标记 transfer range complete，不构成历史账本或权益完成）；`EXEC-02 REVIEW`（provider-owned 原子账户源适配器已完成并接入 live bootstrap/current refresh，账户/权益测试与类型检查通过；线上未配置 provider，精确北京日初/跨日基线仍阻塞 live 解锁）；`REPLAY-01 REVIEW`（价格、方向、队列和生命周期诊断完成，独立 09-09 留出回放通过 12 项回归，生产语义基线尚未冻结）；`RESEARCH-01 REVIEW`（09-09 留出 observed direction/price 仍为 0 fills；force_sell 与 0ms 生命周期只形成反事实上界，不生成默认参数）；`UI-01 REVIEW`（自动库存联动与跨字段金额校验已验证，默认参数仍待策略证据）；`SYNC-01 DONE`（执行 release `724f80f` 已部署并回滚核对，文档 release `7295ecc` 已同步；paper projection `ready`）。
+本批任务状态：`BASE-01 DONE`（统一验证与 CI 配置，远端 CI 运行不以本地测试替代）；`DATA-01 DONE`（官方标签子任务，费用/奖励覆盖另验收）；`EXEC-01 DONE`（风险持久化与入口门禁）；`FIN-01 REVIEW`（保留窗口扫描已双读完成，但钱包生命周期历史仍受节点裁剪限制）；`EXEC-02 REVIEW`（provider-owned 原子账户源适配器已接入 live bootstrap/current refresh，普通 reader 仍不能解锁；北京日初和归档资金流证据未满足）；`REPLAY-01 REVIEW`（价格、方向、队列和生命周期诊断完成，生产语义基线尚未冻结）；`RESEARCH-01 REVIEW`（候选仍未生成可晋级默认参数）；`UI-01 REVIEW`（默认参数仍待策略证据）；`SYNC-01 REVIEW`（扫描器、RPC failover 与 systemd 配置已部署，文档和线上证据同步中）。
 
 当前下一步并行推进：长期 paper `20260913-151223-9a2416627c14` 持续采集真实行情下的逐报价生命周期；把 Polymarket 用户流、订单/成交 REST 查询、链上 Transfer 和本地持久化账本组合成事件流优先的账户状态；用断线补偿、序列缺口检测和周期对账替代对原子 provider 的单点等待；真实认证 maker 探针已于 2026-09-14 完成最小下单/撤单生命周期，用户流认证现可由签名 L2 查询证明，证据见 `docs/evidence/2026-09-14/live-auth-maker-probe-20260914.json`。日初基线新增 composite 采集器，下一次北京时间 00:00 窗口采集真实完整数据后再评估门禁。原子快照保留为首次启动、重启恢复和高风险操作的高保证路径。历史数据可以支撑工程回归和有界策略筛选，但不能替代真实队列/成交或钱包对账。当前实验表明队列因子尚未进入有效成交分支；不把 force 模式上界或 0ms 生命周期结果转成生产参数。
 

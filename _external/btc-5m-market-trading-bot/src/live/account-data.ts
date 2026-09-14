@@ -249,15 +249,36 @@ export async function connectAccountReader() {
   const historyReader = new OrderHistoryReader(wallet, 2000, 8,
     join(process.env.PM_ACCOUNT_HISTORY_DIR || 'results/account-history', `${wallet.toLowerCase()}.json`));
   const financeReader = new AccountFinanceReader(wallet);
+  const rpcUrls = [...new Set([
+    process.env.POLYGON_RPC?.trim(),
+    process.env.PM_ACCOUNT_RPC_FALLBACK_URL?.trim(),
+    'https://polygon.drpc.org',
+  ].filter((value): value is string => !!value))];
   const receiptRpc = async (method: string, params: unknown[]) => {
-    const response = await fetch(process.env.POLYGON_RPC || 'https://polygon.drpc.org', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) throw new Error('rpc_failed');
-    const data = await response.json() as Row;
-    if (data.error || data.result == null) throw new Error('rpc_result_invalid');
-    return data.result;
+    let lastError: Error = new Error('rpc_unavailable');
+    for (const url of rpcUrls) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(8000),
+          });
+          if (response.status === 429) {
+            await new Promise<void>(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+            lastError = new Error('rpc_rate_limited');
+            continue;
+          }
+          if (!response.ok) throw new Error('rpc_failed');
+          const data = await response.json() as Row;
+          if (data.error || data.result == null) throw new Error(typeof data.error === 'object' && data.error && 'message' in data.error ? String((data.error as Row).message) : 'rpc_result_invalid');
+          return data.result;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error('rpc_failed');
+          if (attempt < 2) await new Promise<void>(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
+    }
+    throw lastError;
   };
   return async () => {
     const began = Date.now();
