@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-14T08:45:00Z",
+  "updatedAt": "2026-09-14T10:50:00Z",
   "summary": "paper 已修复为有效采样运行；真实下单撤单探针已有证据，剩余工作按数据、策略、恢复三条线并行推进。",
   "hardRules": ["本金上限 $50", "北京时间单日最大亏损 $30", "实盘必须显式开启，异常自动停止"],
   "phases": [
@@ -22,9 +22,9 @@
       {"id":"EXEC-03","title":"双边限价报价与库存","status":"REVIEW","owner":"执行 Agent","detail":"stableLive 使用双边 maker 限价单，按盘口、库存和剩余时间调整报价。","next":"从 paper 成交与拒单数据校准。"},
       {"id":"EXEC-04","title":"撤单、补轻侧与尾盘退出","status":"REVIEW","owner":"执行 Agent","detail":"挂单寿命、成本门槛和尾盘动作已有实现，边界场景仍需真实探针覆盖。","next":"验证真实成交、撤单和停止后的残余持仓。"}
     ]},
-    {"id":"P4","title":"连续 paper 观察","status":"RUNNING","owner":"主 Agent / 执行 Agent","detail":"当前服务器正在用真实行情运行 paper，最低门槛为至少 2 小时且达到 10 个市场或 20 次模拟成交。","tasks":[
+    {"id":"P4","title":"连续 paper 观察","status":"REVIEW","owner":"主 Agent / 执行 Agent","detail":"当前 run 已超过 2 小时，并达到有效样本门槛；正在整理结果并转入真实生命周期复核。","tasks":[
       {"id":"PAPER-01","title":"实时行情与报价","status":"RUNNING","owner":"执行 Agent","detail":"新 run 已恢复有效提交：mode=paper、live_unlocked=false；启动后首检出现 1 次 quote 和 2 次 simulated maker fill。","next":"继续记录有效报价、成交、撤单/退出和延迟；达到门槛或出现故障立即更新。","runId":"20260914-084336-6831da9cc88c"},
-      {"id":"PAPER-02","title":"paper 样本门槛","status":"RUNNING","owner":"QA / 量化 Agent","detail":"当前 run 配置为 $2/order、$1000 paper 累计周转上限、1000 次上限、180 分钟；paper 周转额度不等于实盘本金授权。","next":"从 2026-09-14T08:43:36Z 重新计时，达到 2 小时且 10 个市场或 20 次有效模拟成交后复核。"}
+      {"id":"PAPER-02","title":"paper 样本门槛","status":"DONE","owner":"QA / 量化 Agent","detail":"run 已运行约 2 小时 2 分钟，达到 26 个市场和 46 次有效模拟成交，无运行错误；模拟 PnL 约 -$9.96，仅用于策略压力分析。","next":"转入真实订单停止/恢复核对；paper 结果不直接等同实盘收益。"}
     ]},
     {"id":"P5","title":"极小额真实探针","status":"TODO","owner":"执行 / QA Agent","detail":"paper 达标后直接验证真实订单生命周期，金额控制在 $0.05-$0.50。","tasks":[
       {"id":"LIVE-01","title":"真实 maker 下单与撤单","status":"REVIEW","owner":"执行 Agent","detail":"$0.05 真实 maker 探针已取得下单 ACK、撤单 ACK、WebSocket 撤单事件和空开放订单证据；本轮未成交，尚缺完整引擎初始化与余额/恢复核对。","next":"补一次连续用户流确认和停止/恢复核对；保持 live_unlocked=false。"},

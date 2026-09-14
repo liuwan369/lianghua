@@ -18,6 +18,8 @@ The minimum observation is measured from the current run start: at least two hou
 
 Checkpoint at approximately `2026-09-14 16:51 Asia/Shanghai`: the run was still active with `3` markets, `3` quotes, `6` simulated fills, `$26.51` fill notional, engine PnL `-$0.59`, and no reported error. These are simulated engine figures, not wallet profit.
 
+Checkpoint at `2026-09-14 18:46 Asia/Shanghai`: the same run was still active after about 2 hours 2 minutes, with `26` markets, `26` quotes, `46` simulated fills, `$128.70` fill notional, engine PnL `-$9.96`, and no reported error. The P4 time/sample gate is complete; this is not evidence of live profitability. Next validation is authenticated user-feed confirmation plus stop/recovery reconciliation.
+
 ## Historical run distinction
 
 The `2026-09-13` paper-long-run document describes an earlier run that was later stopped. Its elapsed time and results must not be counted as elapsed time for this current run.
