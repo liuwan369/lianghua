@@ -64,6 +64,7 @@ export function mountTasks() {
       if (tasksResult.status === 'fulfilled') {
         taskResource.data = tasksResult.value; taskResource.error = null; taskResource.receivedAt = Date.now();
       } else {
+        taskResource.data = null; taskResource.receivedAt = 0;
         taskResource.error = tasksResult.reason instanceof Error ? tasksResult.reason.message : '任务读取失败';
       }
       if (statusResult.status === 'fulfilled') {
@@ -75,9 +76,9 @@ export function mountTasks() {
     } finally { busy = false; if (!closed) render(); }
   };
   const activate = () => { if (activated || closed) return; activated = true; void load(); };
-  root.querySelector<HTMLButtonElement>('[data-task-refresh]')?.addEventListener('click', () => { activated = true; void load(); });
+  root.querySelector<HTMLButtonElement>('[data-task-refresh], [data-refresh]')?.addEventListener('click', () => { activated = true; void load(); });
   document.querySelector<HTMLButtonElement>('[data-view="tasks"]')?.addEventListener('click', activate);
   render();
-  const timer = window.setInterval(() => { if (activated) void load(); }, 10000);
+  const timer = window.setInterval(() => { if (activated && root.classList.contains('active')) void load(); }, 10000);
   return () => { closed = true; window.clearInterval(timer); document.querySelector<HTMLButtonElement>('[data-view="tasks"]')?.removeEventListener('click', activate); };
 }

@@ -131,10 +131,21 @@ export const api = {
   tasks: () => get<TaskView>('tasks', '/task-view.json'),
   strategyComparison: async (): Promise<StrategyComparison> => {
     const paths = ['/api/prediction', '/api/evaluation', '/api/edge-v2/live'];
-    const results = await Promise.allSettled(paths.map(path => fetch(path, { cache: 'no-store' }).then(async response => {
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return response.json() as Promise<Obj>;
-    })));
+    const fetchSource = async (path: string): Promise<Obj> => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(path, { method: 'GET', cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const value: unknown = await response.json();
+        if (!object(value)) throw new Error('策略数据格式不正确');
+        return value;
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error('策略数据读取超时');
+        throw error;
+      } finally { window.clearTimeout(timer); }
+    };
+    const results = await Promise.allSettled(paths.map(fetchSource));
     const data: Obj[] = [];
     results.forEach(result => { if (result.status === 'fulfilled' && result.value && typeof result.value === 'object') data.push(result.value); });
     if (!data.length) throw new Error('策略数据暂不可用');

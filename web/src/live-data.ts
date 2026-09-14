@@ -204,7 +204,7 @@ export function connect() {
   // refresh() owns the run/event refresh sequence. Triggering the paginated
   // loaders here as well races the same requests and can replace a fresh
   // snapshot with an older response (especially when the user clicks twice).
-  document.querySelectorAll('[data-refresh]').forEach(b=>b.addEventListener('click',()=>{void refresh();}));
+  document.querySelectorAll('[data-refresh]:not(#view-tasks [data-refresh])').forEach(b=>b.addEventListener('click',()=>{void refresh();}));
   renderMarkets();renderStatus();renderConfig();renderEvents();void refresh();
   const poll=window.setInterval(()=>void refresh(),5000);
   const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();},1000);
