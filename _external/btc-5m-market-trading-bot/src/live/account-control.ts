@@ -132,6 +132,28 @@ export class AccountExecutionGate implements ReservationCoordinator {
     this.store.write({ ...latest, equity: result.state });
   }
 
+  /**
+   * MVP bootstrap: start accounting from the first ordinary read available.
+   * This intentionally ignores pre-start deposits and uses curPrice estimates;
+   * it is never presented as a historical or atomic account reconciliation.
+   */
+  async initializeSimple(reader: () => Promise<unknown>, nowMs = Date.now()): Promise<void> {
+    const before = this.store.read();
+    if (before.equity.day !== null) throw new Error('account opening baseline already initialized');
+    const raw = await reader();
+    const checked = cutTime(raw, 'current');
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(checked));
+    const y = parts.find(p => p.type === 'year')!.value, m = parts.find(p => p.type === 'month')!.value, d = parts.find(p => p.type === 'day')!.value;
+    const openingAt = Date.parse(`${y}-${m}-${d}T00:00:00+08:00`);
+    const opening = accountDataToEquitySnapshot(raw, before.account, openingAt, 1, true);
+    const current = accountDataToEquitySnapshot(raw, before.account, checked, 2, true);
+    const result = reduceAccountEquity(before.equity, { type: 'initialize', opening,
+      current: { snapshot: current, previousSnapshotId: opening.id,
+        cashFlows: { fromMs: openingAt, toMs: checked, complete: true, items: [] }, positionReleases: [] } }, nowMs, this.maxAgeMs);
+    if (!result.applied) throw new Error(`account MVP bootstrap rejected: ${result.state.reconciliationIssue ?? 'unknown'}`);
+    this.store.write({ ...this.store.read(), equity: result.state });
+  }
+
   /** Build an empty, fail-closed envelope for first authoritative refresh. */
   static emptyEquity(account: string, mode: 'live' | 'paper'): AccountEquityState {
     return createAccountEquityState(account, mode);

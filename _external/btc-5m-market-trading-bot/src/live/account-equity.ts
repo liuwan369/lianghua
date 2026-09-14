@@ -13,7 +13,7 @@ export interface EquityPosition {
   quantityMicros: number | null;
   priceMicrousd: number | null;
   pricedAtMs: number;
-  valuation: 'liquidation_bid' | 'confirmed_payout';
+  valuation: 'liquidation_bid' | 'confirmed_payout' | 'curPrice_estimate';
   complete: boolean;
 }
 
@@ -135,7 +135,7 @@ function snapshot(value: unknown, account: string, mode: Mode, maxAgeMs = Number
     if (!text(position.conditionId) || !text(position.assetId) || !unsigned(position.quantityMicros)
         || position.complete !== true || !time(position.pricedAtMs) || position.pricedAtMs > value.atMs
         || position.quantityMicros > 0 && value.atMs - position.pricedAtMs > maxAgeMs
-        || (typeof position.valuation !== 'string' || !['liquidation_bid', 'confirmed_payout'].includes(position.valuation))
+        || (typeof position.valuation !== 'string' || !['liquidation_bid', 'confirmed_payout', 'curPrice_estimate'].includes(position.valuation))
         || !(position.quantityMicros === 0 && position.priceMicrousd === null || unsigned(position.priceMicrousd) && position.priceMicrousd <= SCALE)
         || position.valuation === 'confirmed_payout' && position.priceMicrousd !== null && ![0, SCALE].includes(position.priceMicrousd as number)) fail('invalid_or_stale_position_valuation');
     const positionKey = key(position as unknown as EquityPosition);

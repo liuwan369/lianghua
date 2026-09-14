@@ -1068,6 +1068,11 @@ async function runWithRiskState(cfg: RunConfig, engine: Engine, accountId: strin
         if (accountStore?.read().equity.day === null) {
           await accountGate.initialize(bootstrapReader);
         }
+      } else if (process.env.PM_MVP_LIVE_MODE === '1') {
+        accountReader = ordinaryReader ?? await connectAccountReader();
+        if (accountStore?.read().equity.day === null) {
+          await accountGate.initializeSimple(accountReader);
+        }
       } else if (accountStore?.read().equity.day === null) {
         throw new Error("实盘已拒绝：缺少权威北京时间日初账户快照");
       } else {

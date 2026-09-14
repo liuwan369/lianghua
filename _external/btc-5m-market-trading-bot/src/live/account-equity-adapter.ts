@@ -12,7 +12,7 @@ function amount(value: unknown, name: string): number {
 }
 
 /** Converts one account-data read into a conservative, same-cut equity snapshot. */
-export function accountDataToEquitySnapshot(value: unknown, account: string, atMs = Date.now(), sequence = 1): EquitySnapshot {
+export function accountDataToEquitySnapshot(value: unknown, account: string, atMs = Date.now(), sequence = 1, allowEstimated = false): EquitySnapshot {
   if (!row(value) || typeof value.wallet !== 'string' || value.wallet.toLowerCase() !== account.toLowerCase() || value.read_only !== true || !Number.isSafeInteger(atMs) || atMs < 0
       || !Number.isSafeInteger(sequence) || sequence < 1) throw new Error('untrusted_account_snapshot');
   const collateral = value.collateral;
@@ -20,19 +20,19 @@ export function accountDataToEquitySnapshot(value: unknown, account: string, atM
   if (!row(collateral) || collateral.available !== true || collateral.complete !== true
       || typeof collateral.value !== 'number' || !Number.isFinite(collateral.value)
       || !row(positions) || positions.available !== true || positions.complete !== true || !Array.isArray(positions.items)
-      || value.pagination_atomic !== true) {
+      || (!allowEstimated && value.pagination_atomic !== true)) {
     throw new Error('incomplete_account_snapshot');
   }
   const mapped = positions.items.map((item): NonNullable<EquitySnapshot['positions']>[number] => {
     if (!row(item) || typeof item.conditionId !== 'string' || typeof item.asset !== 'string'
-        || item.size == null || item.valuation !== 'liquidation_bid') throw new Error('incomplete_position_snapshot');
+        || item.size == null || (!allowEstimated && item.valuation !== 'liquidation_bid')) throw new Error('incomplete_position_snapshot');
     const quantityMicros = amount(item.size, 'position_size');
-    const rawPrice = item.liquidation_bid;
+    const rawPrice = item.liquidation_bid ?? (allowEstimated ? item.curPrice : undefined);
     if (rawPrice == null) throw new Error('missing_liquidation_bid');
     const priceMicrousd = amount(rawPrice, 'position_price');
     if (priceMicrousd > SCALE) throw new Error('invalid_position_price');
     return { conditionId: item.conditionId, assetId: item.asset, quantityMicros, priceMicrousd,
-      pricedAtMs: atMs, valuation: 'liquidation_bid', complete: true };
+      pricedAtMs: atMs, valuation: item.liquidation_bid != null ? 'liquidation_bid' : 'curPrice_estimate', complete: true };
   });
   return { id: `account-${account.toLowerCase()}-${atMs}-${sequence}`, account, mode: 'live', sequence, atMs,
     complete: true, cashMicrousd: amount(collateral.value, 'collateral'), positions: mapped };
