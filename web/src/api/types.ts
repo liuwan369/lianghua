@@ -11,4 +11,10 @@ export interface Event { id: number; event: string; market: string | null; time:
 export interface Events { control_source?: ControlSource; schemaVersion: 1; run_id: string; events: Event[]; next_before_id: number | null }
 export interface Summary extends Obj { run_id: string; mode: string; account_id: string | null; fill_count: number; fill_notional: number | null; fees: number | null; settled_markets: number; settled_pnl: number | null; pnl_semantics: string; completeness: string; order_lifecycle_available: boolean }
 export interface SummaryResponse { control_source?: ControlSource; schemaVersion: 1; summary: Summary }
+export interface TaskItem { id: string; title: string; status: string; owner: string; detail: string; next: string; runId?: string }
+export interface TaskPhase { id: string; title: string; status: string; owner: string; detail: string; tasks: TaskItem[] }
+export interface TaskView { schemaVersion: 1; title: string; updatedAt: string; summary: string; hardRules: string[]; phases: TaskPhase[] }
+export interface EdgeCandidate { direction: string; reason?: string | null; historical_signals: number | null; historical_hits: number | null; historical_accuracy: number | null; live_signals?: number | null; live_hits?: number | null; live_accuracy?: number | null }
+export interface EdgeLive { schemaVersion: 1; updated?: number; phase?: string; collector_status?: string; mode?: string; latest_freeze: Obj; decisions: Obj; candidates: Record<string, EdgeCandidate>; collection: Obj; market?: Obj; limitations: string[] }
 export interface Resource<T> { data: T | null; error: string | null; receivedAt: number; loading: boolean }
+export interface StrategyComparison { receivedAt: number; sources: Obj[] }

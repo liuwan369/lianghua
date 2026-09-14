@@ -1,4 +1,4 @@
-import type { Account, Config, Events, Markets, Obj, Runs, Status, SummaryResponse } from './types';
+import type { Account, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, TaskView, StrategyComparison } from './types';
 
 const object = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
@@ -65,6 +65,12 @@ export function validate(kind: string, data: unknown): void {
       && integer(s.fill_count) && integer(s.settled_markets) && ['fill_notional','fees','settled_pnl'].every(k => nullableNumber(s[k]))
       && typeof s.completeness === 'string' && typeof s.pnl_semantics === 'string' && typeof s.order_lifecycle_available === 'boolean';
   }
+  if (kind === 'tasks') valid = data.schemaVersion === 1 && typeof data.title === 'string' && typeof data.updatedAt === 'string'
+    && typeof data.summary === 'string' && Array.isArray(data.hardRules) && data.hardRules.every(v => typeof v === 'string')
+    && Array.isArray(data.phases) && data.phases.every(p => object(p) && typeof p.id === 'string' && typeof p.title === 'string'
+      && typeof p.status === 'string' && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(p.status) && typeof p.owner === 'string' && typeof p.detail === 'string' && Array.isArray(p.tasks)
+      && p.tasks.every(t => object(t) && typeof t.id === 'string' && typeof t.title === 'string' && typeof t.status === 'string'
+        && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(t.status) && typeof t.owner === 'string' && typeof t.detail === 'string' && typeof t.next === 'string'));
   if (!valid) throw new Error('接口数据不完整，已清空该板块');
 }
 
@@ -122,4 +128,16 @@ export const api = {
   runs: (before?: number) => get<Runs>('runs', `/api/v1/runs?limit=50${before == null ? '' : `&before_id=${before}`}`),
   events: (run: string, before?: number) => get<Events>('events', `/api/v1/events?run_id=${encodeURIComponent(run)}&limit=50${before == null ? '' : `&before_id=${before}`}`),
   summary: (run: string) => get<SummaryResponse>('summary', `/api/v1/summary?run_id=${encodeURIComponent(run)}`),
+  tasks: () => get<TaskView>('tasks', '/task-view.json'),
+  strategyComparison: async (): Promise<StrategyComparison> => {
+    const paths = ['/api/prediction', '/api/evaluation', '/api/edge-v2/live'];
+    const results = await Promise.allSettled(paths.map(path => fetch(path, { cache: 'no-store' }).then(async response => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json() as Promise<Obj>;
+    })));
+    const data: Obj[] = [];
+    results.forEach(result => { if (result.status === 'fulfilled' && result.value && typeof result.value === 'object') data.push(result.value); });
+    if (!data.length) throw new Error('策略数据暂不可用');
+    return { receivedAt: Date.now(), sources: data };
+  },
 };
