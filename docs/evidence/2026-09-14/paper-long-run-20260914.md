@@ -16,6 +16,8 @@ The previous runs reached their `$10` and then `$50` cumulative submission limit
 
 The minimum observation is measured from the current run start: at least two hours plus either ten market windows or twenty valid simulated fills/submissions. A running process without new valid quote/fill events does not satisfy the gate. Latency samples are reported separately from real order ACK latency.
 
+Checkpoint at approximately `2026-09-14 16:51 Asia/Shanghai`: the run was still active with `3` markets, `3` quotes, `6` simulated fills, `$26.51` fill notional, engine PnL `-$0.59`, and no reported error. These are simulated engine figures, not wallet profit.
+
 ## Historical run distinction
 
 The `2026-09-13` paper-long-run document describes an earlier run that was later stopped. Its elapsed time and results must not be counted as elapsed time for this current run.
