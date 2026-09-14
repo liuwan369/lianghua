@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-14T05:30:00Z",
-  "summary": "先完成 paper 观察，再做极小额真实探针，最后进入受限小额运行。",
+  "updatedAt": "2026-09-14T06:55:00Z",
+  "summary": "paper 已修复为有效采样运行；真实下单撤单探针已有证据，剩余工作按数据、策略、恢复三条线并行推进。",
   "hardRules": ["本金上限 $50", "北京时间单日最大亏损 $30", "实盘必须显式开启，异常自动停止"],
   "phases": [
     {"id":"P0","title":"基线与范围","status":"DONE","owner":"主 Agent","detail":"项目入口、资金边界、验证口径和回退方式已确定。","tasks":[
@@ -11,23 +11,23 @@
     ]},
     {"id":"P1","title":"数据与执行基础","status":"REVIEW","owner":"执行 / 数据 Agent","detail":"行情、账户读取、订单状态和风险持久化已接入，长期财务完整性仍在增强。","tasks":[
       {"id":"EXEC-01","title":"风险与状态恢复","status":"DONE","owner":"执行 Agent","detail":"账户/模式隔离、风险停机和预留生命周期已有回归。","next":"在真实探针中复核停止后状态。"},
-      {"id":"FIN-01","title":"账户与资金观测","status":"REVIEW","owner":"执行 / 数据 Agent","detail":"当前窗口资金扫描可用，钱包全历史和 provider 原子快照属于增强路径。","next":"继续保留观测，不阻塞 MVP 探针。"},
-      {"id":"PERF-01","title":"行情与执行延迟","status":"REVIEW","owner":"执行 / QA Agent","detail":"paper 正在记录盘口处理、行情年龄和策略决策 p50/p95。","next":"用当前 paper 样本固定可接受范围。"}
+      {"id":"FIN-01","title":"账户与资金观测","status":"REVIEW","owner":"执行 / 数据 Agent","detail":"当前窗口资金扫描可用；钱包全历史和 provider 原子快照是增强项，不阻塞当前 paper 或极小额探针。","next":"继续补普通账户 opening/current 对账，缺失项保持明确。"},
+      {"id":"PERF-01","title":"行情与执行延迟","status":"RUNNING","owner":"执行 / QA Agent","detail":"已有 5000 样本的盘口处理、行情年龄和策略决策 p50/p95；新 paper run 继续采集报价相关样本。","next":"按新 run 的有效提交和延迟关联结果校准范围，不把行情年龄当 ACK 延迟。"}
     ]},
     {"id":"P2","title":"回放与策略基线","status":"REVIEW","owner":"量化 Agent","detail":"历史数据用于筛选和回归，真实排队与成交仍须通过真实探针校准。","tasks":[
-      {"id":"REPLAY-01","title":"回放一致性与成交诊断","status":"REVIEW","owner":"量化 / QA Agent","detail":"逐 token 盘口覆盖、价格方向和生命周期诊断已完成部分验证。","next":"结合 paper 结果解释零成交和单边暴露。"},
-      {"id":"RESEARCH-01","title":"固定第一套默认参数","status":"RUNNING","owner":"量化 Agent","detail":"候选为 stableLive 双边限价做市，当前使用 $2/order 作为 paper 起步值。","next":"达到 paper 样本门槛后冻结版本。"}
+      {"id":"REPLAY-01","title":"回放一致性与成交诊断","status":"RUNNING","owner":"量化 / QA Agent","detail":"逐 token 盘口覆盖、价格方向和生命周期诊断已有部分验证，可独立继续，不依赖 paper 计时。","next":"用新 paper 的有效报价/成交对照零成交和单边暴露假设。"},
+      {"id":"RESEARCH-01","title":"固定第一套默认参数","status":"RUNNING","owner":"量化 Agent","detail":"候选为 stableLive 双边限价做市；paper 使用 $2/order 仅是起步配置，尚未宣称生产最优。","next":"达到有效样本门槛后冻结版本并记录适用条件。"}
     ]},
     {"id":"P3","title":"做市执行闭环","status":"REVIEW","owner":"执行 / 量化 Agent","detail":"策略报价、库存、退出和风险动作已经接入，真实队列与收益仍需小额验证。","tasks":[
       {"id":"EXEC-03","title":"双边限价报价与库存","status":"REVIEW","owner":"执行 Agent","detail":"stableLive 使用双边 maker 限价单，按盘口、库存和剩余时间调整报价。","next":"从 paper 成交与拒单数据校准。"},
       {"id":"EXEC-04","title":"撤单、补轻侧与尾盘退出","status":"REVIEW","owner":"执行 Agent","detail":"挂单寿命、成本门槛和尾盘动作已有实现，边界场景仍需真实探针覆盖。","next":"验证真实成交、撤单和停止后的残余持仓。"}
     ]},
     {"id":"P4","title":"连续 paper 观察","status":"RUNNING","owner":"主 Agent / 执行 Agent","detail":"当前服务器正在用真实行情运行 paper，最低门槛为至少 2 小时且达到 10 个市场或 20 次模拟成交。","tasks":[
-      {"id":"PAPER-01","title":"实时行情与报价","status":"RUNNING","owner":"执行 Agent","detail":"持续发现 BTC 五分钟市场、接收盘口、报价和模拟成交。","next":"保持运行并记录报价、成交、撤单和延迟。","runId":"20260914-050759-ca2af577cd72"},
-      {"id":"PAPER-02","title":"paper 样本门槛","status":"TODO","owner":"QA / 量化 Agent","detail":"至少 2 小时，且 10 个市场窗口或 20 次模拟成交；出现故障先修复。","next":"门槛达成后进入 P5。"}
+      {"id":"PAPER-01","title":"实时行情与报价","status":"RUNNING","owner":"执行 Agent","detail":"新 run 已恢复有效提交：mode=paper、live_unlocked=false，首个检查出现 1 次 quote 和 1 次 simulated maker fill。","next":"继续记录有效报价、成交、撤单/退出和延迟；达到门槛或出现故障立即更新。","runId":"20260914-065212-1b45f5670a9c"},
+      {"id":"PAPER-02","title":"paper 样本门槛","status":"RUNNING","owner":"QA / 量化 Agent","detail":"当前 run 配置为 $2/order、$50 paper 累计上限、200 次上限、180 分钟；$50 是引擎允许的 paper cap，不是实盘本金授权。","next":"从 2026-09-14T06:52:12Z 重新计时，达到 2 小时且 10 个市场或 20 次有效模拟成交后复核。"}
     ]},
     {"id":"P5","title":"极小额真实探针","status":"TODO","owner":"执行 / QA Agent","detail":"paper 达标后直接验证真实订单生命周期，金额控制在 $0.05-$0.50。","tasks":[
-      {"id":"LIVE-01","title":"真实 maker 下单与撤单","status":"TODO","owner":"执行 Agent","detail":"显式开启 PM_MVP_LIVE_MODE=1，验证下单 ACK、撤单 ACK、成交或明确无成交、余额和空挂单。","next":"完成后才允许受限小额运行。"},
+      {"id":"LIVE-01","title":"真实 maker 下单与撤单","status":"REVIEW","owner":"执行 Agent","detail":"$0.05 真实 maker 探针已取得下单 ACK、撤单 ACK、WebSocket 撤单事件和空开放订单证据；本轮未成交，尚缺完整引擎初始化与余额/恢复核对。","next":"补一次连续用户流确认和停止/恢复核对；保持 live_unlocked=false。"},
       {"id":"LIVE-02","title":"停止与恢复核对","status":"TODO","owner":"QA Agent","detail":"停止后确认开放订单、未核对敞口和风险状态，重启后不重复下单。","next":"失败则自动回到 paper。"}
     ]},
     {"id":"P6","title":"受限小额运行","status":"TODO","owner":"主 Agent","detail":"真实探针通过后以 $2/order 起步，资金和风险始终受 $50/$30 硬条件约束。","tasks":[
