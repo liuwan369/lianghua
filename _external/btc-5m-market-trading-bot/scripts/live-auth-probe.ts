@@ -61,8 +61,16 @@ async function main(): Promise<void> {
     fetchTrades: (ids) => clob.getTradesByIds(ids),
   }, deadline);
   try {
-    await user.waitUntilReady(15_000);
-    const userFeedReady = true;
+    let userFeedReady = false;
+    try {
+      await user.waitUntilReady(5_000);
+      userFeedReady = true;
+    } catch {
+      // Polymarket may omit a standalone user-channel ack. The controlled
+      // probe below uses one minimum maker order to obtain an actual channel
+      // event; the normal live orchestrator remains fail-closed until ready.
+      console.warn("user feed has no standalone ack; continuing controlled channel challenge");
+    }
     const info = await clob.client.getClobMarketInfo(market.conditionId) as { mos?: unknown; mts?: unknown };
     const minSize = number(info.mos);
     if (!minSize || minSize <= 0) throw new Error("market minimum size unavailable");
