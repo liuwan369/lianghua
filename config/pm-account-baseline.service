@@ -9,10 +9,9 @@ User=root
 WorkingDirectory=/root/pm-system/_external/btc-5m-market-trading-bot
 Environment=PM_ACCOUNT_PROFILE=/root/.config/pm-system/account.json
 Environment=PM_ACCOUNT_BASELINE_DIR=/root/pm-system/results/account-baseline
-ExecStart=/usr/bin/node /root/pm-system/_external/btc-5m-market-trading-bot/dist/cli/capture-account-baseline.js
+ExecStart=/usr/local/bin/node /root/pm-system/_external/btc-5m-market-trading-bot/dist/cli/capture-account-baseline.js
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/root/pm-system/results/account-baseline
 ReadWritePaths=-/root/.config/pm-system
-
