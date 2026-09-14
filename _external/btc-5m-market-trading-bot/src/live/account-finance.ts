@@ -16,6 +16,7 @@ const moneyTokens = new Set([PUSD.toLowerCase(), USDC_E.toLowerCase()]);
 const exchanges = new Set([CTF_EXCHANGE.toLowerCase(), NEG_RISK_CTF_EXCHANGE.toLowerCase()]);
 const address = (v: unknown) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v) ? v.toLowerCase() : null;
 const topicAddress = (v: unknown) => typeof v === 'string' && /^0x0{24}[0-9a-fA-F]{40}$/.test(v) ? `0x${v.slice(-40)}`.toLowerCase() : null;
+const walletTopic = (wallet: string) => `0x${'0'.repeat(24)}${wallet.slice(2)}`.toLowerCase();
 const amount = (raw: bigint) => raw <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(raw) / 1e6 : null;
 const number = (v: unknown) => (typeof v === 'number' || typeof v === 'string' && v.trim() !== '') && Number.isFinite(Number(v)) ? Number(v) : null;
 
@@ -42,9 +43,14 @@ export async function scanConfirmedTransfers(rpc: Rpc, wallet: string, options: 
     const transfers: Row[] = [];
     for (let start = validFrom; start <= to; start += chunkSize) {
       const end = Math.min(to, start + chunkSize - 1);
-      const logs = await rpc('eth_getLogs', [{ address: [...moneyTokens], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}`, topics: [TRANSFER] }]);
-      if (!Array.isArray(logs)) throw new Error('logs_invalid');
-      for (const raw of logs) {
+      const filters = [
+        [TRANSFER, walletTopic(normalizedWallet)],
+        [TRANSFER, null, walletTopic(normalizedWallet)],
+      ];
+      for (const indexedTopics of filters) {
+        const logs = await rpc('eth_getLogs', [{ address: [...moneyTokens], fromBlock: `0x${start.toString(16)}`, toBlock: `0x${end.toString(16)}`, topics: indexedTopics }]);
+        if (!Array.isArray(logs)) throw new Error('logs_invalid');
+        for (const raw of logs) {
         const log = raw as Row;
         if (log.removed === true) throw new Error('transfer_log_removed');
         const tx = typeof log.transactionHash === 'string' ? log.transactionHash.toLowerCase() : '';
@@ -52,20 +58,23 @@ export async function scanConfirmedTransfers(rpc: Rpc, wallet: string, options: 
         const blockRaw = typeof log.blockNumber === 'string' ? log.blockNumber : '';
         const token = address(log.address);
         const topics = Array.isArray(log.topics) ? log.topics.map(t => String(t).toLowerCase()) : [];
+        const blockHash = typeof log.blockHash === 'string' ? log.blockHash.toLowerCase() : '';
         if (!/^0x[0-9a-f]{64}$/.test(tx) || !/^0x[0-9a-f]+$/.test(idx) || !/^0x[0-9a-f]+$/.test(blockRaw)
             || !token || !moneyTokens.has(token) || topics[0] !== TRANSFER || topics.length !== 3
+            || !/^0x[0-9a-f]{64}$/.test(blockHash)
             || !/^0x[0-9a-f]{64}$/.test(String(log.data || '').toLowerCase())) throw new Error('transfer_log_invalid');
         const block = Number.parseInt(blockRaw, 16), fromAddress = topicAddress(topics[1]), toAddress = topicAddress(topics[2]);
         if (!Number.isSafeInteger(block) || block < start || block > end || !fromAddress || !toAddress) throw new Error('transfer_log_invalid');
         if (fromAddress !== normalizedWallet && toAddress !== normalizedWallet) continue;
         const id = `${tx}:${idx}`;
-        if (seen.has(id)) throw new Error('transfer_log_duplicate');
+        if (seen.has(id)) continue;
         seen.add(id);
         const value = amount(BigInt(String(log.data)));
         if (value === null) throw new Error('amount_overflow');
-        transfers.push({ transfer_id: id, transaction_hash: tx, log_index: idx, block, block_hash: log.blockHash,
+        transfers.push({ transfer_id: id, transaction_hash: tx, log_index: idx, block, block_hash: blockHash,
           token, from: fromAddress, to: toAddress, amount: value,
           net_amount: (toAddress === normalizedWallet ? value : 0) - (fromAddress === normalizedWallet ? value : 0) });
+        }
       }
     }
     return { ...base, transfers, complete: true, reason: 'confirmed_block_range_scanned' };

@@ -89,14 +89,27 @@ describe('account cash evidence', () => {
     expect(receiptEvidence(receipt([log(other)]),wallet,tx,20).transfers).toEqual([]);
   });
   it('scans confirmed blocks and retains an explicit range-complete status', async () => {
+    const filters: unknown[] = [];
     const rpc = async (method: string, params: unknown[]) => {
       if (method === 'eth_blockNumber') return '0x30';
       const filter = params[0] as Record<string, string>;
+      filters.push(filter.topics);
       return Number.parseInt(filter.fromBlock.slice(2), 16) === 0x10 ? [log(PUSD, wallet)] : [];
     };
     const result = await scanConfirmedTransfers(rpc, wallet, { fromBlock: 0x10, confirmations: 2, chunkSize: 0x10 });
     expect(result).toMatchObject({ complete: true, from_block: 0x10, to_block: 0x2e });
     expect(result.transfers[0]).toMatchObject({ transaction_hash: tx, amount: 2, net_amount: 2 });
+    expect(filters).toEqual([
+      [transferTopic, `0x${'0'.repeat(24)}${wallet.slice(2)}`], [transferTopic, null, `0x${'0'.repeat(24)}${wallet.slice(2)}`],
+      [transferTopic, `0x${'0'.repeat(24)}${wallet.slice(2)}`], [transferTopic, null, `0x${'0'.repeat(24)}${wallet.slice(2)}`],
+    ]);
+  });
+  it('rejects transfer logs without a canonical block hash', async () => {
+    const original = log(PUSD, wallet);
+    const bad = { ...original, blockHash: '0x01' };
+    const result = await scanConfirmedTransfers(async (method) => method === 'eth_blockNumber' ? '0x30' : [bad], wallet, { fromBlock: 0x10, confirmations: 2, chunkSize: 0x10 });
+    expect(result).toMatchObject({ complete: false, reason: 'transfer_log_invalid', transfers: [] });
+    void rpc;
   });
   it('verifies reward amount against the wallet receipt, not the activity label', async () => {
     const rpc = async (method: string) => method === 'eth_blockNumber' ? '0x30' : receipt();
