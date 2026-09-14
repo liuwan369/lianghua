@@ -299,8 +299,30 @@ describe("uncertain ACK circuit breaker", () => {
     };
     const result = await executor.submitExit(Side.Up, 'up', 0.4, 5);
     expect(result).toMatchObject({ ok: true, orderId: 'exit-order' });
+    expect(result.size).toBe(5);
+    expect((executor as unknown as { spentUsd: number }).spentUsd).toBeCloseTo(2);
     expect(events.slice(1)).toEqual(['submitted', 'acknowledged']);
     executor.confirmAccountReconciled();
     expect(events.at(-1)).toBe('reconciled');
+  });
+
+  it("caps live exits per order and counts them toward the session total", async () => {
+    const executor = new Executor(true, 2, 10, 4);
+    const submitted: { size: number; price: number }[] = [];
+    (executor as unknown as { clob: Record<string, unknown> }).clob = {
+      tickSize: async () => 0.01,
+      minOrderSize: () => 5,
+      submitMarketSell: async (_token: string, size: number, price: number) => {
+        submitted.push({ size, price });
+        return { success: true, orderId: `exit-${submitted.length}` };
+      },
+    };
+    const first = await executor.submitExit(Side.Up, 'up', 0.4, 50);
+    const second = await executor.submitExit(Side.Down, 'down', 0.4, 50);
+    expect(first).toMatchObject({ ok: true, size: 5, notional: 2 });
+    expect(second).toMatchObject({ ok: true, size: 5, notional: 2 });
+    expect(submitted).toEqual([{ size: 5, price: 0.4 }, { size: 5, price: 0.4 }]);
+    const third = await executor.submitExit(Side.Up, 'up', 0.4, 5);
+    expect(third).toMatchObject({ ok: false, rejectReason: 'limit', limitReason: 'max_total_usd' });
   });
 });

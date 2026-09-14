@@ -288,7 +288,7 @@ export class Executor {
 
   private trackSubmission(operation: () => Promise<SubmitResult>, price: number): Promise<SubmitResult> {
     if (this.stopping || this.paused || this.submissions.size > 0 || this.takerInFlight.size > 0) {
-      return Promise.resolve({ok:false,price,size:0,notional:0});
+      return Promise.resolve({ok:false, rejectReason: "paused", price,size:0,notional:0});
     }
     const submission = operation();
     this.submissions.add(submission);
@@ -411,7 +411,8 @@ export class Executor {
       }
       const tick = await this.tick(token);
       const px = tickRoundDown(price, tick);
-      const size = Math.floor(shares * 100) / 100;
+      const marketMinimum = typeof this.clob.minOrderSize === "function" ? this.clob.minOrderSize(token) : undefined;
+      const size = this.prepSize(px, shares, marketMinimum ?? MIN_ORDER_SHARES);
       const notional = px * size;
       if (size <= 0) return { ok: false, rejectReason: "invalid", price: px, size, notional };
       if (!this.canSpend(notional)) return {
@@ -428,6 +429,8 @@ export class Executor {
       } catch {
         this.reservationCoordinator?.transition(reservationId, 'unknown');
         this.paused = true;
+        this.sent += 1;
+        this.spentUsd += notional;
         throw new UnknownOrderStateError('exit submission failed with unknown exchange state', {
           kind: 'taker', side, token, price: px, size, notional, submittedAtUnix,
         });
@@ -436,6 +439,8 @@ export class Executor {
         this.reservationCoordinator?.transition(reservationId, 'unknown');
         if (resp.orderId) this.reservationByOrderId.set(resp.orderId, reservationId);
         this.paused = true;
+        this.sent += 1;
+        this.spentUsd += notional;
         throw new UnknownOrderStateError("exit ACK timeout; account reconciliation required", {
           kind: "taker", side, token, price: px, size, notional, submittedAtUnix,
         });
@@ -453,6 +458,7 @@ export class Executor {
         this.knownOrderIds.add(resp.orderId);
       }
       this.sent += 1;
+      this.spentUsd += notional;
       return { ok: true, orderId: resp.orderId, price: px, size, notional, tradeIds: resp.tradeIds,
         signLatencyMs: resp.signLatencyMs, ackLatencyMs: resp.ackLatencyMs };
     }, price);
