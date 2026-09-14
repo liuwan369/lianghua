@@ -127,6 +127,22 @@ describe("Executor fill tracking", () => {
     expect((await executor.submit(Side.Up, "token-up", 0.04, 20)).size).toBe(20);
   });
 
+  it("exposes paper budget exhaustion as a terminal limit reason", async () => {
+    const executor = new Executor(false, 2, 20, 2);
+    const first = await executor.submit(Side.Up, "token-up", 0.4, 5);
+    const second = await executor.submit(Side.Down, "token-down", 0.4, 5);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    expect(second.rejectReason).toBe("limit");
+    expect(second.limitReason).toBe("max_total_usd");
+    expect(executor.limitReached()).toBe("max_total_usd");
+    // The executor remains terminal and does not turn an exhausted run into
+    // an apparently active stream of accepted paper orders.
+    const third = await executor.submit(Side.Up, "token-up", 0.4, 5);
+    expect(third.limitReason).toBe("max_total_usd");
+  });
+
   it("keeps a partially filled maker order tracked until its remaining size fills", async () => {
     const executor = new Executor(false, 10, 10, 100);
     const submitted = await executor.submit(Side.Up, "token-up", 0.4, 5);

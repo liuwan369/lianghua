@@ -35,7 +35,11 @@ program
     "Kill-switch order count",
     process.env.MAX_ORDERS ?? "200",
   )
-  .option("--max-total-usd <n>", "Max cumulative notional", process.env.MAX_TOTAL_USD)
+  .option(
+    "--max-total-usd <n>",
+    "Max cumulative notional (paper turnover; live capital cap)",
+    process.env.MAX_TOTAL_USD,
+  )
   .option("--skip-preflight", "Skip wallet preflight on --live")
   .option(
     "--heartbeat-ms <n>",
@@ -75,15 +79,18 @@ program
       : undefined;
     const orderUsd = parseFloat(opts.orderUsd);
     const maxOrders = parseInt(opts.maxOrders, 10);
-    const effectiveTotalUsd = maxTotalUsd ?? (live ? 10 : undefined);
+    // Paper orders are simulated turnover and can span many markets. Keep the
+    // default bounded, but do not apply the $50 live capital ceiling to paper.
+    const effectiveTotalUsd = maxTotalUsd ?? (live ? 10 : 1000);
     if (!Number.isFinite(orderUsd) || orderUsd <= 0 || orderUsd > 50) {
       throw new Error("--order-usd must be > 0 and <= 50 under the account capital limit");
     }
     if (!Number.isInteger(maxOrders) || maxOrders <= 0) {
       throw new Error("--max-orders must be a positive integer");
     }
-    if (effectiveTotalUsd != null && (!Number.isFinite(effectiveTotalUsd) || effectiveTotalUsd <= 0 || effectiveTotalUsd > 50)) {
-      throw new Error("--max-total-usd must be > 0 and <= 50 under the account capital limit");
+    const maxAllowedTotalUsd = live ? 50 : 100_000;
+    if (effectiveTotalUsd != null && (!Number.isFinite(effectiveTotalUsd) || effectiveTotalUsd <= 0 || effectiveTotalUsd > maxAllowedTotalUsd)) {
+      throw new Error(`--max-total-usd must be > 0 and <= ${maxAllowedTotalUsd} for ${live ? "live capital" : "paper turnover"}`);
     }
     if (live && maxTotalUsd == null) {
       console.warn(

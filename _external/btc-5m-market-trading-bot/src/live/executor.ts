@@ -9,6 +9,9 @@ import {
 
 export interface SubmitResult {
   ok: boolean;
+  /** Structured reason when a submission was refused before reaching the venue. */
+  rejectReason?: "limit" | "paused" | "invalid";
+  limitReason?: "max_orders" | "max_total_usd";
   orderId?: string;
   price: number;
   size: number;
@@ -90,6 +93,7 @@ export class Executor {
   private maxOrderUsd: number;
   private maxOrders: number;
   private maxTotalUsd: number;
+  private reachedLimit?: "max_orders" | "max_total_usd";
   private paperSeq = 0;
   private resting = new RestingIds();
   /** Track remaining size so partial fills stay cancellable. */
@@ -251,16 +255,31 @@ export class Executor {
 
   private canSpend(notional: number): boolean {
     if (this.sent >= this.maxOrders) {
-      console.warn(`MAX ORDERS (${this.maxOrders}) reached — refusing (kill switch)`);
+      this.noteLimit("max_orders", `MAX ORDERS (${this.maxOrders}) reached — refusing (kill switch)`);
       return false;
     }
     if (this.spentUsd + notional > this.maxTotalUsd + 1e-9) {
-      console.warn(
+      this.noteLimit(
+        "max_total_usd",
         `MAX TOTAL $${this.maxTotalUsd.toFixed(0)} reached (spent $${this.spentUsd.toFixed(2)}) — refusing`,
       );
       return false;
     }
     return true;
+  }
+
+  private noteLimit(reason: "max_orders" | "max_total_usd", message: string): void {
+    // A cap is a terminal state for this executor run. Emit the transition once
+    // so monitoring can distinguish an exhausted paper run from a live process
+    // that is still producing valid submissions.
+    if (this.reachedLimit !== reason) {
+      this.reachedLimit = reason;
+      console.warn(`${message} [terminal=${reason}]`);
+    }
+  }
+
+  limitReached(): "max_orders" | "max_total_usd" | undefined {
+    return this.reachedLimit;
   }
 
   submit(side: Side, token: string, price: number, shares: number): Promise<SubmitResult> {
@@ -294,8 +313,10 @@ export class Executor {
     const notional = px * size;
     const none: SubmitResult = { ok: false, price: px, size, notional };
 
-    if (this.stopping || this.takerInFlight.size > 0 || !Number.isFinite(size) || !Number.isFinite(px) || size <= 0 || px <= 0 || px >= 1) return none;
-    if (!this.canSpend(notional)) return none;
+    if (this.stopping || this.takerInFlight.size > 0 || !Number.isFinite(size) || !Number.isFinite(px) || size <= 0 || px <= 0 || px >= 1) {
+      return { ...none, rejectReason: "invalid" };
+    }
+    if (!this.canSpend(notional)) return { ...none, rejectReason: "limit", limitReason: this.reachedLimit };
 
     const existing = this.resting.get(side);
     if (existing) {
@@ -392,7 +413,10 @@ export class Executor {
       const px = tickRoundDown(price, tick);
       const size = Math.floor(shares * 100) / 100;
       const notional = px * size;
-      if (size <= 0 || !this.canSpend(notional)) return { ok: false, price: px, size, notional };
+      if (size <= 0) return { ok: false, rejectReason: "invalid", price: px, size, notional };
+      if (!this.canSpend(notional)) return {
+        ok: false, rejectReason: "limit", limitReason: this.reachedLimit, price: px, size, notional,
+      };
       const reservationId = `exit-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}`;
       this.reservationCoordinator?.prepare(reservationId, notional, 0);
       this.reservationCoordinator?.transition(reservationId, 'submitted');
@@ -451,8 +475,10 @@ export class Executor {
     const notional = px * size;
     const none: SubmitResult = { ok: false, price: px, size, notional };
 
-    if (this.stopping || this.takerInFlight.size > 0 || !Number.isFinite(size) || !Number.isFinite(px) || size <= 0 || px <= 0 || px >= 1) return none;
-    if (!this.canSpend(notional)) return none;
+    if (this.stopping || this.takerInFlight.size > 0 || !Number.isFinite(size) || !Number.isFinite(px) || size <= 0 || px <= 0 || px >= 1) {
+      return { ...none, rejectReason: "invalid" };
+    }
+    if (!this.canSpend(notional)) return { ...none, rejectReason: "limit", limitReason: this.reachedLimit };
     if (this.takerInFlight.has(side)) {
       console.warn(`taker in-flight ${Side.asStr(side)} — skip duplicate`);
       return none;

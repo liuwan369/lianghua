@@ -3,14 +3,14 @@
 ## Current run
 
 - Node: Dublin `34.242.206.196`
-- Run ID: `20260914-065212-1b45f5670a9c`
-- Started: `2026-09-14T06:52:12Z`
+- Run ID: `20260914-084336-6831da9cc88c`
+- Started: `2026-09-14T08:43:36Z`
 - Mode: `paper`
 - Live unlock: `false`
-- Parameters: `$2` per order, `$50` paper notional cap, 200 order cap, 180 minute duration
-- Process: running; first post-start check showed 1 quote and 1 simulated maker fill (`2026-09-14T06:52:xxZ`)
+- Parameters: `$2` per order, `$1000` paper notional cap, 1000 order cap, 180 minute duration
+- Process: running; first post-start check showed 1 quote and 2 simulated maker fills
 
-The previous run reached its `$10` cumulative submission limit (`spent $9.94`) and then repeatedly refused quotes. Its process uptime and market count were not valid continuous paper evidence. It was stopped and replaced with this bounded run. The `$50` cap is a paper-engine limit and does not authorize additional live capital.
+The previous runs reached their `$10` and then `$50` cumulative submission limits and repeatedly refused quotes. Their process uptime and market count were not valid continuous paper evidence. They were stopped and replaced with this bounded run. The `$1000` cap is a paper-engine turnover limit and does not authorize additional live capital.
 
 ## Observation rule
 
