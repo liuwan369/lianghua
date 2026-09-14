@@ -109,7 +109,6 @@ describe('account cash evidence', () => {
     const bad = { ...original, blockHash: '0x01' };
     const result = await scanConfirmedTransfers(async (method) => method === 'eth_blockNumber' ? '0x30' : [bad], wallet, { fromBlock: 0x10, confirmations: 2, chunkSize: 0x10 });
     expect(result).toMatchObject({ complete: false, reason: 'transfer_log_invalid', transfers: [] });
-    void rpc;
   });
   it('verifies reward amount against the wallet receipt, not the activity label', async () => {
     const rpc = async (method: string) => method === 'eth_blockNumber' ? '0x30' : receipt();
