@@ -36,7 +36,10 @@ export function mountTasks() {
     const liveKnown = statusResource.data !== null;
     const phases = (data?.phases || []).map(phase => ({ ...phase, tasks: phase.tasks.map(task => {
       if (task.id !== 'PAPER-01' || !liveKnown) return task;
-      return { ...task, status: liveRunning ? 'RUNNING' : 'TODO' };
+      if (liveRunning) return { ...task, status: 'RUNNING' };
+      // A configured paper run may have completed normally. Preserve the
+      // persisted DONE/REVIEW result instead of showing a finished run as TODO.
+      return task.status === 'RUNNING' ? { ...task, status: 'REVIEW' } : task;
     }) }));
     const allTasks = phases.flatMap(p => p.tasks);
     const completed = allTasks.filter(task => task.status === 'DONE').length;
