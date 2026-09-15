@@ -1,0 +1,27 @@
+{
+  "kind": "live_auth_maker_probe",
+  "executed_at": "2026-09-15",
+  "wallet": "0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd",
+  "market": "btc-updown-5m-1789440600",
+  "condition_id": "0x75365d88ce76dcc38f372884577a86ba629e1e933bc201aae0d8dd43a132c9be",
+  "size": 5,
+  "price": 0.01,
+  "notional_usd": 0.05,
+  "order_ack": {
+    "success": true,
+    "order_id": "0x148cf2ad7b356290cd262b60b922650d2727f65b6f21e378d15e524704dd4b1e",
+    "status": "live",
+    "ack_latency_ms": 50.75587799999994
+  },
+  "cancel_ack": {
+    "confirmed": true
+  },
+  "user_feed_ready": true,
+  "websocket_cancel_event": true,
+  "fills": [],
+  "still_open": false,
+  "rest_order_matched": false,
+  "balance_delta_raw": 0,
+  "probe_safe": true,
+  "live_unlocked": false
+}

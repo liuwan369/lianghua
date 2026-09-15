@@ -86,6 +86,15 @@ async function main(): Promise<void> {
     orderId = ack.orderId;
     if (!ack.success || !orderId) throw new Error(`maker order rejected: ${ack.errorMsg ?? "missing order id"}`);
     user.registerOrder(orderId, ack.tradeIds);
+    // Some deployments omit a standalone subscription ACK. Once the HTTP
+    // order ACK has registered our id, the first target-market order/trade
+    // event is the provider's concrete authenticated-channel evidence.
+    try {
+      await user.waitUntilReady(5_000);
+      userFeedReady = true;
+    } catch {
+      userFeedReady = false;
+    }
     const cancelRequestedAt = nowUnix();
     const cancelAck = await clob.cancel(orderId);
     const cancelAckAt = nowUnix();
