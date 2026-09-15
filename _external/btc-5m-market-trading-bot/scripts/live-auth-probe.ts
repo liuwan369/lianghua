@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     const bestBid = number(book.bids?.[0]?.price);
     const price = tickRoundDown(Math.max(tick, (bestBid ?? 0.01) - tick * 2), tick);
     const notional = price * minSize;
-    if (!Number.isFinite(notional) || notional <= 0 || notional > 50) throw new Error("probe notional exceeds the authorized $50 cap");
+    if (!Number.isFinite(notional) || notional <= 0 || notional > 30) throw new Error("probe notional exceeds the authorized $30 daily-loss cap");
     const submittedAt = nowUnix();
     const ack = await clob.submitOrder({ tokenId, price, size: minSize, tickSize: tick });
     orderId = ack.orderId;
