@@ -118,7 +118,7 @@ async function main(): Promise<void> {
         ( (row as Record<string, unknown>).maker_orders as unknown[]).some((maker: unknown) => maker && typeof maker === "object" && String((maker as Record<string, unknown>).order_id) === orderId))));
     const finalBalance = await clob.client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
     const balanceDelta = Number(initialBalance.balance ?? 0) - Number(finalBalance.balance ?? 0);
-    const probeSafe = cancelAck && websocketCancelEvent && fills.length === 0 && !restOrderMatched && !stillOpen && Number.isFinite(balanceDelta) && Math.abs(balanceDelta) <= 1;
+    const probeSafe = userFeedReady && cancelAck && websocketCancelEvent && fills.length === 0 && !restOrderMatched && !stillOpen && Number.isFinite(balanceDelta) && Math.abs(balanceDelta) <= 1;
     console.log(JSON.stringify({
       kind: "live_auth_maker_probe",
       wallet,
