@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-15T10:56:00+08:00",
-  "summary": "paper 观察已完成；真实用户流探针已通过；当前只剩策略亏损诊断和停止/恢复核对，实盘仍关闭。",
+  "updatedAt": "2026-09-15T12:22:00+08:00",
+  "summary": "paper 观察、真实用户流和停止/恢复核对均已完成；当前只剩策略亏损诊断，实盘仍关闭。",
   "hardRules": ["本金上限 $50", "北京时间单日最大亏损 $30", "实盘必须显式开启，异常自动停止"],
   "phases": [
     {"id":"P0","title":"基线与范围","status":"DONE","owner":"主 Agent","detail":"项目入口、资金边界、验证口径和回退方式已确定。","tasks":[
@@ -26,9 +26,9 @@
       {"id":"PAPER-01","title":"实时行情与报价","status":"DONE","owner":"执行 Agent","detail":"run 已正常结束：mode=paper、live_unlocked=false，37 个市场、38 次 quote、69 次模拟成交，无运行错误。","next":"保留该 run 作为策略诊断样本；不因进程停止重新启动旧配置。","runId":"20260914-084336-6831da9cc88c"},
       {"id":"PAPER-02","title":"paper 样本门槛","status":"DONE","owner":"QA / 量化 Agent","detail":"run 运行约 3 小时，达到 37 个市场和 69 次有效模拟成交；最终引擎 PnL 约 -$12.22，仅用于策略压力分析。","next":"转入真实订单停止/恢复核对和策略亏损归因；paper 结果不直接等同实盘收益。"}
     ]},
-    {"id":"P5","title":"极小额真实探针","status":"REVIEW","owner":"执行 / QA Agent","detail":"paper 达标后验证真实订单生命周期；maker 下单/撤单已通过，停止恢复仍待完成。","tasks":[
+    {"id":"P5","title":"极小额真实探针","status":"REVIEW","owner":"执行 / QA Agent","detail":"真实 maker 下单/撤单和跨完整市场窗口的停止/恢复已通过；策略诊断完成前不进入受限实盘。","tasks":[
       {"id":"LIVE-01","title":"真实 maker 下单与撤单","status":"DONE","owner":"执行 Agent","detail":"2026-09-15 $0.05 探针取得下单 ACK、撤单 ACK、目标市场用户流 ready、WebSocket 撤单事件、无成交、空开放订单和余额变化 0。","next":"保留证据；进入停止/恢复核对。"},
-      {"id":"LIVE-02","title":"停止与恢复核对","status":"TODO","owner":"QA Agent","detail":"停止后确认开放订单、未核对敞口和风险状态，重启后不重复下单。","next":"失败则自动回到 paper。"}
+      {"id":"LIVE-02","title":"停止与恢复核对","status":"DONE","owner":"QA Agent","detail":"跨完整 5 分钟市场窗口的 paper 运行正常退出：exit_code=0、投影 ready、reconciliation_required=false、剩余敞口 0；中途停止会保留模拟敞口并拒绝重启，已按设计核实。","next":"进入策略诊断；真实引擎仍保持 live_unlocked=false。"}
     ]},
     {"id":"P6","title":"受限小额运行","status":"TODO","owner":"主 Agent","detail":"真实探针通过后以 $2/order 起步，资金和风险始终受 $50/$30 硬条件约束。","tasks":[
       {"id":"LIVE-03","title":"小额自动做市","status":"TODO","owner":"执行 Agent","detail":"只运行已冻结策略和默认参数，异常、数据过期或风险超限自动停止。","next":"按成交质量和回撤逐步校准。"},
