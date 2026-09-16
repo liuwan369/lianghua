@@ -54,6 +54,18 @@ export class OrderBook {
       .map(([p, s]) => [untick(p), s]);
   }
 
+  askLevels(): [number, number][] {
+    return [...this.asks.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([p, s]) => [untick(p), s]);
+  }
+
+  levels(limit = Number.POSITIVE_INFINITY): { bids: [number, number][]; asks: [number, number][] } {
+    if (!Number.isFinite(limit) && limit !== Number.POSITIVE_INFINITY) throw new Error("invalid depth limit");
+    const count = Math.max(0, Math.floor(limit));
+    return { bids: this.bidLevels().slice(0, count), asks: this.askLevels().slice(0, count) };
+  }
+
   microprice(): number | undefined {
     const bb = this.bestBid();
     const ba = this.bestAsk();

@@ -1,17 +1,17 @@
 # 策略接口与可复用功能
 
-日期：2026-09-16。支持范围：Polymarket BTC 五分钟、BUY outcome 决策插件。
+日期：2026-09-16。支持范围：通用交易底座，当前提供 Polymarket BTC 五分钟适配器。
 
 ## 已分开的部分
 
-行情采集、市场发现、账户查询、CLOB 签名与请求、订单执行、资金预留、运行日志和控制台不需要调用现有配对策略即可复用。模块可复用不代表所有异常场景已完成，具体状态以任务页功能架构为准。
+行情采集、市场发现、账户查询、CLOB 签名与请求、订单执行、资金预留、持仓记账、风险、结算、运行日志和控制台由平台底座提供。策略不需要导入 venue client、MakerSession 或 PairCost；只实现 `StrategyPlugin`，通过平台事件返回订单动作。模块可复用不代表所有异常场景已完成，具体状态以任务页功能架构为准。
 
-引擎通过 `src/strategies/types.ts` 的 `BuyStrategy` 接口读取同步决策。`MakerSession` 接受策略工厂，不再直接构造 `PairCostMarketMaker`。策略读取内存行情与库存，执行器负责下单、撤单和回报；不向报价或补仓路径增加 REST、计时器或磁盘查询。
+通用入口是 `_external/btc-5m-market-trading-bot/src/platform/index.ts`。`TradingPlatform` 暴露 `market`、`account`、`orders`、`portfolio`、`risk`、`settlement`、`history` 和 `telemetry`。事件链先更新底座持仓与订单，再同步调用插件；成交后的策略动作不等待 REST、下一次盘口或磁盘查询。旧 `Engine` / `MakerSession` 通过单独兼容路径保留，不能代表通用底座的边界。
 
 | 策略 ID | 行为 | 使用范围 |
 | --- | --- | --- |
-| `pair-cost` | 保留现有配对成本策略 | 原有 paper / 受控 live 路径 |
-| `observe` | 不产生订单意图，仍接收行情和生成运行记录 | 仅 paper；live 参数在网络连接前报错 |
+| `pair-cost` | 旧系统配对成本策略 | 兼容的旧 paper / 受控 live 路径 |
+| `observe` | 不产生订单意图，仍接收行情和生成运行记录 | 通用 CLI 示例，默认 paper |
 
 `--passive-budget` 是同一算法的参数预设。默认仍为 `pair-cost`，不会修改已保存配置或切换正在运行的策略。
 
@@ -20,23 +20,34 @@
 在 `_external/btc-5m-market-trading-bot` 目录构建后：
 
 ```sh
+node dist/cli/platform.js --paper --strategy-module ./dist/platform/example-strategy.js --duration-sec 60
 node dist/cli/live.js run --paper --strategy observe --duration-min 1
-node dist/cli/live.js run --paper --strategy pair-cost
 ```
 
 也支持 `PM_STRATEGY_ID`；未知 ID 会报错。网页配置暂不新增策略参数，避免选择值与后台启动契约不一致。
 
-新 BUY 策略实现 `BuyStrategy`，通过代码注入 `new Engine({ strategyFactory: config => new MyStrategy(config) })`；需要 CLI 选择时加入 `src/strategies/registry.ts`。实现须维护风险生命周期，不得自行签名或发送订单。当前仍共用 `StrategyConfig` 与 `RiskState`，不是任意交易方向的通用插件系统。
+新策略实现 `StrategyPlugin`：
 
-## 尚未分开的部分
+```ts
+import type { StrategyPlugin } from "./platform/contracts.js";
+export const strategy: StrategyPlugin = {
+  id: "my-strategy",
+  onEvent(event, context) { return []; },
+};
+```
 
-- 成交事件缺少完整 BUY / SELL 方向，库存执行主要按买入增加份数。
-- Executor 普通挂单为 BUY，现有 SELL 是退出入口，不等于普通 maker SELL 策略。
-- 每个 outcome 的待单槽位、挂单寿命、尾盘和微观结构过滤仍在当前 BUY 做市运行时。
-- 可替换选边、报价和买入份数；普通买卖、多挂单、不同持仓模式还不能直接接入。
+动作使用 `submit`、`cancel`、`replace`，订单包含 token、`BUY|SELL`、价格、份数、TIF 和 post-only。平台统一做资金/份额预留、订单幂等、成交记账和风险停止；策略不得自行签名、调用 venue API 或绕过硬条件。CLI 用 `--strategy-module` 加载 `createStrategy()` 或默认插件。
 
-下一阶段先增加带 outcome、direction、价格、数量和流动性方式的订单意图，贯通成交方向、现金流、库存和按订单 ID 的跟踪，再迁出策略专属退出与过滤规则。保留认证成交立即触发决策、无需下一盘口或 REST 的回归。
+## 当前适配器限制
+
+- 当前 Polymarket 连接器要求显式二元市场列表；任意 venue 需要实现 `OrderGateway` 和市场/账户适配器。
+- 账户普通读取是后台刷新；未知订单、重连缺口和不完整对账会保持风险停止，不能用慢 REST 替代成交事件。
+- 结算接口只在注入已确认的 wallet/relayer adapter 时可用；广播交易不会直接增加现金。
+- PaperGateway 是显示盘口与公开成交驱动的可重复模型，不代表真实队列位置或成交率已校准。
+- 旧 `BuyStrategy`、PairCost 的选边、挂单寿命、微结构和尾盘规则仍属于兼容策略，不会自动进入通用插件。
+
+后续策略只需依赖 `StrategyPlugin` 和只读 `StrategyContext`；增加新交易场所时实现适配器，不修改平台账本。任何影响订单、资金或风险语义的改动都要重新运行公共契约测试。
 
 ## 验证
 
-注册表与注入测试覆盖默认兼容、自定义 BUY 策略、未知 ID、观察无订单和拒绝 live。编排用例验证拒绝观察实盘发生于执行器创建和网络请求前。引擎 353 项测试、类型检查和构建通过；离线测试不替代真实部分成交、恢复或收益验证。
+公共平台测试覆盖 BUY/SELL、多订单、部分成交、撤单/替换、重复成交、份额预留、共享资金、插件隔离和 paper 关闭；CLI 测试覆盖参数、策略模块、持久化、信号和清理。引擎原有测试继续验证旧兼容路径；离线测试不替代真实部分成交、恢复或收益验证。

@@ -29,6 +29,9 @@ export interface UserFeedOptions {
   ledger?: AccountEventLedger;
   /** Returns true if this order id belongs to our executor. */
   isOurOrder: (orderId: string) => boolean;
+  /** Retain both directions for the generic platform; legacy BUY sessions opt out. */
+  includeSellTrades?: boolean;
+  orderDirection?: (orderId: string) => "BUY" | "SELL" | undefined;
   /** Observe authenticated order lifecycle messages with their WS receive time. */
   onOrderEvent?: (event: {
     orderId: string;
@@ -39,7 +42,8 @@ export interface UserFeedOptions {
 }
 
 export type UserFeedEvent =
-  | { kind: "exchangeFill"; fill: Fill; reportLatencyMs?: number; orderId?: string; tradeId?: string }
+  | { kind: "exchangeFill"; fill: Fill; reportLatencyMs?: number; orderId?: string; tradeId?: string;
+      tokenId?: string; direction?: "BUY" | "SELL" }
   | { kind: "orderCancelled"; orderId: string; side?: Side };
 
 export interface UserFeedControl {
@@ -71,6 +75,13 @@ function authPayload(creds: ApiKeyCreds, conditionId: string): string {
     markets: conditionId ? [conditionId] : [],
     type: "user",
   });
+}
+
+function directionFields(opts: UserFeedOptions, orderId: string | undefined, raw: unknown, tokenId: string) {
+  if (!opts.includeSellTrades) return {};
+  const owned = orderId ? opts.orderDirection?.(orderId) : undefined;
+  const value = String(raw ?? "").toUpperCase();
+  return { tokenId, direction: owned ?? (value === "BUY" || value === "SELL" ? value : undefined) };
 }
 
 /** Parse one user-channel WS message into feed events. Exported for tests. */
@@ -143,6 +154,7 @@ export function parseUserMessage(
         events.push({
           kind: "exchangeFill",
           fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: false },
+          ...directionFields(opts, takerId, e.side, tok!),
           reportLatencyMs,
           orderId: takerId,
           tradeId,
@@ -162,6 +174,7 @@ export function parseUserMessage(
         events.push({
           kind: "exchangeFill",
           fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: true },
+          ...directionFields(opts, orderId, maker.side, tok!),
           reportLatencyMs,
           orderId,
           tradeId,
@@ -220,16 +233,18 @@ export function parseAuthenticatedTrade(
 
   if (traderSide === "TAKER") {
     const action = String(e.side ?? "").toUpperCase();
-    if (action && action !== "BUY") return [];
+    if (!opts.includeSellTrades && action && action !== "BUY") return [];
     const tok = typeof e.asset_id === "string" ? e.asset_id : undefined;
     const side = tok ? sideOfToken(tok, opts.upToken, opts.downToken) : undefined;
     const price = num(e.price);
     const size = num(e.size);
     const orderId = typeof e.taker_order_id === "string" ? e.taker_order_id : undefined;
+    if (opts.includeSellTrades && (!orderId || !opts.isOurOrder(orderId))) return [];
     if (side != null && price != null && size != null && size > 0) {
       out.push({
         kind: "exchangeFill",
         fill: { side, shares: size, price, tsUnix, isMaker: false },
+        ...directionFields(opts, orderId, e.side, tok!),
         orderId,
         tradeId,
       });
@@ -242,16 +257,18 @@ export function parseAuthenticatedTrade(
       const address = String(maker.maker_address ?? maker.owner ?? "").toLowerCase();
       if (address !== account) continue;
       const makerAction = String(maker.side ?? "").toUpperCase();
-      if (makerAction && makerAction !== "BUY") continue;
+      if (!opts.includeSellTrades && makerAction && makerAction !== "BUY") continue;
       const tok = typeof maker.asset_id === "string" ? maker.asset_id : undefined;
       const side = tok ? sideOfToken(tok, opts.upToken, opts.downToken) : undefined;
       const price = num(maker.price);
       const size = num(maker.matched_amount);
       const orderId = typeof maker.order_id === "string" ? maker.order_id : undefined;
+      if (opts.includeSellTrades && (!orderId || !opts.isOurOrder(orderId))) continue;
       if (side == null || price == null || size == null || size <= 0) continue;
       out.push({
         kind: "exchangeFill",
         fill: { side, shares: size, price, tsUnix, isMaker: true },
+        ...directionFields(opts, orderId, maker.side, tok!),
         orderId,
         tradeId,
       });
@@ -513,6 +530,7 @@ export function runUserFeed(
             ws.terminate();
             throw new Error("authenticated L2 account verification failed");
           }
+          authenticated = credentialsValid;
         }
         if (connectedOnce) {
           discontinuity = true;

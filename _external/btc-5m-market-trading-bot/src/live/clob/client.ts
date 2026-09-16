@@ -53,6 +53,9 @@ export interface SubmitOrderArgs {
   price: number;
   size: number;
   tickSize: number;
+  direction?: "BUY" | "SELL";
+  timeInForce?: "GTC" | "FOK" | "FAK";
+  postOnly?: boolean;
 }
 
 export interface SubmitOrderResult {
@@ -451,7 +454,7 @@ export class ClobWrapper {
             tokenID: args.tokenId,
             price: args.price,
             size: args.size,
-            side: ClobSide.BUY,
+            side: args.direction === "SELL" ? ClobSide.SELL : ClobSide.BUY,
           },
           {
             tickSize: sdkTickSize(args.tickSize),
@@ -463,7 +466,9 @@ export class ClobWrapper {
 
         const ackStarted = performance.now();
         postAttempted = true;
-        const resp = await this.postSignedOrder(order, OrderType.GTC, true);
+        const orderType = args.timeInForce === "FOK" ? OrderType.FOK
+          : args.timeInForce === "FAK" ? OrderType.FAK : OrderType.GTC;
+        const resp = await this.postSignedOrder(order, orderType, args.postOnly ?? true);
         postAttempted = false;
         ackLatencyMs += performance.now() - ackStarted;
         const orderId = resp?.orderID;

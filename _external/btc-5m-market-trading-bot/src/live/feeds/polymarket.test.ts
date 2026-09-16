@@ -59,6 +59,15 @@ describe("Polymarket websocket health", () => {
     expect(up.bestBid()).toBeUndefined();
     expect(up.bestAsk()).toBeUndefined();
   });
+
+  it("exposes sorted bid and ask depth for top-five monitoring", () => {
+    const up = new OrderBook();
+    up.applySnapshot([[0.40, 10], [0.39, 8], [0.38, 6]], [[0.41, 9], [0.42, 7], [0.43, 5]]);
+    expect(up.levels(2)).toEqual({
+      bids: [[0.4, 10], [0.39, 8]],
+      asks: [[0.41, 9], [0.42, 7]],
+    });
+  });
   it("requires both Up and Down books to be fresh", () => {
     expect(bookFeedHealthy(true, true, 9_900, 9_800, 10_000, 500)).toBe(true);
     expect(bookFeedHealthy(true, true, 9_900, 9_000, 10_000, 500)).toBe(false);

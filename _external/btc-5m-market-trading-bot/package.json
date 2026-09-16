@@ -6,12 +6,14 @@
   "main": "dist/index.js",
   "bin": {
     "btc-5m-live": "./dist/cli/live.js",
-    "btc-5m-backtest": "./dist/cli/backtest.js"
+    "btc-5m-backtest": "./dist/cli/backtest.js",
+    "trading-platform": "./dist/cli/platform.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli/live.ts",
     "start": "node dist/cli/live.js",
+    "platform": "node dist/cli/platform.js",
     "preflight": "node dist/cli/live.js preflight",
     "paper": "node dist/cli/live.js run --paper --duration-min 6 --log-file results/paper/session.jsonl",
     "live": "node dist/cli/live.js run --live --duration-min 15 --log-file results/live/session.jsonl --traded-file results/live/traded.jsonl",

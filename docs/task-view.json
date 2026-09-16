@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-16T09:40:00+08:00",
-  "summary": "基础交易系统与策略分别验收。基础挂单、撤单、全成交和低延迟反应已有证据；资金总占用、连续结算、异常恢复和通用买卖策略仍需补齐。",
+  "updatedAt": "2026-09-16T11:30:00+08:00",
+  "summary": "基础交易底座与策略已经分层。通用平台提供行情深度、账户、订单、持仓、风险、结算和记录接口；真实资金总占用、连续结算、异常恢复和策略收益仍分别验收。",
   "hardRules": [
     "本金上限 $50",
     "北京时间单日最大亏损 $30",
@@ -10,14 +10,14 @@
   ],
   "architecture": {
     "title": "自动交易系统功能架构",
-    "summary": "行情、账户、订单、风险和记录属于通用底座；报价、补仓和择时属于可替换策略。已完成仅指每项所列范围，不代表整套自动实盘已完成。",
+    "summary": "行情、账户、订单、持仓、风险、结算和记录属于通用底座；报价、补仓和择时属于可替换策略。已完成仅指每项所列范围，不代表整套自动实盘已完成。",
     "groups": [
       {
         "id": "DATA", "title": "行情与市场数据", "owner": "数据 Agent", "scope": "CORE",
         "detail": "可独立采集、查询与回放，不依赖现有做市策略。",
         "items": [
           { "id": "DATA-01", "title": "自动发现 BTC 五分钟市场", "status": "DONE", "detail": "发现当前场次、UP / DOWN token 和市场时间。", "next": "维护官方市场适配。", "verification": "市场发现模块和现有采集记录。" },
-          { "id": "DATA-02", "title": "实时双边盘口与公开成交", "status": "DONE", "detail": "WebSocket 增量行情、价格档位和逐 token 最小报价单位。", "next": "继续观测连接质量。", "verification": "行情模块及服务器历史采集。" },
+          { "id": "DATA-02", "title": "实时双边盘口与公开成交", "status": "DONE", "detail": "WebSocket 增量行情保存买卖双方完整 L2 档位、公开成交、交易所时间、本机接收时间、处理时间和消息年龄；策略可读取前五档或全部有效档位。", "next": "继续观测连接质量，并把深度字段接入现有控制台数据投影。", "verification": "OrderBook 深度回归、Polymarket feed 回归和统一平台 Book 契约通过；当前服务器采集器需恢复后才有新的在线样本。" },
           { "id": "DATA-03", "title": "BTC 价格与参考价格输入", "status": "DONE", "detail": "参考价格可供策略使用，不替代官方结算。", "next": "维护行情源。", "verification": "BTC 与 oracle feeds 已接入。" },
           { "id": "DATA-04", "title": "行情采集与历史保存", "status": "DONE", "detail": "独立采集服务、SQLite 日库和 JSONL 事件。", "next": "持续采集。", "verification": "都柏林 collector 服务及历史日库。" },
           { "id": "DATA-05", "title": "历史官方结算标签", "status": "DONE", "detail": "已核验批次有 1,235 个市场的官方标签。", "next": "随新市场补充标签。", "verification": "限已有标签批次，不代表全历史覆盖。" },
@@ -70,9 +70,9 @@
           { "id": "STRATEGY-04", "title": "经过验证的默认参数", "status": "TODO", "detail": "目标是只填写基本硬条件，其他采用实测默认值。", "next": "按各策略分别交付参数包。", "verification": "尚未冻结生产默认参数。" },
           { "id": "STRATEGY-05", "title": "自动调参与调整原因", "status": "PARTIAL", "detail": "已有库存和阶段联动，完整自适应与解释仍待交付。", "next": "补齐参数变化记录与页面展示。", "verification": "部分规则实现。" },
           { "id": "STRATEGY-06", "title": "奖励后可持续净盈利", "status": "TODO", "detail": "尚无足够真实连续收益证据。", "next": "分别评估交易损益、费用和实际奖励。", "verification": "真实样本不足，不承诺盈利。" },
-          { "id": "STRATEGY-07", "title": "策略注册与 BUY 决策替换", "status": "DONE", "detail": "PairCost 决策通过 BuyStrategy 接口和注册表选择；新 BUY 策略可通过工厂注入。", "next": "新策略实现接口后复用底座；通用 SELL 扩展单列待完成。", "verification": "自定义策略注入、默认兼容及未知 ID 回归通过；引擎 353 项测试与构建通过。" },
+          { "id": "STRATEGY-07", "title": "策略注册与通用平台插件", "status": "DONE", "detail": "TradingPlatform 通过 StrategyPlugin 接收事件并返回提交、撤单或替换动作；平台统一负责订单、持仓、资金和风险。", "next": "新策略只依赖平台契约；旧 PairCost 继续走兼容路径。", "verification": "CLI 可加载默认或 createStrategy 插件；类型检查、平台和 CLI 回归通过。" },
           { "id": "STRATEGY-08", "title": "不下单的独立观察模式", "status": "DONE", "detail": "--strategy observe 观察行情和运行记录，不调用配对决策；限定 paper。", "next": "通过 CLI 独立运行，账户只读查询仍使用现有入口。", "verification": "无订单意图回归通过；live 观察在执行器创建和网络请求前明确报错。" },
-          { "id": "STRATEGY-09", "title": "通用买卖、多挂单策略运行时", "status": "TODO", "detail": "当前成交与库存模型主要处理 BUY；普通 maker SELL 和多挂单还需补齐。", "next": "扩展订单方向、库存现金流、按订单 ID 跟踪与卖出恢复。", "verification": "不能只换策略名字就接入任意买卖策略。" }
+          { "id": "STRATEGY-09", "title": "通用买卖、多挂单策略运行时", "status": "PARTIAL", "detail": "公共 paper 平台已支持 BUY、SELL、多订单、部分成交、撤单和替换；真实适配器的部分成交、重启和异常组合仍需实证。", "next": "完成真实生命周期和恢复样本后再开放自动实盘策略。", "verification": "PaperGateway 15 项回归；真实部分成交和连续运行尚未完成。" }
         ]
       },
       {
@@ -106,7 +106,7 @@
           { "id": "WEB-02", "title": "账户、模拟记录与运行状态", "status": "DONE", "detail": "余额、持仓、行情、订单记录、错误和模拟结果展示。", "next": "保持数据来源清楚。", "verification": "现有控制台。" },
           { "id": "WEB-03", "title": "参数保存与基础防误配", "status": "DONE", "detail": "配置保存和跨字段金额校验已实现。", "next": "接入各策略实测默认值。", "verification": "配置契约及前端回归。" },
           { "id": "WEB-04", "title": "功能架构树与完成标记", "status": "DONE", "detail": "任务页包含 10 个模块、62 项功能；支持完成情况、模块筛选与详情，保留交付任务。", "next": "开发完成后更新任务数据，页面定时读取并变色。", "verification": "前端 62 项测试和构建通过；桌面及手机筛选、详情、刷新与无溢出检查通过。" },
-          { "id": "WEB-05", "title": "真实延迟与自动调整原因", "status": "PARTIAL", "detail": "已有部分字段，连续实盘数据和完整调整解释待接齐。", "next": "补齐分段延迟和调整原因。", "verification": "部分面板已接入。" },
+          { "id": "WEB-05", "title": "真实延迟与自动调整原因", "status": "PARTIAL", "detail": "底座已产生消息年龄、处理耗时、ACK 和成交回报字段；现有控制台的完整深度、连续实盘样本和自动调整解释仍待接齐。", "next": "把五档深度、订单等待成交时间和分段延迟接入现有页面。", "verification": "底座契约与延迟字段已测；服务器采集器当前离线，未伪造在线数值。" },
           { "id": "WEB-06", "title": "到账收益、费用与奖励总账", "status": "PARTIAL", "detail": "展示和规则页面已有，到账归属和最终净收益未完成。", "next": "接齐真实资金和奖励账。", "verification": "展示字段不能替代到账证据。" },
           { "id": "WEB-07", "title": "只填基本条件即可自动实盘", "status": "TODO", "detail": "等待默认参数、资金闭环与自动执行完成。", "next": "按策略提供经过验证的启动配置。", "verification": "完整自动策略入口尚未开放。" }
         ]
@@ -167,7 +167,7 @@
       "title": "数据与执行基础",
       "status": "REVIEW",
       "owner": "执行 / 数据 Agent",
-      "detail": "行情、账户读取、订单状态和风险持久化已接入，长期财务完整性仍在增强。",
+      "detail": "行情深度、账户读取、订单状态和风险持久化已接入，长期财务完整性仍在增强。",
       "tasks": [
         {
           "id": "EXEC-01",
