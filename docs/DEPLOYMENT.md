@@ -1,10 +1,12 @@
 # 都柏林部署
 
-更新时间：2026-09-16。发布和三端同步按 [交付规划 v7](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 和 [Agent 协作约定 v6](AGENT-WORKFLOW.md) 执行。每批核对本地、Git 和服务器发布清单；回滚只恢复程序版本，不覆盖订单、账本和风险状态。
+更新时间：2026-09-17。发布和三端同步按 [交付规划 v8](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 和 [Agent 协作约定 v6](AGENT-WORKFLOW.md) 执行。每批核对本地、Git 和服务器发布清单；回滚只恢复程序版本，不覆盖订单、账本和风险状态。
 
 正式入口：[https://34-242-206-196.sslip.io/console/](https://34-242-206-196.sslip.io/console/)。HTTP 80 跳转 HTTPS 443，后端仅监听 `127.0.0.1:18766`。当前控制台和采集服务在线，交易停止、paper 模式、实盘锁关闭。策略暂停期间不部署策略参数或自动实盘入口。
 
 本轮 2026-09-16 平台生命周期修复 `3c69167` 已推送并部署：101 个文件 SHA-256 一致，两个服务分别检查均 active，状态保持 stopped paper / live locked，配置 revision 7。回退备份 `/root/.pm-releases/architecture-20260916T100559Z-e5a5b5/`；详见 [本批发布记录](evidence/2026-09-16/platform-lifecycle-release.md)。下文其他带日期的记录均属于历史证据。
+
+本轮 2026-09-17 前端重构已部署到 `/console/`：总览移除市场表，市场和订单独立导航删除，订单/成交/撤单/失败记录归入自动交易，新增策略配置页，设置页只保留账户接入和系统诊断。策略列表和参数明确为当前会话草稿，策略执行仍暂停。源码提交为 `8e1c014`、`c31fd9a`；服务器回退目录 `/root/.pm-releases/frontend-refactor-20260917-r2/`。本地与服务器入口及 JS SHA-256 已核对，公网入口和 status API 返回 HTTP 200，状态保持 stopped/paper/live locked。详见 [前端重构发布记录](evidence/2026-09-17/frontend-refactor-release.md)。
 
 历史发布：2026-09-11 账户财务与历史恢复修复 `b9880eb`，34个发布文件内容一致，公网JS与构建SHA-256一致，账户接口通过前端实际严格校验。账户文件未改变，只重启控制台以刷新常驻账户读取进程，采集器未重启；交易未运行且实盘锁关闭：[公网验证](evidence/2026-09-11/finance-release-check.json)。该批回滚备份位于 `/root/.local/share/pm-system-recovery/20260911-finance-b9880eb.tar.gz`，只备份被替换的文件。
 
