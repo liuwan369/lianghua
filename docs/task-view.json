@@ -1,38 +1,334 @@
 {
   "schemaVersion": 1,
   "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-15T12:22:00+08:00",
-  "summary": "paper 观察、真实用户流和停止/恢复核对均已完成；当前只剩策略亏损诊断，实盘仍关闭。",
-  "hardRules": ["本金上限 $50", "北京时间单日最大亏损 $30", "实盘必须显式开启，异常自动停止"],
+  "updatedAt": "2026-09-16T09:40:00+08:00",
+  "summary": "基础交易系统与策略分别验收。基础挂单、撤单、全成交和低延迟反应已有证据；资金总占用、连续结算、异常恢复和通用买卖策略仍需补齐。",
+  "hardRules": [
+    "本金上限 $50",
+    "北京时间单日最大亏损 $30",
+    "实盘必须显式开启，异常自动停止"
+  ],
+  "architecture": {
+    "title": "自动交易系统功能架构",
+    "summary": "行情、账户、订单、风险和记录属于通用底座；报价、补仓和择时属于可替换策略。已完成仅指每项所列范围，不代表整套自动实盘已完成。",
+    "groups": [
+      {
+        "id": "DATA", "title": "行情与市场数据", "owner": "数据 Agent", "scope": "CORE",
+        "detail": "可独立采集、查询与回放，不依赖现有做市策略。",
+        "items": [
+          { "id": "DATA-01", "title": "自动发现 BTC 五分钟市场", "status": "DONE", "detail": "发现当前场次、UP / DOWN token 和市场时间。", "next": "维护官方市场适配。", "verification": "市场发现模块和现有采集记录。" },
+          { "id": "DATA-02", "title": "实时双边盘口与公开成交", "status": "DONE", "detail": "WebSocket 增量行情、价格档位和逐 token 最小报价单位。", "next": "继续观测连接质量。", "verification": "行情模块及服务器历史采集。" },
+          { "id": "DATA-03", "title": "BTC 价格与参考价格输入", "status": "DONE", "detail": "参考价格可供策略使用，不替代官方结算。", "next": "维护行情源。", "verification": "BTC 与 oracle feeds 已接入。" },
+          { "id": "DATA-04", "title": "行情采集与历史保存", "status": "DONE", "detail": "独立采集服务、SQLite 日库和 JSONL 事件。", "next": "持续采集。", "verification": "都柏林 collector 服务及历史日库。" },
+          { "id": "DATA-05", "title": "历史官方结算标签", "status": "DONE", "detail": "已核验批次有 1,235 个市场的官方标签。", "next": "随新市场补充标签。", "verification": "限已有标签批次，不代表全历史覆盖。" },
+          { "id": "DATA-06", "title": "全历史盘口覆盖与数据质量", "status": "PARTIAL", "detail": "解码和覆盖检查已有，部分历史市场缺少连续双边盘口。", "next": "补齐缺口并标识无法恢复的时间段。", "verification": "覆盖诊断及回放记录。" }
+        ]
+      },
+      {
+        "id": "ACCOUNT", "title": "账户与资金", "owner": "执行 / 数据 Agent", "scope": "CORE",
+        "detail": "账户读取可独立使用；全部资金占用和持续核算尚未闭环。",
+        "items": [
+          { "id": "ACCOUNT-01", "title": "账户接入、签名与平台认证", "status": "DONE", "detail": "官方 SDK、交易钱包、认证查询和真实签名下单。", "next": "复用给新策略。", "verification": "2026-09-15 / 16 真实认证探针。" },
+          { "id": "ACCOUNT-02", "title": "余额、持仓、挂单与成交读取", "status": "DONE", "detail": "只读查询已接通，查询结果可能晚于实时订单事件。", "next": "保持后台读取，不阻塞补单。", "verification": "账户页面和官方查询模块。" },
+          { "id": "ACCOUNT-03", "title": "普通账户自动启动与持续刷新", "status": "PARTIAL", "detail": "简化启动已有，后续刷新仍残留严格快照校验。", "next": "统一普通账户启动与刷新的兼容路径。", "verification": "account-control 源码核对；普通刷新仍需修复。" },
+          { "id": "ACCOUNT-04", "title": "可用资金与全部资金占用", "status": "PARTIAL", "detail": "新订单有预留，存量持仓和开放订单尚未完整计入总额度。", "next": "接齐余额、在途单和存量头寸的联合计算。", "verification": "预留测试已通过；总占用尚未完整验证。" },
+          { "id": "ACCOUNT-05", "title": "充值、提现与日损益核算", "status": "PARTIAL", "detail": "已有资金流扫描和离线核算，外部操作的及时刷新仍待接齐。", "next": "完成日切、外部资金变化和结算核算。", "verification": "离线核算测试，不等于完整实盘日损益。" }
+        ]
+      },
+      {
+        "id": "EXECUTION", "title": "真实订单执行", "owner": "执行 Agent", "scope": "CORE",
+        "detail": "下单、撤单和退出适配器可复用；通用卖出持仓模型尚未完成。",
+        "items": [
+          { "id": "EXECUTION-01", "title": "限价挂单与接受回执", "status": "DONE", "detail": "post-only GTC 买入挂单已取得真实订单 ID 和接受状态。", "next": "复用执行接口。", "verification": "小额真实挂单 ACK。" },
+          { "id": "EXECUTION-02", "title": "撤单与撤单回报", "status": "DONE", "detail": "真实撤单 ACK、用户 WebSocket 撤单事件和最终空挂单。", "next": "补充并发撤改场景。", "verification": "真实撤单样本。" },
+          { "id": "EXECUTION-03", "title": "自然全成交、数量与价格", "status": "DONE", "detail": "已有两笔 5 份 maker 全成交及清理记录。", "next": "补部分成交样本。", "verification": "限已有真实全成交样本。" },
+          { "id": "EXECUTION-04", "title": "单笔主动退出与定向赎回", "status": "DONE", "detail": "FOK 退出和定向赎回各有真实证据。", "next": "接入连续自动结算。", "verification": "单笔退出 / 赎回记录，不等于完整卖出策略。" },
+          { "id": "EXECUTION-05", "title": "部分成交、撤改单与迟到回报", "status": "PARTIAL", "detail": "状态处理和回归已有，真实替换竞态与部分成交样本不足。", "next": "完成对应真实生命周期校准。", "verification": "已有离线回归，真实覆盖不完整。" },
+          { "id": "EXECUTION-06", "title": "断线、超时和异常恢复", "status": "PARTIAL", "detail": "断线停单、未知订单保留和补偿查询已有。", "next": "完成无人值守恢复的组合验证。", "verification": "未完整覆盖真实断线和在途回报。" },
+          { "id": "EXECUTION-07", "title": "跨市场结算与资金复用", "status": "PARTIAL", "detail": "自动结算、清理库存再进入下一场尚未闭环。", "next": "打通结算后继续交易。", "verification": "单笔结算有证据；当前未结头寸会阻止换场。" }
+        ]
+      },
+      {
+        "id": "LATENCY", "title": "低延迟交易链路", "owner": "执行 / QA Agent", "scope": "CORE",
+        "detail": "行情和成交驱动内存决策；账户慢查询放在后台。",
+        "items": [
+          { "id": "LATENCY-01", "title": "行情接收与订单网络请求分离", "status": "DONE", "detail": "等待 ACK 时继续消费行情，执行队列保留最新决策。", "next": "保持反应速度回归。", "verification": "已部署执行通道修复。" },
+          { "id": "LATENCY-02", "title": "成交立即更新库存并触发补单", "status": "DONE", "detail": "不等待下一盘口、心跳或普通报价间隔。", "next": "测量真实端到端补仓。", "verification": "主循环离线回归验证即时重评估。" },
+          { "id": "LATENCY-03", "title": "补单不等待 REST 首次可见", "status": "DONE", "detail": "慢查询不串入补单触发链；过时报价清理本地占用。", "next": "防止后续改动恢复慢查询依赖。", "verification": "执行与账户热路径回归。" },
+          { "id": "LATENCY-04", "title": "订单状态合并写入", "status": "DONE", "detail": "下单前资金预留持久化，后续状态合并写入。", "next": "继续测量实际磁盘开销。", "verification": "account-state-store 与 risk-store 回归。" },
+          { "id": "LATENCY-05", "title": "签名、ACK、成交回报分段测量", "status": "DONE", "detail": "单次真实 ACK 61.9ms，其中 HTTP 47.4ms、签名 14.2ms；该次无成交。", "next": "扩大持续样本。", "verification": "历史单次探针，不能作为持续延迟保证。" },
+          { "id": "LATENCY-06", "title": "持续延迟分布与真实补仓速度", "status": "PARTIAL", "detail": "p50 / p95 和真实补仓链路仍待测；另一笔成交回报约 857ms。", "next": "采集常驻进程的成交到补单时间。", "verification": "ACK 不能替代成交回报或补仓速度。" }
+        ]
+      },
+      {
+        "id": "STRATEGY", "title": "可替换策略与自动参数", "owner": "量化 / 执行 Agent", "scope": "STRATEGY",
+        "detail": "现有配对策略单独保留；先支持买入决策替换，再补通用买卖、多挂单接口。",
+        "items": [
+          { "id": "STRATEGY-01", "title": "现有双边限价与配对成本策略", "status": "PARTIAL", "detail": "现有策略有 paper 样本，连续小额实盘效果尚未验证。", "next": "作为可选策略维护。", "verification": "代码与 paper 样本；未证明盈利。" },
+          { "id": "STRATEGY-02", "title": "库存偏斜、补轻侧和报价调整", "status": "PARTIAL", "detail": "现有规则已实现，单边暴露和成交成本仍在诊断。", "next": "用真实执行参数校准。", "verification": "库存规则回归和亏损分析。" },
+          { "id": "STRATEGY-03", "title": "挂单寿命、撤单和尾盘退出", "status": "PARTIAL", "detail": "当前 BUY 做市运行时仍带有这些规则，尚未全部由插件接管。", "next": "随通用意图接口迁出策略专属规则。", "verification": "单笔退出有证据，通用策略支持未完成。" },
+          { "id": "STRATEGY-04", "title": "经过验证的默认参数", "status": "TODO", "detail": "目标是只填写基本硬条件，其他采用实测默认值。", "next": "按各策略分别交付参数包。", "verification": "尚未冻结生产默认参数。" },
+          { "id": "STRATEGY-05", "title": "自动调参与调整原因", "status": "PARTIAL", "detail": "已有库存和阶段联动，完整自适应与解释仍待交付。", "next": "补齐参数变化记录与页面展示。", "verification": "部分规则实现。" },
+          { "id": "STRATEGY-06", "title": "奖励后可持续净盈利", "status": "TODO", "detail": "尚无足够真实连续收益证据。", "next": "分别评估交易损益、费用和实际奖励。", "verification": "真实样本不足，不承诺盈利。" },
+          { "id": "STRATEGY-07", "title": "策略注册与 BUY 决策替换", "status": "DONE", "detail": "PairCost 决策通过 BuyStrategy 接口和注册表选择；新 BUY 策略可通过工厂注入。", "next": "新策略实现接口后复用底座；通用 SELL 扩展单列待完成。", "verification": "自定义策略注入、默认兼容及未知 ID 回归通过；引擎 353 项测试与构建通过。" },
+          { "id": "STRATEGY-08", "title": "不下单的独立观察模式", "status": "DONE", "detail": "--strategy observe 观察行情和运行记录，不调用配对决策；限定 paper。", "next": "通过 CLI 独立运行，账户只读查询仍使用现有入口。", "verification": "无订单意图回归通过；live 观察在执行器创建和网络请求前明确报错。" },
+          { "id": "STRATEGY-09", "title": "通用买卖、多挂单策略运行时", "status": "TODO", "detail": "当前成交与库存模型主要处理 BUY；普通 maker SELL 和多挂单还需补齐。", "next": "扩展订单方向、库存现金流、按订单 ID 跟踪与卖出恢复。", "verification": "不能只换策略名字就接入任意买卖策略。" }
+        ]
+      },
+      {
+        "id": "RISK", "title": "资金限制与停止控制", "owner": "执行 / QA Agent", "scope": "CORE",
+        "detail": "所有策略共用资金边界和停止控制，不由策略自行放宽。",
+        "items": [
+          { "id": "RISK-01", "title": "新订单资金与费用预留", "status": "DONE", "detail": "下单前记入占用，未知结果保留预留。", "next": "复用给各策略。", "verification": "预留生命周期回归。" },
+          { "id": "RISK-02", "title": "总投入 $50 的完整执行限制", "status": "PARTIAL", "detail": "已有新订单额度，存量持仓、开放订单与余额需联合计算。", "next": "完成全账户资金占用闭环。", "verification": "不能把新订单预留等同完整本金限制。" },
+          { "id": "RISK-03", "title": "北京时间日损失 $30", "status": "PARTIAL", "detail": "核算与停止逻辑有测试，日初、资金变化和结算尚未持续闭环。", "next": "完成普通账户的实盘权益核算。", "verification": "离线测试不等于全天实盘覆盖。" },
+          { "id": "RISK-04", "title": "账户隔离与风险状态持久化", "status": "DONE", "detail": "paper / live 分离、进程锁、崩溃预留和磁盘失败处理。", "next": "保持所有策略共用。", "verification": "持久化与账户隔离回归。" },
+          { "id": "RISK-05", "title": "一键停止、残单清理与重启恢复", "status": "PARTIAL", "detail": "模拟停止和真实探针清理已验证，异常组合未覆盖齐。", "next": "验证真实在途单和重启组合。", "verification": "已有停止测试及探针清理证据。" }
+        ]
+      },
+      {
+        "id": "RESEARCH", "title": "研究、回放与模拟", "owner": "量化 / 数据 Agent", "scope": "CORE",
+        "detail": "数据与研究工具独立使用；具体候选策略单独验收。",
+        "items": [
+          { "id": "RESEARCH-01", "title": "历史回放与批量参数比较", "status": "DONE", "detail": "已有回放、扫描和费用 / 队列诊断工具。", "next": "新策略适配相同输入数据。", "verification": "结果受数据覆盖和成交假设限制。" },
+          { "id": "RESEARCH-02", "title": "连续 paper 运行能力", "status": "DONE", "detail": "历史批次约 3 小时、37 市场、69 次模拟成交，PnL -$12.22。", "next": "针对新参数建立独立运行记录。", "verification": "历史样本，不表示服务器当前在交易。" },
+          { "id": "RESEARCH-03", "title": "参考地址交易行为分析", "status": "DONE", "detail": "已有 7,680 市场行为报告、批次和补轻侧分析。", "next": "继续提取可验证假设。", "verification": "公开成交无法还原隐藏挂单逻辑。" },
+          { "id": "RESEARCH-04", "title": "单边亏损、配对成本和逆向选择", "status": "PARTIAL", "detail": "已有归因和回放，尚未产出真实验证后的改进参数。", "next": "按机制分别验证。", "verification": "现有亏损诊断报告。" },
+          { "id": "RESEARCH-05", "title": "真实成交率、滑点与队列校准", "status": "PARTIAL", "detail": "探针少量样本已有，部分成交和成交后价格仍待补。", "next": "积累真实有效报价和成交样本。", "verification": "真实样本不足以形成稳定统计。" },
+          { "id": "RESEARCH-06", "title": "H1 / H2 与反向信号观察", "status": "PARTIAL", "detail": "已有研究代码和只读页面，本批不修改相关研究逻辑。", "next": "独立核验研究结论和部署状态。", "verification": "不计为做市自动实盘完成。" }
+        ]
+      },
+      {
+        "id": "WEB", "title": "前端与用户操作", "owner": "产品 / API Agent", "scope": "CORE",
+        "detail": "保留现有前端，通过功能树查看进度。",
+        "items": [
+          { "id": "WEB-01", "title": "总览、交易、市场、订单、收益、设置", "status": "DONE", "detail": "现有六个主页面已接入。", "next": "按实际缺口优化。", "verification": "页面存在不代表全部实盘功能已完成。" },
+          { "id": "WEB-02", "title": "账户、模拟记录与运行状态", "status": "DONE", "detail": "余额、持仓、行情、订单记录、错误和模拟结果展示。", "next": "保持数据来源清楚。", "verification": "现有控制台。" },
+          { "id": "WEB-03", "title": "参数保存与基础防误配", "status": "DONE", "detail": "配置保存和跨字段金额校验已实现。", "next": "接入各策略实测默认值。", "verification": "配置契约及前端回归。" },
+          { "id": "WEB-04", "title": "功能架构树与完成标记", "status": "DONE", "detail": "任务页包含 10 个模块、62 项功能；支持完成情况、模块筛选与详情，保留交付任务。", "next": "开发完成后更新任务数据，页面定时读取并变色。", "verification": "前端 62 项测试和构建通过；桌面及手机筛选、详情、刷新与无溢出检查通过。" },
+          { "id": "WEB-05", "title": "真实延迟与自动调整原因", "status": "PARTIAL", "detail": "已有部分字段，连续实盘数据和完整调整解释待接齐。", "next": "补齐分段延迟和调整原因。", "verification": "部分面板已接入。" },
+          { "id": "WEB-06", "title": "到账收益、费用与奖励总账", "status": "PARTIAL", "detail": "展示和规则页面已有，到账归属和最终净收益未完成。", "next": "接齐真实资金和奖励账。", "verification": "展示字段不能替代到账证据。" },
+          { "id": "WEB-07", "title": "只填基本条件即可自动实盘", "status": "TODO", "detail": "等待默认参数、资金闭环与自动执行完成。", "next": "按策略提供经过验证的启动配置。", "verification": "完整自动策略入口尚未开放。" }
+        ]
+      },
+      {
+        "id": "OPS", "title": "服务器、开发与协作", "owner": "主 Agent / QA", "scope": "CORE",
+        "detail": "部署、验证和采集不依赖当前策略，角色按任务并行轮换。",
+        "items": [
+          { "id": "OPS-01", "title": "都柏林服务、HTTPS 与采集", "status": "DONE", "detail": "控制台与采集服务在线；运行状态另从服务器实时读取。", "next": "保持服务监控。", "verification": "服务器只读检查。" },
+          { "id": "OPS-02", "title": "测试、类型检查与构建", "status": "DONE", "detail": "统一验证和 CI 已建立。", "next": "每次修改运行相应回归。", "verification": "已有测试与构建流程。" },
+          { "id": "OPS-03", "title": "Agent 分工、复核与低延迟约束", "status": "DONE", "detail": "数据、量化、执行、产品和 QA 分工；不表示全部常驻。", "next": "逐轮更新任务归属。", "verification": "AGENT-WORKFLOW.md 与实际派工。" },
+          { "id": "OPS-04", "title": "本地 / Git / 服务器同步与回退", "status": "PARTIAL", "detail": "已有发布回退流程；工作区仍包含其他未交付变更。", "next": "按发布清单核对本批文件，不混入其他研究。", "verification": "按具体发布核验，不宣称整个工作区三端一致。" },
+          { "id": "OPS-05", "title": "定时接续开发与故障处理", "status": "PARTIAL", "detail": "已有自动化配置记录，依赖本机和 Codex 运行。", "next": "核验实际触发结果。", "verification": "本批未复核最新自动化触发。" },
+          { "id": "OPS-06", "title": "长期负载、告警与无人值守恢复", "status": "PARTIAL", "detail": "部分隔离和恢复已有，全天自动交易稳定性尚未交付。", "next": "验证长期负载与异常恢复。", "verification": "未完成全天自动实盘验证。" }
+        ]
+      },
+      {
+        "id": "DELIVERY", "title": "最终交付与增强项", "owner": "主 Agent 统筹", "scope": "DELIVERY",
+        "detail": "系统能力与策略收益分别验收，增强项不阻塞基础交易。",
+        "items": [
+          { "id": "DELIVERY-01", "title": "小额连续自动实盘", "status": "TODO", "detail": "单笔探针已完成，自动策略持续运行尚未完成。", "next": "完成资金和订单闭环后进入持续验证。", "verification": "未宣称自动实盘运行。" },
+          { "id": "DELIVERY-02", "title": "跨市场、重启、结算完整闭环", "status": "TODO", "detail": "接齐资金、订单状态、恢复及结算后再交易。", "next": "完成执行和账户剩余项。", "verification": "仍有明确未完成模块。" },
+          { "id": "DELIVERY-03", "title": "默认参数与真实净收益评估", "status": "TODO", "detail": "使用真实执行成本校准不同策略。", "next": "系统验收与策略效果分别给出结论。", "verification": "未完成收益验收。" },
+          { "id": "DELIVERY-04", "title": "原子快照与钱包全历史归档", "status": "DEFERRED", "detail": "高保证增强能力，不作为 MVP 强制前提。", "next": "基础闭环完成后按实际需要补充。", "verification": "有部分实现，旧阻塞条件应修正。" },
+          { "id": "DELIVERY-05", "title": "复杂审计报表", "status": "DEFERRED", "detail": "不进入报价、撤单和补单的等待链。", "next": "仅在有实际用途时补充。", "verification": "不阻塞基础上线。" }
+        ]
+      }
+    ]
+  },
   "phases": [
-    {"id":"P0","title":"基线与范围","status":"DONE","owner":"主 Agent","detail":"项目入口、资金边界、验证口径和回退方式已确定。","tasks":[
-      {"id":"BASE-01","title":"工程基线与统一验证","status":"DONE","owner":"QA / 主 Agent","detail":"测试、构建、服务器入口和三端发布流程已建立。","next":"维护当前版本并在发布前复核。"},
-      {"id":"SCOPE-01","title":"个人开发 MVP 范围","status":"DONE","owner":"主 Agent","detail":"原子快照、全历史归档和复杂审计降为增强项，不阻塞 MVP。","next":"按 v3 快速上线链路推进。"}
-    ]},
-    {"id":"P1","title":"数据与执行基础","status":"REVIEW","owner":"执行 / 数据 Agent","detail":"行情、账户读取、订单状态和风险持久化已接入，长期财务完整性仍在增强。","tasks":[
-      {"id":"EXEC-01","title":"风险与状态恢复","status":"DONE","owner":"执行 Agent","detail":"账户/模式隔离、风险停机和预留生命周期已有回归。","next":"在真实探针中复核停止后状态。"},
-      {"id":"FIN-01","title":"账户与资金观测","status":"REVIEW","owner":"执行 / 数据 Agent","detail":"当前窗口资金扫描可用；钱包全历史和 provider 原子快照是增强项，不阻塞当前 paper 或极小额探针。","next":"继续补普通账户 opening/current 对账，缺失项保持明确。"},
-      {"id":"PERF-01","title":"行情与执行延迟","status":"RUNNING","owner":"执行 / QA Agent","detail":"已有 5000 样本的盘口处理、行情年龄和策略决策 p50/p95；新 paper run 继续采集报价相关样本。","next":"按新 run 的有效提交和延迟关联结果校准范围，不把行情年龄当 ACK 延迟。"}
-    ]},
-    {"id":"P2","title":"回放与策略基线","status":"REVIEW","owner":"量化 Agent","detail":"历史数据用于筛选和回归，真实排队与成交仍须通过真实探针校准。","tasks":[
-      {"id":"REPLAY-01","title":"回放一致性与成交诊断","status":"RUNNING","owner":"量化 / QA Agent","detail":"逐 token 盘口覆盖、价格方向和生命周期诊断已有部分验证，可独立继续，不依赖 paper 计时。","next":"用新 paper 的有效报价/成交对照零成交和单边暴露假设。"},
-      {"id":"RESEARCH-01","title":"固定第一套默认参数","status":"RUNNING","owner":"量化 Agent","detail":"候选为 stableLive 双边限价做市；paper 使用 $2/order 仅是起步配置，尚未宣称生产最优。","next":"达到有效样本门槛后冻结版本并记录适用条件。"}
-    ]},
-    {"id":"P3","title":"做市执行闭环","status":"REVIEW","owner":"执行 / 量化 Agent","detail":"策略报价、库存、退出和风险动作已经接入，真实队列与收益仍需小额验证。","tasks":[
-      {"id":"EXEC-03","title":"双边限价报价与库存","status":"REVIEW","owner":"执行 Agent","detail":"stableLive 使用双边 maker 限价单，按盘口、库存和剩余时间调整报价。","next":"从 paper 成交与拒单数据校准。"},
-      {"id":"EXEC-04","title":"撤单、补轻侧与尾盘退出","status":"REVIEW","owner":"执行 Agent","detail":"挂单寿命、成本门槛和尾盘动作已有实现，边界场景仍需真实探针覆盖。","next":"验证真实成交、撤单和停止后的残余持仓。"}
-    ]},
-    {"id":"P4","title":"连续 paper 观察","status":"DONE","owner":"主 Agent / 执行 Agent","detail":"run 已按 180 分钟正常结束，并达到有效样本门槛；结果进入策略诊断，不把模拟收益当真实收益。","tasks":[
-      {"id":"PAPER-01","title":"实时行情与报价","status":"DONE","owner":"执行 Agent","detail":"run 已正常结束：mode=paper、live_unlocked=false，37 个市场、38 次 quote、69 次模拟成交，无运行错误。","next":"保留该 run 作为策略诊断样本；不因进程停止重新启动旧配置。","runId":"20260914-084336-6831da9cc88c"},
-      {"id":"PAPER-02","title":"paper 样本门槛","status":"DONE","owner":"QA / 量化 Agent","detail":"run 运行约 3 小时，达到 37 个市场和 69 次有效模拟成交；最终引擎 PnL 约 -$12.22，仅用于策略压力分析。","next":"转入真实订单停止/恢复核对和策略亏损归因；paper 结果不直接等同实盘收益。"}
-    ]},
-    {"id":"P5","title":"极小额真实探针","status":"REVIEW","owner":"执行 / QA Agent","detail":"真实 maker 下单/撤单和跨完整市场窗口的停止/恢复已通过；策略诊断完成前不进入受限实盘。","tasks":[
-      {"id":"LIVE-01","title":"真实 maker 下单与撤单","status":"DONE","owner":"执行 Agent","detail":"2026-09-15 $0.05 探针取得下单 ACK、撤单 ACK、目标市场用户流 ready、WebSocket 撤单事件、无成交、空开放订单和余额变化 0。","next":"保留证据；进入停止/恢复核对。"},
-      {"id":"LIVE-02","title":"停止与恢复核对","status":"DONE","owner":"QA Agent","detail":"跨完整 5 分钟市场窗口的 paper 运行正常退出：exit_code=0、投影 ready、reconciliation_required=false、剩余敞口 0；中途停止会保留模拟敞口并拒绝重启，已按设计核实。","next":"进入策略诊断；真实引擎仍保持 live_unlocked=false。"}
-    ]},
-    {"id":"P6","title":"受限小额运行","status":"TODO","owner":"主 Agent","detail":"真实探针通过后以 $2/order 起步，资金和风险始终受 $50/$30 硬条件约束。","tasks":[
-      {"id":"LIVE-03","title":"小额自动做市","status":"TODO","owner":"执行 Agent","detail":"只运行已冻结策略和默认参数，异常、数据过期或风险超限自动停止。","next":"按成交质量和回撤逐步校准。"},
-      {"id":"OPS-01","title":"持续监控与回退","status":"TODO","owner":"主 Agent / QA Agent","detail":"监控服务、日志、备份、发布清单和回滚路径。","next":"持续更新任务视图和交付证据。"}
-    ]}
+    {
+      "id": "P0",
+      "title": "基线与范围",
+      "status": "DONE",
+      "owner": "主 Agent",
+      "detail": "项目入口、资金边界、验证口径和回退方式已确定。",
+      "tasks": [
+        {
+          "id": "BASE-01",
+          "title": "工程基线与统一验证",
+          "status": "DONE",
+          "owner": "QA / 主 Agent",
+          "detail": "测试、构建、服务器入口和三端发布流程已建立。",
+          "next": "维护当前版本并在发布前复核。"
+        },
+        {
+          "id": "SCOPE-01",
+          "title": "个人开发 MVP 范围",
+          "status": "DONE",
+          "owner": "主 Agent",
+          "detail": "原子快照、全历史归档和复杂审计降为增强项，不阻塞 MVP。",
+          "next": "按 v3 快速上线链路推进。"
+        }
+      ]
+    },
+    {
+      "id": "P1",
+      "title": "数据与执行基础",
+      "status": "REVIEW",
+      "owner": "执行 / 数据 Agent",
+      "detail": "行情、账户读取、订单状态和风险持久化已接入，长期财务完整性仍在增强。",
+      "tasks": [
+        {
+          "id": "EXEC-01",
+          "title": "风险与状态恢复",
+          "status": "DONE",
+          "owner": "执行 Agent",
+          "detail": "账户/模式隔离、风险停机和预留生命周期已有回归。",
+          "next": "在真实探针中复核停止后状态。"
+        },
+        {
+          "id": "FIN-01",
+          "title": "账户与资金观测",
+          "status": "REVIEW",
+          "owner": "执行 / 数据 Agent",
+          "detail": "当前窗口资金扫描可用；钱包全历史和 provider 原子快照是增强项，不阻塞当前 paper 或极小额探针。",
+          "next": "继续补普通账户 opening/current 对账，缺失项保持明确。"
+        },
+        {
+          "id": "PERF-01",
+          "title": "行情与执行延迟",
+          "status": "RUNNING",
+          "owner": "执行 / QA Agent",
+      "detail": "已发布 latency-20260916：盘口和用户流持续消费，执行通道只保留最新决策并抑制过时报价；下单前额度预留同步落盘，后续风险/账户快照异步合并，写失败自动停单并清理锁。热路径不再因 30 秒慢读模型 TTL 停止 5 分钟市场内挂单，只在日切或已触发停止时拦截。探针并行查询并记录 HTTP ACK、WS order 生命周期、REST 首次可见和成交回报。",
+      "next": "用常驻进程采集新的 ACK/反应 p50/p95，区分交易所 HTTP 处理波动与本地队列延迟；严禁把 REST 读模型延迟用于补仓触发。"
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "title": "回放与策略基线",
+      "status": "REVIEW",
+      "owner": "量化 Agent",
+      "detail": "历史数据用于筛选和回归，真实排队与成交仍须通过真实探针校准。",
+      "tasks": [
+        {
+          "id": "REPLAY-01",
+          "title": "回放一致性与成交诊断",
+          "status": "RUNNING",
+          "owner": "量化 / QA Agent",
+          "detail": "逐 token 盘口覆盖、价格方向和生命周期诊断已有部分验证，可独立继续，不依赖 paper 计时。",
+          "next": "用新 paper 的有效报价/成交对照零成交和单边暴露假设。"
+        },
+        {
+          "id": "RESEARCH-01",
+          "title": "固定第一套默认参数",
+          "status": "RUNNING",
+          "owner": "量化 Agent",
+          "detail": "候选为 stableLive 双边限价做市；paper 使用 $2/order 仅是起步配置，尚未宣称生产最优。",
+          "next": "达到有效样本门槛后冻结版本并记录适用条件。"
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "title": "做市执行闭环",
+      "status": "REVIEW",
+      "owner": "执行 / 量化 Agent",
+      "detail": "策略报价、库存、退出和风险动作已经接入，真实队列与收益仍需小额验证。",
+      "tasks": [
+        {
+          "id": "EXEC-03",
+          "title": "双边限价报价与库存",
+          "status": "REVIEW",
+          "owner": "执行 Agent",
+          "detail": "stableLive 使用双边 maker 限价单，按盘口、库存和剩余时间调整报价。",
+          "next": "从 paper 成交与拒单数据校准。"
+        },
+        {
+          "id": "EXEC-04",
+          "title": "撤单、补轻侧与尾盘退出",
+          "status": "REVIEW",
+          "owner": "执行 Agent",
+          "detail": "挂单寿命、成本门槛和尾盘动作已有实现，边界场景仍需真实探针覆盖。",
+          "next": "验证真实成交、撤单和停止后的残余持仓。"
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "title": "连续 paper 观察",
+      "status": "DONE",
+      "owner": "主 Agent / 执行 Agent",
+      "detail": "run 已按 180 分钟正常结束，并达到有效样本门槛；结果进入策略诊断，不把模拟收益当真实收益。",
+      "tasks": [
+        {
+          "id": "PAPER-01",
+          "title": "实时行情与报价",
+          "status": "DONE",
+          "owner": "执行 Agent",
+          "detail": "run 已正常结束：mode=paper、live_unlocked=false，37 个市场、38 次 quote、69 次模拟成交，无运行错误。",
+          "next": "保留该 run 作为策略诊断样本；不因进程停止重新启动旧配置。",
+          "runId": "20260914-084336-6831da9cc88c"
+        },
+        {
+          "id": "PAPER-02",
+          "title": "paper 样本门槛",
+          "status": "DONE",
+          "owner": "QA / 量化 Agent",
+          "detail": "run 运行约 3 小时，达到 37 个市场和 69 次有效模拟成交；最终引擎 PnL 约 -$12.22，仅用于策略压力分析。",
+          "next": "转入真实订单停止/恢复核对和策略亏损归因；paper 结果不直接等同实盘收益。"
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "title": "极小额真实校准",
+      "status": "RUNNING",
+      "owner": "执行 / 量化 / QA Agent",
+      "detail": "已捕获并清理两笔自然 maker 全成交，并完成第三轮 90 秒真实撤单样本。继续采集部分成交、替换竞态、断线恢复、退出和 markout。",
+      "tasks": [
+        {
+          "id": "LIVE-01",
+          "title": "真实 maker 下单与撤单",
+          "status": "DONE",
+          "owner": "执行 Agent",
+          "detail": "2026-09-15 $0.05 探针取得下单 ACK、撤单 ACK、目标市场用户流 ready、WebSocket 撤单事件、无成交、空开放订单和余额变化 0。",
+          "next": "保留证据；进入停止/恢复核对。"
+        },
+        {
+          "id": "LIVE-02",
+          "title": "停止与恢复核对",
+          "status": "DONE",
+          "owner": "QA Agent",
+          "detail": "跨完整 5 分钟市场窗口的 paper 运行正常退出：exit_code=0、投影 ready、reconciliation_required=false、剩余敞口 0；中途停止会保留模拟敞口并拒绝重启，已按设计核实。",
+          "next": "在真实校准订单上重复最终空单和资金核对。"
+        },
+        {
+          "id": "LIVE-03",
+          "title": "真实成交参数采集",
+          "status": "RUNNING",
+          "owner": "执行 / 量化 Agent",
+          "detail": "2026-09-16 已捕获两笔 5 份真实 maker 全成交并完成退出/清理；撤单样本和 reactivity-r2 探针已确认 ACK/撤单事件链。最新下单 ACK 61.9ms（HTTP 47.4ms、签名 14.2ms），REST 首次可见 109ms；成交事件立即触发最新盘口重评估，过期报价拟态待单会回滚。无成交探针不等于策略盈利。",
+          "next": "继续累计已清理自然成交样本，并覆盖部分成交、替换竞态、断线恢复、退出和 5/30 秒 markout；同时按签名、HTTP ACK、WS order、首次可见、成交回报和 REST 补偿分解延迟。",
+          "evidence": "docs/evidence/2026-09-16/live-calibration-probe-20260916-reactivity-r2.md"
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "title": "受限小额运行",
+      "status": "TODO",
+      "owner": "主 Agent",
+      "detail": "真实校准和执行状态机核对完成后，以 $2/order 起步，资金和风险始终受 $50/$30 硬条件约束。",
+      "tasks": [
+        {
+          "id": "LIVE-03",
+          "title": "小额自动做市",
+          "status": "TODO",
+          "owner": "执行 Agent",
+          "detail": "只运行已冻结策略和默认参数，异常、数据过期或风险超限自动停止。",
+          "next": "按成交质量和回撤逐步校准。"
+        },
+        {
+          "id": "OPS-01",
+          "title": "持续监控与回退",
+          "status": "TODO",
+          "owner": "主 Agent / QA Agent",
+          "detail": "监控服务、日志、备份、发布清单和回滚路径。",
+          "next": "持续更新任务视图和交付证据。"
+        }
+      ]
+    }
   ]
 }

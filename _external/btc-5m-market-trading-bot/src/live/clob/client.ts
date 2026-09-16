@@ -150,6 +150,7 @@ export class ClobWrapper {
   private orderVersion: 2 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
   private marketMinOrderSizes = new Map<string, number>();
+  private negRiskByToken = new Map<string, boolean>();
 
   private constructor(
     client: ClobClient,
@@ -211,8 +212,28 @@ export class ClobWrapper {
       creds,
       resolved.signatureType,
     );
+    await wrapper.warmTransport();
     await wrapper.syncCollateralBalance();
     return wrapper;
+  }
+
+  /** Establish the CLOB HTTP connection before the first signed order. */
+  private async warmTransport(): Promise<void> {
+    const started = performance.now();
+    try {
+      const response = await fetch(`${DEFAULT_HOST}/time`, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(DEFAULT_WARM_TIMEOUT_MS),
+      });
+      await response.arrayBuffer();
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      console.info(`CLOB HTTP connection ready in ${(performance.now() - started).toFixed(1)}ms`);
+    } catch (error) {
+      // The SDK balance sync below remains authoritative. A failed optional
+      // warmup must not make a valid account unusable.
+      console.warn(`CLOB HTTP warmup unavailable (${error instanceof Error ? error.message : String(error)})`);
+    }
   }
 
   /** Push on-chain USDC balance to CLOB and log tradable collateral. */
@@ -364,6 +385,11 @@ export class ClobWrapper {
               if (token?.t) this.marketMinOrderSizes.set(token.t, minOrderSize);
             }
             this.orderVersion = version;
+            if (typeof market.nr === "boolean") {
+              for (const token of market.t) {
+                if (token?.t) this.negRiskByToken.set(token.t, market.nr);
+              }
+            }
             await this.client.createOrder(
               {
                 tokenID: tokenId,
@@ -401,11 +427,20 @@ export class ClobWrapper {
     this.client.tickSizes[tokenId] = sdkTickSize(tickSize);
   }
 
+  private async negRisk(tokenId: string): Promise<boolean> {
+    const cached = this.negRiskByToken.get(tokenId);
+    if (cached != null) return cached;
+    const value = await withTimeout(this.client.getNegRisk(tokenId), this.requestTimeoutMs, "CLOB risk metadata");
+    const result = Boolean(value);
+    this.negRiskByToken.set(tokenId, result);
+    return result;
+  }
+
   async submitOrder(args: SubmitOrderArgs): Promise<SubmitOrderResult> {
     const started = performance.now();
     let postAttempted = false;
     try {
-      const negRisk = await withTimeout(this.client.getNegRisk(args.tokenId), this.requestTimeoutMs, "CLOB risk metadata");
+      const negRisk = await this.negRisk(args.tokenId);
       let signLatencyMs = 0;
       let ackLatencyMs = 0;
 
@@ -538,7 +573,7 @@ export class ClobWrapper {
     const started = performance.now();
     let postAttempted = false;
     try {
-      const negRisk = await withTimeout(this.client.getNegRisk(tokenId), this.requestTimeoutMs, "CLOB risk metadata");
+      const negRisk = await this.negRisk(tokenId);
       let signLatencyMs = 0;
       let ackLatencyMs = 0;
 
@@ -604,7 +639,7 @@ export class ClobWrapper {
     const started = performance.now();
     let postAttempted = false;
     try {
-      const negRisk = await withTimeout(this.client.getNegRisk(tokenId), this.requestTimeoutMs, "CLOB risk metadata");
+      const negRisk = await this.negRisk(tokenId);
       const order = await withTimeout(this.client.createOrder({ tokenID: tokenId, size: shares, price, side: ClobSide.SELL },
         { tickSize: sdkTickSize(tickSize), negRisk, version: this.orderVersion }), this.requestTimeoutMs, "CLOB order signing");
       postAttempted = true;

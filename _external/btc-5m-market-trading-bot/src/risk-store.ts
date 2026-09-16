@@ -116,6 +116,9 @@ export class RiskStore {
   private closed = false;
   private failed = false;
   private lastWritten = "";
+  private hotPersistScheduled = false;
+  private lastFileMtimeMs = 0;
+  private lastFileSize = 0;
 
   constructor(directory: string, accountId: string, mode: "live" | "paper") {
     const account = accountId.trim().toLowerCase();
@@ -148,6 +151,7 @@ export class RiskStore {
       }
       this.persist();
       if (!fs.existsSync(this.initializedPath)) this.atomicWrite(this.initializedPath, "initialized\n");
+      this.captureFileSignature();
     } catch (error) {
       this.close();
       throw error;
@@ -167,12 +171,34 @@ export class RiskStore {
   }
 
   checkpoint(risk: RiskState, exposure: RiskExposure | null = this.document.exposure): void {
+    this.flushHot();
     this.document.risk = snapshot(risk);
     this.document.exposure = exposure;
     this.persist();
   }
 
+  /**
+   * Hot-path checkpoint. Keep risk state in memory immediately and coalesce
+   * the disk write onto the next event-loop turn. Order decisions must not
+   * wait for fsync on every book update; shutdown and cold checkpoints call
+   * flushHot() before relying on the file.
+   */
+  checkpointHot(risk: RiskState, exposure: RiskExposure | null = this.document.exposure): void {
+    if (this.closed || this.failed) throw new Error("risk persistence is unavailable; refusing new risk");
+    this.document.risk = snapshot(risk);
+    this.document.exposure = exposure;
+    if (this.hotPersistScheduled) return;
+    this.hotPersistScheduled = true;
+    setImmediate(() => {
+      this.hotPersistScheduled = false;
+      if (this.closed || this.failed) return;
+      try { this.persist(false); }
+      catch { this.failed = true; }
+    });
+  }
+
   requireReconciliation(reason: string): void {
+    this.flushHot();
     this.document.reconciliationRequired = true;
     this.document.stopReason = reason;
     this.persist();
@@ -185,15 +211,16 @@ export class RiskStore {
     this.checkpoint(risk, exposure);
   }
 
-  private persist(): void {
+  private persist(durable = true): void {
     if (this.closed || this.failed) throw new Error("risk persistence is unavailable; refusing new risk");
     try {
       validate(this.document, this.document.account, this.document.mode);
       const encoded = JSON.stringify(this.document);
       if (encoded === this.lastWritten) return;
-      if (this.lastWritten) this.verifyBeforeSubmission();
-      this.atomicWrite(this.statePath, `${encoded}\n`);
+      if (durable && this.lastWritten) this.verifyBeforeSubmission();
+      this.atomicWrite(this.statePath, `${encoded}\n`, durable);
       this.lastWritten = encoded;
+      this.captureFileSignature();
     } catch (error) {
       this.failed = true;
       throw new Error("risk persistence failed; refusing new risk", { cause: error });
@@ -201,6 +228,7 @@ export class RiskStore {
   }
 
   verifyBeforeSubmission(): void {
+    this.flushHot();
     if (this.closed || this.failed) throw new Error("risk persistence is unavailable; refusing new risk");
     try {
       const lock: unknown = JSON.parse(fs.readFileSync(this.lockPath, "utf8"));
@@ -214,14 +242,51 @@ export class RiskStore {
     }
   }
 
-  private atomicWrite(path: string, content: string): void {
+  /** Cheap in-process guard used by the order hot path. */
+  verifyBeforeSubmissionFast(): void {
+    this.verifyHot();
+  }
+
+  private captureFileSignature(): void {
+    const stat = fs.statSync(this.statePath);
+    this.lastFileMtimeMs = stat.mtimeMs;
+    this.lastFileSize = stat.size;
+  }
+
+  private verifyHot(): void {
+    if (this.closed || this.failed) throw new Error("risk persistence is unavailable; refusing new risk");
+    try {
+      const stat = fs.statSync(this.statePath);
+      if (stat.mtimeMs !== this.lastFileMtimeMs || stat.size !== this.lastFileSize) {
+        throw new Error("risk state changed outside the active owner");
+      }
+    } catch (error) {
+      this.failed = true;
+      throw new Error("risk checkpoint is missing or changed; refusing new risk", { cause: error });
+    }
+  }
+
+  /** Force the latest coalesced hot checkpoint to disk before a cold action. */
+  flushHot(): void {
+    if (!this.hotPersistScheduled) return;
+    this.hotPersistScheduled = false;
+    if (this.closed || this.failed) return;
+    try {
+      this.persist(false);
+    } catch (error) {
+      this.failed = true;
+      throw new Error("risk hot checkpoint failed; refusing new risk", { cause: error });
+    }
+  }
+
+  private atomicWrite(path: string, content: string, durable = true): void {
     const temporary = `${path}.${this.lockToken}.tmp`;
     const backup = `${path}.${this.lockToken}.bak`;
     let fd: number | undefined;
     try {
       fd = fs.openSync(temporary, "wx", 0o600);
       fs.writeFileSync(fd, content);
-      fs.fsyncSync(fd);
+      if (durable) fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = undefined;
       if (process.platform === "win32" && fs.existsSync(path)) {
@@ -238,7 +303,7 @@ export class RiskStore {
       } else {
         fs.renameSync(temporary, path);
       }
-      if (process.platform !== "win32") {
+      if (durable && process.platform !== "win32") {
         const directoryFd = fs.openSync(resolve(path, ".."), "r");
         try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
       }
@@ -251,8 +316,16 @@ export class RiskStore {
 
   close(): void {
     if (this.closed) return;
-    this.closed = true;
-    const owner: unknown = JSON.parse(fs.readFileSync(this.lockPath, "utf8"));
-    if (record(owner) && owner.token === this.lockToken) fs.unlinkSync(this.lockPath);
+    try {
+      this.flushHot();
+    } catch {
+      this.failed = true;
+    } finally {
+      this.closed = true;
+      try {
+        const owner: unknown = JSON.parse(fs.readFileSync(this.lockPath, "utf8"));
+        if (record(owner) && owner.token === this.lockToken) fs.unlinkSync(this.lockPath);
+      } catch { /* best effort cleanup after a failed checkpoint */ }
+    }
   }
 }

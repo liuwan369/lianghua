@@ -108,6 +108,25 @@ describe("pending orders remain liabilities until confirmed", () => {
     expect(s.fills()).toBe(0);
     expect(s.pendingQuotes()).toEqual([q]);
   });
+
+  it("allows an exchange fill to bypass the normal decision interval", () => {
+    const normalSession = session();
+    const normalQuote = normalSession.pendingQuotes()[0];
+    normalSession.confirmExchangeFill({ ...normalQuote, shares: normalQuote.shares, tsUnix: 1006, isMaker: true });
+    const normal = normalSession.onBook(1005.1, 0.45, 0.46, 0.52, 0.53, {
+      upTickSize: 0.01,
+      downTickSize: 0.01,
+    });
+    expect(normal.filter(event => event.kind === "quote")).toHaveLength(0);
+    const forcedSession = session();
+    const forcedQuote = forcedSession.pendingQuotes()[0];
+    forcedSession.confirmExchangeFill({ ...forcedQuote, shares: forcedQuote.shares, tsUnix: 1006, isMaker: true });
+    const forced = forcedSession.onBook(1005.1, 0.45, 0.46, 0.52, 0.53, {
+      upTickSize: 0.01,
+      downTickSize: 0.01,
+    }, true);
+    expect(forced.some(event => event.kind === "quote" || event.kind === "taker")).toBe(true);
+  });
 });
 
 

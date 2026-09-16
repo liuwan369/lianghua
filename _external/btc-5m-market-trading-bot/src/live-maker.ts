@@ -8,7 +8,8 @@ import {
   type MarketTickSizes,
 } from "./models.js";
 import type { StrategyConfig } from "./config.js";
-import { PairCostMarketMaker, type DecisionRejection } from "./strategy.js";
+import { buyStrategyFactory } from "./strategies/registry.js";
+import { assertStrategyMode, type BuyStrategy, type BuyStrategyFactory, type DecisionRejection } from "./strategies/types.js";
 import { MarketMode, type RiskState } from "./risk.js";
 
 /** Incremental 1-second BTC spot price ring. */
@@ -70,7 +71,7 @@ export interface PendingQuote {
 
 /** Streaming MAKER session for live/paper. */
 export class MakerSession {
-  strat: PairCostMarketMaker;
+  strat: BuyStrategy;
   marketStart = 0;
   marketEnd = 0;
   makerLifeSec: number;
@@ -92,8 +93,10 @@ export class MakerSession {
     defensiveCancelBps: number,
     liveMode = false,
     riskState?: RiskState,
+    strategyFactory: BuyStrategyFactory = buyStrategyFactory(),
   ) {
-    this.strat = new PairCostMarketMaker(cfg);
+    this.strat = strategyFactory(cfg);
+    assertStrategyMode(this.strat, liveMode);
     if (riskState) this.strat.risk = riskState;
     this.makerLifeSec = Math.max(0.1, makerLifeSec);
     this.decisionIntervalSec = Math.max(0, decisionIntervalSec);
@@ -149,7 +152,9 @@ export class MakerSession {
     downBid?: number,
     downAsk?: number,
     ticks: MarketTickSizes = {},
+    forceDecision = false,
   ): MakerEvent[] {
+    if (this.strat.executionMode === "observe") return [];
     const book: MarketBooks = {
       tsUnix,
       up: { bid: upBid, ask: upAsk, tickSize: ticks.upTickSize, tsUnix },
@@ -220,7 +225,7 @@ export class MakerSession {
 
     if (
       !this.haltNew &&
-      (this.decisionIntervalSec <= 0 ||
+      (forceDecision || this.decisionIntervalSec <= 0 ||
         tsUnix - this.lastDecisionTs >= this.decisionIntervalSec)
     ) {
       this.lastDecisionTs = tsUnix;

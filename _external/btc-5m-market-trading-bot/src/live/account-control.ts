@@ -51,33 +51,62 @@ function reconciliationEvidence(value: unknown): Pick<EquityReconciliation, 'cas
 
 /** Live submission gate. It persists a reservation before the caller touches the network. */
 export class AccountExecutionGate implements ReservationCoordinator {
-  constructor(private readonly store: AccountStateStore, private readonly maxAgeMs = 30_000) {}
+  private hotState: ReturnType<AccountStateStore['read']>;
+
+  constructor(private readonly store: AccountStateStore, private readonly maxAgeMs = 30_000) {
+    this.hotState = store.read();
+  }
 
   verifyBeforeSubmission(nowMs = Date.now()): void {
     const state = this.store.read();
     const view = accountEquityView(state.equity, nowMs, this.maxAgeMs);
     if (!view.accounting_ready || view.paused) throw new Error(`accounting gate closed: ${view.reason ?? 'paused'}`);
+    if (state.reservation.halted) throw new Error('accounting gate closed: daily loss limit reached');
     if (availableMicrousd(state.reservation) <= 0) throw new Error('accounting gate closed: capital reservation exhausted');
     this.store.verifyBeforeSubmission();
   }
 
+  /**
+   * Fast in-memory gate for quote, cancel/replace and hedge decisions. The
+   * account reader and full disk integrity check stay on the cold refresh
+   * path. A reservation itself is committed synchronously below because it
+   * is the only state that must survive a process crash before the network
+   * request is sent.
+   */
+  verifyBeforeSubmissionFast(nowMs = Date.now()): void {
+    // A live market is longer than the ordinary account-read freshness TTL.
+    // The fast path must not turn a slow read model into a 30-second trading
+    // pause. It still enforces the Beijing-day boundary and persisted halt;
+    // the next cold refresh updates equity/positions at the market boundary.
+    const view = accountEquityView(this.hotState.equity, nowMs, Number.MAX_SAFE_INTEGER);
+    if (!view.accounting_ready || view.paused) throw new Error(`accounting gate closed: ${view.reason ?? 'paused'}`);
+    if (this.hotState.reservation.halted) throw new Error('accounting gate closed: daily loss limit reached');
+    if (availableMicrousd(this.hotState.reservation) <= 0) throw new Error('accounting gate closed: capital reservation exhausted');
+    this.store.verifyHot();
+  }
+
   prepare(id: string, amountUsd: number, feeReserveUsd: number, nowMs = Date.now()): void {
-    this.verifyBeforeSubmission(nowMs);
-    const state = this.store.read();
-    const result = prepareReservation(state.reservation, id, money(amountUsd, 'amount'), feeMoney(feeReserveUsd), nowMs);
+    this.verifyBeforeSubmissionFast(nowMs);
+    const result = prepareReservation(this.hotState.reservation, id, money(amountUsd, 'amount'), feeMoney(feeReserveUsd), nowMs);
     if (!result.applied) throw new Error(`reservation rejected: ${result.reason}`);
-    this.store.write({ ...state, reservation: result.state });
+    this.hotState = { ...this.hotState, reservation: result.state };
+    this.store.write(this.hotState);
   }
 
   transition(id: string, status: ReservationStatus, nowMs = Date.now()): void {
-    const state = this.store.read();
-    const result = transitionReservation(state.reservation, id, status, nowMs);
+    const result = transitionReservation(this.hotState.reservation, id, status, nowMs);
     if (!result.applied) throw new Error(`reservation transition rejected: ${result.reason}`);
-    this.store.write({ ...state, reservation: result.state });
+    this.hotState = { ...this.hotState, reservation: result.state };
+    // prepare() already committed the capital reservation before the request
+    // touched the network. Later lifecycle states can be coalesced; if the
+    // process dies here, the durable prepared row still blocks a restart until
+    // the exchange state is reconciled.
+    this.store.writeHot(this.hotState);
   }
 
   /** Read one account-data cut and advance persisted equity atomically. */
   async refresh(reader: AuthoritativeAccountReader, nowMs = Date.now()): Promise<void> {
+    this.store.flushHot();
     const before = this.store.read();
     if (before.equity.day === null) {
       throw new Error('account reconciliation requires an authoritative day-opening baseline');
@@ -85,12 +114,13 @@ export class AccountExecutionGate implements ReservationCoordinator {
     const sequence = (before.equity.day?.latest.sequence ?? 0) + 1;
     const raw = reader ? await reader() : undefined;
     const cutAt = cutTime(raw, 'current');
+    const evaluationNow = Math.max(nowMs, cutAt);
     const evidence = reconciliationEvidence(raw);
     const snapshot = accountDataToEquitySnapshot(raw, before.account, cutAt, sequence);
     const previous = before.equity.day.latest;
     const current = { snapshot, previousSnapshotId: previous.id,
       cashFlows: evidence.cashFlows, positionReleases: evidence.positionReleases };
-    const result = reduceAccountEquity(before.equity, { type: 'reconcile', current }, nowMs, this.maxAgeMs);
+    const result = reduceAccountEquity(before.equity, { type: 'reconcile', current }, evaluationNow, this.maxAgeMs);
     const latest = this.store.read();
     if (latest.equity.day?.latest.id !== before.equity.day.latest.id) {
       throw new Error('account state changed during reconciliation; retry required');
@@ -100,6 +130,7 @@ export class AccountExecutionGate implements ReservationCoordinator {
       throw new Error(`account reconciliation rejected: ${result.state.reconciliationIssue ?? 'unknown'}`);
     }
     this.store.write({ ...latest, equity: result.state });
+    this.hotState = this.store.read();
   }
 
   /**
@@ -109,6 +140,7 @@ export class AccountExecutionGate implements ReservationCoordinator {
    * result cannot be used here because it has no atomic opening/current link.
    */
   async initialize(reader: AuthoritativeOpeningReader, nowMs = Date.now()): Promise<void> {
+    this.store.flushHot();
     const before = this.store.read();
     if (before.equity.day !== null) throw new Error('account opening baseline already initialized');
     const cuts = await reader();
@@ -116,13 +148,16 @@ export class AccountExecutionGate implements ReservationCoordinator {
       throw new Error('authoritative opening cut is incomplete');
     }
     const evidence = reconciliationEvidence(cuts);
-    const opening = accountDataToEquitySnapshot(cuts.opening, before.account, cutTime(cuts.opening, 'opening'), 1);
-    const current = accountDataToEquitySnapshot(cuts.current, before.account, cutTime(cuts.current, 'current'), 2);
+    const openingAt = cutTime(cuts.opening, 'opening');
+    const currentAt = cutTime(cuts.current, 'current');
+    const opening = accountDataToEquitySnapshot(cuts.opening, before.account, openingAt, 1);
+    const current = accountDataToEquitySnapshot(cuts.current, before.account, currentAt, 2);
+    const evaluationNow = Math.max(nowMs, currentAt);
     const result = reduceAccountEquity(before.equity, {
       type: 'initialize', opening,
       current: { snapshot: current, previousSnapshotId: opening.id,
         cashFlows: evidence.cashFlows, positionReleases: evidence.positionReleases },
-    }, nowMs, this.maxAgeMs);
+    }, evaluationNow, this.maxAgeMs);
     const latest = this.store.read();
     if (latest.equity.day !== null) throw new Error('account state changed during initialization; retry required');
     if (!result.applied) {
@@ -130,6 +165,7 @@ export class AccountExecutionGate implements ReservationCoordinator {
       throw new Error(`account opening reconciliation rejected: ${result.state.reconciliationIssue ?? 'unknown'}`);
     }
     this.store.write({ ...latest, equity: result.state });
+    this.hotState = this.store.read();
   }
 
   /**
@@ -142,6 +178,7 @@ export class AccountExecutionGate implements ReservationCoordinator {
     if (before.equity.day !== null) throw new Error('account opening baseline already initialized');
     const raw = await reader();
     const checked = cutTime(raw, 'current');
+    const evaluationNow = Math.max(nowMs, checked);
     const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(checked));
     const y = parts.find(p => p.type === 'year')!.value, m = parts.find(p => p.type === 'month')!.value, d = parts.find(p => p.type === 'day')!.value;
     const openingAt = Date.parse(`${y}-${m}-${d}T00:00:00+08:00`);
@@ -149,9 +186,10 @@ export class AccountExecutionGate implements ReservationCoordinator {
     const current = accountDataToEquitySnapshot(raw, before.account, checked, 2, true);
     const result = reduceAccountEquity(before.equity, { type: 'initialize', opening,
       current: { snapshot: current, previousSnapshotId: opening.id,
-        cashFlows: { fromMs: openingAt, toMs: checked, complete: true, items: [] }, positionReleases: [] } }, nowMs, this.maxAgeMs);
+        cashFlows: { fromMs: openingAt, toMs: checked, complete: true, items: [] }, positionReleases: [] } }, evaluationNow, this.maxAgeMs);
     if (!result.applied) throw new Error(`account MVP bootstrap rejected: ${result.state.reconciliationIssue ?? 'unknown'}`);
     this.store.write({ ...this.store.read(), equity: result.state });
+    this.hotState = this.store.read();
   }
 
   /** Build an empty, fail-closed envelope for first authoritative refresh. */

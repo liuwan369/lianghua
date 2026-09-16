@@ -31,6 +31,33 @@ describe('versioned API validation', () => {
     expect(()=>validate('account-data',{...base,order_history:{...section,items:[{}]}})).toThrow();
     expect(()=>validate('account-data',{...base,order_history:{...section,historical_complete:true}})).toThrow();
   });
+  it('validates the read-only anti-signal sample contract',()=>{
+    expect(()=>validate('anti-signal',{schemaVersion:1,status:'ONLINE',rule:'BOLL_BREAKOUT_20_1.5',mode:'read_only_no_orders',samples:{observed:3,skipped:1,forecasted:2,settled:1,pending:1,direct_hits:0,inverse_hits:1,direct_accuracy:0,inverse_accuracy:1},recent:[]})).not.toThrow();
+    expect(()=>validate('anti-signal',{schemaVersion:1,status:'ONLINE',rule:'x',mode:'read_only_no_orders',samples:{observed:-1,skipped:0,forecasted:0,settled:0,pending:0,direct_hits:0,inverse_hits:0,direct_accuracy:null,inverse_accuracy:null}})).toThrow();
+  });
+  it('accepts old task data and validates optional architecture without deriving completion',()=>{
+    const item = {id:'order',title:'下单',status:'DONE',detail:'已实现',next:'无',verification:'已验证'};
+    const group = {id:'execution',title:'执行',owner:'执行 Agent',scope:'CORE',detail:'可复用',items:[item]};
+    const base = {schemaVersion:1,title:'任务',updatedAt:'2026-09-16T00:00:00Z',summary:'说明',hardRules:[],phases:[]};
+    const architecture = {title:'功能架构',summary:'各模块完成情况',groups:[group]};
+    expect(()=>validate('tasks',base)).not.toThrow();
+    expect(()=>validate('tasks',{...base,architecture})).not.toThrow();
+    for(const invalid of [null,{}, {...architecture,groups:[{...group,scope:'UNKNOWN'}]}, {...architecture,groups:[{...group,items:[{...item,status:'RUNNING'}]}]}, {...architecture,groups:[{...group,items:[{...item,verification:null}]}]}]) {
+      expect(()=>validate('tasks',{...base,architecture:invalid})).toThrow();
+    }
+    expect(()=>validate('tasks',{...base,architecture:{...architecture,groups:[group,group]}})).toThrow();
+    expect(()=>validate('tasks',{...base,architecture:{...architecture,groups:[group,{...group,id:'other'}]}})).toThrow();
+    expect(()=>validate('tasks',{...base,architecture:{...architecture,groups:[{...group,items:[item,item]}]}})).toThrow();
+    expect(()=>validate('tasks',{...base,architecture:{...architecture,groups:[{...group,id:' '}]}})).toThrow();
+  });
+  it('allows repeated task IDs across phases but rejects duplicates within a phase',()=>{
+    const item={id:'LIVE-03',title:'订单',owner:'执行',status:'TODO',detail:'测试',next:'下一步'};
+    const phase={id:'P1',title:'阶段',owner:'执行',status:'TODO',detail:'说明',tasks:[item]};
+    const base={schemaVersion:1,title:'任务',updatedAt:'2026-09-16T00:00:00Z',summary:'说明',hardRules:[],phases:[phase,{...phase,id:'P2'}]};
+    expect(()=>validate('tasks',base)).not.toThrow();
+    expect(()=>validate('tasks',{...base,phases:[{...phase,tasks:[item,item]}]})).toThrow();
+    expect(()=>validate('tasks',{...base,phases:[phase,phase]})).toThrow();
+  });
   it('does not reflect submitted credentials in an account failure', async () => {
     const owner_key='a'.repeat(64), relayer_key='synthetic-relayer-test-only', builder_secret='builder-secret-test-only';
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({ok:false,error:`rejected ${owner_key} ${relayer_key} ${builder_secret}`} ),{status:400})));

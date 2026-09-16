@@ -1,4 +1,4 @@
-import { Side } from "../models.js";
+import { polymarketFillFee, Side } from "../models.js";
 import {
   ClobWrapper,
   geocheck,
@@ -34,6 +34,15 @@ export interface UnknownOrderContext {
 export interface ReservationCoordinator {
   prepare(id: string, amountUsd: number, feeReserveUsd: number): void;
   transition(id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled'): void;
+}
+
+// The active strategy preset uses the official taker fee curve. Maker orders
+// remain zero-fee; taker/exit reservations include this amount before POST.
+const DEFAULT_TAKER_FEE_RATE = 0.07;
+const DEFAULT_FEE_EXPONENT = 1.0;
+
+function takerFeeReserve(shares: number, price: number): number {
+  return polymarketFillFee(shares, price, false, DEFAULT_TAKER_FEE_RATE, 0, DEFAULT_FEE_EXPONENT);
 }
 
 export class UnknownOrderStateError extends Error {
@@ -419,7 +428,7 @@ export class Executor {
         ok: false, rejectReason: "limit", limitReason: this.reachedLimit, price: px, size, notional,
       };
       const reservationId = `exit-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}`;
-      this.reservationCoordinator?.prepare(reservationId, notional, 0);
+      this.reservationCoordinator?.prepare(reservationId, notional, takerFeeReserve(size, px));
       this.reservationCoordinator?.transition(reservationId, 'submitted');
       this.activeReservationIds.add(reservationId);
       const submittedAtUnix = Date.now() / 1000;
@@ -508,7 +517,7 @@ export class Executor {
     }
 
     const reservationId = `order-${Date.now()}-${this.sent + 1}-${Side.asStr(side)}-taker`;
-    this.reservationCoordinator?.prepare(reservationId, notional, 0);
+    this.reservationCoordinator?.prepare(reservationId, notional, takerFeeReserve(size, px));
     this.reservationCoordinator?.transition(reservationId, 'submitted');
     this.activeReservationIds.add(reservationId);
     const submittedAtUnix = Date.now() / 1000;

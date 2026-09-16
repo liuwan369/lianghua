@@ -33,6 +33,14 @@ Codex 自动化需要本机开机且 app 运行，调度配置不部署到都柏
 
 ## 发布流程
 
+### `hotpath-20260916-r1` durability and cold-path split (2026-09-16)
+
+本批在完整测试和构建通过后发布到都柏林 `/root/pm-system/_external/btc-5m-market-trading-bot`。发布前状态为 `running=false`、`mode=paper`、`live_unlocked=false`；发布目录为 `/root/.pm-system-release-hotpath-20260916-r1`，旧引擎回滚包为 `engine-before-hotpath-20260916-r1.tar.gz`。下单前账户预留改为同步原子落盘，盘口/成交后的风险快照继续异步合并；热刷新失败会 fail-closed，关闭路径始终清理锁。发布后 dashboard 与 collector 均为 `active`，状态仍为停止 paper、实盘锁定，未启动真实交易。
+
+本批本地/线上关键文件 SHA-256 一致：`account-control.ts` `618d46f7c17cd887c9f9743632c21d258d8eb656f431825f5fc26eed65e68bb3`、`account-state-store.ts` `888df07108201677edd3e650007d57733f921d8be5a1a7b651259572de4ed68e`、`risk-store.ts` `73ed3311d3174f70082a9986c520ed30a0d6210ab5fb567ded5a442ea334456b`，以及对应 dist 文件 `46f6c8f91b5cbc9654b23e19a108a65c18c293f1f4690252bd4e2386d7d37b82`、`065b3e4607a97a8a95b7c947258788cfaf2e50e9413610201a29befb1887790b`、`634281a6cd8a302bb9789b4723f8f5a08642253378350c426a8d0afe75968560`。本次最新归档 SHA-256 为 `2cfec6866f110ca9124465924147cb319551135a771beb1b1521af6090b0ac91`。
+
+最终重建后再次发布同一批次，修正并确认的本地/线上哈希为：`src/live/account-control.ts` `1194dba9b36f1219d7dc7dcbe6cad2e786aa99f86f7473e71e480906342762c1`、`src/live/account-state-store.ts` `8694e3071b2a587503c45be2c0f0c6e2db9fbcd4dd89d70573f8d3bd2bedc320`、`src/risk-store.ts` `73ed3311d3174f70082a9986c520ed30a0d6210ab5fb567ded5a442ea334456b`；对应 dist 为 `884fadc0e62683f27f9e0c9103a1f8b48ec29fcb04f8fc2fa1aef34c3cb29fe6`、`9990abc7e1548e4a520056363074bfd712b5148945d39b3382646a697d67f61c`、`634281a6cd8a302bb9789b4723f8f5a08642253378350c426a8d0afe75968560`。最终归档 SHA-256 为 `b6e9e5580f7455ccae7172154e19d726474aaac4ef9b0fa0cfa237cedb541da7`，回滚包为 `/root/.pm-system-release-hotpath-20260916-r1/engine-before-hotpath-20260916-r1.tar.gz`；远端 dashboard 与 collector 均为 `active`，状态接口仍为 `running=false`、`mode=paper`、`live_unlocked=false`。
+
 ### `d517119` account event continuity ledger (2026-09-14)
 
 本批已部署到都柏林 `/root/pm-system/_external/btc-5m-market-trading-bot`，并生成回滚包 `/root/.pm-system-release-2ad45d0/engine-before-2ad45d0.tar.gz`。远端完成 `npm run build`，并核对事件账本、认证用户流和编排器源码/产物哈希；`pm-system-dashboard-dublin.service` 与 `pm-r25-dublin-collector.service` 均为 `active`。状态接口复核为 `mode=paper`、`running=false`、`live_unlocked=false`，未提交真实订单。

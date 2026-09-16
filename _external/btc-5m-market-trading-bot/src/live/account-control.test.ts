@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -81,7 +82,9 @@ describe('account execution gate', () => {
       cashFlows: { fromMs: openingAt, toMs: currentAt + 1000, complete: true, items: [] }, positionReleases: [] };
     let release!: () => void;
     const pending = new Promise<void>(resolve => { release = resolve; });
-    const refreshing = gate.refresh(async () => { await pending; return data; }, currentAt + 1000);
+    // The reader returns its checked_at after the await; the gate must use the
+    // returned cut time rather than rejecting it as a future snapshot.
+    const refreshing = gate.refresh(async () => { await pending; return data; }, currentAt);
     gate.prepare('during-refresh', 2, 0, currentAt + 500);
     release();
     await refreshing;
@@ -106,5 +109,49 @@ describe('account execution gate', () => {
       gate.prepare('order-1', 2, 0, currentAt + 500);
       expect(store.read().reservation.reservations[0]).toMatchObject({ id: 'order-1', amountMicrousd: 2_000_000, feeReserveMicrousd: 0 });
     } finally { store.close(); }
+  });
+
+  it('does not stop a live market when the slow account read model ages past its TTL', () => {
+    const opening = snapshot('opening', 1, openingAt);
+    const current = snapshot('current', 2, currentAt);
+    const equity = createAccountEquityState(account, 'live');
+    const initialized = reduceAccountEquity(equity, {
+      type: 'initialize', opening,
+      current: { snapshot: current, previousSnapshotId: opening.id,
+        cashFlows: { fromMs: openingAt, toMs: currentAt, complete: true, items: [] }, positionReleases: [] },
+    }, currentAt, 30_000);
+    const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
+    const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(account, 'live', initialized.state, createReservationState()));
+    const gate = new AccountExecutionGate(store, 30_000);
+    expect(() => gate.verifyBeforeSubmissionFast(currentAt + 60_000)).not.toThrow();
+    gate.prepare('after-reader-ttl', 2, 0, currentAt + 60_000);
+    expect(store.read().reservation.reservations[0]).toMatchObject({
+      id: 'after-reader-ttl', status: 'prepared', amountMicrousd: 2_000_000,
+    });
+    store.close();
+  });
+
+  it('durably records a reservation before a network submission can start', () => {
+    const opening = snapshot('opening', 1, openingAt);
+    const current = snapshot('current', 2, currentAt);
+    const equity = createAccountEquityState(account, 'live');
+    const initialized = reduceAccountEquity(equity, {
+      type: 'initialize', opening,
+      current: { snapshot: current, previousSnapshotId: opening.id,
+        cashFlows: { fromMs: openingAt, toMs: currentAt, complete: true, items: [] }, positionReleases: [] },
+    }, currentAt, 30_000);
+    const root = mkdtempSync(join(tmpdir(), 'pm-account-gate-')); roots.push(root);
+    const store = new AccountStateStore(root, account, 'live', accountStateEnvelope(account, 'live', initialized.state, createReservationState()));
+    const gate = new AccountExecutionGate(store, Number.MAX_SAFE_INTEGER);
+    gate.prepare('crash-window', 2, 0, currentAt + 500);
+    expect(JSON.parse(fs.readFileSync(store.statePath, 'utf8')).reservation.reservations[0]).toMatchObject({
+      id: 'crash-window', status: 'prepared', amountMicrousd: 2_000_000,
+    });
+    gate.transition('crash-window', 'submitted', currentAt + 501);
+    expect(store.read().reservation.reservations[0].status).toBe('submitted');
+    store.flushHot();
+    expect(JSON.parse(fs.readFileSync(store.statePath, 'utf8')).reservation.reservations[0].status).toBe('submitted');
+    store.close();
+    expect(() => new AccountStateStore(root, account, 'live')).toThrow(/unresolved/);
   });
 });

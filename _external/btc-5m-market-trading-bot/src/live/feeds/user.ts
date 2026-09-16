@@ -29,6 +29,13 @@ export interface UserFeedOptions {
   ledger?: AccountEventLedger;
   /** Returns true if this order id belongs to our executor. */
   isOurOrder: (orderId: string) => boolean;
+  /** Observe authenticated order lifecycle messages with their WS receive time. */
+  onOrderEvent?: (event: {
+    orderId: string;
+    type: string;
+    sizeMatched?: number;
+    receivedAtMonoMs: number;
+  }) => void;
 }
 
 export type UserFeedEvent =
@@ -435,6 +442,19 @@ export function runUserFeed(
   };
 
   const emitRaw = (raw: unknown) => {
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      const value = raw as Record<string, unknown>;
+      const eventType = String(value.event_type ?? value.type ?? "").toLowerCase();
+      const orderId = typeof value.id === "string" ? value.id : undefined;
+      if (eventType === "order" && orderId && opts.isOurOrder(orderId)) {
+        opts.onOrderEvent?.({
+          orderId,
+          type: String(value.type ?? value.status ?? "").toUpperCase(),
+          sizeMatched: num(value.size_matched),
+          receivedAtMonoMs: performance.now(),
+        });
+      }
+    }
     for (const ev of parseUserMessage(raw, opts, orderMatched, seenTrades)) {
       emitEvent(ev);
     }
@@ -680,8 +700,11 @@ export function runUserFeed(
       if (stableCount < 2) {
         throw new Error("authenticated trade snapshot did not stabilize in 5 seconds");
       }
-      const snapshotSeen = new Set<string>();
-      const events = finalRows.flatMap((row) => parseAuthenticatedTrade(row, opts, snapshotSeen));
+      // Use the same trade identity set as the WebSocket parser. A REST
+      // compensation response can contain the same trade after its status
+      // changes from MATCHED to MINED/CONFIRMED; parsing it with a fresh set
+      // would emit a second fill for the same execution.
+      const events = finalRows.flatMap((row) => parseAuthenticatedTrade(row, opts, seenTrades));
       discontinuity = false;
       gapStartUnix = undefined;
       opts.ledger?.markResynced("explicit authenticated REST reconciliation");

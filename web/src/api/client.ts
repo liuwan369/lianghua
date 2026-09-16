@@ -1,10 +1,27 @@
-import type { Account, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, TaskView, StrategyComparison } from './types';
+import type { Account, AntiSignal, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, TaskView, StrategyComparison } from './types';
 
 const object = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
 const nullableNumber = (v: unknown) => v === null || num(v);
 const nullableString = (v: unknown) => v === null || typeof v === 'string';
 const integer = (v: unknown) => num(v) && Number.isInteger(v) && (v as number) >= 0;
+const uniqueIds = (values: unknown[]) => values.every(v => object(v) && typeof v.id === 'string' && v.id.trim().length > 0)
+  && new Set(values.map(v => (v as Obj).id)).size === values.length;
+function validArchitecture(value: unknown): boolean {
+  if (!object(value) || typeof value.title !== 'string' || typeof value.summary !== 'string' || !Array.isArray(value.groups)
+    || !uniqueIds(value.groups)) return false;
+  const itemIds: unknown[] = [];
+  for (const group of value.groups) {
+    if (!object(group) || typeof group.title !== 'string' || typeof group.owner !== 'string' || typeof group.detail !== 'string'
+      || !['CORE','STRATEGY','DELIVERY'].includes(String(group.scope)) || !Array.isArray(group.items) || !uniqueIds(group.items)) return false;
+    for (const item of group.items) {
+      if (!object(item) || !['title','detail','next','verification'].every(key => typeof item[key] === 'string')
+        || !['DONE','PARTIAL','TODO','DEFERRED'].includes(String(item.status))) return false;
+      itemIds.push(item);
+    }
+  }
+  return uniqueIds(itemIds);
+}
 export function validate(kind: string, data: unknown): void {
   if (!object(data) || (kind !== 'account' && data.schemaVersion !== 1)) throw new Error('接口版本或数据格式不兼容');
   if (data.control_source !== undefined && (!object(data.control_source)
@@ -67,10 +84,20 @@ export function validate(kind: string, data: unknown): void {
   }
   if (kind === 'tasks') valid = data.schemaVersion === 1 && typeof data.title === 'string' && typeof data.updatedAt === 'string'
     && typeof data.summary === 'string' && Array.isArray(data.hardRules) && data.hardRules.every(v => typeof v === 'string')
-    && Array.isArray(data.phases) && data.phases.every(p => object(p) && typeof p.id === 'string' && typeof p.title === 'string'
+    && Array.isArray(data.phases) && uniqueIds(data.phases) && data.phases.every(p => object(p) && typeof p.id === 'string' && typeof p.title === 'string'
       && typeof p.status === 'string' && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(p.status) && typeof p.owner === 'string' && typeof p.detail === 'string' && Array.isArray(p.tasks)
-      && p.tasks.every(t => object(t) && typeof t.id === 'string' && typeof t.title === 'string' && typeof t.status === 'string'
-        && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(t.status) && typeof t.owner === 'string' && typeof t.detail === 'string' && typeof t.next === 'string'));
+      && uniqueIds(p.tasks) && p.tasks.every(t => object(t) && typeof t.id === 'string' && typeof t.title === 'string' && typeof t.status === 'string'
+        && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(t.status) && typeof t.owner === 'string' && typeof t.detail === 'string' && typeof t.next === 'string'
+        && (t.runId === undefined || typeof t.runId === 'string')))
+    && (data.architecture === undefined || validArchitecture(data.architecture));
+  if (kind === 'anti-signal') {
+    const samples = data.samples;
+    valid = data.schemaVersion === 1 && typeof data.status === 'string'
+      && typeof data.rule === 'string' && typeof data.mode === 'string'
+      && (samples === undefined || object(samples) && ['observed','skipped','forecasted','settled','pending','direct_hits','inverse_hits'].every(k => integer(samples[k]))
+        && ['direct_accuracy','inverse_accuracy'].every(k => nullableNumber(samples[k])))
+      && (data.recent === undefined || Array.isArray(data.recent));
+  }
   if (!valid) throw new Error('接口数据不完整，已清空该板块');
 }
 
@@ -151,4 +178,5 @@ export const api = {
     if (!data.length) throw new Error('策略数据暂不可用');
     return { receivedAt: Date.now(), sources: data };
   },
+  antiSignal: () => get<AntiSignal>('anti-signal', '/api/anti-signal'),
 };

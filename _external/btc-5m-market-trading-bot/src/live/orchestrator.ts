@@ -169,10 +169,19 @@ export async function applyEvents(
   user?: UserFeedControl,
   canSubmit?: () => boolean,
   triggerReceivedAtMonoMs?: number,
+  isSuperseded?: () => boolean,
 ): Promise<void> {
   for (const ev of events) {
     switch (ev.kind) {
       case "quote": {
+        if (live && isSuperseded?.()) {
+          // MakerSession registers a quote while producing the decision, before
+          // the exchange request is sent. If that stale action is discarded,
+          // remove the speculative reservation or the next decision will see
+          // a phantom pending quote and never submit its replacement.
+          engine.onOrderCancelled(ev.side);
+          continue;
+        }
         if (live && !canSubmit?.()) {
           throw new Error("live feeds became unhealthy before quote submission");
         }
@@ -210,7 +219,11 @@ export async function applyEvents(
       }
 
       case "taker": {
-
+        // A newer decision supersedes an unsubmitted taker action too. The
+        // current in-flight HTTP request cannot be cancelled safely, but a
+        // stale follow-up action must never be sent after a fresh book or fill
+        // has already queued a replacement decision.
+        if (live && isSuperseded?.()) continue;
         if (live && !canSubmit?.()) {
           throw new Error("live feeds became unhealthy before hedge submission");
         }
@@ -506,7 +519,9 @@ async function runOneMarket(
 
       ? runUserFeed(
 
-          (ev) => queue.push(ev),
+          (ev) => queue.push(ev.kind === "user"
+            ? { ...ev, receivedAtMonoMs: performance.now() }
+            : ev),
 
           {
 
@@ -577,63 +592,118 @@ async function runOneMarket(
 
 
 
-  const decideAndApply = async (ts: number, b: BookSnapshot) => {
+  type DecisionRequest = {
+    version: number;
+    ts: number;
+    book: BookSnapshot;
+    forceDecision: boolean;
+    triggerReceivedAtMonoMs?: number;
+  };
+  let pendingDecision: DecisionRequest | undefined;
+  let nextDecisionVersion = 0;
+  let applyRunning = false;
+  let applyDrain: Promise<void> | undefined;
+  let applyError: unknown;
+  let acceptingDecisions = true;
 
-    if (cfg.live && !liveBookIsFresh(b)) return;
-    if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) return;
-
-    const decisionStarted = performance.now();
-    const ev = engine.onBook(
-
-      ts,
-
-      b.upBid,
-
-      b.upAsk,
-
-      b.downBid,
-
-      b.downAsk,
-
-      {
-        upBidSize: b.upBidSz,
-        downBidSize: b.downBidSz,
-        upBidLevels: b.upBidLevels?.map(([price, size]) => ({ price, size })),
-        downBidLevels: b.downBidLevels?.map(([price, size]) => ({ price, size })),
-        upSellTradeRateSharesPerSec: b.upSellTradeRate,
-        downSellTradeRateSharesPerSec: b.downSellTradeRate,
-        upTickSize: executor.knownTickSize(mkt.upToken),
-        downTickSize: executor.knownTickSize(mkt.downToken),
-      },
-
-    );
-
-    recordLatency(journal,mkt,"strategy_decision",performance.now() - decisionStarted,cfg.live);
-    const rejection = engine.session.lastDecisionRejection();
-    const rejectionKey = rejection ? JSON.stringify(rejection) : undefined;
-    if (rejectionKey !== lastDecisionRejection) {
-      lastDecisionRejection = rejectionKey;
-      if (rejection) journal.log("decision_rejected", mkt, ts, { ...rejection,
-        side: rejection.side != null ? Side.asStr(rejection.side) : null });
+  const drainApplyQueue = async (): Promise<void> => {
+    if (applyRunning) return;
+    applyRunning = true;
+    try {
+      while (pendingDecision != null && acceptingDecisions) {
+        const request = pendingDecision;
+        pendingDecision = undefined;
+        const requestIsSuperseded = () =>
+          pendingDecision != null && pendingDecision.version > request.version;
+        const decisionStarted = performance.now();
+        const b = request.book;
+        if (cfg.live && (!liveBookIsFresh(b) || !user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) continue;
+        const ev = engine.onBook(
+          request.ts,
+          b.upBid,
+          b.upAsk,
+          b.downBid,
+          b.downAsk,
+          {
+            upBidSize: b.upBidSz,
+            downBidSize: b.downBidSz,
+            upBidLevels: b.upBidLevels?.map(([price, size]) => ({ price, size })),
+            downBidLevels: b.downBidLevels?.map(([price, size]) => ({ price, size })),
+            upSellTradeRateSharesPerSec: b.upSellTradeRate,
+            downSellTradeRateSharesPerSec: b.downSellTradeRate,
+            upTickSize: executor.knownTickSize(mkt.upToken),
+            downTickSize: executor.knownTickSize(mkt.downToken),
+          },
+          request.forceDecision,
+        );
+        recordLatency(journal, mkt, "strategy_decision", performance.now() - decisionStarted, cfg.live);
+        const rejection = engine.session.lastDecisionRejection();
+        const rejectionKey = rejection ? JSON.stringify(rejection) : undefined;
+        if (rejectionKey !== lastDecisionRejection) {
+          lastDecisionRejection = rejectionKey;
+          if (rejection) journal.log("decision_rejected", mkt, request.ts, {
+            ...rejection,
+            side: rejection.side != null ? Side.asStr(rejection.side) : null,
+          });
+        }
+        if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) continue;
+        await applyEvents(
+          ev,
+          executor,
+          engine,
+          mkt,
+          journal,
+          request.ts,
+          cfg.live,
+          user,
+          () => Boolean(
+            latest != null && liveBookIsFresh(latest) && user?.isHealthy() && userStreamContinuous(user) && pm.isHealthy(5_000),
+          ),
+          request.triggerReceivedAtMonoMs ?? b.receivedAtMonoMs,
+          requestIsSuperseded,
+        );
+        // Keep the urgent flag if a fill arrived while this request was in
+        // flight. The newer queued request carries it forward; clearing here
+        // would otherwise lose the only trigger for immediate replenishment.
+        if (request.forceDecision && pendingDecision == null) {
+          forceDecisionPending = false;
+          forceDecisionTriggerMonoMs = undefined;
+        }
+      }
+    } catch (error) {
+      applyError = error;
+    } finally {
+      applyRunning = false;
+      applyDrain = undefined;
     }
+  };
 
-    // Health can change while the strategy computes. Never submit a real
-    // order unless both authenticated events and both book sides are fresh.
-    if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) return;
-    await applyEvents(
-      ev,
-      executor,
-      engine,
-      mkt,
-      journal,
+  const waitForApplyQueue = async (): Promise<void> => {
+    acceptingDecisions = false;
+    if (applyDrain) await applyDrain;
+    if (applyError != null) throw applyError;
+  };
+
+  const decideAndApply = async (
+    ts: number,
+    b: BookSnapshot,
+    forceDecision = false,
+    triggerReceivedAtMonoMs?: number,
+  ): Promise<boolean> => {
+
+    if (cfg.live && !liveBookIsFresh(b)) return false;
+    if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user) || !pm.isHealthy(5_000))) return false;
+    if (!acceptingDecisions) return false;
+    const previous = pendingDecision;
+    pendingDecision = {
+      version: ++nextDecisionVersion,
       ts,
-      cfg.live,
-      user,
-      () => Boolean(
-        liveBookIsFresh(b) && user?.isHealthy() && userStreamContinuous(user) && pm.isHealthy(5_000),
-      ),
-      b.receivedAtMonoMs,
-    );
+      book: b,
+      forceDecision: forceDecision || previous?.forceDecision === true,
+      triggerReceivedAtMonoMs: previous?.triggerReceivedAtMonoMs ?? triggerReceivedAtMonoMs ?? b.receivedAtMonoMs,
+    };
+    if (!applyRunning) applyDrain = drainApplyQueue();
+    return true;
 
   };
 
@@ -641,6 +711,8 @@ async function runOneMarket(
 
   let nextHb = Date.now() + cfg.heartbeatMs;
   let reachedMarketEnd = false;
+  let forceDecisionPending = false;
+  let forceDecisionTriggerMonoMs: number | undefined;
 
 
 
@@ -659,6 +731,8 @@ async function runOneMarket(
 
   while (nowUnix() < deadline && !shouldStop()) {
 
+    if (applyError != null) throw applyError;
+
       if (cfg.live && (!user?.isHealthy() || !userStreamContinuous(user))) {
       console.error("authenticated order/fill feed stale — cancelling and stopping");
       await executor.cancelAll();
@@ -671,7 +745,7 @@ async function runOneMarket(
       throw new Error("polymarket book feed is not healthy");
     }
 
-    const waitMs = Math.max(1, Math.min(nextHb - Date.now(), 250));
+    const waitMs = Math.max(1, Math.min(nextHb - Date.now(), cfg.live ? 25 : 250));
 
     const msg = await queue.pop(waitMs);
 
@@ -679,7 +753,11 @@ async function runOneMarket(
 
     if (Date.now() >= nextHb) {
 
-      if (latest) await decideAndApply(nowUnix(), latest);
+      if (latest) {
+        const force = forceDecisionPending;
+        const trigger = forceDecisionTriggerMonoMs;
+        await decideAndApply(nowUnix(), latest, force, trigger);
+      }
 
       nextHb = Date.now() + cfg.heartbeatMs;
 
@@ -734,7 +812,9 @@ async function runOneMarket(
         recordLatency(journal,mkt,"book_processing",latest.receivedAtMonoMs == null || latest.processedAtMonoMs == null
           ? undefined : latest.processedAtMonoMs - latest.receivedAtMonoMs,cfg.live);
 
-        await decideAndApply(msg.snapshot.tsUnix, msg.snapshot);
+        const force = forceDecisionPending;
+        const trigger = forceDecisionTriggerMonoMs;
+        await decideAndApply(msg.snapshot.tsUnix, msg.snapshot, force, trigger);
 
         break;
 
@@ -756,6 +836,11 @@ async function runOneMarket(
 
       case "user":
 
+        if (msg.event.kind === "exchangeFill") {
+          forceDecisionPending = true;
+          forceDecisionTriggerMonoMs ??= msg.receivedAtMonoMs ?? performance.now();
+        }
+
         await handleUserEvent(
 
           engine,
@@ -773,6 +858,23 @@ async function runOneMarket(
 
         );
 
+        // A user fill is an urgent inventory change. Queue a fresh decision
+        // immediately from the newest book instead of waiting for the next
+        // market tick or heartbeat. Freshness/health gates remain inside
+        // decideAndApply; if the book is stale, forceDecisionPending survives
+        // until the next healthy book arrives.
+        if (msg.event.kind === "exchangeFill" && latest && bookIsComplete(latest)) {
+          await decideAndApply(
+            nowUnix(),
+            latest,
+            true,
+            msg.receivedAtMonoMs ?? forceDecisionTriggerMonoMs,
+          );
+        }
+
+        // Venue fills change inventory immediately. Mark an urgent recheck so
+        // the main loop uses the freshest book within the live 25ms poll
+        // budget. Network ACK work stays out of the feed-ingestion branch.
         break;
 
       case "userStatus":
@@ -798,6 +900,7 @@ async function runOneMarket(
     }
 
   }
+    await waitForApplyQueue();
     reachedMarketEnd = nowUnix() >= mkt.end;
     if (cfg.live && user) {
       if (!reachedMarketEnd) await attemptResidualExit("duration_stop");

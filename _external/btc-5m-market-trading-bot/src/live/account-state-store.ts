@@ -50,6 +50,9 @@ export class AccountStateStore {
   private closed = false;
   private failed = false;
   private lastWritten = '';
+  private hotPersistScheduled = false;
+  private lastFileMtimeMs = 0;
+  private lastFileSize = 0;
   private state: AccountStateEnvelope;
 
   constructor(directory: string, account: string, mode: 'live' | 'paper', initial?: AccountStateEnvelope) {
@@ -86,6 +89,7 @@ export class AccountStateStore {
         throw new Error('account state must be initialized from an authoritative snapshot');
       }
       this.verifyBeforeSubmission();
+      this.captureFileSignature();
     } catch (error) {
       this.close();
       throw error;
@@ -97,11 +101,38 @@ export class AccountStateStore {
   }
 
   write(next: AccountStateEnvelope): void {
+    this.flushHot();
     const checked = validate(next, this.state.account, this.state.mode);
     this.verifyBeforeSubmission();
-    this.atomicWrite(this.statePath, `${JSON.stringify(checked)}\n`);
+    try {
+      this.atomicWrite(this.statePath, `${JSON.stringify(checked)}\n`);
+    } catch (error) {
+      this.failed = true;
+      throw new Error('account checkpoint failed; refusing new risk', { cause: error });
+    }
     this.state = checked;
     this.lastWritten = JSON.stringify(checked);
+    this.captureFileSignature();
+  }
+
+  /**
+   * Coalesce non-critical account/equity checkpoints. Pre-submit reservations
+   * use write(), so this path is for refresh/mark data and never authorizes a
+   * new order on its own.
+   */
+  writeHot(next: AccountStateEnvelope): void {
+    const checked = validate(next, this.state.account, this.state.mode);
+    this.verifyHot();
+    this.state = checked;
+    this.lastWritten = JSON.stringify(checked);
+    if (this.hotPersistScheduled) return;
+    this.hotPersistScheduled = true;
+    setImmediate(() => {
+      this.hotPersistScheduled = false;
+      if (this.closed || this.failed) return;
+      try { this.persistHot(); }
+      catch { this.failed = true; }
+    });
   }
 
   initialize(next: AccountStateEnvelope): void {
@@ -111,9 +142,11 @@ export class AccountStateStore {
     this.atomicWrite(this.initializedPath, 'initialized\n');
     this.state = checked;
     this.lastWritten = JSON.stringify(checked);
+    this.captureFileSignature();
   }
 
   verifyBeforeSubmission(): void {
+    this.flushHot();
     if (this.closed || this.failed) throw new Error('account persistence is unavailable; refusing new risk');
     try {
       const lock: unknown = JSON.parse(fs.readFileSync(this.lockPath, 'utf8'));
@@ -126,23 +159,67 @@ export class AccountStateStore {
     }
   }
 
-  close(): void {
-    if (this.closed) return;
-    this.closed = true;
+  /** Cheap in-process guard used by the order hot path. */
+  verifyHot(): void {
+    if (this.closed || this.failed) throw new Error('account persistence is unavailable; refusing new risk');
     try {
-      const owner: unknown = JSON.parse(fs.readFileSync(this.lockPath, 'utf8'));
-      if (record(owner) && owner.token === this.token) fs.unlinkSync(this.lockPath);
-    } catch { /* best effort cleanup after a failed constructor */ }
+      const stat = fs.statSync(this.statePath);
+      if (stat.mtimeMs !== this.lastFileMtimeMs || stat.size !== this.lastFileSize) {
+        throw new Error('account state changed outside the active owner');
+      }
+    } catch (error) {
+      this.failed = true;
+      throw new Error('account checkpoint is missing or changed; refusing new risk', { cause: error });
+    }
   }
 
-  private atomicWrite(path: string, content: string): void {
+  private captureFileSignature(): void {
+    const stat = fs.statSync(this.statePath);
+    this.lastFileMtimeMs = stat.mtimeMs;
+    this.lastFileSize = stat.size;
+  }
+
+  flushHot(): void {
+    if (!this.hotPersistScheduled) return;
+    this.hotPersistScheduled = false;
+    if (this.closed || this.failed) return;
+    try {
+      this.persistHot();
+    } catch (error) {
+      this.failed = true;
+      throw new Error('account hot checkpoint failed; refusing new risk', { cause: error });
+    }
+  }
+
+  private persistHot(): void {
+    const encoded = JSON.stringify(this.state);
+    this.atomicWrite(this.statePath, `${encoded}\n`, false);
+    this.captureFileSignature();
+  }
+
+  close(): void {
+    if (this.closed) return;
+    try {
+      this.flushHot();
+    } catch {
+      this.failed = true;
+    } finally {
+      this.closed = true;
+      try {
+        const owner: unknown = JSON.parse(fs.readFileSync(this.lockPath, 'utf8'));
+        if (record(owner) && owner.token === this.token) fs.unlinkSync(this.lockPath);
+      } catch { /* best effort cleanup after a failed constructor */ }
+    }
+  }
+
+  private atomicWrite(path: string, content: string, durable = true): void {
     const temporary = `${path}.${this.token}.tmp`;
     const backup = `${path}.${this.token}.bak`;
     let fd: number | undefined;
     try {
       fd = fs.openSync(temporary, 'wx', 0o600);
       fs.writeFileSync(fd, content);
-      fs.fsyncSync(fd);
+      if (durable) fs.fsyncSync(fd);
       fs.closeSync(fd);
       fd = undefined;
       if (process.platform === 'win32' && fs.existsSync(path)) {
@@ -154,7 +231,7 @@ export class AccountStateStore {
         }
         fs.unlinkSync(backup);
       } else fs.renameSync(temporary, path);
-      if (process.platform !== 'win32') {
+      if (durable && process.platform !== 'win32') {
         const dir = fs.openSync(resolve(path, '..'), 'r');
         try { fs.fsyncSync(dir); } finally { fs.closeSync(dir); }
       }

@@ -90,6 +90,46 @@ describe("final account reconciliation", () => {
 });
 
 describe("order event identity", () => {
+  it("handles a fill and submits a forced hedge without REST or the decision interval", async () => {
+    const engine = new Engine({ liveMode: true, decisionIntervalMs: 1000,
+      minMakerFillProbability: 0, fullMakerSizeProbability: 0,
+      accountGate: { verifyBeforeSubmission: vi.fn() } });
+    const executor = new Executor(true, 20, 20, 50);
+    const submitOrder = vi.fn()
+      .mockResolvedValueOnce({ success: true, orderId: 'first-leg' })
+      .mockResolvedValueOnce({ success: true, orderId: 'hedge' });
+    (executor as unknown as { clob: Record<string, unknown> }).clob = {
+      tickSize: async () => 0.01, minOrderSize: () => 5, submitOrder,
+    };
+    const openOrders = vi.spyOn(executor, 'getOpenOrders').mockRejectedValue(new Error('REST unavailable'));
+    const recentTrades = vi.spyOn(executor, 'getRecentTrades').mockRejectedValue(new Error('REST unavailable'));
+    const tradesById = vi.spyOn(executor, 'getTradesByIds').mockRejectedValue(new Error('REST unavailable'));
+    const market = { upToken: 'up', downToken: 'down' } as Market;
+    const journal = { log: vi.fn(), logEvent: vi.fn() } as unknown as Journal;
+    const user = { registerOrder: vi.fn(), reconcileRecentTrades: vi.fn().mockRejectedValue(new Error('REST unavailable')) } as unknown as UserFeedControl;
+    const ticks = { upTickSize: 0.01, downTickSize: 0.01 };
+    engine.reset(1000, 1300);
+    const firstEvents = engine.onBook(1010, 0.45, 0.46, 0.52, 0.53, ticks);
+    const quote = firstEvents.find(event => event.kind === 'quote');
+    expect(quote?.kind).toBe('quote');
+    if (quote?.kind !== 'quote') throw new Error('missing initial quote');
+    await applyEvents(firstEvents, executor, engine, market, journal, 1010, true, user, () => true);
+    await handleUserEvent(engine, executor, market, journal, 1010.001, {
+      kind: 'exchangeFill', orderId: 'first-leg', tradeId: 'fill-1',
+      fill: { side: quote.side, shares: quote.shares, price: quote.price, tsUnix: 1010.001, isMaker: true },
+    });
+    expect(engine.fills()).toBe(1);
+    const hedgeEvents = engine.onBook(1010.001, 0.45, 0.46, 0.52, 0.53, ticks, true);
+    expect(hedgeEvents.some(event => event.kind === 'quote' && event.side !== quote.side)).toBe(true);
+    await applyEvents(hedgeEvents, executor, engine, market, journal, 1010.001, true, user, () => true);
+    expect(submitOrder).toHaveBeenCalledTimes(2);
+    expect(user.registerOrder).toHaveBeenLastCalledWith('hedge', undefined);
+    expect(openOrders).not.toHaveBeenCalled();
+    expect(recentTrades).not.toHaveBeenCalled();
+    expect(tradesById).not.toHaveBeenCalled();
+    expect(user.reconcileRecentTrades).not.toHaveBeenCalled();
+  });
+
   it("retains a paper replacement quote generated in the same tick as an expired cancellation", async () => {
     const engine = new Engine({ liveMode: false, makerLifeSec: 1 });
     const executor = new Executor(false, 20, 20, 200);
@@ -127,6 +167,33 @@ describe("order event identity", () => {
       { kind: "exchangeFill", orderId: current.orderId!, tradeId:"current-trade", fill });
     expect(engine.confirmExchangeFill).toHaveBeenLastCalledWith(fill, 2);
     expect(executor.restingId(Side.Up)).toBe(current.orderId);
+  });
+
+  it("rolls back a superseded live quote so the newer decision can replace it", async () => {
+    const engine = new Engine({ liveMode: false });
+    const executor = new Executor(false, 20, 20, 200);
+    const market = { upToken: "up", downToken: "down" } as Market;
+    const journal = { log: vi.fn(), logEvent: vi.fn() } as unknown as Journal;
+    engine.reset(1000, 1300);
+    const events = engine.onBook(1010, 0.45, 0.46, 0.52, 0.53, {
+      upTickSize: 0.01,
+      downTickSize: 0.01,
+    });
+    expect(events.some((event) => event.kind === "quote")).toBe(true);
+    await applyEvents(
+      events,
+      executor,
+      engine,
+      market,
+      journal,
+      1010,
+      true,
+      undefined,
+      () => true,
+      undefined,
+      () => true,
+    );
+    expect(engine.session.pendingQuotes()).toEqual([]);
   });
 });
 

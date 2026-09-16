@@ -2,11 +2,17 @@ import { passiveBudgetClone, targetClone } from "../config.js";
 import { MakerSession, type MakerEvent } from "../live-maker.js";
 import { Side, type Fill } from "../models.js";
 import type { RiskExposure, RiskStore } from "../risk-store.js";
+import { createBuyStrategy } from "../strategies/registry.js";
+import { assertStrategyMode, type BuyStrategyFactory } from "../strategies/types.js";
 import {
   MakerMicrostructureGate,
   type EngineBookMicrostructure,
 } from "./microstructure.js";
 export interface EngineConfig {
+  /** Registered algorithm; passiveBudget remains a parameter preset. */
+  strategyId?: string;
+  /** In-process extension point; use instead of strategyId. */
+  strategyFactory?: BuyStrategyFactory;
   passiveBudget?: boolean;
   pairCostMax?: number;
   makerLifeSec?: number;
@@ -41,6 +47,7 @@ export interface ResolveResult {
 export class Engine {
   session: MakerSession;
   preset: string;
+  readonly strategyId: string;
   private lastBookTs = Number.NEGATIVE_INFINITY;
   private microstructure: MakerMicrostructureGate;
   private settled = false;
@@ -64,6 +71,12 @@ export class Engine {
     const preset = c.passiveBudget ? "passive_budget_clone" : "target_clone";
     const makerLifeSec = c.makerLifeSec ?? 15;
     const liveMode = c.liveMode ?? false;
+    if (c.strategyId != null && c.strategyFactory) {
+      throw new Error("Choose strategyId or strategyFactory, not both");
+    }
+    const strategy = c.strategyFactory?.(cfg) ?? createBuyStrategy(c.strategyId, cfg);
+    assertStrategyMode(strategy, liveMode);
+    this.strategyId = strategy.id;
     const risk = riskStore?.restore();
     if (risk) {
       risk.advanceRiskDay(Date.now() / 1000);
@@ -79,6 +92,7 @@ export class Engine {
       c.defensiveCancelBps ?? 0,
       liveMode,
       risk,
+      () => strategy,
     );
     const minimumProbability = clamp01(
       c.minMakerFillProbability ?? (liveMode ? 0.05 : 0),
@@ -128,6 +142,7 @@ export class Engine {
     downBid?: number,
     downAsk?: number,
     microstructure: EngineBookMicrostructure = {},
+    forceDecision = false,
   ): MakerEvent[] {
     if (!Number.isFinite(ts) || ts + 1e-9 < this.lastBookTs) return [];
     if (!bookOk(upBid, upAsk, downBid, downAsk)) return [];
@@ -143,7 +158,7 @@ export class Engine {
     const events = this.session.onBook(ts, upBid, upAsk, downBid, downAsk, {
       upTickSize: books.up.tickSize,
       downTickSize: books.down.tickSize,
-    });
+    }, forceDecision);
     const filtered = this.microstructure.filterQuotes(
       events,
       books,
@@ -158,7 +173,7 @@ export class Engine {
         (side) => this.session.requestOrderCancellation(side),
       ),
     ];
-    this.checkpoint();
+    this.checkpointHot();
     return result;
   }
 
@@ -193,7 +208,7 @@ export class Engine {
   confirmExchangeFill(fill: Fill, pendingFillShares = fill.shares): MakerEvent {
     const event = this.session.confirmExchangeFill(fill, pendingFillShares);
     this.settled = false;
-    this.checkpoint();
+    this.checkpointHot();
     return event;
   }
 
@@ -206,12 +221,12 @@ export class Engine {
 
   onOrderCancelled(side?: Side): void {
     this.session.onOrderCancelled(side);
-    this.checkpoint();
+    this.checkpointHot();
   }
 
   resizePendingQuote(side: Side, shares: number, price?: number): void {
     this.session.resizePendingQuote(side, shares, price);
-    this.checkpoint();
+    this.checkpointHot();
   }
 
   private riskExposure(): RiskExposure {
@@ -230,18 +245,33 @@ export class Engine {
     }
   }
 
+  /** Keep the quote/fill path in memory; RiskStore coalesces persistence. */
+  private checkpointHot(): void {
+    try {
+      this.riskStore?.checkpointHot(this.session.strat.risk, this.riskExposure());
+    } catch (error) {
+      this.session.haltNew = true;
+      throw error;
+    }
+  }
+
   prepareSubmission(): void {
     try {
-      this.riskStore?.verifyBeforeSubmission();
+      this.riskStore?.verifyBeforeSubmissionFast();
       if (this.session.liveMode && !this.accountGate) {
         throw new Error("live submission requires an authoritative account gate");
       }
-      this.accountGate?.verifyBeforeSubmission();
+      const gate = this.accountGate as ({
+        verifyBeforeSubmission?: () => void;
+        verifyBeforeSubmissionFast?: () => void;
+      } | undefined);
+      if (gate?.verifyBeforeSubmissionFast) gate.verifyBeforeSubmissionFast();
+      else gate?.verifyBeforeSubmission?.();
       if (this.session.haltNew || !this.session.strat.risk.canTrade(this.session.strat.config)) {
-        this.checkpoint();
+        this.checkpointHot();
         throw new Error("risk stop prevents new order submission");
       }
-      this.checkpoint();
+      this.checkpointHot();
     } catch (error) {
       this.session.haltNew = true;
       throw error;

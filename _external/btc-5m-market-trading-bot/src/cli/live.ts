@@ -8,6 +8,7 @@ import { FeedQueue, nowUnix } from "../live/feeds/index.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import { approve, preflight, settle, wrap } from "../live/onchain.js";
 import { run, type RunConfig } from "../live/orchestrator.js";
+import { buyStrategyFactory, DEFAULT_BUY_STRATEGY_ID } from "../strategies/registry.js";
 
 const program = new Command();
 program
@@ -20,6 +21,8 @@ program
   .description("Run the live/paper maker")
   .option("--live", "Place REAL orders (default: paper)", process.env.LIVE === "true")
   .option("--paper", "Paper mode (default; explicit alias for run without --live)")
+  .option("--strategy <id>", "Decision algorithm: pair-cost or observe (paper only)",
+    process.env.PM_STRATEGY_ID ?? DEFAULT_BUY_STRATEGY_ID)
   .option(
     "--order-usd <n>",
     "Max USD per order",
@@ -74,6 +77,10 @@ program
   .option("--duration-min <n>", "Stop after N minutes (0 = forever)", "0")
   .action(async (opts) => {
     const live = !!opts.live && !opts.paper;
+    buyStrategyFactory(opts.strategy);
+    if (live && opts.strategy === "observe") {
+      throw new Error("observe strategy is paper-only; use feeds-dump or account commands for read-only data");
+    }
     const maxTotalUsd = opts.maxTotalUsd
       ? parseFloat(opts.maxTotalUsd)
       : undefined;
@@ -104,6 +111,7 @@ program
     const cfg: RunConfig = {
       live,
       engine: {
+        strategyId: opts.strategy,
         passiveBudget: !!opts.passiveBudget,
         pairCostMax: parseFloat(opts.pairCostMax),
         makerLifeSec: parseFloat(opts.makerLifeSec),

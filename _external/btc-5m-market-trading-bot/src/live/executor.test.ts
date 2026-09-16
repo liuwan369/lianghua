@@ -234,7 +234,7 @@ describe("uncertain ACK circuit breaker", () => {
   it("persists a reservation before a live network submission and closes rejected orders", async () => {
     const events: string[] = [];
     const coordinator = {
-      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      prepare: vi.fn((id: string, _amountUsd: number, _feeReserveUsd: number) => events.push(`prepare:${id}`)),
       transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'reconciled') => events.push(status)),
     };
     const executor = new Executor(true, 10, 10, 100, coordinator);
@@ -252,7 +252,7 @@ describe("uncertain ACK circuit breaker", () => {
   it("advances the bound reservation through partial fill and final reconciliation", async () => {
     const events: string[] = [];
     const coordinator = {
-      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      prepare: vi.fn((id: string, _amountUsd: number, _feeReserveUsd: number) => events.push(`prepare:${id}`)),
       transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled') => events.push(status)),
     };
     const executor = new Executor(true, 10, 10, 100, coordinator);
@@ -289,7 +289,7 @@ describe("uncertain ACK circuit breaker", () => {
   it("tracks a residual exit through reservation reconciliation", async () => {
     const events: string[] = [];
     const coordinator = {
-      prepare: vi.fn((id: string) => events.push(`prepare:${id}`)),
+      prepare: vi.fn((id: string, _amountUsd: number, _feeReserveUsd: number) => events.push(`prepare:${id}`)),
       transition: vi.fn((_id: string, status: 'submitted' | 'unknown' | 'acknowledged' | 'partially_filled' | 'settlement_pending' | 'reconciled') => events.push(status)),
     };
     const executor = new Executor(true, 10, 10, 100, coordinator);
@@ -300,6 +300,7 @@ describe("uncertain ACK circuit breaker", () => {
     const result = await executor.submitExit(Side.Up, 'up', 0.4, 5);
     expect(result).toMatchObject({ ok: true, orderId: 'exit-order' });
     expect(result.size).toBe(5);
+    expect(coordinator.prepare.mock.calls[0][2]).toBeGreaterThan(0);
     expect((executor as unknown as { spentUsd: number }).spentUsd).toBeCloseTo(2);
     expect(events.slice(1)).toEqual(['submitted', 'acknowledged']);
     executor.confirmAccountReconciled();

@@ -74,7 +74,7 @@ export type FeedEvent =
       bidSz: number;
       askSz: number;
     }
-  | { kind: "user"; event: UserFeedEvent }
+  | { kind: "user"; event: UserFeedEvent; receivedAtMonoMs?: number }
   | { kind: "userStatus"; healthy: boolean; tsUnix: number }
   | { kind: "bookStatus"; healthy: boolean; tsUnix: number };
 

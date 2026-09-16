@@ -25,6 +25,8 @@ import {
   trackSingleSide,
 } from "./risk.js";
 import { fairUpFromChange } from "./live/fair.js";
+import type { BuyStrategy, DecisionRejection } from "./strategies/types.js";
+export type { DecisionRejection } from "./strategies/types.js";
 
 /** Seeded mulberry32 PRNG (seed 42) replacing Rust StdRng. */
 function mulberry32(seed: number): () => number {
@@ -45,15 +47,6 @@ export interface DynamicHedgeClipInput {
   price: number;
   baseClip: number;
   targetPairCost: number;
-}
-
-export interface DecisionRejection {
-  code: "maker_tick_missing_or_invalid" | "maker_price_invalid" | "hedge_pair_cost" |
-    "order_limits_or_minimum" | "risk_blocked" | "entry_pair_cost";
-  side?: Side;
-  price?: number;
-  pairCost?: number;
-  limit?: number;
 }
 
 /**
@@ -98,7 +91,9 @@ export function dynamicHedgeClip(input: DynamicHedgeClipInput): number {
   return Math.min(deficit, Math.max(baseClip, required));
 }
 
-export class PairCostMarketMaker {
+export class PairCostMarketMaker implements BuyStrategy {
+  readonly id = "pair-cost";
+  readonly executionMode = "buy";
   config: StrategyConfig;
   risk: RiskState;
   private rng: () => number;
