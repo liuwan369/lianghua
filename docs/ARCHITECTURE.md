@@ -16,10 +16,10 @@ Polymarket WS/REST + BTC 参考行情
        ├─ Gateway：PaperGateway 或 PolymarketGateway
        ├─ Account：读取、恢复核对、结算结果
        ├─ StrategyPlugin：可选，只读事件 -> 订单意图
-       └─ Telemetry / record（控制台投影待接入）
+       └─ Telemetry / journal -> SQLite 投影 -> 控制台状态/日志
 
-当前控制台启停路径（待迁移）
-六页控制台 -> dashboard API -> live.js run -> 旧 Engine
+当前控制台启停路径
+六页控制台 -> dashboard API -> platform.js -> 无策略 TradingPlatform
 中文任务树 -> task-view.json（独立展示交付状态）
 ```
 
@@ -44,7 +44,7 @@ Polymarket WS/REST + BTC 参考行情
 
 ## 统一交易底座
 
-新平台订单能力经过 `TradingPlatform`，现有控制台和旧 CLI 尚待迁移：
+控制台新启动和平台 CLI 使用 `TradingPlatform`；旧 CLI 保留显式兼容路径：
 
 | 层 | 负责内容 | 不能负责的内容 |
 |---|---|---|
@@ -54,7 +54,7 @@ Polymarket WS/REST + BTC 参考行情
 | `PaperGateway` | 独立模拟撮合和回报顺序 | 不代表真实队列和真实成交率 |
 | 行情 / 用户流 / 账户读取 | L2、公开成交、认证订单事件和账户核对 | 不绕过平台核心产生订单 |
 
-目标是一个公共入口、多个职责清晰的内部模块。新插件只返回订单意图，前端通过后台调用；控制台迁移必须同时适配启停、重启恢复及状态/日志投影，不能只替换启动命令。
+新插件只返回订单意图，前端通过后台调用。控制台已适配启停、运行身份恢复和状态/日志投影。每轮独立状态文件、纯 JSONL 日志和控制台输出；后台按确切可执行文件及日志路径识别存活进程。Windows 隐藏进程通过控制文件正常关闭，Linux 使用 SIGTERM。systemd 重启默认终止同组子进程，不承诺自动保活或重启交易。
 
 ## 热路径与慢路径
 

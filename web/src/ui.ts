@@ -1,4 +1,4 @@
-import type { Market, Markets, Resource } from './api/types';
+import type { Market, Markets, PlatformRuntime, Resource, Status } from './api/types';
 export const esc = (v: unknown) => String(v ?? '--').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]!));
 export const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n);
 export const number = (n: unknown, digits = 0) => finite(n) ? n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits }) : '--';
@@ -6,6 +6,21 @@ export const money = (n: unknown) => finite(n) ? `${n < 0 ? '-' : ''}$${number(M
 export const price = (n: unknown) => finite(n) ? n.toFixed(4) : '--';
 export const date = (s: unknown) => finite(s) ? new Date(s * 1000).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false}) : '--';
 export const modeName = (mode: unknown) => ({paper:'纸面模拟',live:'实盘',shadow:'影子回放'}[String(mode)] || '未确定模式');
+export function executionName(status: Status): string {
+  if (status.engine === 'platform') return status.execution === 'strategy' ? '平台策略运行' : '平台观察';
+  if (status.engine === 'legacy' || status.engine === undefined && status.run_id) return status.mode === 'paper' ? '旧引擎纸面' : '旧引擎运行';
+  return status.execution_target === 'platform' ? '平台观察' : modeName(status.mode);
+}
+export function platformRuntime(status: Status | null, nowSeconds = Date.now() / 1000) {
+  const candidate = status?.stats.runtime;
+  const runtime = status?.engine === 'platform' && candidate && typeof candidate === 'object' && !Array.isArray(candidate)
+    && (candidate as PlatformRuntime).engine === 'platform' ? candidate as PlatformRuntime : null;
+  const matched = !!status?.run_id && status.projection?.run_id === status.run_id;
+  const freshSnapshot = !!runtime && matched && status?.projection?.state === 'ready' && status.projection.stale === false
+    && runtime.stale === false && finite(runtime.source_at) && finite(runtime.expires_at)
+    && runtime.source_at <= nowSeconds + 2 && runtime.expires_at >= runtime.source_at && nowSeconds < runtime.expires_at;
+  return { runtime, current: freshSnapshot && status?.running === true && runtime?.status === 'running', freshSnapshot };
+}
 export const row = (label: string, value: string) => `<div class="row"><span>${esc(label)}</span><b>${value}</b></div>`;
 export const stat = (label: string, value: string, caption: string) => `<div class="stat"><label>${esc(label)}</label><strong>${value}</strong><small>${esc(caption)}</small></div>`;
 export const errorNote = (r: Resource<unknown>) => r.error ? `<p class="note bad" role="status">${esc(r.error)}</p>` : '';

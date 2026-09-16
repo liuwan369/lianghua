@@ -45,6 +45,26 @@ beforeEach(() => {
 afterEach(() => { cleanup?.(); cleanup = undefined; vi.useRealTimers(); document.body.replaceChildren(); });
 
 describe('system architecture task view', () => {
+  it('uses server time for platform snapshot freshness despite a client clock offset', async () => {
+    vi.mocked(api.status).mockResolvedValue({...status,asOf:1000,running:true,engine:'platform',execution:'observation',strategy_id:null,
+      projection:{run_id:status.run_id,state:'ready',stale:false},stats:{runtime:{engine:'platform',status:'running',source_at:999,expires_at:1009,stale:false,fills_count:0}}});
+    await mount();
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('平台观察 · 运行中 · 未加载策略');
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('模拟成交 0');
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('快照待更新或仅有历史记录');
+  });
+  it('does not extend snapshot freshness while waiting for the slower task response', async () => {
+    let finishTasks!: (value: TaskView) => void;
+    vi.mocked(api.tasks).mockReturnValue(new Promise(resolve => {finishTasks=resolve;}));
+    vi.mocked(api.status).mockResolvedValue({...status,asOf:1000,running:true,engine:'platform',strategy_id:null,
+      projection:{run_id:status.run_id,state:'ready',stale:false},stats:{runtime:{engine:'platform',status:'running',source_at:1000,expires_at:1009,stale:false,fills_count:7}}});
+    await mount();
+    await vi.advanceTimersByTimeAsync(8000);finishTasks(fixture());await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('模拟成交 7');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('快照待更新或仅有历史记录');
+  });
   it('defaults to architecture with independent completion, verification and remaining work', async () => {
     await mount();
     expect(document.querySelector('[data-task-tab="architecture"]')?.getAttribute('aria-selected')).toBe('true');
@@ -140,7 +160,7 @@ describe('system architecture task view', () => {
     expect(document.querySelector('[data-task-progress]')?.textContent).toContain('已暂停 1');
     await vi.advanceTimersByTimeAsync(10000);
     expect(paper().textContent).toContain('已暂停');
-    expect(document.querySelector('[data-task-live]')?.textContent).toContain('交易运行中');
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('旧引擎纸面 · 运行中');
   });
   it('clears stale completed nodes on errors, recovers on refresh, and removes all listeners on cleanup', async () => {
     await mount();

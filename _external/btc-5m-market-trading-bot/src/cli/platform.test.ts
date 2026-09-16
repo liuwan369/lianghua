@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), discover: vi.fn(), load: vi.fn(), save: vi.fn(), close: vi.fn(),
-  open: vi.fn(), start: vi.fn(), stop: vi.fn(), attach: vi.fn(), ingest: vi.fn() }));
+  open: vi.fn(), start: vi.fn(), stop: vi.fn(), attach: vi.fn(), ingest: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() }));
 vi.mock("../platform/polymarket.js", () => ({ connectPolymarketPlatform: mocks.connect, discoverBtcMarket: mocks.discover }));
 vi.mock("../platform/store.js", () => ({ PlatformStore: class {
   constructor(path: string) { mocks.open(path); }
@@ -15,7 +15,7 @@ vi.mock("../platform/store.js", () => ({ PlatformStore: class {
 
 import { loadStrategyModule, parsePlatformOptions, runPlatformCli, validateMarkets } from "./platform.js";
 
-const market = { id: "condition", name: "Binary market", startsAt: 100, endsAt: 200,
+const market = { id: "condition", name: "Binary market", startsAt: Date.now() / 1000 - 60, endsAt: Date.now() / 1000 + 300,
   instruments: [{ tokenId: "yes", marketId: "condition", outcome: "YES", tickSize: 0.01, minOrderSize: 5 },
     { tokenId: "no", marketId: "condition", outcome: "NO", tickSize: 0.01, minOrderSize: 5 }] };
 let temporary: string;
@@ -25,10 +25,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   temporary = mkdtempSync(join(tmpdir(), "platform-cli-"));
   mocks.discover.mockResolvedValue([market]);
+  mocks.subscribe.mockReturnValue(mocks.unsubscribe);
   mocks.connect.mockResolvedValue({ start: mocks.start, stop: mocks.stop,
-    platform: { attach: mocks.attach, ingest: mocks.ingest,
+    platform: { attach: mocks.attach, ingest: mocks.ingest, subscribe: mocks.subscribe,
       account: { current: () => ({ cashUsd: 1000, positions: [], orders: [], fills: [], risk: { halted: false } }) },
-      market: { list: () => [market] }, telemetry: { snapshot: () => ({ events: 0 }) },
+      market: { list: () => [market], books: () => [] }, orders: { get: () => undefined },
+      telemetry: { snapshot: () => ({ events: 0 }) },
       capabilities: () => ({ buy: true, sell: true }) } });
   output = vi.spyOn(console, "log").mockImplementation(() => {});
   errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -43,7 +45,7 @@ describe("generic platform CLI inputs", () => {
     expect(parsePlatformOptions(["--live"])).toMatchObject({ mode: "live", limits: { capitalUsd: 50, dailyLossUsd: 30 } });
   });
 
-  it.each([["--duration-sec", "0"], ["--duration-sec", "NaN"], ["--duration-sec", "Infinity"],
+  it.each([["--duration-sec", "-1"], ["--duration-sec", "NaN"], ["--duration-sec", "Infinity"],
     ["--timer-ms", "0"], ["--status-sec", "-1"], ["--capital-usd", "NaN"], ["--max-open-orders", "1.5"],
     ["--live", "--paper"], ["--live", "--capital-usd", "51"], ["--live", "--daily-loss-usd", "31"],
     ["--capital-usd", "10", "--order-usd", "11"]])("rejects invalid options before connections: %j", (...args) => {
@@ -54,6 +56,16 @@ describe("generic platform CLI inputs", () => {
   it("allows larger paper research capital without increasing live budgets", () => {
     expect(parsePlatformOptions(["--capital-usd", "25000", "--daily-loss-usd", "25000"])).toMatchObject({
       mode: "paper", limits: { capitalUsd: 25000, dailyLossUsd: 25000, maxOrderUsd: 25000 } });
+  });
+
+  it.each(["state.json", "state.json.lock", "state.json.next"])("rejects journal overlap with %s", filename => {
+    expect(() => parsePlatformOptions(["--state-file", join(temporary, "state.json"),
+      "--journal-file", join(temporary, filename)])).toThrow(/separate/);
+  });
+
+  it.each(["state.json", "state.json.lock", "state.json.next", "journal.jsonl"])("rejects stop file overlap with %s", filename => {
+    expect(() => parsePlatformOptions(["--state-file", join(temporary, "state.json"),
+      "--journal-file", join(temporary, "journal.jsonl"), "--stop-file", join(temporary, filename)])).toThrow(/separate/);
   });
 
   it("checks market identity, binary feed shape and venue rules", () => {
@@ -100,6 +112,7 @@ describe("generic platform CLI lifecycle", () => {
     expect(mocks.stop).toHaveBeenCalledWith("duration_elapsed");
     expect(mocks.close).toHaveBeenCalledOnce();
     expect(output.mock.calls.map(args => JSON.parse(String(args[0])))).toEqual([
+      expect.objectContaining({ status: "starting", cashUsd: null }),
       expect.objectContaining({ status: "running", strategy: null }), expect.objectContaining({ status: "stopped" })]);
   });
 
@@ -150,5 +163,128 @@ describe("generic platform CLI lifecycle", () => {
     await vi.advanceTimersByTimeAsync(1001);
     expect(await completed).toBeInstanceOf(Error);
     expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["SIGTERM", "SIGINT", "SIGBREAK"] as const)("keeps duration 0 observation running until %s", async signal => {
+    vi.useFakeTimers();
+    const before = process.listenerCount(signal);
+    const running = runPlatformCli(["--duration-sec", "0", "--status-sec", "5"]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.attach).not.toHaveBeenCalled();
+    expect(mocks.connect).toHaveBeenCalledWith(expect.objectContaining({ mode: "paper", durationSec: Infinity }));
+    expect(mocks.ingest.mock.calls.every(([event]) => event.kind === "timer")).toBe(true);
+    process.emit(signal);
+    await running;
+    expect(mocks.stop).toHaveBeenCalledWith(signal);
+    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(process.listenerCount(signal)).toBe(before);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("writes isolated versioned JSONL, bounded depth and stable fill identity in event order", async () => {
+    const journalFile = join(temporary, "events.jsonl");
+    const connection = await mocks.connect();
+    const levels = Array.from({ length: 8 }, (_, index) => [0.4 - index * 0.01, index + 1]);
+    connection.platform.market.books = () => [{ tokenId: "yes", ts: 123, bids: levels, asks: levels }];
+    const order = { clientOrderId: "client", orderId: "venue", strategyId: "manual", tokenId: "yes",
+      status: "OPEN", direction: "BUY", price: 0.4, shares: 5, filledShares: 0, reservedUsd: 2,
+      reservedShares: 0, updatedAt: 123 };
+    mocks.start.mockImplementation(() => {
+      const record = mocks.subscribe.mock.calls.at(-1)![0];
+      const adapterRecord = mocks.connect.mock.calls.at(-1)![0].record;
+      console.info("diagnostic stdout must not enter the journal");
+      adapterRecord({ kind: "order", order });
+      record({ kind: "order", order });
+      record({ kind: "fill", fill: { tradeId: "trade", orderId: "venue", tokenId: "yes",
+        direction: "BUY", price: 0.4, shares: 2, feeUsd: 0, isMaker: true, ts: 124 } });
+      record({ kind: "order", order: { ...order, status: "PARTIAL", filledShares: 2 } });
+      record({ kind: "book", book: { tokenId: "yes", ts: 124 } });
+      record({ kind: "timer", ts: 124 });
+      record({ kind: "error", message: "secret-provider-token" });
+      record({ kind: "settlement", result: { marketId: "condition", state: "unsupported", reason: "secret" } });
+    });
+    const running = runPlatformCli(["--duration-sec", "0", "--journal-file", journalFile]);
+    await vi.waitFor(() => expect(output).toHaveBeenCalledWith(expect.stringContaining('"status":"running"')));
+    process.emit("SIGTERM");
+    await running;
+    const rows = readFileSync(journalFile, "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.map(row => row.event)).toEqual([
+      "platform_status", "order", "fill", "order", "platform_error", "platform_settlement", "platform_status", "platform_status",
+    ]);
+    expect(rows[0].runtime).toMatchObject({ schemaVersion: 1, engine: "platform", execution: "observation",
+      strategy_id: null, status: "starting", cash_usd: null, risk: null });
+    expect(rows.at(-1).runtime).toMatchObject({ status: "stopped", mode: "paper", cash_usd: 1000 });
+    expect(rows.at(-1).runtime.books[0].bids).toHaveLength(5);
+    expect(rows.at(-1).runtime.books[0].asks).toHaveLength(5);
+    expect(rows.at(-1).runtime.books[0].stale).toBe(true);
+    expect(rows.at(-1).runtime.books[0].received_age_ms).toBeGreaterThan(10_000);
+    expect(rows[1]).toMatchObject({ event: "order", order_id: "venue", strategy_id: "manual",
+      direction: "BUY", side: "YES", market_slug: "Binary market", sign_latency_ms: null, ack_latency_ms: null });
+    expect(rows[2]).toMatchObject({ event_id: 'fill:["trade","venue"]', strategy_id: "manual",
+      fee: 0, is_maker: true, engine_ts: 124 });
+    expect(rows.every(row => Number.isFinite(row.recv_ts) && typeof row.event_id === "string")).toBe(true);
+    expect(new Set(rows.map(row => row.event_id)).size).toBe(rows.length);
+    expect(readFileSync(journalFile, "utf8")).not.toMatch(/secret-provider-token|diagnostic stdout/);
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("records a failed terminal status when durable state close fails", async () => {
+    const journalFile = join(temporary, "failed.jsonl");
+    mocks.close.mockImplementation(() => { throw new Error("secret-filesystem-path"); });
+    const completed = runPlatformCli(["--duration-sec", "0", "--journal-file", journalFile]).catch(error => error);
+    await vi.waitFor(() => expect(mocks.start).toHaveBeenCalledOnce());
+    process.emit("SIGINT");
+    expect(await completed).toBeInstanceOf(Error);
+    const raw = readFileSync(journalFile, "utf8");
+    const rows = raw.trim().split("\n").map(line => JSON.parse(line));
+    expect(rows.at(-1).runtime.status).toBe("failed");
+    expect(raw).toContain('"platform_state_close_failed"');
+    expect(raw).not.toContain("secret-filesystem-path");
+  });
+
+  it("stops an indefinite observation when journal writes fail asynchronously", async () => {
+    await expect(runPlatformCli(["--duration-sec", "0", "--journal-file", temporary])).rejects.toThrow(/platform run failed/);
+    expect(mocks.stop).toHaveBeenCalledWith("journal_failed");
+    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(errors.mock.calls.flat().join(" ")).not.toContain(temporary);
+    expect(output.mock.calls.some(([value]) => JSON.parse(String(value)).status === "failed")).toBe(true);
+  });
+
+  it("stops duration 0 when the last selected market expires", async () => {
+    vi.useFakeTimers();
+    const now = Date.now() / 1000;
+    mocks.discover.mockResolvedValue([{ ...market, startsAt: now - 60, endsAt: now + 1 }]);
+    const running = runPlatformCli(["--duration-sec", "0"]);
+    await vi.advanceTimersByTimeAsync(1001);
+    await running;
+    expect(mocks.stop).toHaveBeenCalledWith("markets_expired");
+    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(output.mock.calls.some(([value]) => JSON.parse(String(value)).status === "stopped")).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not connect an already expired selected market", async () => {
+    const now = Date.now() / 1000;
+    mocks.discover.mockResolvedValue([{ ...market, startsAt: now - 60, endsAt: now - 1 }]);
+    await runPlatformCli(["--duration-sec", "0"]);
+    expect(mocks.connect).not.toHaveBeenCalled();
+    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(output.mock.calls.some(([value]) => JSON.parse(String(value)).reason === "markets_expired")).toBe(true);
+  });
+
+  it("accepts a file stop request without console signals and clears every timer", async () => {
+    vi.useFakeTimers();
+    const stopFile = join(temporary, "controller.stop");
+    const running = runPlatformCli(["--duration-sec", "0", "--stop-file", stopFile]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.start).toHaveBeenCalledOnce();
+    writeFileSync(stopFile, "");
+    await vi.advanceTimersByTimeAsync(151);
+    await running;
+    expect(mocks.stop).toHaveBeenCalledWith("controller_stop");
+    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(mocks.unsubscribe).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -6,6 +6,17 @@ afterEach(()=>{vi.unstubAllGlobals();document.body.replaceChildren();});
 const config={schemaVersion:1,revision:3,savedAt:null,params:{mode:'paper'},capabilities:{}} as Config;
 const status={running:false,mode:'paper'} as Status;
 function setup(){document.body.innerHTML='<div id="app"></div>';mountLayout(document.getElementById('app')!);return connectTradingControls(async()=>{});}
+it('labels platform observation separately from a running legacy engine',()=>{
+  const control=setup();
+  const platformConfig={...config,capabilities:{executionTarget:'platform',executionMode:'observation'}};
+  control.receive(platformConfig,{...status,execution_target:'platform',engine:null});
+  expect(document.querySelector('[data-start]')!.textContent).toBe('启动平台观察');
+  expect(document.querySelector('[data-stop]')!.textContent).toBe('停止平台观察');
+  expect(document.querySelector('#view-trade > .note')!.textContent).toContain('未加载策略');
+  control.receive(platformConfig,{...status,running:true,execution_target:'platform',engine:'legacy'});
+  expect(document.querySelector('[data-stop]')!.textContent).toBe('停止旧引擎纸面');
+  control.close();
+});
 it('never offers live execution or sends a request from live configuration',()=>{
   const fetch=vi.fn();vi.stubGlobal('fetch',fetch);const control=setup();control.receive({...config,params:{mode:'live'}},status);
   const start=document.querySelector<HTMLButtonElement>('[data-start]')!;expect(start.disabled).toBe(true);start.click();expect(fetch).not.toHaveBeenCalled();control.close();

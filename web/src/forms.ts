@@ -32,6 +32,8 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   let configError: string | null = null, configMessage = '';
   const key = (field: Control) => field.id.slice('setting-'.length);
   const supported = (field: Control) => !!fieldMap[key(field)];
+  const observation = () => latest?.capabilities.executionTarget === 'platform' && latest.capabilities.executionMode === 'observation';
+  const originalHelp = new Map(fields.map(field => [field, document.getElementById(`help-${key(field)}`)?.textContent || '']));
   const on = (el: Element, event: string, handler: EventListener) => {
     el.addEventListener(event, handler); bindings.push(() => el.removeEventListener(event, handler));
   };
@@ -41,9 +43,35 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   };
   function feedback() {
     const drafts = fields.filter(field => !supported(field) && field.value !== '').length;
-    const message = [configError, configMessage || '已接入字段可保存到服务器；其余字段仅供本页填写，尚未接入引擎。',
+    const scope = observation() ? '平台观察仅应用运行模式和运行时长；其余旧引擎参数可保存，但本次不应用。未加载策略，不下单。' : '';
+    const message = [configError, configMessage || '已接入字段可保存到服务器；其余字段仅供本页填写，尚未接入引擎。', scope,
       drafts ? `${drafts} 项未接入字段仅保留在本页，刷新后丢弃，不会保存或生效。` : ''].filter(Boolean).join(' ');
     document.querySelectorAll('[data-settings-message]').forEach(el => el.textContent = message);
+  }
+  function applyCapabilities() {
+    const active = observation();
+    const applied = latest?.capabilities.runtimeAppliedFields;
+    const preserved = latest?.capabilities.preservedLegacyFields;
+    for (const field of fields.filter(supported)) {
+      const name = fieldMap[key(field)];
+      const inRuntime = active && Array.isArray(applied) && applied.includes(name);
+      const legacy = active && Array.isArray(preserved) && preserved.includes(name);
+      const message = active ? inRuntime ? '平台观察：下次启动生效。' : legacy ? '旧引擎参数：可保存，平台观察不应用。' : '可保存；平台观察未声明应用此字段。' : '保存到服务器，下次启动生效。';
+      field.dataset.runtime = active ? inRuntime ? 'applied' : 'preserved' : 'legacy';
+      field.title = message;
+      const help = document.getElementById(`help-${key(field)}`);
+      if (help) help.textContent = `${message} ${originalHelp.get(field) || ''}`;
+    }
+    if (active) {
+      for (const selector of ['#settings-strategy .settings-intro', '#settings-run .settings-intro']) {
+        const node = document.querySelector(selector);
+        if (node) node.textContent = '平台观察 · 未加载策略。只应用运行模式与时长；旧策略参数保留，不用于当前运行。模拟初始资金与风险采用平台默认值，非真实账户资金。';
+      }
+      document.querySelectorAll('[data-check-state]').forEach(el => el.textContent = '观察模式');
+      document.querySelectorAll('[data-setting-checks]').forEach(el => el.textContent = '本次不加载策略、不创建订单；旧订单金额和配对参数不控制平台观察。');
+      document.querySelectorAll('.settings-checks > .settings-check-foot').forEach(el => el.textContent = '平台模拟资金与真实账户余额分别显示。');
+      if (modeLive) modeLive.textContent = '实盘 · 当前平台观察启动仅支持纸面';
+    }
   }
   function buttons() {
     saves.forEach(button => button.disabled = configBusy);
@@ -143,7 +171,7 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
       for (const [field, value] of submitted) if (field.value === value) dirty.delete(key(field));
       baseline = result; receiveConfig(result, null);
       saved?.config(result);
-      configMessage = `已接入字段已保存为版本 ${result.revision}，下次启动生效；未启动或解锁交易。`;
+      configMessage = observation() ? `配置已保存为版本 ${result.revision}；平台观察只应用模式与时长，旧参数已保留；未启动运行。` : `已接入字段已保存为版本 ${result.revision}，下次启动生效；未启动或解锁交易。`;
     } catch (error) { configMessage = `${error instanceof Error ? error.message : '保存失败'}；草稿已保留。版本冲突时请先核对或撤销未保存修改。`; }
     finally { configBusy = false; if (!closed) { buttons(); feedback(); } }
   }
@@ -183,6 +211,7 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
         const value = config.params[fieldMap[key(field)]];
         field.value = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
       }
+      applyCapabilities();
     }
     feedback();
   }

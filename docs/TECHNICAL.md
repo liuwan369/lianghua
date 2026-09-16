@@ -6,7 +6,9 @@
 
 `contracts.ts` 定义 `Instrument`、`Book`、`AccountSnapshot`、`OrderRequest`、`OrderRecord`、`TradeFill`、`RiskView`、`TradingEvent` 和 `StrategyAction`。`TradingPlatform` 对外暴露 market/account/orders/portfolio/risk/history/settlement/telemetry 八类能力。
 
-独立 `trading-platform` CLI 已接入平台。控制台 `/api/v1/trading/start` 仍启动旧 `live.js run`，进程恢复和读模型也使用旧日志契约；这部分迁移是当前未完成工作。
+独立 `trading-platform` CLI 和控制台新启动均接入平台。`/api/v1/trading/start` 使用已保存的模式与时长启动不挂策略的 paper 平台；其他旧参数保留但未应用。每轮创建独立 journal/state/stop 文件。journal 使用有界异步写入，写入失败触发停止，关闭等待刷盘；运行快照每 2 秒输出，五档仅随快照记录，不在每个 tick 重复序列化。SQLite 投影处理订单/成交幂等和 10 秒时效，普通 stdout 不混入 JSONL。
+
+时长 0 取消时长计时器，选定市场全部到期仍正常停止；自动换场未实现。旧状态文件历史订单初始投影和完整延迟序列仍待补齐。独立 CLI 的 `--strategy-module` 是显式插件入口，当前控制台不传该参数。
 
 `Book` 可以包含完整 `bids/asks`，档位必须按 best-first 排列：买方降序、卖方升序；平台拒绝重复或倒序深度。价格不再固定按 `0.001` 取整，行情保留交易所支持的 `0.0001/0.001/0.0025/0.005/0.01/0.1` 等合法精度。
 

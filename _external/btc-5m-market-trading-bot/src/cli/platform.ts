@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import type { HardLimits, MarketInfo, StrategyPlugin, TradingMode } from "../platform/contracts.js";
+import type { HardLimits, MarketInfo, OrderRecord, StrategyPlugin, TradingEvent, TradingMode } from "../platform/contracts.js";
+import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverBtcMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
 
@@ -14,6 +15,8 @@ export interface PlatformCliOptions {
   timerMs: number;
   statusSec: number;
   stateFile: string;
+  journalFile?: string;
+  stopFile?: string;
   marketsFile?: string;
   strategyModule?: string;
   referenceFeed: boolean;
@@ -39,10 +42,12 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     .option("--daily-loss-usd <number>", "Shared daily loss ceiling (paper 1000; live 30)")
     .option("--order-usd <number>", "Maximum order notional (defaults to capital ceiling)")
     .option("--max-open-orders <number>", "Shared active-order count ceiling", "100")
-    .option("--duration-sec <number>", "Stop and cancel owned orders after this many seconds", "300")
+    .option("--duration-sec <number>", "Stop after this many seconds; 0 runs until an operator signal", "300")
     .option("--timer-ms <number>", "Strategy timer event interval; feed events remain immediate", "1000")
     .option("--status-sec <number>", "JSON status output interval", "30")
     .option("--state-file <path>", "Durable state and exclusive lock file")
+    .option("--journal-file <path>", "Append pure JSONL platform status and execution events")
+    .option("--stop-file <path>", "Stop normally when this controller-owned file exists")
     .option("--reference-feed", "Also subscribe to the BTC reference feed");
   try { command.parse(argv, { from: "user" }); }
   catch (error) {
@@ -61,14 +66,26 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
   if (mode === "live" && (capitalUsd > 50 || dailyLossUsd > 30)) {
     throw new CliInputError("live limits must fit the configured $50 capital / $30 daily loss budget");
   }
-  const durationSec = positive(raw.durationSec, "--duration-sec");
+  const durationSec = Number(raw.durationSec);
+  if (!Number.isFinite(durationSec) || durationSec < 0) throw new CliInputError("--duration-sec must be a finite nonnegative number");
   const timerMs = positive(raw.timerMs, "--timer-ms");
   const statusSec = positive(raw.statusSec, "--status-sec");
   if (durationSec * 1000 > 2_147_483_647 || timerMs > 2_147_483_647 || statusSec * 1000 > 2_147_483_647) {
     throw new CliInputError("timer intervals must fit the Node.js timer range (2147483647 ms)");
   }
+  const stateFile = resolve(raw.stateFile ?? `results/platform/${mode}-state.json`);
+  const journalFile = raw.journalFile ? resolve(raw.journalFile) : undefined;
+  const stopFile = raw.stopFile ? resolve(raw.stopFile) : undefined;
+  const pathKey = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+  if (journalFile && [stateFile, `${stateFile}.lock`, `${stateFile}.next`].some(path => pathKey(path) === pathKey(journalFile))) {
+    throw new CliInputError("--journal-file must be separate from state and recovery files");
+  }
+  if (stopFile && [stateFile, `${stateFile}.lock`, `${stateFile}.next`, journalFile]
+    .some(path => path !== undefined && pathKey(path) === pathKey(stopFile))) {
+    throw new CliInputError("--stop-file must be separate from state, recovery and journal files");
+  }
   return { mode, limits: { capitalUsd, dailyLossUsd, maxOrderUsd, maxOpenOrders }, durationSec, timerMs,
-    statusSec, stateFile: resolve(raw.stateFile ?? `results/platform/${mode}-state.json`),
+    statusSec, stateFile, journalFile, stopFile,
     marketsFile: raw.markets ? resolve(raw.markets) : undefined,
     strategyModule: raw.strategyModule ? resolve(raw.strategyModule) : undefined,
     referenceFeed: raw.referenceFeed === true };
@@ -128,42 +145,126 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile) : undefined;
   const strategy = options.strategyModule ? await loadStrategyModule(options.strategyModule) : undefined;
   let store: PlatformStore | undefined;
+  let journal: PlatformJournal | undefined;
   let connection: Awaited<ReturnType<typeof connectPolymarketPlatform>> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let statusTimer: ReturnType<typeof setInterval> | undefined;
   let durationTimer: ReturnType<typeof setTimeout> | undefined;
+  let marketTimer: ReturnType<typeof setTimeout> | undefined;
+  let stopFileTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubscribe: (() => void) | undefined;
   let signalReason: string | undefined;
   let notifyStop: (() => void) | undefined;
   let primaryFailure: unknown;
   let phase = "initializing";
+  let selectedMarkets = explicitMarkets ?? [];
+  const startedAt = Date.now() / 1000;
+  const knownOrders = new Map<string, OrderRecord>();
   const stopRequested = new Promise<void>(done => { notifyStop = done; });
   const requestStop = (reason: string) => { signalReason ??= reason; notifyStop?.(); };
+  const checkStopFile = () => {
+    if (options.stopFile && existsSync(options.stopFile)) requestStop("controller_stop");
+  };
+  const watchMarketExpiry = () => {
+    const lastExpiry = Math.max(...selectedMarkets.map(market => market.endsAt));
+    const remainingMs = lastExpiry * 1000 - Date.now();
+    if (remainingMs <= 0) { requestStop("markets_expired"); return; }
+    marketTimer = setTimeout(watchMarketExpiry, Math.min(remainingMs, 2_147_483_647));
+  };
   const interrupt = () => requestStop("SIGINT");
   const terminate = () => requestStop("SIGTERM");
+  const breakSignal = () => requestStop("SIGBREAK");
   process.once("SIGINT", interrupt);
   process.once("SIGTERM", terminate);
-  const summary = (status: string) => {
+  process.once("SIGBREAK", breakSignal);
+  const reportError = (errorPhase: string, code: string) => {
+    const details = { phase: errorPhase, code };
+    console.error(JSON.stringify({ kind: "platform_error", ...details }));
+    journal?.write("platform_error", details);
+  };
+  const marketIdentity = (tokenId: string) => {
+    const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === tokenId));
+    return { market_slug: market?.name ?? null,
+      side: market?.instruments.find(instrument => instrument.tokenId === tokenId)?.outcome ?? null };
+  };
+  const record = (event: TradingEvent) => {
+    if (event.kind === "order") {
+      const order = event.order;
+      if (order.orderId) knownOrders.set(order.orderId, order);
+      journal?.write("order", { client_order_id: order.clientOrderId, order_id: order.orderId ?? null,
+        token_id: order.tokenId, strategy_id: order.strategyId, status: order.status,
+        filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
+        price: order.price, shares: order.shares, direction: order.direction, ...marketIdentity(order.tokenId),
+        sign_latency_ms: order.signLatencyMs ?? null, ack_latency_ms: order.ackLatencyMs ?? null,
+        updated_at: order.updatedAt });
+    } else if (event.kind === "fill") {
+      const fill = event.fill;
+      const order = knownOrders.get(fill.orderId) ?? connection?.platform.orders.get(fill.orderId);
+      journal?.write("fill", { trade_id: fill.tradeId, order_id: fill.orderId, token_id: fill.tokenId,
+        strategy_id: order?.strategyId ?? null, price: fill.price, shares: fill.shares,
+        fee: fill.feeUsd, is_maker: fill.isMaker, direction: fill.direction, ...marketIdentity(fill.tokenId),
+        engine_ts: fill.ts }, `fill:${JSON.stringify([fill.tradeId, fill.orderId])}`);
+    } else if (event.kind === "error") {
+      reportError("event", "platform_event_failed");
+    } else if (event.kind === "stopped") {
+      journal?.write("platform_stopped", { reason: signalReason ?? "run_complete" });
+    } else if (event.kind === "settlement") {
+      journal?.write("platform_settlement", { market_id: event.result.marketId, state: event.result.state,
+        transaction_id: event.result.transactionId ?? null });
+    }
+  };
+  const summary = (status: "starting" | "running" | "stopped" | "failed") => {
     const platform = connection?.platform;
-    if (!platform) return;
-    const state = platform.account.current();
+    const state = platform?.account.current();
+    const now = Date.now() / 1000;
+    const runtime = { schemaVersion: 1, engine: "platform", execution: strategy ? "strategy" : "observation",
+      strategy_id: strategy?.id ?? null, status, mode: options.mode, started_at: startedAt,
+      cash_usd: state?.cashUsd ?? null, positions_count: state?.positions.length ?? null,
+      orders_count: state?.orders.length ?? null,
+      active_orders: state?.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)).length ?? null,
+      fills_count: state?.fills.length ?? null, risk: state?.risk ?? null, limits: options.limits,
+      markets: platform?.market.list() ?? selectedMarkets,
+      books: (platform?.market.books() ?? []).map(book => {
+        const receivedAt = book.receivedAt ?? book.ts;
+        const ageMs = Number.isFinite(receivedAt) ? Math.max(0, (now - receivedAt) * 1000) : null;
+        const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === book.tokenId));
+        const expired = market ? now >= market.endsAt : true;
+        return { ...book, bids: book.bids?.slice(0, 5), asks: book.asks?.slice(0, 5),
+          received_age_ms: ageMs, market_expired: expired,
+          stale: expired || ageMs === null || ageMs > 10_000 || receivedAt > now + 1 };
+      }) };
+    journal?.write("platform_status", { runtime });
     console.log(JSON.stringify({ kind: "platform_status", status, mode: options.mode,
-      strategy: strategy?.id ?? null, markets: platform.market.list().map(market => market.id),
-      cashUsd: state.cashUsd, positions: state.positions.length, orders: state.orders.length,
-      activeOrders: state.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)).length,
-      fills: state.fills.length, risk: state.risk, telemetry: platform.telemetry.snapshot(),
-      capabilities: platform.capabilities(), reason: signalReason ?? null }));
+      strategy: strategy?.id ?? null, markets: runtime.markets.map(market => market.id),
+      cashUsd: runtime.cash_usd, positions: runtime.positions_count, orders: runtime.orders_count,
+      activeOrders: runtime.active_orders, fills: runtime.fills_count, risk: runtime.risk,
+      telemetry: platform?.telemetry.snapshot() ?? null, capabilities: platform?.capabilities() ?? null,
+      reason: signalReason ?? null }));
   };
   try {
+    phase = "journal_open";
+    if (options.journalFile) journal = new PlatformJournal(options.journalFile, { onFailure: error => {
+      primaryFailure ??= error; requestStop("journal_failed");
+    } });
+    summary("starting");
+    checkStopFile();
+    if (options.stopFile) stopFileTimer = setInterval(checkStopFile, 150);
     phase = "state_open";
     store = new PlatformStore(options.stateFile);
     const restored = store.load();
     phase = "market_discovery";
     const markets = explicitMarkets ?? validateMarkets(await discoverBtcMarket());
+    selectedMarkets = markets;
+    watchMarketExpiry();
     if (!signalReason) {
       phase = "platform_connect";
       connection = await connectPolymarketPlatform({ mode: options.mode, markets, limits: options.limits,
         paperCashUsd: options.limits.capitalUsd, restored, persist: (state, critical) => store!.save(state, critical),
-        durationSec: options.durationSec, referenceFeed: options.referenceFeed });
+        // Before connection resolution the adapter records initialization;
+        // afterwards the subscription includes publish-only plugin/settlement events.
+        record: event => { if (!connection) record(event); },
+        durationSec: options.durationSec === 0 ? Infinity : options.durationSec, referenceFeed: options.referenceFeed });
+      unsubscribe = connection.platform.subscribe(record);
     }
     if (connection && !signalReason) {
       if (strategy) connection.platform.attach(strategy);
@@ -180,29 +281,37 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         try { summary("running"); }
         catch (error) { primaryFailure ??= error; requestStop("status_failed"); }
       }, options.statusSec * 1000);
-      durationTimer = setTimeout(() => requestStop("duration_elapsed"), options.durationSec * 1000);
+      if (options.durationSec > 0) durationTimer = setTimeout(() => requestStop("duration_elapsed"), options.durationSec * 1000);
       summary("running");
       await stopRequested;
     }
   } catch (error) {
     primaryFailure = error;
-    console.error(JSON.stringify({ kind: "platform_error", phase, code: "platform_run_failed" }));
+    reportError(phase, "platform_run_failed");
   } finally {
-    clearInterval(timer); clearInterval(statusTimer); clearTimeout(durationTimer);
+    clearInterval(timer); clearInterval(statusTimer); clearInterval(stopFileTimer);
+    clearTimeout(durationTimer); clearTimeout(marketTimer);
     try { await connection?.stop(signalReason ?? (primaryFailure ? "run_failed" : "run_complete")); }
     catch (error) {
       primaryFailure ??= error;
-      console.error(JSON.stringify({ kind: "platform_error", phase: "shutdown", code: "platform_shutdown_failed" }));
+      reportError("shutdown", "platform_shutdown_failed");
     }
-    try { summary(primaryFailure ? "failed" : "stopped"); }
-    catch (error) { primaryFailure ??= error; }
     try { store?.close(); }
     catch (error) {
       primaryFailure ??= error;
-      console.error(JSON.stringify({ kind: "platform_error", phase: "state_close", code: "platform_state_close_failed" }));
+      reportError("state_close", "platform_state_close_failed");
     }
+    try { summary(primaryFailure ? "failed" : "stopped"); }
+    catch (error) { primaryFailure ??= error; }
+    try { await journal?.close(); }
+    catch (error) {
+      primaryFailure ??= error;
+      reportError("journal_close", "platform_journal_close_failed");
+    }
+    unsubscribe?.();
     process.removeListener("SIGINT", interrupt);
     process.removeListener("SIGTERM", terminate);
+    process.removeListener("SIGBREAK", breakSignal);
   }
   if (primaryFailure) throw new Error("platform run failed; see the JSON error phase");
 }

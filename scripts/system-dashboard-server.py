@@ -61,6 +61,7 @@ _trading_run_id: str | None = None
 _trading_config_revision: int | None = None
 _trading_account_id: str | None = None
 _trading_request_id: str | None = None
+_trading_engine: str | None = None
 _projection_pending: deque = deque()
 _evidence_download_lock = threading.BoundedSemaphore(6)
 
@@ -150,6 +151,7 @@ def _persist_trading_state() -> None:
         "config_revision": _trading_config_revision,
         "account_id": _trading_account_id,
         "request_id": _trading_request_id,
+        "engine": _trading_engine,
     }
     path = _state_path()
     try:
@@ -167,7 +169,7 @@ def _process_command(pid: int) -> str:
     proc_cmdline = Path(f"/proc/{pid}/cmdline")
     try:
         if proc_cmdline.is_file():
-            return proc_cmdline.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+            return shlex.join(part.decode("utf-8", "replace") for part in proc_cmdline.read_bytes().split(b"\0") if part)
     except OSError:
         return ""
     if os.name == "nt":
@@ -175,25 +177,38 @@ def _process_command(pid: int) -> str:
             completed = subprocess.run(
                 [
                     "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
                     f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine",
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="strict",
                 timeout=5,
             )
             return completed.stdout.strip() if completed.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, UnicodeError):
             return ""
     return ""
 
 
 def _process_matches(pid: int | None, log_path: Path | None) -> bool:
-    if not pid or pid <= 0:
+    if not pid or pid <= 0 or log_path is None:
         return False
-    command = _process_command(pid)
-    if "dist/cli/live.js" not in command.replace("\\", "/"):
+    try:
+        args = shlex.split(_process_command(pid).replace("\\", "/"))
+    except ValueError:
         return False
-    return log_path is None or log_path.name in command
+    # Match the exact journal argument as well as the executable; a recycled
+    # PID or another run with a similar filename must never receive a signal.
+    for executable, flag in (("dist/cli/platform.js", "--journal-file"), ("dist/cli/live.js", "--log-file")):
+        if not any(arg == executable or arg.endswith("/" + executable) for arg in args):
+            continue
+        if flag in args:
+            index = args.index(flag) + 1
+            expected = os.path.normcase(str(log_path).replace("\\", "/"))
+            return index < len(args) and os.path.normcase(args[index]) == expected
+    return False
 
 
 def _restore_trading_state() -> None:
@@ -206,6 +221,7 @@ def _restore_trading_state_locked() -> None:
     global _trading_log, _trading_console_log, _trading_exit_code
     global _trading_stop_result, _trading_state_loaded
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
+    global _trading_engine
     if _trading_state_loaded:
         return
     _trading_state_loaded = True
@@ -228,6 +244,7 @@ def _restore_trading_state_locked() -> None:
     _trading_config_revision = state.get("config_revision") if type(state.get("config_revision")) is int else None
     _trading_account_id = state.get("account_id") if isinstance(state.get("account_id"), str) else None
     _trading_request_id = state.get("request_id") if isinstance(state.get("request_id"), str) else None
+    _trading_engine = "platform" if state.get("engine") == "platform" else ("legacy" if _trading_log else None)
     candidate_pid = state.get("pid") if isinstance(state.get("pid"), int) else None
     _trading_pid = candidate_pid if _process_matches(candidate_pid, _trading_log) else None
 
@@ -509,7 +526,11 @@ def trading_status(include_stats: bool = True) -> dict:
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
         account = account_config_status()
         status = {
-            "available": (TRADING_ROOT / "dist" / "cli" / "live.js").is_file(),
+            "available": (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file(),
+            "execution_target": "platform",
+            "engine": _trading_engine,
+            "execution": "observation" if _trading_engine == "platform" else ("legacy" if _trading_engine else None),
+            "strategy_id": None,
             "running": running,
             "mode": _trading_mode,
             "pid": process.pid if process and running else (_trading_pid if running else None),
@@ -596,7 +617,16 @@ def trade_log_stats(selection: tuple | None = None) -> dict:
     if not isinstance(stats, dict):
         stats = {**_new_trade_cache(Path(""))["stats"], "available": False,
                  "file": None, "pnl": None, "fees": None, "market_summaries": []}
-    return {**stats, "projection": {k: view.get(k) for k in
+    runtime = stats.get("runtime")
+    if isinstance(runtime, dict):
+        runtime = dict(runtime)
+        source_at, expires_at = runtime.get("source_at"), runtime.get("expires_at")
+        valid_times = (type(source_at) in {int, float} and type(expires_at) in {int, float}
+                       and math.isfinite(source_at) and math.isfinite(expires_at))
+        runtime["age_seconds"] = max(0, time.time() - source_at) if valid_times else None
+        runtime["stale"] = bool(runtime.get("stale") or view.get("stale") or not valid_times
+                                or time.time() >= expires_at)
+    return {**stats, "runtime": runtime, "projection": {k: view.get(k) for k in
              ("state", "run_id", "as_of", "age_seconds", "stale", "worker_alive", "projection_ms")},
             "pending": bool(stats.get("pending") or view.get("ingestion", {}).get("pending"))}
 
@@ -643,10 +673,11 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
     global _trading_process, _trading_pid, _trading_started_at, _trading_mode, _trading_params
     global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
+    global _trading_engine
     mode = str(payload.get("mode") or "paper").lower()
     if mode not in {"paper", "live"}:
         raise ValueError("mode must be paper or live")
-    if not TRADING_ROOT.is_dir() or not (TRADING_ROOT / "dist" / "cli" / "live.js").is_file():
+    if not TRADING_ROOT.is_dir() or not (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file():
         raise RuntimeError("交易引擎尚未构建")
     if mode == "live":
         if payload.get("confirm_live") is not True:
@@ -701,23 +732,22 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
         candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
         candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
+        candidate_state = log_dir / f"dashboard-{run_id}.platform-state.json"
         # Create the selected journal before returning the start response.
         # The status endpoint must never fall back to a previous run while the
         # child process is still starting.
         candidate_log.touch()
         console_handle = candidate_console_log.open("a", encoding="utf-8")
         args = [
-            "node", "dist/cli/live.js", "run", "--paper" if mode == "paper" else "--live",
-            "--order-usd", str(order_usd), "--max-orders", str(max_orders), "--pair-cost-max", str(pair_cost_max),
-            "--max-total-usd", str(max_total_usd), "--duration-min", str(duration_min),
-            "--maker-life-sec", str(maker_life_sec), "--decision-interval-ms", str(decision_interval_ms),
-            "--defensive-cancel-bps", str(defensive_cancel_bps),
-            "--log-file", str(candidate_log), "--traded-file", str(log_dir / "traded.jsonl"),
+            "node", "dist/cli/platform.js", "--paper" if mode == "paper" else "--live",
+            "--duration-sec", str(duration_min * 60), "--status-sec", "2",
+            "--journal-file", str(candidate_log), "--state-file", str(candidate_state),
+            "--stop-file", str(candidate_log.with_suffix(".stop")),
         ]
         env = _trading_environment()
-        account_id = account_config_status().get("wallet") or None
+        account_id = (account_config_status().get("wallet") or None) if mode == "live" else None
         env["LIVE"] = "false" if mode == "paper" else "true"
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             _trading_process = subprocess.Popen(
                 args, cwd=TRADING_ROOT, env=env, stdout=console_handle,
@@ -734,6 +764,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         _trading_started_at = time.time()
         _trading_mode = mode
         _trading_run_id = run_id
+        _trading_engine = "platform"
         _trading_config_revision = config_revision
         _trading_request_id = request_id
         _trading_account_id = account_id
@@ -786,7 +817,10 @@ def stop_trading() -> dict:
         if process is None and restored_pid and _process_matches(restored_pid, _trading_log):
             try:
                 if os.name == "nt":
-                    subprocess.run(["taskkill", "/PID", str(restored_pid), "/T"], timeout=10, check=False)
+                    if _trading_engine == "platform" and _trading_log:
+                        _trading_log.with_suffix(".stop").touch()
+                    else:
+                        subprocess.run(["taskkill", "/PID", str(restored_pid), "/T"], timeout=10, check=False)
                 else:
                     os.kill(restored_pid, signal.SIGTERM)
                 stop_requested = True
@@ -798,7 +832,10 @@ def stop_trading() -> dict:
         if process is not None and process.poll() is None:
             try:
                 if os.name == "nt":
-                    process.send_signal(signal.CTRL_BREAK_EVENT)
+                    if _trading_engine == "platform" and _trading_log:
+                        _trading_log.with_suffix(".stop").touch()
+                    else:
+                        process.send_signal(signal.CTRL_BREAK_EVENT)
                 else:
                     process.send_signal(signal.SIGTERM)
                 stop_requested = True
@@ -909,7 +946,8 @@ def make_handler(root: Path):
                     status = trading_status()
                     value = {"schemaVersion": 1, "asOf": time.time(),
                              **{k: status[k] for k in ("running", "mode", "run_id", "config_revision",
-                                   "account_id", "params", "stop_result", "live_unlocked")},
+                                   "account_id", "params", "stop_result", "live_unlocked",
+                                   "execution_target", "engine", "execution", "strategy_id")},
                              "projection": status["stats"].get("projection"),
                              "stats": status["stats"]}
                 elif path == "/api/v1/markets":

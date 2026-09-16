@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import sys
@@ -11,7 +12,28 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dashboard.ledger import Ledger
-from dashboard.read_model import atomic_json, read_json
+from dashboard.read_model import MAX_SNAPSHOT_BYTES, atomic_json, read_json
+
+
+def bounded_snapshot(value):
+    """Keep the HTTP snapshot bounded while full lifecycle history stays in SQLite."""
+    stats = value["stats"]
+    runtime = stats.get("runtime") or {}
+    arrays = [(stats, "orders"), (stats, "market_summaries"), (stats, "events"),
+              (runtime, "books"), (runtime, "markets")]
+    while len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) > MAX_SNAPSHOT_BYTES:
+        for owner, key in arrays:
+            if owner.get(key):
+                owner[key] = owner[key][:len(owner[key]) // 2]
+                stats["snapshot_truncated"] = True
+                if key == "orders":
+                    stats["orders_truncated"] = True
+                elif owner is runtime:
+                    runtime["truncated"] = True
+                break
+        else:
+            raise ValueError("projection metadata exceeds snapshot budget")
+    return value
 
 
 class ProjectionWorker:
@@ -23,6 +45,7 @@ class ProjectionWorker:
         self.progress_state = None
         self.snapshot_version = None
         self.last_heartbeat = 0.0
+        self.runtime_expires_at = None
 
     def step(self):
         iteration = time.monotonic()
@@ -38,19 +61,22 @@ class ProjectionWorker:
             self.ledger.ingest_if_changed(prior, max_bytes=262144, max_records=1000)
             self.historical_cursor = prior
         state = {key: value for key, value in progress.items() if key not in {"records", "inserted", "bytes"}}
-        projected = changed_selection or state != self.progress_state or bool(progress["records"])
+        expired = self.runtime_expires_at is not None and time.time() > self.runtime_expires_at
+        projected = changed_selection or state != self.progress_state or bool(progress["records"]) or expired
         if projected:
             summary = self.ledger.summary(run_id)
             stats = self.ledger.legacy_stats(run_id, summary=summary)
             if progress.get("error"):
                 stats["error"] = "交易日志变化或损坏，统计待核对"
             version = uuid.uuid4().hex
-            atomic_json(self.directory / "snapshot.json", {
+            atomic_json(self.directory / "snapshot.json", bounded_snapshot({
                 "schemaVersion": 2, "run_id": run_id, "as_of": time.time(),
                 "snapshot_version": version,
                 "stats": stats, "summary": summary, "ingestion": progress,
                 "projection_ms": (time.monotonic() - iteration) * 1000,
-            })
+            }))
+            runtime = stats.get("runtime")
+            self.runtime_expires_at = runtime["expires_at"] if runtime and not runtime["stale"] else None
             self.snapshot_version = version
             self.progress_state = state
             self.selected = selection

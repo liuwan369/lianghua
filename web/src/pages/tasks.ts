@@ -1,5 +1,5 @@
 import { api } from '../api/client';
-import { esc, date, money, number } from '../ui';
+import { esc, date, executionName, fresh, money, number, platformRuntime } from '../ui';
 import type { ArchitectureGroup, ArchitectureScope, Resource, Status, TaskItem, TaskPhase, TaskView } from '../api/types';
 
 const labels: Record<string, string> = { DONE: '已完成', PARTIAL: '部分完成', DEFERRED: '延期增强', RUNNING: '进行中', REVIEW: '复核中', TODO: '待完成', BLOCKED: '已阻塞', PAUSED: '已暂停' };
@@ -15,11 +15,15 @@ export const taskPageMarkup = `<div class="head task-overview"><div><div class="
 <div class="task-toolbar"><div class="task-tabs" role="tablist" aria-label="任务视图"><button type="button" id="task-tab-architecture" role="tab" data-task-tab="architecture" aria-controls="task-content" aria-selected="true">功能架构</button><button type="button" id="task-tab-delivery" role="tab" data-task-tab="delivery" aria-controls="task-content" aria-selected="false">交付任务</button></div><div class="task-filters" data-task-filters><label>完成情况<select data-task-filter><option value="all">全部</option><option value="incomplete">未完成</option><option value="done">已完成</option></select></label><label>模块范围<select data-task-scope><option value="all">全部模块</option><option value="CORE">通用底座</option><option value="STRATEGY">独立策略</option><option value="DELIVERY">交付与增强</option></select></label></div></div>
 <div class="task-legend" data-task-legend></div><div class="task-layout" id="task-content" role="tabpanel" aria-labelledby="task-tab-architecture"><section class="task-tree"><div class="section-title"><h2 data-task-tree-title>功能架构</h2><span class="muted" data-task-visible></span></div><div data-task-tree></div></section><section class="task-detail-panel" aria-label="节点详情"><div data-task-detail></div></section></div>`;
 
-function liveLine(status: Status | null, error: string | null) {
+function liveLine(status: Status | null, error: string | null, receivedAt: number) {
   if (!status) return error ? `实时运行状态读取失败：${error}` : '实时运行状态尚未获取';
   const stats = status.stats || {};
   const run = status.run_id ? `运行 ${status.run_id}` : '暂无运行';
-  return `${status.running ? '交易运行中' : '交易已停止'} · ${status.mode || '未知模式'} · ${run} · ${status.mode === 'paper' ? '模拟' : ''}成交 ${number(stats.fills)} · 成交额 ${money(stats.fill_notional)}${status.live_unlocked ? ' · 实盘开关已开' : ' · 实盘开关关闭'}`;
+  if (status.engine === 'platform') {
+    const { runtime, current } = platformRuntime(status, status.asOf + (Date.now() - receivedAt) / 1000);
+    return `${executionName(status)} · ${status.running ? '运行中' : '已停止'} · ${status.strategy_id === null ? '未加载策略' : status.strategy_id || '策略状态未知'} · ${run} · ${current ? `模拟成交 ${number(runtime?.fills_count)}` : '快照待更新或仅有历史记录'} · ${status.control_source?.label || '来源未标注'} · 快照 ${date(runtime?.source_at)}`;
+  }
+  return `${executionName(status)} · ${status.running ? '运行中' : '已停止'} · ${run} · ${status.mode === 'paper' ? '模拟' : ''}成交 ${number(stats.fills)} · 成交额 ${money(stats.fill_notional)}${status.live_unlocked ? ' · 实盘开关已开' : ' · 实盘开关关闭'}`;
 }
 
 function phaseMarkup(phase: TaskPhase, selected: string, collapsed: Set<string>) {
@@ -54,6 +58,7 @@ export function mountTasks() {
   let closed = false; let activated = false; let busy = false;
   const collapsed = new Set<string>();
   const text = (selector: string, value: string) => { const node = root.querySelector(selector); if (node) node.textContent = value; };
+  const renderLive = () => text('[data-task-live]', liveLine(fresh(statusResource), statusResource.error || (statusResource.data && !fresh(statusResource) ? '运行状态已过期' : null), statusResource.receivedAt));
   const render = () => {
     const data = taskResource.data;
     const architecture = data?.architecture;
@@ -72,7 +77,7 @@ export function mountTasks() {
       ? `部分完成 ${allTasks.filter(item => item.status === 'PARTIAL').length} · 待完成 ${allTasks.filter(item => item.status === 'TODO').length} · 已暂停 ${allTasks.filter(item => item.status === 'PAUSED').length} · 延期增强 ${allTasks.filter(item => item.status === 'DEFERRED').length}`
       : `进行中 ${allTasks.filter(item => item.status === 'RUNNING').length} · 复核中 ${allTasks.filter(item => item.status === 'REVIEW').length} · 已暂停 ${allTasks.filter(item => item.status === 'PAUSED').length}`;
     text('[data-task-updated]', data?.updatedAt ? `规划更新 ${date(Date.parse(data.updatedAt) / 1000)}` : taskResource.error ? '规划读取失败' : '规划读取中');
-    text('[data-task-live]', liveLine(statusResource.data, statusResource.error));
+    renderLive();
     text('[data-task-summary]', taskResource.error || (architectureActive ? architecture?.summary : data?.summary) || (data ? '暂无功能架构数据' : '任务数据读取中'));
     text('[data-task-progress]', `${completed} / ${allTasks.length} 项完成 · ${counts}`);
     text('[data-task-tree-title]', architectureActive ? architecture?.title || '功能架构' : '阶段与任务');
@@ -115,7 +120,7 @@ export function mountTasks() {
     if (closed || busy) return;
     busy = true;
     try {
-      const [tasksResult, statusResult] = await Promise.allSettled([api.tasks(), api.status()]);
+      const [tasksResult, statusResult] = await Promise.allSettled([api.tasks(), api.status().then(data => ({data, receivedAt:Date.now()}))]);
       if (closed) return;
       if (tasksResult.status === 'fulfilled') {
         taskResource.data = tasksResult.value; taskResource.error = null; taskResource.receivedAt = Date.now();
@@ -124,7 +129,7 @@ export function mountTasks() {
         taskResource.error = tasksResult.reason instanceof Error ? tasksResult.reason.message : '任务读取失败';
       }
       if (statusResult.status === 'fulfilled') {
-        statusResource.data = statusResult.value; statusResource.error = null; statusResource.receivedAt = Date.now();
+        statusResource.data = statusResult.value.data; statusResource.error = null; statusResource.receivedAt = statusResult.value.receivedAt;
       } else {
         statusResource.data = null;
         statusResource.error = statusResult.reason instanceof Error ? statusResult.reason.message : '实时状态读取失败';
@@ -166,8 +171,9 @@ export function mountTasks() {
   render();
   if (root.classList.contains('active')) activate();
   const timer = window.setInterval(() => { if (activated && root.classList.contains('active')) void load(); }, 10000);
+  const expiryTimer = window.setInterval(() => { if (activated && root.classList.contains('active')) renderLive(); }, 1000);
   return () => {
-    closed = true; window.clearInterval(timer);
+    closed = true; window.clearInterval(timer); window.clearInterval(expiryTimer);
     root.removeEventListener('click', onClick); root.removeEventListener('change', onChange);
     nav?.removeEventListener('click', activate);
   };

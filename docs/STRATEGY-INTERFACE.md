@@ -19,7 +19,7 @@ export interface StrategyPlugin {
 }
 ```
 
-新平台的订单公共入口是 `platform.orders.submit/cancel/replace`，由 `TradingCore` 做资金、份额、身份和风险校验，新插件不能直接调用 CLOB SDK。当前独立 `trading-platform` CLI 已使用这条路径；现有控制台仍启动旧 `live.js run`，其启停、恢复及状态/日志投影迁移尚未完成，不能把“统一入口”描述为所有入口的现状。
+新平台的订单公共入口是 `platform.orders.submit/cancel/replace`，由 `TradingCore` 做资金、份额、身份和风险校验，新插件不能直接调用 CLOB SDK。独立平台 CLI 和控制台新启动已统一使用 `platform.js`；控制台不挂策略，启停、进程身份恢复及状态/日志已接入。旧 `live.js run` 仅保留显式兼容入口。
 
 策略通过 `onEvent` 接收市场、盘口、参考价、订单、成交、账户、结算、定时器和错误事件；`context` 只读，包含模式、时间、市场、完整盘口和当前账户投影。
 

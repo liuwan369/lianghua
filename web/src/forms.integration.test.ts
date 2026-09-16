@@ -5,7 +5,7 @@ import { connect } from './live-data';
 let stop: (() => void) | undefined;
 afterEach(() => { stop?.(); stop=undefined; vi.useRealTimers(); vi.unstubAllGlobals(); document.body.replaceChildren(); });
 const params = { mode:'paper', order_usd:2, maker_life_sec:15, duration_min:5, max_total_usd:100, max_orders:50, pair_cost_max:.99, decision_interval_ms:23, defensive_cancel_bps:12 };
-async function setup() {
+async function setup(capabilities:Record<string,unknown> = {}) {
   vi.useFakeTimers();
   document.body.innerHTML='<div id="app"></div>';
   mountLayout(document.getElementById('app')!);
@@ -16,7 +16,7 @@ async function setup() {
       requests.push({path,body:JSON.parse(options.body as string)});
       return new Response(JSON.stringify({ok:false,error:path.includes('/account/')?'请使用带登录保护的 HTTPS 页面接入账户':'配置版本已变化，请重新读取后保存',current_revision:4}),{status:path.includes('/account/')?403:409});
     }
-    if(path==='/api/v1/config') return new Response(JSON.stringify({schemaVersion:1,revision,savedAt:null,params,capabilities:{supportedFields:Object.keys(params),demoFieldMappings:{order:'order_usd',life:'maker_life_sec',duration:'duration_min',submitted:'max_total_usd',maxOrders:'max_orders',mode:'mode'}}}));
+    if(path==='/api/v1/config') return new Response(JSON.stringify({schemaVersion:1,revision,savedAt:null,params,capabilities:{supportedFields:Object.keys(params),demoFieldMappings:{order:'order_usd',life:'maker_life_sec',duration:'duration_min',submitted:'max_total_usd',maxOrders:'max_orders',mode:'mode'},...capabilities}}));
     if(path==='/api/account/status') return new Response(JSON.stringify({wallet:'0x'+'1'.repeat(40),wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null}));
     if(path.startsWith('/api/v1/runs')) return new Response(JSON.stringify({schemaVersion:1,runs:[],next_before_id:null}));
     return new Response('{}',{status:503});
@@ -29,6 +29,21 @@ function input(selector:string,value:string) {
   expect(el.disabled).toBe(false);el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));return el;
 }
 function click(selector:string) { const b=document.querySelector<HTMLButtonElement>(selector)!;expect(b.disabled).toBe(false);b.click(); }
+
+it('marks only applied platform fields while retaining all nine saved values and edited legacy drafts',async()=>{
+  const capabilities={executionTarget:'platform',executionMode:'observation',runtimeAppliedFields:['mode','duration_min'],preservedLegacyFields:Object.keys(params).filter(k=>!['mode','duration_min'].includes(k))};
+  const {requests}=await setup(capabilities);
+  expect(document.querySelector('#setting-duration')!.getAttribute('data-runtime')).toBe('applied');
+  expect(document.querySelector('#setting-order')!.getAttribute('data-runtime')).toBe('preserved');
+  expect(document.querySelector('#help-order')!.textContent).toContain('平台观察不应用');
+  input('#setting-order','3');input('#setting-duration','20');
+  await vi.advanceTimersByTimeAsync(5100);
+  expect(document.querySelector<HTMLInputElement>('#setting-order')!.value).toBe('3');
+  click('#settings-run [data-settings-save]');await vi.advanceTimersByTimeAsync(100);
+  expect(requests[0].body.params).toEqual({...params,order_usd:3,duration_min:20});
+  expect(document.querySelector('[data-settings-message]')!.textContent).toContain('未加载策略');
+  expect(requests.every(r=>r.path==='/api/v1/config')).toBe(true);
+});
 
 it('keeps edited account and strategy values through ticks and polling without background writes',async()=>{
   const {requests}=await setup();

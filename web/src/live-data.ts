@@ -4,7 +4,7 @@ import { connectAccountData } from './account-data';
 import { connectTradingControls } from './trading-controls';
 import { pageTelemetry } from './page-telemetry';
 import type { Account, Config, Events, Markets, Resource, Status } from './api/types';
-import { activeMarkets, date, esc, finite, fresh, money, modeName, number, price, quotePair, serverNow, usableMarket, marketMessage } from './ui';
+import { activeMarkets, date, esc, executionName, finite, fresh, money, modeName, number, platformRuntime, price, quotePair, serverNow, usableMarket, marketMessage } from './ui';
 
 const set = (selector: string, value: unknown) => { const node = document.querySelector(selector); if (node) node.textContent = String(value ?? '--'); };
 function row(section: string, label: string, value: unknown) {
@@ -14,7 +14,7 @@ function disable(selector: string, reason: string) {
   document.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>(selector).forEach(el => { el.disabled=true; el.title=reason; });
 }
 const resource = <T>(): Resource<T> => ({data:null,error:null,receivedAt:0,loading:false});
-const names: Record<string,string> = {quote:'挂单尝试',fill:'成交',cancel:'撤单事件',reset:'切场',stopped:'停止',unresolved:'未结算',resolved:'结算',taker:'吃单尝试',error:'错误'};
+const names: Record<string,string> = {quote:'挂单尝试',fill:'成交',cancel:'撤单事件',reset:'切场',stopped:'停止',unresolved:'未结算',resolved:'结算',taker:'吃单尝试',error:'错误',platform_status:'平台快照',platform_order:'平台订单',platform_fill:'平台成交'};
 
 export function prepareReadOnly() {
   set('.side-note','服务器数据接入中\n未接入功能保留原位');
@@ -60,6 +60,9 @@ export function connect() {
   const telemetry=pageTelemetry();
   const trading=connectTradingControls(refresh);
   const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>();
+  const runtimeRows=document.createElement('div');runtimeRows.dataset.platformRuntime='';runtimeRows.hidden=true;
+  runtimeRows.innerHTML='<div class="row"><span>平台模拟现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><p class="muted" data-runtime-source role="status"></p>';
+  document.getElementById('homeStrategy')!.closest('.panel')!.append(runtimeRows);
   let closed=false, refreshing=false, runLoading=false, runsLoading=false, historyGeneration=0;
   let configGeneration=0, accountGeneration=0;
   let marketFilter=0;
@@ -96,7 +99,7 @@ export function connect() {
     set('#view-trade .quote:nth-child(1) b',market?quotePair(market,'up',usable):'-- / --');
     set('#view-trade .quote:nth-child(2) b',market?quotePair(market,'down',usable):'-- / --');
     row('#view-trade','两边立即买入成本',usable?price(market.ask_sum):'--');
-    row('#view-trade','策略判断',usable?'盘口已获取 · 策略判断待接入':'行情不可用或已过期');
+    row('#view-trade','策略判断',fresh(status)?.engine==='platform'&&fresh(status)?.strategy_id===null?'平台观察 · 未加载策略':usable?'盘口已获取 · 策略判断待接入':'行情不可用或已过期');
     row('#view-home','数据连接',data?.collector_online && usable ? `行情已更新 · ${data.node_label}`:marketMessage(markets));
     row('#settings-system','数据节点',data?.node_label || '--');
     row('#settings-system','行情更新时间',data?.latest_event_at || '--');
@@ -108,17 +111,32 @@ export function connect() {
   }
   function renderStatus() {
     const s=fresh(status);
-    const mode=s?modeName(s.mode):'模式未知';
+    const mode=s?executionName(s):'模式未知';
+    const clock=s ? s.asOf+(Date.now()-status.receivedAt)/1000 : Date.now()/1000;
+    const runtime=platformRuntime(s,clock);
+    const platform=s?.engine==='platform';
+    const strategy=platform ? s.strategy_id===null?'未加载策略':s.strategy_id ? `策略 ${s.strategy_id}`:'策略状态未知' : '';
     set('#status',!s ? status.error||'状态读取中' : s.running ? `${mode} · 运行中`:`${mode} · 未运行`);
-    set('#homeStrategy',!s?'-- · 状态未知':s.running?'运行中':'未运行');
-    set('#view-trade .chip',s ? `${mode} · ${s.running?'运行中':'未运行'}`:'-- · 状态未知');
+    set('#homeStrategy',!s?'-- · 状态未知':`${mode} · ${s.running?'运行中':'已停止'}${strategy ? ` · ${strategy}` : ''}`);
+    set('#view-trade .chip',s ? `${mode} · ${s.running?'运行中':'未运行'}${strategy ? ` · ${strategy}` : ''}`:'-- · 状态未知');
     row('#settings-system','实盘开关',!s?'未知':s.live_unlocked?'已开启 · 验收状态需核对':'关闭');
     row('#settings-system','当前版本','六页原设计 · 表单接入');
     const stats=s?.stats;
     const valid=stats?.available===true && s?.projection?.stale===false && s.projection.state==='ready' && (s.run_id===null || s.projection.run_id===s.run_id);
-    set('#homeVolume',valid?`${number(stats?.fills)} / ${money(stats?.fill_notional)}`:'-- / --');
-    set('#homeVolume + small',s ? `成交笔数 / 成交额 · ${mode} · 最近运行`:'成交笔数 / 成交额 · 状态未获取');
-    row('#view-home','本次投入上限',s?.running?money(s.params.max_total_usd):'-- · 未运行');
+    set('#homeVolume',valid&&(!platform||runtime.current)?`${number(platform?runtime.runtime?.fills_count:stats?.fills)} / ${money(stats?.fill_notional)}`:'-- / --');
+    set('#homeVolume + small',s ? `成交笔数 / 成交额 · ${mode} · ${platform&&!runtime.current?'历史或过期快照':'本次运行'}`:'成交笔数 / 成交额 · 状态未获取');
+    row('#view-home','本次投入上限',platform?'不适用 · 平台观察':s?.running?money(s.params.max_total_usd):'-- · 未运行');
+    runtimeRows.hidden=!platform;
+    const snapshot=runtime.runtime;
+    set('[data-runtime-cash]',runtime.current&&snapshot?.mode==='paper'?`${money(snapshot.cash_usd)} · 模拟资金`:'-- · 无当前模拟资金快照');
+    set('[data-runtime-counts]',runtime.current?`${number(snapshot?.positions_count)} / ${number(snapshot?.active_orders)}`:'-- / --');
+    set('[data-runtime-risk]',runtime.current&&typeof snapshot?.risk?.halted==='boolean'?snapshot.risk.halted?`已暂停 · ${String(snapshot.risk.reason||'原因未提供')}`:'未触发暂停':'-- · 无当前风险快照');
+    set('[data-runtime-source]',`${s?.control_source?.label||'来源未标注'} · 平台运行 ${s?.run_id||'--'} · ${snapshot?`采集 ${date(snapshot.source_at)} · ${number(Math.max(0,clock-snapshot.source_at),1)} 秒前 · ${!s?.running?'历史最终快照':runtime.current?'当前快照':'已过期或等待当前快照'}`:'等待平台快照'}`);
+    if(platform){
+      row('#view-trade','策略判断',strategy);
+      row('#view-trade','补仓状态',s?.strategy_id===null?'未加载策略':'按平台策略运行');
+      set('#view-home .grid .note','平台观察未加载交易策略。平台模拟资金、持仓与真实账户分别核对。');
+    }
     const rows=valid&&Array.isArray(stats?.events)? stats.events.slice(-6):[];
     const logs=rows.map(e=>`${date(e.time)} · ${names[e.event]||'其他事件'} · ${e.market||'--'}${e.event==='fill'?` · ${number(e.shares,2)} 份 × ${price(e.price)}`:''}`).join('\n');
     set('#homeLog',status.error||logs||'尚无可用运行事件。'); set('#tradeLog',status.error||logs||'尚无可用运行事件。');
@@ -128,13 +146,13 @@ export function connect() {
     row('#view-home','当前账户',account.error?'-- · 读取失败':a?.wallet_configured ? `${a.wallet} · ${a.control_source?.label || '来源未标注'}` : a ? `未配置 · ${a.control_source?.label || '来源未标注'}` : '读取中');
     if(s?.control_source?.scope === 'local_preview') {
       set('.side-note',`${s.control_source.market_node}公开行情\n账户、运行、账本：本机预览`);
-      set('#homeStrategy', `${s.running ? '运行中' : '未运行'} · 本机预览`);
+      set('#homeStrategy', `${mode} · ${s.running ? '运行中' : '未运行'}${strategy ? ` · ${strategy}` : ''} · 本机预览`);
     }
   }
   function renderConfig() {
     const c=config.data;
     document.querySelectorAll('[data-effective-summary]').forEach(el=>el.textContent=config.error || (!c?'配置未获取':`${c.control_source?.label || '来源未标注'} · 已保存版本 ${c.revision} · 本次运行版本 ${status.data?.config_revision??'--'}`));
-    row('#view-trade','目标成本上限','-- · 目标与硬上限尚未分别接入');
+    row('#view-trade','目标成本上限',c?.capabilities.executionMode==='observation'?'不应用 · 平台观察':'-- · 目标与硬上限尚未分别接入');
   }
   function renderEvents() {
     if(document.getElementById('view-orders')?.dataset.source==='account')return;

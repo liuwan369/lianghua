@@ -37,6 +37,20 @@ export function validate(kind: string, data: unknown): void {
   if (kind === 'status' && object(data.stats) && data.stats.events !== undefined) valid = valid
     && Array.isArray(data.stats.events) && data.stats.events.every(e=>object(e) && typeof e.event==='string'
       && nullableString(e.market) && ['time','shares','price'].every(k=>nullableNumber(e[k])));
+  if (kind === 'status') {
+    valid = valid && (data.execution_target === undefined || data.execution_target === 'platform')
+      && (data.engine === undefined || data.engine === null || ['platform','legacy'].includes(String(data.engine)))
+      && (data.execution === undefined || data.execution === null || ['observation','strategy','legacy'].includes(String(data.execution)))
+      && (data.strategy_id === undefined || nullableString(data.strategy_id));
+    const runtime = object(data.stats) ? data.stats.runtime : undefined;
+    if (runtime !== undefined && runtime !== null) valid = valid && object(runtime) && runtime.engine === 'platform'
+      && ['observation','strategy'].includes(String(runtime.execution)) && nullableString(runtime.strategy_id)
+      && typeof runtime.status === 'string' && typeof runtime.mode === 'string'
+      && num(runtime.source_at) && num(runtime.expires_at) && typeof runtime.stale === 'boolean'
+      && ['cash_usd','positions_count','orders_count','active_orders','fills_count'].every(k => nullableNumber(runtime[k]))
+      && (runtime.risk === null || object(runtime.risk)) && (runtime.limits === null || object(runtime.limits))
+      && Array.isArray(runtime.markets) && runtime.markets.every(object) && Array.isArray(runtime.books) && runtime.books.every(object);
+  }
   if (kind === 'markets') valid = typeof data.collector_online === 'boolean' && typeof data.node_label === 'string'
     && num(data.asOf) && nullableNumber(data.cache_age_seconds) && Array.isArray(data.current_markets)
     && data.current_markets.every(m => object(m) && typeof m.slug === 'string' && num(m.start) && num(m.end)

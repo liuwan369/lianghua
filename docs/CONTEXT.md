@@ -1,6 +1,6 @@
 # 当前接手上下文
 
-更新时间：2026-09-16。当前入口是 [当前系统状态](CURRENT-STATUS.md)、[交付规划 v6](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 和 [Agent 协作约定 v6](AGENT-WORKFLOW.md)。
+更新时间：2026-09-16。当前入口是 [当前系统状态](CURRENT-STATUS.md)、[交付规划 v7](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 和 [Agent 协作约定 v6](AGENT-WORKFLOW.md)。
 
 ## 当前主线
 
@@ -11,7 +11,7 @@
 ## 当前代码边界
 
 - 新平台位于 `_external/btc-5m-market-trading-bot/src/platform/`。
-- 控制台启停/恢复和日志仍走旧 `live.js run` / Engine，独立平台 CLI 才使用新入口；UI-00 负责迁移，不能宣称所有入口已统一。
+- 控制台新启动、进程身份恢复和日志已接入 `platform.js`，默认无策略观察；旧 `live.js run` 仅保留显式兼容入口。当前只应用 mode/duration，其余旧配置保留。
 - 旧 `src/live/engine.ts`、`MakerSession`、`PairCost` 是兼容路径，不是公共平台默认策略。
 - Paper 网关只用盘口和公开成交模拟，不伪造真实队列；真实成交只认认证用户事件或明确补偿结果。
 - 策略只能返回 `submit/cancel/replace`，不能访问 CLOB client 或修改账本。

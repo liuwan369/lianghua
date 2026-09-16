@@ -2,27 +2,29 @@
 
 核对日期：2026-09-16。配置实现见 `scripts/dashboard/config.py`、账户实现见 `scripts/dashboard_account.py`；公共交易平台配置见 `_external/btc-5m-market-trading-bot/src/platform/`。
 
-当前策略接入暂停。现有前端配置入口保留，但页面字段不能被解释为新策略默认参数或自动调参已经接线。策略恢复前不冻结 `pair-cost`、`stableLive` 或 `target_clone` 的生产默认值。基础资金边界仍为本金 `$50`、北京时间单日损失 `$30`。
+当前策略接入暂停。本批源码将控制台启停接入无策略 `TradingPlatform` 观察；本说明不表示已部署。现有前端配置入口保留，页面字段不能被解释为新策略默认参数或自动调参已经接线。实盘资金边界仍为本金 `$50`、北京时间单日损失 `$30`；平台 paper 默认 `$1000` 是独立模拟现金，不是实盘额度。
 
 ## 页面与引擎参数
 
 新版六页设置中已接入保存的字段共九项：
 
-| 页面字段 | API 字段 | 含义 |
-| --- | --- | --- |
-| order | order_usd | 单笔名义金额上限 |
-| life | maker_life_sec | maker 挂单有效秒数 |
-| mode | mode | paper / live 配置模式 |
-| duration | duration_min | 运行分钟数，0 表示不限时 |
-| submitted | max_total_usd | 累计提交金额保险丝 |
-| maxOrders | max_orders | 累计订单次数上限 |
-| pairCost | pair_cost_max | 现有引擎配对/加仓成本参数，不等于补仓硬上限 |
-| decisionInterval | decision_interval_ms | 最短决策间隔，0 不节流 |
-| defensiveCancel | defensive_cancel_bps | BTC 逆向波动撤单阈值，0 关闭 |
+| 页面字段 | API 字段 | 含义 | 本批平台观察 |
+| --- | --- | --- | --- |
+| order | order_usd | 旧单笔名义金额上限 | 保留，可保存；不应用 |
+| life | maker_life_sec | 旧 maker 挂单有效秒数 | 保留，可保存；不应用 |
+| mode | mode | paper / live 配置模式 | 应用；前端与版本化启动仅支持 paper |
+| duration | duration_min | 运行分钟数，0 不按时长退出 | 应用 |
+| submitted | max_total_usd | 旧累计提交金额保险丝 | 保留，可保存；不应用 |
+| maxOrders | max_orders | 旧累计订单次数上限 | 保留，可保存；不应用 |
+| pairCost | pair_cost_max | 旧引擎配对/加仓成本参数 | 保留，可保存；不应用 |
+| decisionInterval | decision_interval_ms | 旧最短决策间隔 | 保留，可保存；不应用 |
+| defensiveCancel | defensive_cancel_bps | 旧 BTC 逆向波动撤单阈值 | 保留，可保存；不应用 |
 
-三个独立引擎控件已连接 `pair_cost_max`、`decision_interval_ms`、`defensive_cancel_bps`；其余成本目标、库存、补仓和退出设置仅为草稿。不能把控件可输入当成引擎生效。
+九个控件都有保存映射。平台观察依照 capabilities 标出 `runtimeAppliedFields=[mode,duration_min]`，其余七项归入 `preservedLegacyFields`，仍可编辑保存且保留原值，但不传入新平台。其余成本目标、库存、补仓和退出设置仅为本页草稿，不保存、不执行。
 
-默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改，作用于下次启动；版本化启动仅支持 paper。当前为单服务器配置，不按账户隔离。
+默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改；只把模式、时长应用于下次平台观察启动，不热更新、不加载策略。当前为单服务器配置，不按账户隔离。本批固定订阅的市场全部到期会自动停止，即使 `duration_min=0` 也不表示跨场永久运行。
+
+平台初始模拟现金和风险参数使用平台 CLI 默认值，不能用旧 `order_usd/max_total_usd` 推断当前平台限额。当前真实值取 `stats.runtime.cash_usd/risk/limits`。页面将模拟现金、持仓和活跃委托与真实账户分开；来源时间、运行编号与有效期不匹配时不显示为当前值，旧引擎记录另标“旧引擎纸面”。
 
 历史兼容路径中的 `pair_cost_max` 不应解释为所有预设的统一硬上限。旧 `target_clone` 的 `hedgeLimit()` 说明只用于历史代码核对，当前策略暂停，不能把它当作新平台生产参数。完整公共执行语义见 [技术实现](TECHNICAL.md)。
 

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-16T18:11:00+08:00",
-  "summary": "公共交易底座已接口化；当前只审查底座、适配器、账户核对和展示，策略接入与自动实盘暂停。",
+  "updatedAt": "2026-09-16T22:05:00+08:00",
+  "summary": "公共交易底座和控制台平台入口已接口化；策略接入与自动实盘暂停，继续补真实异常生命周期、深度展示和长期运维。",
   "hardRules": [
     "本金上限 $50",
     "北京时间单日最大亏损 $30",
@@ -39,7 +39,7 @@
         "id": "EXECUTION", "title": "订单执行与生命周期", "owner": "执行 Agent", "scope": "CORE",
         "detail": "订单功能属于平台，不随策略绑定。",
         "items": [
-          { "id": "EXEC-00", "title": "统一交易底座入口", "status": "PARTIAL", "detail": "TradingPlatform、插件和独立平台 CLI 已接通；控制台启停、恢复和旧 CLI 仍走旧 Engine。", "next": "迁移控制台启停及状态/日志投影，明确旧 CLI 兼容边界。", "verification": "平台接口测试通过；源码追踪确认控制台仍启动 live.js run。" },
+          { "id": "EXEC-00", "title": "统一交易底座入口", "status": "DONE", "detail": "TradingPlatform、插件、独立平台 CLI 和控制台默认入口已接通；控制台默认无策略观察，旧 CLI 仅显式兼容。", "next": "继续补真实异常生命周期和连续稳定性。", "verification": "控制台控制测试、Windows 进程恢复测试和线上无策略观察验证通过。" },
           { "id": "EXEC-01", "title": "提交、ACK 和订单身份", "status": "DONE", "detail": "调用方提供 client ID，平台验证身份并拒绝冲突，记录 ACK、签名耗时和交易 ID。", "next": "继续采集真实分段延迟。", "verification": "Core 和 CLI 回归通过。" },
           { "id": "EXEC-02", "title": "撤单、替换和订单归属", "status": "DONE", "detail": "策略只能操作自己的订单；替换要求新 client ID 和确认撤单。", "next": "补真实撤改单竞态样本。", "verification": "权限和替换回归通过。" },
           { "id": "EXEC-03", "title": "部分成交与迟到成交", "status": "PARTIAL", "detail": "paper 状态机和成交去重已完成；真实迟到成交与撤单竞态仍需证据。", "next": "在不接入策略的前提下补小额生命周期样本。", "verification": "模拟迟到成交预留回归通过。" },
@@ -77,8 +77,8 @@
           { "id": "WEB-03", "title": "中文功能架构树和完成颜色", "status": "DONE", "detail": "任务页读取 `task-view.json`，支持模块、状态筛选和详情。", "next": "每批交付同步更新 JSON。", "verification": "任务页桌面/移动布局回归通过。" },
           { "id": "WEB-04", "title": "五档深度、分段延迟和自动调整原因", "status": "TODO", "detail": "底座字段已存在，正式页面尚未全部展示。", "next": "等连续来源和接口契约稳定后接入。", "verification": "当前页面不伪造实时数值。" },
           { "id": "WEB-05", "title": "策略设置页面", "status": "PAUSED", "detail": "策略暂停期间不新增策略配置和默认参数。", "next": "策略恢复时按插件能力扩展。", "verification": "暂停项。" },
-          { "id": "WEB-06", "title": "控制台启停与恢复迁入公共平台", "status": "TODO", "detail": "当前开始模拟和进程恢复仍识别旧 live.js run，平台默认应独立运行观察模式。", "next": "迁移后台启动、停止和重启识别，确保暂停期间不会隐式启动旧策略。", "verification": "尚未迁移。" },
-          { "id": "WEB-07", "title": "平台事件、状态与日志投影接入", "status": "TODO", "detail": "新平台事件契约和旧控制台运行日志不同，需要明确的适配层。", "next": "对接账户、订单、成交、深度、延迟和运行状态，再验证六页一致性。", "verification": "尚未完成；不能只更换 CLI 命令。" }
+          { "id": "WEB-06", "title": "控制台启停与恢复迁入公共平台", "status": "DONE", "detail": "开始、停止和进程身份恢复使用 platform.js；Windows 隐藏进程通过 stop 文件正常刷盘退出。", "next": "补 systemd 重启后的无人值守恢复决策。", "verification": "中文/空格路径的直接停止和持久化恢复后停止均通过。" },
+          { "id": "WEB-07", "title": "平台事件、状态与日志投影接入", "status": "PARTIAL", "detail": "平台 JSONL、运行摘要、订单/成交投影、模拟资金隔离和过期状态已接入；完整延迟分布与旧状态历史订单初始投影未完成。", "next": "补完整延迟序列、旧状态迁移和五档页面展示。", "verification": "平台投影、时效和前端 71 项测试通过；无策略观察不产生订单。" }
         ]
       },
       {
@@ -86,7 +86,7 @@
         "detail": "本地、Git 和服务器按同一发布清单核对。",
         "items": [
           { "id": "OPS-01", "title": "服务器服务和 HTTPS", "status": "DONE", "detail": "控制台与采集服务在线，公网入口和反向代理已部署。", "next": "保持只读状态核验。", "verification": "服务器服务检查。" },
-          { "id": "OPS-02", "title": "测试、类型检查和构建", "status": "DONE", "detail": "TypeScript 全套测试、类型检查和构建命令可复现。", "next": "按受影响范围运行回归。", "verification": "引擎 43 文件 / 418 项，前端 8 文件 / 64 项通过。" },
+          { "id": "OPS-02", "title": "测试、类型检查和构建", "status": "DONE", "detail": "TypeScript、Python 测试、类型检查和构建命令可复现。", "next": "按受影响范围运行回归。", "verification": "引擎 44 文件 / 437 项，前端 71 项，Python 567 passed / 1 skipped。" },
           { "id": "OPS-03", "title": "三段同步和回退", "status": "PARTIAL", "detail": "本批 3c69167 已推送并部署，101 个文件逐项哈希一致，替换前备份已保存；自动回退的断线故障演练未做。", "next": "继续按清单发布，并补故障回退验证；无关研究改动保持独立。", "verification": "两个服务分别 active；交易停止、paper、live 锁关闭，配置 revision 7。" },
           { "id": "OPS-04", "title": "长期负载、告警和无人值守恢复", "status": "TODO", "detail": "短时资源优化存在，长期稳定性和告警闭环未交付。", "next": "底座生命周期稳定后安排验证。", "verification": "暂无全天自动运行结论。" }
         ]
@@ -118,8 +118,8 @@
       { "id": "LIVE-02", "title": "断线、重启和最终空单", "status": "TODO", "owner": "执行 / QA Agent", "detail": "需要真实用户流和账户读取的组合核对。", "next": "完成故障注入与真实补偿检查。" },
       { "id": "FIN-01", "title": "opening/current 账户联合核对", "status": "TODO", "owner": "数据 Agent", "detail": "余额、开放订单、持仓、费用和外部资金尚未持续合并。", "next": "先完成普通账户数据闭环。" }
     ] },
-    { "id": "P3", "title": "控制台与运维核对", "status": "TODO", "owner": "产品 / QA Agent", "detail": "六页保留，只接真实可用的数据字段。", "tasks": [
-      { "id": "UI-00", "title": "启停、恢复与平台投影迁移", "status": "TODO", "owner": "执行 / 产品 Agent", "detail": "旧控制台仍调用 live.js run，需完整接入新平台的进程与事件契约。", "next": "先接无策略观察运行，再核对订单、账户和运行状态。" },
+    { "id": "P3", "title": "控制台与运维核对", "status": "REVIEW", "owner": "产品 / QA Agent", "detail": "无策略平台入口和投影已接通，继续核对真实数据展示与长期运行。", "tasks": [
+      { "id": "UI-00", "title": "启停、恢复与平台投影迁移", "status": "DONE", "owner": "执行 / 产品 Agent", "detail": "控制台默认启动无策略平台观察，停止、精确进程恢复和日志投影已接通。", "next": "补 systemd 重启后的无人值守恢复决策。" },
       { "id": "UI-01", "title": "五档深度和延迟展示", "status": "TODO", "owner": "产品 / API Agent", "detail": "展示档位、来源、消息年龄和分段延迟。", "next": "等待连续来源样本和接口稳定。" },
       { "id": "OPS-01", "title": "长期负载和告警", "status": "TODO", "owner": "QA Agent", "detail": "验证行情、账本、账户查询和服务异常时的可见状态。", "next": "平台真实生命周期通过后执行。" }
     ] },

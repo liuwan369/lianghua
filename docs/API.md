@@ -17,7 +17,9 @@
 | GET /api/trading/status | 兼容运行状态 |
 | GET /api/trading/log | 有上限的引擎事件与控制台日志尾部 |
 
-运行事件不等于完整真实委托生命周期；当前 `order_lifecycle_available=false`。平台底座的订单接口和控制台历史接口是两条边界，不能互相冒充。进程重启后账户 `last_check` 可以为空，不能把它当成授权失效。
+运行事件不等于完整真实委托生命周期。新平台日志出现实际订单事件后，摘要的 `order_lifecycle_available` 才为 true；无策略观察运行没有订单。进程重启后账户 `last_check` 可以为空，不能把它当成授权失效。
+
+状态新增 `execution_target`、`engine`、`execution`、`strategy_id`，区分当前平台和旧引擎记录。`stats.runtime` 包含平台模拟现金、订单/持仓数量、风险、市场及五档快照，并带 `source_at/expires_at/age_seconds/stale`；10 秒失效，API 刷新不续鲜。`stats.orders` 最多返回最新 50 单，同时提供总数和截断标记；未知值为 null。五档数据已投影，完整页面和延迟分布尚未全部接入。
 
 ## 写入与检查
 
@@ -32,7 +34,7 @@
 
 请求须为 JSON 对象，最大 32,000 字节。配置完整替换和边界见 [配置契约](../contracts/config-v1.md)。账户字段只接受 wallet、owner_key、relayer_key、relayer_address、builder_api_key、builder_secret、builder_passphrase；Builder 三项必须同时填写或同时留空。服务运行交易期间拒绝检查/更换账户。
 
-公网登录认证按当前部署配置关闭。账户操作要求 Origin/Host、JSON 类型、可信 HTTPS 代理及所配置公开来源匹配；此来源规则不识别用户身份。交易控制令牌与实盘解锁是另一组条件，公开访问不等于允许真实交易。正式页面的纸面启动仍调用旧策略引擎；当前交易已停止，策略开发暂停，但尚未增加禁止旧 paper 启动的后台开关。新平台启停/恢复/日志迁移见任务 UI-00。
+公网登录认证按当前部署配置关闭。账户操作要求 Origin/Host、JSON 类型、可信 HTTPS 代理及所配置公开来源匹配；此来源规则不识别用户身份。交易控制令牌与实盘解锁是另一组条件，公开访问不等于允许真实交易。控制台新启动统一调用 `platform.js`，不传策略模块；版本化启动仅支持 paper，模拟运行 `account_id=null`。只有 mode 和 duration_min 应用于观察运行，其余配置保留但未应用。旧历史记录仍可读取。
 
 ## 错误语义
 
