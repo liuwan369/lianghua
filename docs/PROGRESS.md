@@ -2,6 +2,8 @@
 
 更新时间：2026-09-16。平台底座接口化完成，正在进行代码审查和事实文档整理；策略暂停，自动实盘关闭。
 
+本批 `3c69167` 已完成本地/Git/服务器同步，101 个变更文件哈希一致；任务页 PAUSED 状态与控制台迁移缺口已上线，详见 [发布记录](evidence/2026-09-16/platform-lifecycle-release.md)。
+
 ## 已完成
 
 - `TradingPlatform`、`TradingCore`、`StrategyPlugin`、`PaperGateway`、Polymarket 适配器和 `PlatformStore` 已提交。

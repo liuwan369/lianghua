@@ -14,9 +14,19 @@ npm test
 npm run build
 ```
 
-当前基线为 43 个测试文件、411 项 TypeScript 测试通过，`npm run typecheck` 和 `npm run build` 通过。依赖使用 `package-lock.json` 固定安装；执行适配为 `@polymarket/clob-client-v2` 1.1.0，账户检查使用 `@polymarket/client` 0.9.0 并限定实际 V2 授权范围。
+当前基线为 43 个测试文件、418 项 TypeScript 测试通过，`npm run typecheck` 和 `npm run build` 通过。依赖使用 `package-lock.json` 固定安装；执行适配为 `@polymarket/clob-client-v2` 1.1.0，账户检查使用 `@polymarket/client` 0.9.0 并限定实际 V2 授权范围。
 
-## 显式纸面运行
+## 平台观察运行
+
+当前无策略入口使用独立 CLI，未传 `--strategy-module` 时不产生策略订单：
+
+```powershell
+node dist/cli/platform.js --paper --duration-sec 60 --status-sec 5 --state-file results/platform/observation-state.json
+```
+
+控制台启停/恢复仍走旧 `live.js run`，迁移尚未完成。
+
+## 旧引擎兼容运行（策略暂停期间不执行）
 
 下面命令使用真实公开行情和模拟订单，不需要提交真实订单：
 

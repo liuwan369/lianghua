@@ -4,7 +4,7 @@
 
 正式入口：[https://34-242-206-196.sslip.io/console/](https://34-242-206-196.sslip.io/console/)。HTTP 80 跳转 HTTPS 443，后端仅监听 `127.0.0.1:18766`。当前控制台和采集服务在线，交易停止、paper 模式、实盘锁关闭。策略暂停期间不部署策略参数或自动实盘入口。
 
-本轮 2026-09-16 平台生命周期修复目前只在本地工作区完成，尚未部署；下文远端哈希和服务记录属于历史发布证据，不能证明本批代码已上线。
+本轮 2026-09-16 平台生命周期修复 `3c69167` 已推送并部署：101 个文件 SHA-256 一致，两个服务分别检查均 active，状态保持 stopped paper / live locked，配置 revision 7。回退备份 `/root/.pm-releases/architecture-20260916T100559Z-e5a5b5/`；详见 [本批发布记录](evidence/2026-09-16/platform-lifecycle-release.md)。下文其他带日期的记录均属于历史证据。
 
 历史发布：2026-09-11 账户财务与历史恢复修复 `b9880eb`，34个发布文件内容一致，公网JS与构建SHA-256一致，账户接口通过前端实际严格校验。账户文件未改变，只重启控制台以刷新常驻账户读取进程，采集器未重启；交易未运行且实盘锁关闭：[公网验证](evidence/2026-09-11/finance-release-check.json)。该批回滚备份位于 `/root/.local/share/pm-system-recovery/20260911-finance-b9880eb.tar.gz`，只备份被替换的文件。
 
