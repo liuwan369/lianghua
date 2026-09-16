@@ -37,13 +37,13 @@ export function connectAccountData() {
   let lastOrders:unknown[]=[],lastPositions:AccountSection|null|undefined;
   let lastFinancial:unknown[]=[],financialBoundary=0;
   const changed=(before:unknown[],after:unknown[])=>before.length!==after.length||after.some((v,i)=>v!==before[i]);
-  const note=document.querySelector('#view-orders .note')!;
+  const note=document.querySelector('#trade-orders .note')!;
   const toolbar=document.createElement('div');toolbar.className='subnav';
   toolbar.innerHTML='<label>数据来源 <select id="orders-source"><option value="account">真实账户订单与成交</option><option value="run">运行事件（按运行模式）</option></select></label><button id="account-previous">上一页</button><button id="account-next">下一页</button><span id="account-data-state" role="status"></span>';
   note.before(toolbar);
   const selector=toolbar.querySelector<HTMLSelectElement>('select')!;
-  const orderButtons=Array.from(document.querySelector('#view-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button'));
-  const exportButton=document.querySelector<HTMLButtonElement>('#view-orders .head-actions button')!;
+  const orderButtons=Array.from(document.querySelector('#trade-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button'));
+  const exportButton=document.querySelector<HTMLButtonElement>('#trade-orders .head-actions button')!;
   const positions=document.createElement('div');positions.className='table-wrap';positions.id='account-positions';
   positions.innerHTML='<table class="table"><caption>真实账户持仓 · 与模拟运行库存分开</caption><thead><tr><th>市场</th><th>方向</th><th>份数</th><th>平均价</th><th>当前估值</th><th>平台报告盈亏</th></tr></thead><tbody></tbody></table>';
   document.querySelector('#view-home .grid')!.after(positions);
@@ -61,7 +61,7 @@ export function connectAccountData() {
     const signature=[source,filter,page,wallet,error,section('open_orders'),section('trades'),section('order_history')];
     if(!changed(lastOrders,signature))return;
     lastOrders=signature;
-    document.getElementById('view-orders')!.dataset.source=source;
+    document.getElementById('trade-orders')!.dataset.source=source;
     const runHistory=document.getElementById('history-run')?.closest<HTMLElement>('.subnav');if(runHistory)runHistory.hidden=source==='account';
     for(const id of ['account-previous','account-next','account-data-state'])document.getElementById(id)!.hidden=source!=='account';
     orderButtons.forEach((b,i)=>{b.disabled=source!=='account';b.classList.toggle('active',i===filter);});
@@ -72,8 +72,8 @@ export function connectAccountData() {
     const history=section('order_history');
     const scope=filter===3?history?`已观察订单范围 · ${history.complete?'状态查询完成':history.error_code==='order_details_unavailable'?'官方未返回部分订单详情，撤单状态无法核对':'状态尚未全部查明'} · 非账户全部历史`:'已撤订单状态尚无来源':complete?'当前挂单与成交查询已完整返回':'来源未就绪或分页不完整';
     text('#account-data-state',error||`${wallet||'未配置账户'} · 第 ${page+1} 页 · ${scope}`);
-    text('#view-orders .note','仅 CONFIRMED 回报列入已成交；待确认与失败回报不计成交份数和金额。撤单状态取自官方订单查询，仅覆盖已观察的订单，不推断消失挂单已撤。费率不是实际扣费。导出覆盖当前筛选下已获取记录。');
-    document.querySelector('#view-orders tbody')!.innerHTML=slice.length?slice.map(r=>`<tr><td>${date(r.time)}</td><td>${esc(r.market)}<small> ${esc(r.id)}</small></td><td>${esc(r.side)}</td><td>${price(r.price)}</td><td>${number(r.shares,4)}</td><td>${money(r.amount)}</td><td>--</td><td>${esc(r.status)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty">${esc(error|| (filter===3?history?'已观察订单中暂无确认撤单记录；不代表账户历史没有撤单':'平台已撤订单历史尚无来源，不能推断为空':complete?'当前筛选无记录':'等待真实账户数据，不能判断为空'))}</td></tr>`;
+    text('#trade-orders .note','仅 CONFIRMED 回报列入已成交；待确认与失败回报不计成交份数和金额。撤单状态取自官方订单查询，仅覆盖已观察的订单，不推断消失挂单已撤。费率不是实际扣费。导出覆盖当前筛选下已获取记录。');
+    document.querySelector('#trade-orders tbody')!.innerHTML=slice.length?slice.map(r=>`<tr><td>${date(r.time)}</td><td>${esc(r.market)}<small> ${esc(r.id)}</small></td><td>${esc(r.side)}</td><td>${price(r.price)}</td><td>${number(r.shares,4)}</td><td>${money(r.amount)}</td><td>--</td><td>${esc(r.status)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty">${esc(error|| (filter===3?history?'已观察订单中暂无确认撤单记录；不代表账户历史没有撤单':'平台已撤订单历史尚无来源，不能推断为空':complete?'当前筛选无记录':'等待真实账户数据，不能判断为空'))}</td></tr>`;
     (document.getElementById('account-previous') as HTMLButtonElement).disabled=page===0;
     (document.getElementById('account-next') as HTMLButtonElement).disabled=(page+1)*50>=all.length;
   }

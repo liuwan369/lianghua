@@ -41,9 +41,9 @@ it('activates the original filter toolbar and filters real orders versus fills',
   d.trades=section([{id:'trade-filled',trader_side:'TAKER',taker_order_id:'order-filled',market:'filled-market',side:'BUY',price:'.5',size:'3',match_time:2,status:'CONFIRMED'}]);
   vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify(d))));
   const ui=connectAccountData();ui.receiveAccount({wallet,wallet_configured:true,owner_signer_configured:true,relayer_api_configured:false,builder_api_configured:false,last_check:null,config_error:null});await ui.refresh();
-  const buttons=document.querySelector('#view-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button');
-  expect(buttons[1].disabled).toBe(false);buttons[1].click();expect(document.querySelector('#view-orders tbody')!.textContent).toContain('open-market');expect(document.querySelector('#view-orders tbody')!.textContent).not.toContain('filled-market');
-  buttons[2].click();expect(document.querySelector('#view-orders tbody')!.textContent).toContain('filled-market');expect(document.querySelector('#view-orders tbody')!.textContent).not.toContain('open-market');ui.close();
+  const buttons=document.querySelector('#trade-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button');
+  expect(buttons[1].disabled).toBe(false);buttons[1].click();expect(document.querySelector('#trade-orders tbody')!.textContent).toContain('open-market');expect(document.querySelector('#trade-orders tbody')!.textContent).not.toContain('filled-market');
+  buttons[2].click();expect(document.querySelector('#trade-orders tbody')!.textContent).toContain('filled-market');expect(document.querySelector('#trade-orders tbody')!.textContent).not.toContain('open-market');ui.close();
 });
 
 async function mounted(d:AccountData){
@@ -54,21 +54,21 @@ async function mounted(d:AccountData){
 it('keeps failed and provisional trade reports out of settled fills and clears their accounting amounts',async()=>{
   const d=data();d.trades=section(['CONFIRMED','FAILED','MATCHED','MINED','RETRYING','UNKNOWN'].map((status,i)=>({trader_side:'TAKER',taker_order_id:'order-'+status,market:'market-'+status,price:'.5',size:'10',match_time:i,status})));
   const ui=await mounted(d);
-  const body=document.querySelector('#view-orders tbody')!;
+  const body=document.querySelector('#trade-orders tbody')!;
   for(const tr of Array.from(body.querySelectorAll('tr'))){
     const cells=tr.querySelectorAll('td');
     if(cells[1].textContent?.includes('CONFIRMED')){expect(cells[4].textContent).toBe('10.0000');expect(cells[5].textContent).toBe('$5.00');}
     else {expect(cells[4].textContent).toBe('--');expect(cells[5].textContent).toBe('--');}
   }
-  const buttons=document.querySelector('#view-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button');
+  const buttons=document.querySelector('#trade-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button');
   buttons[2].click();expect(body.querySelectorAll('tr')).toHaveLength(1);expect(body.textContent).toContain('market-CONFIRMED');
   buttons[4].click();expect(body.querySelectorAll('tr')).toHaveLength(1);expect(body.textContent).toContain('market-FAILED');ui.close();
 });
 it('uses official cancellation status without treating missing or unmatched orders as canceled',async()=>{
   const d=data();d.order_history={...section([{id:'canceled',market:'official-cancel',status:'CANCELED'},{id:'missing',market:'unknown-order',status:'UNKNOWN'},{id:'matched',market:'matched-order',status:'MATCHED'},{id:'stale',market:'stale-cancel',status:'CANCELED',status_stale:true}].map(o=>({status_checked_at:new Date().toISOString(),status_stale:false,...o}))),coverage:'observed_order_ids',historical_complete:false};
   const ui=await mounted(d);
-  document.querySelector('#view-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button')[3].click();
-  const body=document.querySelector('#view-orders tbody')!;
+  document.querySelector('#trade-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button')[3].click();
+  const body=document.querySelector('#trade-orders tbody')!;
   expect(body.textContent).toContain('official-cancel');expect(body.textContent).not.toContain('unknown-order');expect(body.textContent).not.toContain('matched-order');expect(body.textContent).not.toContain('stale-cancel');
   expect(document.querySelector('#account-data-state')!.textContent).toContain('非账户全部历史');ui.close();
 });
@@ -91,7 +91,7 @@ it('filters reward activity by the same UTC period and excludes undated entries 
 it('preserves unchanged account table nodes on timer renders but clears them when their source expires',async()=>{
   vi.useFakeTimers();vi.setSystemTime(new Date('2026-09-10T12:00:00Z'));
   const d=data();d.positions=section([{title:'position',size:1}]);d.open_orders=section([{id:'open',market:'order'}]);d.activity=section([{type:'REWARD',timestamp:Date.now()/1000,usdcSize:3}]);
-  const ui=await mounted(d),selectors=['#account-positions tbody tr','#view-orders tbody tr','#reward-payments tbody tr'];
+  const ui=await mounted(d),selectors=['#account-positions tbody tr','#trade-orders tbody tr','#reward-payments tbody tr'];
   const nodes=selectors.map(s=>document.querySelector(s));
   vi.setSystemTime(new Date('2026-09-10T12:00:01Z'));ui.render();
   selectors.forEach((s,i)=>expect(document.querySelector(s)).toBe(nodes[i]));

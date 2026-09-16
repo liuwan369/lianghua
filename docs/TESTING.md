@@ -10,7 +10,7 @@ npm --prefix web test
 npm --prefix web run build
 ```
 
-当前 2026-09-16 控制台迁移复跑：引擎 437 passed / 44 files，前端 71 passed，Python 567 passed / 1 skipped，类型检查和构建通过。覆盖独立日志刷盘、订单投影去重、状态过期、运行恢复、旧配置保留和页面时钟偏差。Windows 隐藏进程直接停止和保存状态后恢复再停止均实测通过，含中文和空格路径。下文更早的测试数量为历史记录；本轮线上验证见 [发布记录](evidence/2026-09-16/console-platform-release.md)。
+当前 2026-09-17 前端重构复跑：前端 72 passed / 10 files，类型检查和构建通过。新增覆盖策略列表、策略专属 JSON 草稿切换、无效/重复策略 ID；同时覆盖总览移除市场表、订单模块归入自动交易、设置页只保留账户与系统诊断。更早的引擎/Python 基线和线上验证见 [发布记录](evidence/2026-09-16/console-platform-release.md)。
 
 随后报价最优价扫描优化：Python 全量 **293 passed / 1 skipped**，其中 shadow 定向 **37 passed**；独立审查另做 25,000 次对原 `345dc21` 源码的报价差分，结果一致且输入未修改。200 档深度微基准约提速 1.40 倍，只表示报价函数耗时变化，不能代表整段回放或实盘延迟。证据及复现方法见 [自动接续与回放优化](evidence/2026-09-13/automation-replay-progress.md)。本批不涉及 TypeScript 或前端代码，没有重复双方构建。
 

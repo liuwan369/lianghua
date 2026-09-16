@@ -4,7 +4,7 @@ import { connectAccountData } from './account-data';
 import { connectTradingControls } from './trading-controls';
 import { pageTelemetry } from './page-telemetry';
 import type { Account, Config, Events, Markets, Resource, Status } from './api/types';
-import { activeMarkets, date, esc, executionName, finite, fresh, money, modeName, number, platformRuntime, price, quotePair, serverNow, usableMarket, marketMessage } from './ui';
+import { activeMarkets, date, esc, executionName, fresh, money, modeName, number, platformRuntime, price, quotePair, usableMarket, marketMessage } from './ui';
 
 const set = (selector: string, value: unknown) => { const node = document.querySelector(selector); if (node) node.textContent = String(value ?? '--'); };
 function row(section: string, label: string, value: unknown) {
@@ -20,7 +20,7 @@ export function prepareReadOnly() {
   set('.side-note','服务器数据接入中\n未接入功能保留原位');
   const note=document.querySelector<HTMLElement>('.side-note'); if(note)note.style.whiteSpace='pre-line';
   disable('[data-start],[data-stop],[data-exit]', '交易控制尚未完成验收');
-  disable('#view-orders .subnav button,#view-orders .head-actions button,#view-markets .subnav button', '筛选及导出尚未接入，功能保留');
+  disable('#trade-orders .subnav button,#trade-orders .head-actions button', '筛选及导出尚未接入，功能保留');
   document.querySelectorAll<HTMLInputElement>('#settings-strategy input,#settings-run input').forEach(el=>{el.value='';el.placeholder='未接入';});
   document.querySelectorAll<HTMLSelectElement>('#settings-strategy select,#settings-run select').forEach(el=>{
     const option=document.createElement('option');option.text='未接入';option.value='';el.prepend(option);el.value='';
@@ -39,7 +39,7 @@ export function prepareReadOnly() {
   // Use direct selectors rather than synthetic totals: quote events are not orders.
   set('#homeOrders','--');
   set('#homeOrders + small','今日 --　当月 --');
-  set('#view-home .stats .stat:nth-child(3) strong','--');
+  set('#homeStrategyMetric','--');
   set('#view-home .stats .stat:nth-child(3) small','今日 --　当月 -- · 已结算胜率待接入');
   set('#view-home .section-title > .muted','收益账单未获取 · 纸面与实盘按运行区分');
   set('#view-home .panel .section-title .pill','服务器事件');
@@ -51,7 +51,7 @@ export function prepareReadOnly() {
   row('#view-trade','补仓状态','未接入');
   row('#view-home','账户余额','-- · 余额未接入');
   row('#view-home','当前持仓','-- · 持仓未接入');
-  set('#view-orders .note','按运行展示服务器事件，费用未知显示 --。完整委托生命周期、筛选和导出尚未接入；挂单尝试不代表平台已接单。');
+  set('#trade-orders .note','按运行展示服务器事件，费用未知显示 --。完整委托生命周期、筛选和导出尚未接入；挂单尝试不代表平台已接单。');
 }
 
 export function connect() {
@@ -65,13 +65,6 @@ export function connect() {
   document.getElementById('homeStrategy')!.closest('.panel')!.append(runtimeRows);
   let closed=false, refreshing=false, runLoading=false, runsLoading=false, historyGeneration=0;
   let configGeneration=0, accountGeneration=0;
-  let marketFilter=0;
-  const marketFilters=Array.from(document.querySelectorAll<HTMLButtonElement>('#view-markets .subnav button'));
-  marketFilters.forEach((button,index)=>{
-    button.disabled=index===3;
-    button.title=index===3?'需要完整实时深度与实际委托份数，当前不使用双边报价冒充盘口容量':'只筛选行情，不代表通过账户和策略风控';
-    button.addEventListener('click',()=>{marketFilter=index;marketFilters.forEach((b,i)=>b.classList.toggle('active',i===index));renderMarkets();});
-  });
   const forms = connectForms({
     config: value => {
       configGeneration++;
@@ -86,7 +79,7 @@ export function connect() {
   let eventsReceivedAt=0, historyCursor:number|undefined;
   let telemetrySummary:any=null;
   let events: Events|null=null, selectedRun:string|null=null, eventError:string|null=null;
-  const note=document.querySelector('#view-orders .note')!;
+  const note=document.querySelector('#trade-orders .note')!;
   const controls=document.createElement('div'); controls.className='subnav';
   controls.innerHTML='<label>查看运行 <select id="history-run" aria-label="查看运行"><option value="">暂无运行</option></select></label><button id="older-events" disabled>更早事件</button><button id="older-runs" disabled>更早运行</button><span id="history-state" role="status"></span>';
   note.before(controls);
@@ -95,7 +88,6 @@ export function connect() {
 
   function renderMarkets() {
     const data=fresh(markets), list=activeMarkets(markets), market=list[0], usable=market ? usableMarket(market,markets):false;
-    const clock=serverNow(markets);
     set('#view-trade .quote:nth-child(1) b',market?quotePair(market,'up',usable):'-- / --');
     set('#view-trade .quote:nth-child(2) b',market?quotePair(market,'down',usable):'-- / --');
     row('#view-trade','两边立即买入成本',usable?price(market.ask_sum):'--');
@@ -103,11 +95,6 @@ export function connect() {
     row('#view-home','数据连接',data?.collector_online && usable ? `行情已更新 · ${data.node_label}`:marketMessage(markets));
     row('#settings-system','数据节点',data?.node_label || '--');
     row('#settings-system','行情更新时间',data?.latest_event_at || '--');
-    const threshold=fresh(config)?.params.pair_cost_max;
-    marketFilters[2].textContent=`成本低于 ${money(threshold)}（已保存配置）`;
-    const filtered=list.filter(m=>marketFilter===0||marketFilter===1&&usableMarket(m,markets)||marketFilter===2&&usableMarket(m,markets)&&finite(threshold)&&finite(m.ask_sum)&&m.ask_sum<threshold);
-    const tbody=document.querySelector('#view-markets tbody')!;
-    tbody.innerHTML=filtered.length ? filtered.map(m=>{const ok=usableMarket(m,markets);return `<tr><td>${esc(m.slug)}</td><td>${number(Math.max(0,Math.floor(m.end-clock)))} 秒</td><td>${quotePair(m,'up',ok)}</td><td>${quotePair(m,'down',ok)}</td><td>${ok?price(m.ask_sum):'--'}</td><td>${ok?'已获取快照':'已过期/缺失'}</td><td><span class="pill warn">${ok?'行情可用 · 执行另需风控':'行情不可用'}</span></td></tr>`;}).join('') : `<tr><td colspan="7" class="empty">${esc(list.length?'没有符合当前筛选的市场':marketMessage(markets))}</td></tr>`;
   }
   function renderStatus() {
     const s=fresh(status);
@@ -117,7 +104,9 @@ export function connect() {
     const platform=s?.engine==='platform';
     const strategy=platform ? s.strategy_id===null?'未加载策略':s.strategy_id ? `策略 ${s.strategy_id}`:'策略状态未知' : '';
     set('#status',!s ? status.error||'状态读取中' : s.running ? `${mode} · 运行中`:`${mode} · 未运行`);
-    set('#homeStrategy',!s?'-- · 状态未知':`${mode} · ${s.running?'运行中':'已停止'}${strategy ? ` · ${strategy}` : ''}`);
+    const strategyText=!s?'-- · 状态未知':`${mode} · ${s.running?'运行中':'已停止'}${strategy ? ` · ${strategy}` : ''}`;
+    set('#homeStrategy',strategyText);
+    set('#homeStrategyMetric',strategyText);
     set('#view-trade .chip',s ? `${mode} · ${s.running?'运行中':'未运行'}${strategy ? ` · ${strategy}` : ''}`:'-- · 状态未知');
     row('#settings-system','实盘开关',!s?'未知':s.live_unlocked?'已开启 · 验收状态需核对':'关闭');
     row('#settings-system','当前版本','六页原设计 · 表单接入');
@@ -146,7 +135,9 @@ export function connect() {
     row('#view-home','当前账户',account.error?'-- · 读取失败':a?.wallet_configured ? `${a.wallet} · ${a.control_source?.label || '来源未标注'}` : a ? `未配置 · ${a.control_source?.label || '来源未标注'}` : '读取中');
     if(s?.control_source?.scope === 'local_preview') {
       set('.side-note',`${s.control_source.market_node}公开行情\n账户、运行、账本：本机预览`);
-      set('#homeStrategy', `${mode} · ${s.running ? '运行中' : '未运行'}${strategy ? ` · ${strategy}` : ''} · 本机预览`);
+      const previewStrategyText=`${mode} · ${s.running ? '运行中' : '未运行'}${strategy ? ` · ${strategy}` : ''} · 本机预览`;
+      set('#homeStrategy', previewStrategyText);
+      set('#homeStrategyMetric', previewStrategyText);
     }
   }
   function renderConfig() {
@@ -155,8 +146,9 @@ export function connect() {
     row('#view-trade','目标成本上限',c?.capabilities.executionMode==='observation'?'不应用 · 平台观察':'-- · 目标与硬上限尚未分别接入');
   }
   function renderEvents() {
-    if(document.getElementById('view-orders')?.dataset.source==='account')return;
-    const body=document.querySelector('#view-orders tbody')!;
+    if(document.getElementById('trade-orders')?.dataset.source==='account')return;
+    const body=document.querySelector('#trade-orders tbody');
+    if (!body) return;
     const expired=events!==null && Date.now()-eventsReceivedAt>=15000;
     const rows=events?.run_id===selectedRun && Date.now()-eventsReceivedAt<15000 ? events.events:[];
     body.innerHTML=rows.length ? rows.map(e=>{const fill=e.event==='fill';return `<tr><td>${date(e.time)}</td><td>${esc(e.market)}</td><td>${esc(e.side)}</td><td>${price(e.price)}</td><td>${fill?number(e.shares,2):'--'}</td><td>${fill?money(e.amount):'--'}</td><td>${fill?money(e.fee):'--'}</td><td>${esc(names[e.event]||'其他事件')}</td></tr>`;}).join('') : `<tr><td colspan="8" class="empty">${esc(eventError||'该运行暂无事件')}</td></tr>`;

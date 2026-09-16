@@ -11,24 +11,26 @@ function mount() { document.body.innerHTML='<div id="app"></div>';mountLayout(do
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();document.body.replaceChildren();});
 
 describe('approved six-page design regression',()=>{
-  it('retains every approved section, heading, form and reward card',()=>{
+  it('retains the approved data sections while using the simplified navigation',()=>{
     const baseline=new JSDOM(reference,{url:'http://localhost',runScripts:'outside-only'});
     baseline.window.HTMLElement.prototype.scrollIntoView=()=>{};
     for(const script of baseline.window.document.querySelectorAll('script')) {
       baseline.window.eval(script.src ? readFileSync(resolve(docs,script.getAttribute('src')!),'utf8') : script.textContent!);
     }
     mount();
-    const signature=(doc:Document,selector:string)=>Array.from(doc.querySelectorAll(selector)).filter(e=>!e.closest('[data-live-auth-panel]')&&!e.closest('#view-tasks')).map(e=>e.textContent?.trim());
-    expect(signature(document,'.view h1,.view h2,.view h3:not([data-engine-extension]),details summary')).toEqual(signature(baseline.window.document,'.view h1,.view h2,.view h3,details summary'));
-    const navSignature=signature(baseline.window.document,'[data-view],[data-setting]');
-    expect(signature(document,'[data-view],[data-setting]')).toEqual([...navSignature.slice(0,6),'任务视图',...navSignature.slice(6)]);
-    expect(document.querySelector('[data-view="strategies"]')).toBeNull();
-    expect(document.querySelector('[data-view="anti-signal"]')).toBeNull();
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('[data-view]'), button => button.dataset.view)).toEqual(['home','trade','strategy','earnings','settings','tasks']);
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('[data-setting]'), button => button.dataset.setting)).toEqual(['account','system']);
+    expect(document.querySelector('[data-view="markets"]')).toBeNull();
+    expect(document.querySelector('[data-view="orders"]')).toBeNull();
+    expect(document.querySelector('[data-view="strategy"]')).not.toBeNull();
     expect(document.querySelectorAll('.reward-card')).toHaveLength(baseline.window.document.querySelectorAll('.reward-card').length);
-    expect(Array.from(document.querySelectorAll('input,select')).filter(e=>!e.closest('[data-engine-extension]')&&!e.closest('[data-live-auth-panel]')&&!e.closest('#view-tasks')).map(e=>e.id)).toEqual(Array.from(baseline.window.document.querySelectorAll('input,select'),e=>e.id));
     expect(Array.from(document.querySelectorAll('[data-engine-extension] input'),e=>e.id)).toEqual(['setting-pairCost','setting-decisionInterval','setting-defensiveCancel']);
     expect(document.querySelectorAll('.latency-table tbody tr')).toHaveLength(8);
     expect(document.querySelector('#view-home')!.querySelectorAll('.stat')).toHaveLength(8);
+    expect(document.querySelector('#view-home #overview-markets')).toBeNull();
+    expect(document.querySelector('#trade-orders')).not.toBeNull();
+    expect(document.querySelector('#view-strategy #settings-strategy')).not.toBeNull();
+    expect(document.querySelector('#view-strategy #settings-run')).not.toBeNull();
     const css=readFileSync(resolve(process.cwd(),'src/style.css'),'utf8');
     const expectedCss=reference.match(/<style>([\s\S]*?)<\/style>/)![1].replace(/\r\n/g, '\n');
     expect(css.replace(/\r\n/g, '\n').startsWith(expectedCss)).toBe(true);
@@ -36,11 +38,11 @@ describe('approved six-page design regression',()=>{
   });
   it('keeps the seven-page navigation and four settings tabs usable without replacing the DOM',()=>{
     mount();const input=document.getElementById('setting-order');
-    for(const name of ['home','trade','markets','orders','earnings','settings','tasks']){
+    for(const name of ['home','trade','strategy','earnings','settings','tasks']){
       document.querySelector<HTMLButtonElement>(`[data-view="${name}"]`)!.click();
       expect(document.querySelector('.view.active')!.id).toBe(`view-${name}`);
     }
-    for(const name of ['strategy','run','account','system']){
+    for(const name of ['account','system']){
       document.querySelector<HTMLButtonElement>(`[data-setting="${name}"]`)!.click();
       expect(document.getElementById(`settings-${name}`)!.style.display).toBe('block');
     }
@@ -63,7 +65,8 @@ describe('approved six-page design regression',()=>{
     expect(document.getElementById('status')!.textContent).toContain('登录已失效');
     expect(document.getElementById('homeVolume')!.textContent).toBe('-- / --');
     expect(document.querySelector('#view-trade .quote b')!.textContent).toBe('-- / --');
-    expect(document.querySelector('#view-markets tbody')!.textContent).toContain('登录已失效');
+    const connectionRow=Array.from(document.querySelectorAll('#view-home .row')).find(row=>row.querySelector('span')?.textContent==='数据连接');
+    expect(connectionRow?.querySelector('b')?.textContent).toContain('登录已失效');
     expect(document.querySelectorAll('.reward-card').length).toBeGreaterThan(9);
     expect(fetch.mock.calls.every(([,opts])=>opts.method==='GET')).toBe(true);
     stop();
@@ -85,12 +88,12 @@ describe('approved six-page design regression',()=>{
     expect(document.getElementById('homeVolume')!.textContent).toBe('2 / $4.00');
     expect(document.querySelector('#view-trade .quote b')!.textContent).toBe('0.4000 / 0.4100');
     expect((document.getElementById('setting-order') as HTMLInputElement).value).toBe('2');
-    expect(document.querySelector('#view-orders tbody')!.textContent).toContain('<img src=x');
-    expect(document.querySelector('#view-orders tbody img')).toBeNull();
+    expect(document.querySelector('#trade-orders tbody')!.textContent).toContain('<img src=x');
+    expect(document.querySelector('#trade-orders tbody img')).toBeNull();
     const eventPage=fixtures['/api/v1/events'] as {events: unknown[]};
     eventPage.events.push({...eventPage.events[0] as object,id:2,market:'new-event'});
     await vi.advanceTimersByTimeAsync(5000);
-    expect(document.querySelector('#view-orders tbody')!.textContent).toContain('new-event');
+    expect(document.querySelector('#trade-orders tbody')!.textContent).toContain('new-event');
     fetch.mockResolvedValue(new Response('',{status:503}));await vi.advanceTimersByTimeAsync(5000);
     expect(document.querySelector('#view-trade .quote b')!.textContent).toBe('-- / --');
     expect(document.getElementById('homeVolume')!.textContent).toBe('-- / --');

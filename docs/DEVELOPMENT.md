@@ -27,7 +27,7 @@ python scripts/system-dashboard-server.py --host 127.0.0.1 --port 8765 --root .
 
 访问本机 `/console/` 验证开发构建；正式入口始终为 [都柏林控制台](https://34-242-206-196.sslip.io/console/)。本机控制状态和账户文件属于本机，不能用它们代替服务器状态；市场数据来源由 PM 环境配置决定。
 
-原六页结构来自 `web/src/approved-layout.html`，业务映射在 `live-data.ts`，设置与账户交互在 `forms.ts`，请求契约在 `api/`。不得通过删除原设计模块来规避尚未接通的功能。
+当前页面骨架来自 `web/src/approved-layout.html`，业务映射在 `live-data.ts`，策略配置在 `web/src/pages/strategy.ts`，设置与账户交互在 `forms.ts`，请求契约在 `api/`。市场和订单作为独立导航已移除，但对应公共行情和执行模块仍保留在自动交易页。策略页与公共底座分离，未知策略字段不得绕过配置契约提交服务器。
 
 策略决策、风险、执行、行情、日志模块位于引擎 `src/`。Python `pm_maker/` 和历史研究脚本服务于模型分析/影子回放，不代替 TypeScript 实盘执行器。
 
