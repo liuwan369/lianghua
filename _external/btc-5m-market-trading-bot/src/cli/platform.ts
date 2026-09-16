@@ -260,6 +260,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       phase = "platform_connect";
       connection = await connectPolymarketPlatform({ mode: options.mode, markets, limits: options.limits,
         paperCashUsd: options.limits.capitalUsd, restored, persist: (state, critical) => store!.save(state, critical),
+        observationOnly: !strategy,
         // Before connection resolution the adapter records initialization;
         // afterwards the subscription includes publish-only plugin/settlement events.
         record: event => { if (!connection) record(event); },

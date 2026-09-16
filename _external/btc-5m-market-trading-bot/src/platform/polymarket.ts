@@ -88,6 +88,8 @@ export interface ConnectOptions {
   settle?: PlatformAdapters["settle"];
   durationSec?: number;
   referenceFeed?: boolean;
+  /** Observation runs consume books but do not drive the paper matching model. */
+  observationOnly?: boolean;
 }
 
 export async function connectPolymarketPlatform(options: ConnectOptions) {
@@ -176,7 +178,10 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
             sourceAgeMs: b.marketAgeMs, source: b.source, bid: b.downBid, ask: b.downAsk, bidSize: b.downBidSz, askSize: b.downAskSz,
             bids: b.downBidLevels, asks: b.downAskLevels },
         ];
-        for (const book of values) { paper?.book(book); platform.ingest({ kind: "book", book }); }
+        for (const book of values) {
+          if (!options.observationOnly) paper?.book(book);
+          platform.ingest({ kind: "book", book });
+        }
       } else if (event.kind === "tickSize") {
         const instrument = platform.core.instrument(event.token);
         if (instrument) {
@@ -185,7 +190,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         }
       } else if (event.kind === "marketTrade") {
         const direction = event.takerSide.toUpperCase();
-        if (direction === "BUY" || direction === "SELL") paper?.trade(event.token, direction, event.price, event.shares, event.tsUnix);
+        if (!options.observationOnly && (direction === "BUY" || direction === "SELL")) {
+          paper?.trade(event.token, direction, event.price, event.shares, event.tsUnix);
+        }
       } else if (event.kind === "btc" || event.kind === "oracle") {
         platform.ingest({ kind: "reference", symbol: event.kind === "btc" ? "BTC" : "BTC_ORACLE", price: event.price, ts: event.tsUnix });
       } else if (event.kind === "user") {

@@ -105,7 +105,8 @@ describe("generic platform CLI lifecycle", () => {
     const running = runPlatformCli(["--duration-sec", "2", "--timer-ms", "500"]);
     await vi.advanceTimersByTimeAsync(2001);
     await running;
-    expect(mocks.connect).toHaveBeenCalledWith(expect.objectContaining({ mode: "paper", paperCashUsd: 1000, persist: expect.any(Function) }));
+    expect(mocks.connect).toHaveBeenCalledWith(expect.objectContaining({ mode: "paper", paperCashUsd: 1000,
+      observationOnly: true, persist: expect.any(Function) }));
     expect(mocks.attach).not.toHaveBeenCalled();
     expect(mocks.ingest).toHaveBeenCalledWith(expect.objectContaining({ kind: "timer" }));
     expect(mocks.stop).toHaveBeenCalledOnce();
