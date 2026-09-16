@@ -1,6 +1,6 @@
 # 控制台 API
 
-更新时间：2026-09-16。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。策略暂停，本文只描述平台和控制台能力。
+更新时间：2026-09-17。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。本文只描述当前已实现的平台和控制台 API；已授权的 BTC 五分钟反转开发以 [新规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md) 为准，其中策略配置、真实启停、场次状态和统一订单分页接口仍待实现，不能按已上线接口调用。
 
 ## 读取
 

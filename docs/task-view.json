@@ -1,139 +1,133 @@
 {
   "schemaVersion": 1,
-  "title": "自动做市系统任务视图",
-  "updatedAt": "2026-09-17T01:35:00+08:00",
-  "summary": "公共交易底座和控制台平台入口已接口化；总览、自动交易、策略、收益、设置和任务视图已同步，策略执行与自动实盘仍暂停，继续补真实异常生命周期、深度展示和长期运维。",
+  "title": "BTC 五分钟反转策略交付任务",
+  "updatedAt": "2026-09-17T02:30:00+08:00",
+  "summary": "做市方向已停止，本地及服务器备份、技术评估和开发规划已完成。下一步并行开发 BTC 五分钟反转策略、执行恢复和普通用户前端，再做小额真实验证；新策略和前端改造尚未完成。",
   "hardRules": [
-    "本金上限 $50",
-    "北京时间单日最大亏损 $30",
-    "默认 paper，实盘必须显式解锁",
-    "未知订单、失效行情和持久化失败保持停机"
+    "本轮先备份、评估并形成规划，策略实现和真实上线不能提前标记完成。",
+    "旧做市停止开发并保留回退备份；删除做市参数和界面，不再开展配对做市、库存补仓或做市奖励优化。",
+    "取消多日 paper、第三个独立日期、等待午夜和原子快照等前置要求；必要测试采用快速功能测试和小额真实订单。",
+    "旧 $50 本金与 $30 单日损失上限仅沿用于小额接口验证，不代表原版完整倍投预算已获授权。70 方案单场约需 $147.94，75 方案约需 $257.94，均为文档估算；正式预算待明确并按实时费用校验。",
+    "真实交易只能选择 70 或 75 一个方案，不能把两套份额、账本和预算相加。",
+    "反转保留旧方向有效限价单，部分成交只处理剩余数量，最多四阶段，不自动提高 70¢ 或 75¢ 买价上限。",
+    "触发、反转确认、阶段订单数和真实成交数分别记录；请求超时先查原单，不能盲目重复提交。",
+    "行情驱动交易，账户查询和前端刷新不进入下单热路径；行情过期暂停新触发，不擅自撤销已有有效限价单。",
+    "日内风险基于真实当前权益及可追溯资金活动恢复；日初不能完整恢复时明确覆盖范围，不假造午夜基线，不把充值计作收益。",
+    "官方结果、结算和赎回到账分别记录；未成交份额不计成本，未到账返还不能再次使用。",
+    "前端使用普通中文配置、顶部策略名称标签和单策略参数/运行设置二级标签；移除 JSON 草稿和空策略入口，订单每页可选 10、20、50 条。",
+    "目标一个工作日内推进开发和小额真实验证；完成状态以实际功能和结果为准，不承诺盈利或未验证的自动运行。",
+    "主 Agent 统筹，策略 Agent、执行 Agent、前端 Agent 并行，复核 Agent 独立检查；发布时本地、Git、服务器版本同步并保留回退点。"
   ],
   "architecture": {
-    "title": "自动交易系统功能架构",
-    "summary": "平台功能和策略功能分开显示。DONE 只表示该项列出的范围已验证，不表示整套自动实盘或策略盈利已完成。",
+    "title": "BTC 五分钟反转系统功能架构",
+    "summary": "备份、评估与规划已完成；已有底座保留可复用标记。新策略、恢复闭环、前端和真实上线待完成，不表示新策略已运行。",
     "groups": [
       {
-        "id": "DATA", "title": "行情与市场数据", "owner": "数据 Agent", "scope": "CORE",
-        "detail": "行情、市场规则和深度可以独立供任何策略使用。",
+        "id": "CORE", "title": "可复用交易底座", "owner": "执行 Agent", "scope": "CORE",
+        "detail": "已有行情、账户、订单和插件入口；反转策略需要的完整闭环仍是部分完成。",
         "items": [
-          { "id": "DATA-01", "title": "市场发现与 token 规则", "status": "DONE", "detail": "发现二元市场、Up/Down token、tick 和最小委托量。", "next": "持续校验新场次规则。", "verification": "市场发现和规则加载回归通过。" },
-          { "id": "DATA-02", "title": "实时 L2 深度与公开成交", "status": "DONE", "detail": "平台接收双边完整档位、公开成交、交易所时间、本机接收时间和处理耗时。", "next": "恢复采集器后继续采集在线样本。", "verification": "行情 feed、OrderBook 和平台 Book 回归通过。" },
-          { "id": "DATA-03", "title": "真实 tick 精度", "status": "DONE", "detail": "保留 0.0001、0.0025 等合法精度，不使用固定 0.001 取整。", "next": "随交易所规则变化继续核对。", "verification": "低精度档位回归通过。" },
-          { "id": "DATA-04", "title": "行情完整性和新鲜度门禁", "status": "PARTIAL", "detail": "底座有完整/新鲜校验，真实服务器连续样本和控制台展示仍待补。", "next": "核对双 token 连续更新、断线和过期状态。", "verification": "离线健康函数已测；持续在线样本未完成。" },
-          { "id": "DATA-05", "title": "历史证据与结算标签", "status": "PARTIAL", "detail": "已有带日期的采集和结算证据，覆盖范围不能代表全历史。", "next": "保留历史性质并标注覆盖缺口。", "verification": "证据目录按日期保存。" }
+          { "id": "CORE-00", "title": "底座接入整体状态", "status": "PARTIAL", "detail": "复用独立行情、账户、订单和策略插件接口；恢复、换场、费用和赎回仍需补齐。", "next": "按新策略需求补接口和生命周期。", "verification": "既有模块有回归和部分真实探针；新策略未验收。" },
+          { "id": "CORE-01", "title": "市场发现与双边深度", "status": "DONE", "detail": "已有五分钟市场、UP/DOWN token、tick、最小委托量与实时 L2 深度能力。", "next": "新场次复用，并检查身份与行情时间。", "verification": "既有市场发现、OrderBook、行情 feed 和 tick 精度回归记录。" },
+          { "id": "CORE-02", "title": "账户认证和真实账户读取", "status": "DONE", "detail": "已有认证 CLOB、余额、持仓、开放订单和成交查询。", "next": "将真实余额、冻结和场次占用接入新策略。", "verification": "既有账户读取和认证探针记录，不代表新策略资金闭环。" },
+          { "id": "CORE-03", "title": "下单、撤单、订单身份和预留", "status": "DONE", "detail": "已有提交、ACK、撤单、订单归属、客户端身份和现金预留能力。", "next": "接入非 post-only 的限价买单并核对真实异常组合。", "verification": "既有 Core 回归和真实下单撤单探针。" },
+          { "id": "CORE-04", "title": "独立策略插件和运行入口", "status": "DONE", "detail": "已有 TradingPlatform、StrategyPlugin、只读上下文和独立平台入口。", "next": "注册反转插件及专属配置。", "verification": "既有插件加载、CLI 和无订单观察插件回归。" },
+          { "id": "CORE-05", "title": "成交事件与分段延迟", "status": "PARTIAL", "detail": "已有即时成交更新及签名、HTTP ACK 时间字段；新策略完整触发链路仍未接通。", "next": "记录触发到提交、ACK、成交回报和页面更新时间。", "verification": "旧热路径回归可复用，单次探针不代表新策略延迟分布。" }
         ]
       },
       {
-        "id": "ACCOUNT", "title": "账户、资金与风险", "owner": "执行 / 数据 Agent", "scope": "CORE",
-        "detail": "账户读取、资金预留和风险账本由平台统一负责。",
+        "id": "REVERSAL", "title": "BTC 五分钟反转策略", "owner": "策略 Agent", "scope": "STRATEGY",
+        "detail": "读取桌面最终方案后实现独立插件，当前尚未开发。",
         "items": [
-          { "id": "ACCOUNT-01", "title": "账户认证与只读读取", "status": "DONE", "detail": "认证 CLOB 读取、余额、持仓、开放订单和成交接口已接通。", "next": "维持来源和时间范围标记。", "verification": "账户读取与认证探针证据。" },
-          { "id": "ACCOUNT-02", "title": "BUY 现金预留与 SELL 份额预留", "status": "DONE", "detail": "下单前记录名义金额、费用或可卖份额，未知结果不释放。", "next": "覆盖真实异常组合。", "verification": "TradingCore 预留回归通过。" },
-          { "id": "ACCOUNT-03", "title": "账户、在途订单和持仓联合占用", "status": "PARTIAL", "detail": "平台本地预留已完成，普通账户全量联合核对和长期刷新未闭环。", "next": "对齐余额、开放订单、持仓、费用和外部资金变化。", "verification": "当前只能把已获取范围标为可用。" },
-          { "id": "ACCOUNT-04", "title": "日损失与停止状态", "status": "PARTIAL", "detail": "风险日切、损失计算和持久化有回归，持续账户权益基线仍需真实核对。", "next": "完成 opening/current 和结算资金核对。", "verification": "离线风险测试通过，连续实盘未验收。" },
-          { "id": "ACCOUNT-05", "title": "结算到账、费用和奖励对账", "status": "TODO", "detail": "结算接口存在，到账和奖励不能用费率或广播回执代替。", "next": "接入真实到账凭证和钱包净额。", "verification": "当前没有完整到账总账。" }
+          { "id": "REV-01", "title": "70 / 75 方案和独立参数", "status": "TODO", "detail": "70：触发 67¢、确认/限价 70¢、份额 5/18/54/130；75：触发 70¢、确认/限价 75¢、份额 5/22/75/236。", "next": "建立两个互斥配置，实盘只启用一个。", "verification": "来源方案已读取，插件和参数持久化未开发。" },
+          { "id": "REV-02", "title": "跨价、方向与四阶段状态机", "status": "TODO", "detail": "触发与确认分开；后续相反方向跨价才增加阶段，同向重复跨价不增加，最多四阶段。", "next": "按技术评估实现首样本、重连和双边冲突规则。", "verification": "规则已统一，插件实现和测试未完成。" },
+          { "id": "REV-03", "title": "固定限价和保留旧单", "status": "TODO", "detail": "有效跨价提交固定限价 GTC，不能即成则保留余量；反转不撤旧单，实际成交只认认证回报。", "next": "实现非 post-only 买单，禁止追价及整笔重下；旧单不套用未来更低卖一。", "verification": "新策略订单生命周期未实现。" },
+          { "id": "REV-04", "title": "场次状态、持仓和净结果", "status": "TODO", "detail": "按官方赢家、真实成交份额、实际成本和费用计算，反转次数不能替代持仓。", "next": "输出阶段、方向、等待原因和场次账本。", "verification": "当前无反转策略运行投影。" },
+          { "id": "REV-05", "title": "正式预算与验证范围", "status": "TODO", "detail": "原 $50 不能覆盖两套原始四阶段，不能静默缩放后声称原策略已验证。", "next": "明确单场、多场未结算占用及正式预算。", "verification": "成本仅为方案估算，实际市场费用和完整运行额度待明确。" }
         ]
       },
       {
-        "id": "EXECUTION", "title": "订单执行与生命周期", "owner": "执行 Agent", "scope": "CORE",
-        "detail": "订单功能属于平台，不随策略绑定。",
+        "id": "LIFECYCLE", "title": "订单恢复、换场和资金闭环", "owner": "执行 Agent", "scope": "CORE",
+        "detail": "补真实运行必要功能，慢查询用于补偿与恢复，不增设日期等待。",
         "items": [
-          { "id": "EXEC-00", "title": "统一交易底座入口", "status": "DONE", "detail": "TradingPlatform、插件、独立平台 CLI 和控制台默认入口已接通；控制台默认无策略观察，旧 CLI 仅显式兼容。", "next": "继续补真实异常生命周期和连续稳定性。", "verification": "控制台控制测试、Windows 进程恢复测试和线上无策略观察验证通过。" },
-          { "id": "EXEC-01", "title": "提交、ACK 和订单身份", "status": "DONE", "detail": "调用方提供 client ID，平台验证身份并拒绝冲突，记录 ACK、签名耗时和交易 ID。", "next": "继续采集真实分段延迟。", "verification": "Core 和 CLI 回归通过。" },
-          { "id": "EXEC-02", "title": "撤单、替换和订单归属", "status": "DONE", "detail": "策略只能操作自己的订单；替换要求新 client ID 和确认撤单。", "next": "补真实撤改单竞态样本。", "verification": "权限和替换回归通过。" },
-          { "id": "EXEC-03", "title": "部分成交与迟到成交", "status": "PARTIAL", "detail": "paper 状态机和成交去重已完成；真实迟到成交与撤单竞态仍需证据。", "next": "在不接入策略的前提下补小额生命周期样本。", "verification": "模拟迟到成交预留回归通过。" },
-          { "id": "EXEC-04", "title": "断线、未知状态与重启恢复", "status": "PARTIAL", "detail": "未知状态会停机，重连可用稳定账户/订单证据恢复纯撤单；真实断线中成交组合和长期样本尚未完成。", "next": "继续验证重连、补偿查询和最终空单。", "verification": "断线取消、账户快照和停止冻结已有回归。" },
-          { "id": "EXEC-05", "title": "二元结算接口", "status": "PARTIAL", "detail": "结算计划明确限制两个不同 token 的二元市场，到账仍需账户核对。", "next": "补真实结算回执和资金变化。", "verification": "输入边界回归通过。" }
+          { "id": "LIFE-01", "title": "未知订单、迟到成交和重启恢复", "status": "TODO", "detail": "持久化场次、阶段和已签订单身份；超时查原单、离线成交补齐、MATCHED 后 FAILED 冲正。", "next": "核对官方订单身份与完整成交状态；重启不重复触发、不释放未知占用。", "verification": "已有恢复模块可复用，新策略真实异常组合未验证。" },
+          { "id": "LIFE-02", "title": "自动换场与旧场收尾", "status": "TODO", "detail": "结束前继续有效触发，结束后撤余单、接收迟到回报、切换下一场并跟踪旧场结算。", "next": "避免旧 token 下新单和丢失未结算场次。", "verification": "新策略跨场运行未实现。" },
+          { "id": "LIFE-03", "title": "实际费用、冻结和可用资金", "status": "TODO", "detail": "依据当前市场规则和成交回执计算费用；占用含挂单、持仓成本和未结算资金。", "next": "不硬编码 0.07，不将费率当实扣费用，不重复花用待到账资金。", "verification": "现有读取与预留可复用，新策略完整账本未接通。" },
+          { "id": "LIFE-04", "title": "真实权益与日内损失恢复", "status": "TODO", "detail": "以当前真实权益和可追溯充值、提现、成交、结算活动恢复可核对时段的损失。", "next": "记录覆盖起点和缺口，扣除外部资金变化，不伪造日初权益。", "verification": "新策略资金恢复未验收；不等待午夜或原子快照。" },
+          { "id": "LIFE-05", "title": "官方结果和自动赎回到账", "status": "TODO", "detail": "结束、官方确认、赎回提交和到账分别推进，只有到账资金才能重新投入。", "next": "补赎回授权、回执、到账核对与失败重试。", "verification": "已有结算入口，自动赎回闭环尚未完成。" }
         ]
       },
       {
-        "id": "LATENCY", "title": "低延迟与可观测性", "owner": "执行 / QA Agent", "scope": "CORE",
-        "detail": "成交驱动热路径与慢账户读模型分离。",
+        "id": "WEB", "title": "普通用户反转策略控制台", "owner": "前端 Agent", "scope": "CORE",
+        "detail": "保留导航、账户和诊断框架，改造策略、自动交易和订单界面。",
         "items": [
-          { "id": "LATENCY-01", "title": "成交立即更新账本并发事件", "status": "DONE", "detail": "成交不等待下一次心跳或 REST 首次可见。", "next": "保持回归，避免慢查询重新进入热路径。", "verification": "平台和旧执行器即时重评估测试。" },
-          { "id": "LATENCY-02", "title": "真实盘口健康门禁", "status": "DONE", "detail": "实盘新单同时要求双边完整、新鲜盘口和认证用户流健康连续。", "next": "补服务器断线和过期样本。", "verification": "Feed 健康函数和门禁代码已修复。" },
-          { "id": "LATENCY-03", "title": "分段延迟记录", "status": "PARTIAL", "detail": "签名、HTTP ACK、用户事件、REST 可见和成交字段已有，持续 p50/p95 未形成。", "next": "采集常驻样本并接入页面。", "verification": "单次真实探针不能代表分布。" },
-          { "id": "LATENCY-04", "title": "五档深度和延迟页面展示", "status": "TODO", "detail": "接口可提供深度，现有控制台仍主要展示买一/卖一。", "next": "只在数据来源和新鲜度明确后补 UI。", "verification": "不使用伪造在线数字。" }
+          { "id": "WEB-01", "title": "策略大标签与独立中文设置", "status": "TODO", "detail": "顶部策略名称，进入后切换策略参数/运行设置；70 / 75 互斥，配置保存到服务器。", "next": "移除 stableLive、做市字段、JSON 草稿和空策略创建。", "verification": "当前仍是旧草稿页面，新布局未实现。" },
+          { "id": "WEB-02", "title": "当前场次和四阶段视图", "status": "TODO", "detail": "显示倒计时、双边卖价与深度、反转次数、阶段订单、实际持仓和等待原因。", "next": "删除配对成本、数量差和补仓状态，接真实状态投影。", "verification": "自动交易仍含做市专属字段。" },
+          { "id": "WEB-03", "title": "订单分页、中文场次和详情", "status": "TODO", "detail": "默认每页 10 条，可选 10/20/50；按订单聚合成交和状态，场次名称替代完整地址。", "next": "加入筛选、分页及明细，刷新不抢走历史页。", "verification": "当前固定 50 条且按事件拼接，未完成订单聚合。" },
+          { "id": "WEB-04", "title": "资金、收益和到账", "status": "TODO", "detail": "显示可用、冻结、未结算、实际成本、费用和净结果，删除做市奖励说明并保留真实到账历史。", "next": "接场次账本，不将估计返还或费率当真实净收益。", "verification": "新策略账单尚未接入。" },
+          { "id": "WEB-05", "title": "真实启停、原因和延迟", "status": "TODO", "detail": "显示当前策略、方案、配置版本、停止结果和真实分段延迟。", "next": "替换仅允许 paper 的旧控制逻辑，接真实策略接口。", "verification": "现有按钮仍启动无策略观察，不能声称已能运行新策略。" }
         ]
       },
       {
-        "id": "STRATEGY", "title": "独立策略层（暂停）", "owner": "量化 Agent", "scope": "STRATEGY",
-        "detail": "插件基础能力保留完成状态，策略研究和交易接入标为已暂停，底座通过后再恢复。",
+        "id": "DELIVERY", "title": "备份、验证和真实交付", "owner": "主 Agent / 复核 Agent", "scope": "DELIVERY",
+        "detail": "先保护现有系统，再并行开发、快速测试、小额真实验证和正式运行。",
         "items": [
-          { "id": "STRATEGY-01", "title": "StrategyPlugin 注册和只读上下文", "status": "DONE", "detail": "平台能加载独立插件，策略只接收事件和只读账户/盘口上下文。", "next": "底座审查完成后做更多隔离测试。", "verification": "平台 CLI、类型和插件加载回归通过。" },
-          { "id": "STRATEGY-02", "title": "观察插件", "status": "DONE", "detail": "最小观察插件不产生订单，可用于接口烟雾验证。", "next": "继续作为平台验收工具。", "verification": "无订单意图回归通过。" },
-          { "id": "STRATEGY-03", "title": "做市、方向或套利策略接入", "status": "PAUSED", "detail": "不接入旧 PairCost、stableLive、target_clone 或新策略。", "next": "等待平台 P1-P3 完成。", "verification": "策略暂停决定。" },
-          { "id": "STRATEGY-04", "title": "策略默认参数和自动调参", "status": "PAUSED", "detail": "不根据历史 paper、参考地址或单笔探针冻结参数。", "next": "恢复后重新建立回放、paper 和真实校准。", "verification": "无生产默认策略。" },
-          { "id": "STRATEGY-05", "title": "策略收益和奖励经济性", "status": "PAUSED", "detail": "历史收益和奖励研究只保留为证据，不代表未来盈利。", "next": "平台底座验收后独立评估。", "verification": "策略线暂停。" }
-        ]
-      },
-      {
-        "id": "WEB", "title": "前端与任务视图", "owner": "产品 / API Agent", "scope": "CORE",
-        "detail": "当前六个入口只展示真实来源和明确缺口；市场与订单作为自动交易页模块。",
-        "items": [
-          { "id": "WEB-01", "title": "六个入口和基础配置", "status": "DONE", "detail": "总览、自动交易、策略、收益、设置和任务视图已接入；市场和订单独立导航删除，行情和订单模块归入自动交易。", "next": "只修补实际数据缺口。", "verification": "前端 72 项测试和构建通过。" },
-          { "id": "WEB-02", "title": "账户、订单、成交和运行来源切换", "status": "DONE", "detail": "真实账户数据和运行事件分开显示，未知值不填零。", "next": "继续标注覆盖范围和时间。", "verification": "账户页面回归通过。" },
-          { "id": "WEB-03", "title": "中文功能架构树和完成颜色", "status": "DONE", "detail": "任务页读取 `task-view.json`，支持模块、状态筛选和详情。", "next": "每批交付同步更新 JSON。", "verification": "任务页桌面/移动布局回归通过。" },
-          { "id": "WEB-04", "title": "五档深度、分段延迟和自动调整原因", "status": "TODO", "detail": "底座字段已存在，正式页面尚未全部展示。", "next": "等连续来源和接口契约稳定后接入。", "verification": "当前页面不伪造实时数值。" },
-          { "id": "WEB-05", "title": "策略设置页面", "status": "PARTIAL", "detail": "独立策略页已支持会话内添加/选择策略、独立 JSON 草稿以及运行与引擎设置；策略执行仍暂停，未知字段不提交服务端。", "next": "接入策略注册持久化和 StrategyPlugin 后再应用参数。", "verification": "策略页交互回归通过；刷新后草稿不保留是已知边界。" },
-          { "id": "WEB-06", "title": "控制台启停与恢复迁入公共平台", "status": "DONE", "detail": "开始、停止和进程身份恢复使用 platform.js；Windows 隐藏进程通过 stop 文件正常刷盘退出。", "next": "补 systemd 重启后的无人值守恢复决策。", "verification": "中文/空格路径的直接停止和持久化恢复后停止均通过。" },
-          { "id": "WEB-07", "title": "平台事件、状态与日志投影接入", "status": "PARTIAL", "detail": "平台 JSONL、运行摘要、订单/成交投影、模拟资金隔离和过期状态已接入；完整延迟分布与旧状态历史订单初始投影未完成。", "next": "补完整延迟序列、旧状态迁移和五档页面展示。", "verification": "平台投影、时效和前端 72 项测试通过；无策略观察不产生订单。" }
-        ]
-      },
-      {
-        "id": "OPS", "title": "开发、发布与运维", "owner": "主 Agent / QA Agent", "scope": "CORE",
-        "detail": "本地、Git 和服务器按同一发布清单核对。",
-        "items": [
-          { "id": "OPS-01", "title": "服务器服务和 HTTPS", "status": "DONE", "detail": "控制台与采集服务在线，公网入口和反向代理已部署。", "next": "保持只读状态核验。", "verification": "服务器服务检查。" },
-          { "id": "OPS-02", "title": "测试、类型检查和构建", "status": "DONE", "detail": "TypeScript、Python 测试、类型检查和构建命令可复现。", "next": "按受影响范围运行回归。", "verification": "前端 72 项通过；引擎/Python 数量沿用最近完整基线。" },
-          { "id": "OPS-03", "title": "三段同步和回退", "status": "PARTIAL", "detail": "本批 3c69167 已推送并部署，101 个文件逐项哈希一致，替换前备份已保存；自动回退的断线故障演练未做。", "next": "继续按清单发布，并补故障回退验证；无关研究改动保持独立。", "verification": "两个服务分别 active；交易停止、paper、live 锁关闭，配置 revision 7。" },
-          { "id": "OPS-04", "title": "长期负载、告警和无人值守恢复", "status": "TODO", "detail": "短时资源优化存在，长期稳定性和告警闭环未交付。", "next": "底座生命周期稳定后安排验证。", "verification": "暂无全天自动运行结论。" }
-        ]
-      },
-      {
-        "id": "DELIVERY", "title": "最终交付与增强项", "owner": "主 Agent", "scope": "DELIVERY",
-        "detail": "只有平台线和策略线分别通过才讨论自动运行。",
-        "items": [
-          { "id": "DELIVERY-01", "title": "公共平台可被任意策略调用", "status": "PARTIAL", "detail": "契约和插件加载已完成，真实异常生命周期仍待验收。", "next": "完成 P1-P3。", "verification": "平台测试通过，真实连续样本不足。" },
-          { "id": "DELIVERY-02", "title": "受限自动实盘", "status": "PAUSED", "detail": "当前关闭，不因历史探针或 paper 运行自动开启。", "next": "平台和策略线均通过后再评估。", "verification": "服务器 live 锁关闭。" },
-          { "id": "DELIVERY-03", "title": "默认参数和真实收益评估", "status": "PAUSED", "detail": "策略暂停，尚无生产默认值或盈利结论。", "next": "策略恢复后独立验收。", "verification": "不把历史 PnL 当收益证明。" },
-          { "id": "DELIVERY-04", "title": "原子账户快照、全历史和复杂审计", "status": "DEFERRED", "detail": "不是当前唯一阻塞；只在实际需要时增加，不进入热路径。", "next": "平台基础闭环后按用途评估。", "verification": "普通分段读取不能伪装原子。" }
+          { "id": "DEL-01", "title": "改造前备份与恢复入口", "status": "DONE", "detail": "本地12.19GiB项目包、服务器10.55GiB完整包及TLS补充包已保存；包含数据与改造前配置。", "next": "按备份记录恢复独立副本，程序回退不覆盖后续真实交易账本。", "verification": "目录读取、SHA256、服务器zstd完整性和服务恢复通过；证书遗漏已补；未做整机还原。" },
+          { "id": "DEL-02", "title": "开发规划和责任分工", "status": "DONE", "detail": "三路评估和独立复核完成，反转规则、官方接口核验、文件归属、前端与一日开发顺序已写入新规划。", "next": "进入R1/R2并行实现；正式额度另行落实，不挡开发。", "verification": "本轮仅规划完成，不代表策略、前端或真实上线已完成。" },
+          { "id": "DEL-03", "title": "快速测试与独立复核", "status": "TODO", "detail": "验证触发去重、四阶段、限价、部分成交、重启、换场、资金和页面交互。", "next": "开发完成立即测试和修复，不增加数天等待。", "verification": "新策略测试尚未执行。" },
+          { "id": "DEL-04", "title": "小额真实全流程验证", "status": "TODO", "detail": "旧 $50 / $30 边界内测试提交、成交、撤单、恢复和到账，不冒充原版完整倍投验证。", "next": "使用线上可交易场次执行必要真实订单。", "verification": "本轮新策略真实验证尚未执行。" },
+          { "id": "DEL-05", "title": "正式方案真实运行", "status": "TODO", "detail": "正式预算明确且功能通过后，启用单个方案自动交易、换场、结算和恢复。", "next": "按实际交易结果处理问题并更新运行状态。", "verification": "正式预算未明确，真实自动运行尚未开始。" },
+          { "id": "DEL-06", "title": "三段同步和回退", "status": "TODO", "detail": "新版本源码、Git、服务器按同一版本和文件清单发布，保留改造前回退点。", "next": "开发验收后发布并核对服务器实际加载版本。", "verification": "本轮仅编辑规划，尚未部署新策略或前端。" }
         ]
       }
     ]
   },
   "phases": [
-    { "id": "P0", "title": "事实基线与文档统一", "status": "DONE", "owner": "主 Agent", "detail": "当前状态页、接口边界、策略暂停和任务树已统一。", "tasks": [
-      { "id": "BASE-01", "title": "源码、测试和部署基线", "status": "DONE", "owner": "主 Agent / QA", "detail": "记录当前提交、测试、服务和实盘锁状态。", "next": "每批发布前复核。" },
-      { "id": "DOC-01", "title": "清理过时策略和实盘描述", "status": "DONE", "owner": "主 Agent", "detail": "历史证据保留日期，当前文档不再把策略写成运行主线。", "next": "发现矛盾立即修正文档。" }
-    ] },
-    { "id": "P1", "title": "公共平台契约审查", "status": "REVIEW", "owner": "执行 / QA Agent", "detail": "底座状态机、资金、深度、策略隔离和恢复正在复核。", "tasks": [
-      { "id": "CORE-01", "title": "订单状态与资金守恒", "status": "REVIEW", "owner": "执行 Agent", "detail": "已修复撤单迟到成交、ID 冲突、终态复活、取消单快照成交增量、paper 未知撤单和 paper 立即成交回调竞态。", "next": "继续覆盖真实异常组合。" },
-      { "id": "CORE-02", "title": "行情健康和深度契约", "status": "REVIEW", "owner": "数据 / 执行 Agent", "detail": "新鲜度门禁和 tick 精度已修复，连续在线样本未完成。", "next": "完成断线、过期和五档展示核对。" },
-      { "id": "CORE-03", "title": "策略隔离和插件加载", "status": "DONE", "owner": "执行 / QA Agent", "detail": "插件只读上下文和动作权限已接入。", "next": "保留观察插件作为烟雾测试。" }
-    ] },
-    { "id": "P2", "title": "真实订单、账户与恢复", "status": "REVIEW", "owner": "执行 / 数据 Agent", "detail": "不运行自动策略，继续补真实生命周期和账户核对。", "tasks": [
-      { "id": "LIVE-01", "title": "部分成交、撤改单和迟到回报", "status": "REVIEW", "owner": "执行 Agent", "detail": "模拟回归具备，真实样本不完整。", "next": "采集有界真实生命周期证据。" },
-      { "id": "LIVE-02", "title": "断线、重启和最终空单", "status": "TODO", "owner": "执行 / QA Agent", "detail": "需要真实用户流和账户读取的组合核对。", "next": "完成故障注入与真实补偿检查。" },
-      { "id": "FIN-01", "title": "opening/current 账户联合核对", "status": "TODO", "owner": "数据 Agent", "detail": "余额、开放订单、持仓、费用和外部资金尚未持续合并。", "next": "先完成普通账户数据闭环。" }
-    ] },
-    { "id": "P3", "title": "控制台与运维核对", "status": "REVIEW", "owner": "产品 / QA Agent", "detail": "无策略平台入口和投影已接通，继续核对真实数据展示与长期运行。", "tasks": [
-      { "id": "UI-00", "title": "启停、恢复与平台投影迁移", "status": "DONE", "owner": "执行 / 产品 Agent", "detail": "控制台默认启动无策略平台观察，停止、精确进程恢复和日志投影已接通。", "next": "补 systemd 重启后的无人值守恢复决策。" },
-      { "id": "UI-01", "title": "五档深度和延迟展示", "status": "TODO", "owner": "产品 / API Agent", "detail": "展示档位、来源、消息年龄和分段延迟。", "next": "等待连续来源样本和接口稳定。" },
-      { "id": "OPS-01", "title": "长期负载和告警", "status": "TODO", "owner": "QA Agent", "detail": "验证行情、账本、账户查询和服务异常时的可见状态。", "next": "平台真实生命周期通过后执行。" }
-    ] },
-    { "id": "P4", "title": "策略接口验收", "status": "PAUSED", "owner": "执行 / QA Agent", "detail": "策略接入暂停；观察插件仅作为平台烟雾测试。", "tasks": [
-      { "id": "PLUGIN-01", "title": "独立观察插件", "status": "DONE", "owner": "执行 Agent", "detail": "无订单动作，确认事件和只读上下文隔离。", "next": "保持不接入生产。" },
-      { "id": "PLUGIN-02", "title": "新策略插件契约验收", "status": "PAUSED", "owner": "执行 / QA Agent", "detail": "平台审查完成后再测试可替换策略。", "next": "暂缓。" }
-    ] },
-    { "id": "P5", "title": "策略研究与真实校准", "status": "PAUSED", "owner": "量化 Agent", "detail": "暂停，不根据旧 paper 或参考地址冻结参数。", "tasks": [
-      { "id": "STRAT-01", "title": "回放与 paper", "status": "PAUSED", "owner": "量化 Agent", "detail": "平台通过后重新建立独立样本和成交假设。", "next": "暂缓。" },
-      { "id": "STRAT-02", "title": "真实成交与 markout 校准", "status": "PAUSED", "owner": "量化 / 执行 Agent", "detail": "只在策略恢复后进行。", "next": "暂缓。" }
-    ] },
-    { "id": "P6", "title": "自动运行交付", "status": "PAUSED", "owner": "主 Agent", "detail": "当前实盘关闭。", "tasks": [
-      { "id": "LIVE-03", "title": "受限自动运行", "status": "PAUSED", "owner": "主 Agent", "detail": "必须同时通过平台线、策略线、资金线和停止/恢复验收。", "next": "暂缓。" },
-      { "id": "LIVE-04", "title": "持续监控和回退", "status": "PAUSED", "owner": "主 Agent / QA Agent", "detail": "保留三段同步、发布清单和状态告警。", "next": "自动运行决策后执行。" }
-    ] }
+    {
+      "id": "R0", "title": "备份、评估与开发规划", "status": "DONE", "owner": "主 Agent",
+      "detail": "本地/服务器备份、三路评估、独立复核及开发规划完成；后续实现仍待进行。",
+      "tasks": [
+        { "id": "R0-BACKUP", "title": "系统备份和文件校验", "status": "DONE", "owner": "主 Agent", "detail": "本地项目、源方案、服务器系统/数据/配置/证书备份已校验，原服务已恢复且交易仍停止。", "next": "保留归档；回退不覆盖新交易状态。" },
+        { "id": "R0-RULES", "title": "规则与技术风险评估", "status": "DONE", "owner": "策略 Agent / 执行 Agent", "detail": "统一跨价和阶段规则、GTC实际成交、资金差额，核实官方5页并定位底座缺口。", "next": "按技术评估实现并验证。" },
+        { "id": "R0-PLAN", "title": "规划、前端方案和任务树", "status": "DONE", "owner": "主 Agent / 前端 Agent", "detail": "R0-R4及Agent文件分工已明确；去做市前端、订单分页、快速测试与真实验证已规划。", "next": "实施R1/R2，不再执行旧做市和多日模拟规划。" }
+      ]
+    },
+    {
+      "id": "R1", "title": "策略与底座并行开发", "status": "TODO", "owner": "策略 Agent / 执行 Agent",
+      "detail": "规则明确后插件与执行恢复并行，主 Agent 协调接口和正式预算。",
+      "tasks": [
+        { "id": "R1-STRATEGY", "title": "方案参数与四阶段插件", "status": "TODO", "owner": "策略 Agent", "detail": "实现新鲜双边盘口驱动、跨价去重、方向规则、四阶段和保留旧单。", "next": "输出独立插件、持久化状态和阶段测试。" },
+        { "id": "R1-EXECUTION", "title": "限价执行与订单恢复", "status": "TODO", "owner": "执行 Agent", "detail": "普通限价买单可立即吃单或留簿，超时查原单，按真实回报处理部分及迟到成交。", "next": "补订单身份、幂等和恢复接口。" },
+        { "id": "R1-SESSION", "title": "换场、费用、资金和赎回", "status": "TODO", "owner": "执行 Agent", "detail": "结束撤余单、自动换场、跟踪旧场结算，恢复真实权益及资金活动。", "next": "接通官方结果、赎回与到账，处理未结算占用。" },
+        { "id": "R1-BUDGET", "title": "正式预算与验证范围", "status": "TODO", "owner": "主 Agent", "detail": "旧 $50 / $30 用于接口验证，原版完整四阶段预算单独明确，70 / 75 不叠加。", "next": "明确额度后应用一个方案，不静默提高资金授权。" }
+      ]
+    },
+    {
+      "id": "R2", "title": "前端与策略 API", "status": "TODO", "owner": "前端 Agent / 主 Agent",
+      "detail": "按明确接口与 R1 并行，普通用户选方案、填硬条件、查看真实运行。",
+      "tasks": [
+        { "id": "R2-API", "title": "配置、启停和运行接口", "status": "TODO", "owner": "主 Agent", "detail": "提供策略注册、服务器参数保存、版本、真实启停和场次状态。", "next": "输出阶段、方向、订单归属和中文等待原因。" },
+        { "id": "R2-SETTINGS", "title": "策略大标签与独立设置", "status": "TODO", "owner": "前端 Agent", "detail": "选策略后只显示参数或运行设置，70 / 75 互斥，移除 JSON 和做市字段。", "next": "实现中文表单、保存状态和生效版本。" },
+        { "id": "R2-TRADING", "title": "反转视图与订单分页", "status": "TODO", "owner": "前端 Agent", "detail": "显示场次、倒计时、阶段、持仓和深度，订单每页可选 10/20/50 条。", "next": "按订单聚合并展示中文场次和详情。" },
+        { "id": "R2-INCOME", "title": "资金、到账、延迟和进度", "status": "TODO", "owner": "前端 Agent", "detail": "接真实余额、冻结、收益和结算状态，清理做市说明，保持任务与代码一致。", "next": "完成桌面和手机显示，明确未知数据与异常原因。" }
+      ]
+    },
+    {
+      "id": "R3", "title": "快速测试与小额真实验证", "status": "TODO", "owner": "复核 Agent / 执行 Agent",
+      "detail": "开发完成立即测试修复，用必要真实小额订单验证，不设置回测或多日模拟门槛。",
+      "tasks": [
+        { "id": "R3-CHECK", "title": "规则、资金和恢复测试", "status": "TODO", "owner": "复核 Agent", "detail": "覆盖一次触发、跳价、旧新单并存、部分和迟到成交、重启、换场与未到账冻结。", "next": "独立复核，问题交责任 Agent 当批修复。" },
+        { "id": "R3-WEB", "title": "前端与配置联调", "status": "TODO", "owner": "前端 Agent / 复核 Agent", "detail": "验证配置隔离与持久化、启停、分页、状态原因和桌面手机显示。", "next": "执行相关测试、类型检查、构建及浏览器检查。" },
+        { "id": "R3-LIVE", "title": "现有市场小额真实全流程", "status": "TODO", "owner": "执行 Agent / 主 Agent", "detail": "在旧 $50 / $30 内测试提交、ACK、成交、撤单、恢复、官方结果与赎回到账。", "next": "记录实际结果和未覆盖项，不冒充超预算的完整倍投验证。" }
+      ]
+    },
+    {
+      "id": "R4", "title": "正式方案真实运行", "status": "TODO", "owner": "主 Agent",
+      "detail": "功能通过且正式预算明确后部署单个方案；此阶段为真实运行，不是额外多日等待门槛。",
+      "tasks": [
+        { "id": "R4-RELEASE", "title": "本地、Git、服务器同步发布", "status": "TODO", "owner": "主 Agent", "detail": "同步策略、API、前端和服务配置，保留改造前备份。", "next": "核对实际运行版本、策略和回退命令。" },
+        { "id": "R4-RUN", "title": "单方案交易、换场和结算", "status": "TODO", "owner": "策略 Agent / 执行 Agent", "detail": "只运行 70 或 75 一个方案，管理真实订单、资金、旧场次结算和异常恢复。", "next": "持续处理实际交易，页面展示当前动作和结果。" },
+        { "id": "R4-REVIEW", "title": "状态检查、修复与文档同步", "status": "TODO", "owner": "复核 Agent / 主 Agent", "detail": "核对订单、费用、账户和服务状态，问题修复后同步任务与版本。", "next": "按实际功能和真实结果更新，不以历史模拟收益承诺盈利。" }
+      ]
+    }
   ]
 }
