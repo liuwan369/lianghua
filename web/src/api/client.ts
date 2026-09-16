@@ -1,4 +1,4 @@
-import type { Account, AntiSignal, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, TaskView, StrategyComparison } from './types';
+import type { Account, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, TaskView } from './types';
 
 const object = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
@@ -104,14 +104,6 @@ export function validate(kind: string, data: unknown): void {
         && ['DONE','RUNNING','REVIEW','TODO','BLOCKED','PAUSED'].includes(t.status) && typeof t.owner === 'string' && typeof t.detail === 'string' && typeof t.next === 'string'
         && (t.runId === undefined || typeof t.runId === 'string')))
     && (data.architecture === undefined || validArchitecture(data.architecture));
-  if (kind === 'anti-signal') {
-    const samples = data.samples;
-    valid = data.schemaVersion === 1 && typeof data.status === 'string'
-      && typeof data.rule === 'string' && typeof data.mode === 'string'
-      && (samples === undefined || object(samples) && ['observed','skipped','forecasted','settled','pending','direct_hits','inverse_hits'].every(k => integer(samples[k]))
-        && ['direct_accuracy','inverse_accuracy'].every(k => nullableNumber(samples[k])))
-      && (data.recent === undefined || Array.isArray(data.recent));
-  }
   if (!valid) throw new Error('接口数据不完整，已清空该板块');
 }
 
@@ -170,27 +162,4 @@ export const api = {
   events: (run: string, before?: number) => get<Events>('events', `/api/v1/events?run_id=${encodeURIComponent(run)}&limit=50${before == null ? '' : `&before_id=${before}`}`),
   summary: (run: string) => get<SummaryResponse>('summary', `/api/v1/summary?run_id=${encodeURIComponent(run)}`),
   tasks: () => get<TaskView>('tasks', '/task-view.json'),
-  strategyComparison: async (): Promise<StrategyComparison> => {
-    const paths = ['/api/prediction', '/api/evaluation', '/api/edge-v2/live'];
-    const fetchSource = async (path: string): Promise<Obj> => {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 8000);
-      try {
-        const response = await fetch(path, { method: 'GET', cache: 'no-store', credentials: 'same-origin', signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const value: unknown = await response.json();
-        if (!object(value)) throw new Error('策略数据格式不正确');
-        return value;
-      } catch (error) {
-        if (controller.signal.aborted) throw new Error('策略数据读取超时');
-        throw error;
-      } finally { window.clearTimeout(timer); }
-    };
-    const results = await Promise.allSettled(paths.map(fetchSource));
-    const data: Obj[] = [];
-    results.forEach(result => { if (result.status === 'fulfilled' && result.value && typeof result.value === 'object') data.push(result.value); });
-    if (!data.length) throw new Error('策略数据暂不可用');
-    return { receivedAt: Date.now(), sources: data };
-  },
-  antiSignal: () => get<AntiSignal>('anti-signal', '/api/anti-signal'),
 };

@@ -21,9 +21,4 @@ export interface ArchitectureItem { id: string; title: string; status: Architect
 export interface ArchitectureGroup { id: string; title: string; owner: string; scope: ArchitectureScope; detail: string; items: ArchitectureItem[] }
 export interface TaskArchitecture { title: string; summary: string; groups: ArchitectureGroup[] }
 export interface TaskView { schemaVersion: 1; title: string; updatedAt: string; summary: string; hardRules: string[]; phases: TaskPhase[]; architecture?: TaskArchitecture }
-export interface EdgeCandidate { direction: string; reason?: string | null; historical_signals: number | null; historical_hits: number | null; historical_accuracy: number | null; live_signals?: number | null; live_hits?: number | null; live_accuracy?: number | null }
-export interface EdgeLive { schemaVersion: 1; updated?: number; phase?: string; collector_status?: string; mode?: string; latest_freeze: Obj; decisions: Obj; candidates: Record<string, EdgeCandidate>; collection: Obj; market?: Obj; limitations: string[] }
 export interface Resource<T> { data: T | null; error: string | null; receivedAt: number; loading: boolean }
-export interface StrategyComparison { receivedAt: number; sources: Obj[] }
-export interface AntiSignalRow { slug: string; start: number; end: number; created: number; cutoff: number; direction: string; reason: string; features: string; outcome: string | null; direct_hit: number | null; inverse_hit: number | null; settled: number | null }
-export interface AntiSignal { schemaVersion: 1; status: string; rule: string; version?: string; mode: string; started?: number | null; updated?: number | null; samples?: { observed: number; skipped: number; forecasted: number; settled: number; pending: number; direct_hits: number; inverse_hits: number; direct_accuracy: number | null; inverse_accuracy: number | null }; current?: AntiSignalRow | null; recent?: AntiSignalRow[]; limitations?: string[] }

@@ -31,10 +31,6 @@ describe('versioned API validation', () => {
     expect(()=>validate('account-data',{...base,order_history:{...section,items:[{}]}})).toThrow();
     expect(()=>validate('account-data',{...base,order_history:{...section,historical_complete:true}})).toThrow();
   });
-  it('validates the read-only anti-signal sample contract',()=>{
-    expect(()=>validate('anti-signal',{schemaVersion:1,status:'ONLINE',rule:'BOLL_BREAKOUT_20_1.5',mode:'read_only_no_orders',samples:{observed:3,skipped:1,forecasted:2,settled:1,pending:1,direct_hits:0,inverse_hits:1,direct_accuracy:0,inverse_accuracy:1},recent:[]})).not.toThrow();
-    expect(()=>validate('anti-signal',{schemaVersion:1,status:'ONLINE',rule:'x',mode:'read_only_no_orders',samples:{observed:-1,skipped:0,forecasted:0,settled:0,pending:0,direct_hits:0,inverse_hits:0,direct_accuracy:null,inverse_accuracy:null}})).toThrow();
-  });
   it('accepts old task data and validates optional architecture without deriving completion',()=>{
     const item = {id:'order',title:'下单',status:'DONE',detail:'已实现',next:'无',verification:'已验证'};
     const group = {id:'execution',title:'执行',owner:'执行 Agent',scope:'CORE',detail:'可复用',items:[item]};

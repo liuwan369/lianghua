@@ -18,10 +18,12 @@ describe('approved six-page design regression',()=>{
       baseline.window.eval(script.src ? readFileSync(resolve(docs,script.getAttribute('src')!),'utf8') : script.textContent!);
     }
     mount();
-    const signature=(doc:Document,selector:string)=>Array.from(doc.querySelectorAll(selector)).filter(e=>!e.closest('[data-live-auth-panel]')&&!e.closest('#view-tasks')&&!e.closest('#view-strategies')&&!e.closest('#view-anti-signal')).map(e=>e.textContent?.trim());
+    const signature=(doc:Document,selector:string)=>Array.from(doc.querySelectorAll(selector)).filter(e=>!e.closest('[data-live-auth-panel]')&&!e.closest('#view-tasks')).map(e=>e.textContent?.trim());
     expect(signature(document,'.view h1,.view h2,.view h3:not([data-engine-extension]),details summary')).toEqual(signature(baseline.window.document,'.view h1,.view h2,.view h3,details summary'));
     const navSignature=signature(baseline.window.document,'[data-view],[data-setting]');
-    expect(signature(document,'[data-view],[data-setting]')).toEqual([...navSignature.slice(0,6),'任务视图','H1 / H2 对比','低命中反向',...navSignature.slice(6)]);
+    expect(signature(document,'[data-view],[data-setting]')).toEqual([...navSignature.slice(0,6),'任务视图',...navSignature.slice(6)]);
+    expect(document.querySelector('[data-view="strategies"]')).toBeNull();
+    expect(document.querySelector('[data-view="anti-signal"]')).toBeNull();
     expect(document.querySelectorAll('.reward-card')).toHaveLength(baseline.window.document.querySelectorAll('.reward-card').length);
     expect(Array.from(document.querySelectorAll('input,select')).filter(e=>!e.closest('[data-engine-extension]')&&!e.closest('[data-live-auth-panel]')&&!e.closest('#view-tasks')).map(e=>e.id)).toEqual(Array.from(baseline.window.document.querySelectorAll('input,select'),e=>e.id));
     expect(Array.from(document.querySelectorAll('[data-engine-extension] input'),e=>e.id)).toEqual(['setting-pairCost','setting-decisionInterval','setting-defensiveCancel']);
@@ -32,9 +34,9 @@ describe('approved six-page design regression',()=>{
     expect(css.replace(/\r\n/g, '\n').startsWith(expectedCss)).toBe(true);
     baseline.window.close();
   });
-  it('keeps seven-page navigation and four settings tabs usable without replacing the DOM',()=>{
+  it('keeps the seven-page navigation and four settings tabs usable without replacing the DOM',()=>{
     mount();const input=document.getElementById('setting-order');
-    for(const name of ['home','trade','markets','orders','earnings','settings','tasks','strategies','anti-signal']){
+    for(const name of ['home','trade','markets','orders','earnings','settings','tasks']){
       document.querySelector<HTMLButtonElement>(`[data-view="${name}"]`)!.click();
       expect(document.querySelector('.view.active')!.id).toBe(`view-${name}`);
     }
