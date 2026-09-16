@@ -1,6 +1,6 @@
 # 系统架构
 
-更新时间：2026-09-16。当前结构以公共交易平台和可替换策略为两层，策略暂不运行。
+更新时间：2026-09-17。当前结构以公共交易平台和可替换策略为两层，策略暂不运行。
 
 ## 数据流
 
@@ -19,7 +19,7 @@ Polymarket WS/REST + BTC 参考行情
        └─ Telemetry / journal -> SQLite 投影 -> 控制台状态/日志
 
 当前控制台启停路径
-六页控制台 -> dashboard API -> platform.js -> 无策略 TradingPlatform
+总览/自动交易/策略/收益/设置/任务视图 -> dashboard API -> platform.js -> 无策略 TradingPlatform
 中文任务树 -> task-view.json（独立展示交付状态）
 ```
 
@@ -34,7 +34,7 @@ Polymarket WS/REST + BTC 参考行情
 | Polymarket 网关 | `src/platform/polymarket.ts` | CLOB 签名、用户流、真实账户读取和结算适配 |
 | 存储 | `src/platform/store.ts` | 账户/模式锁、临时文件、`fsync`、原子替换和崩溃锁处理 |
 | 行情 | `src/live/feeds/`、`src/live/orderbook.ts` | 完整 L2、真实 tick、交易所时间、本机接收和新鲜度 |
-| 控制台 | `web/`、`scripts/system-dashboard-server.py` | 六页展示、配置保存、纸面启停、账户只读和功能树 |
+| 控制台 | `web/`、`scripts/system-dashboard-server.py` | 六个入口展示、配置保存、纸面启停、账户只读和功能树；行情与订单分别嵌入自动交易页 |
 
 ## 策略边界
 

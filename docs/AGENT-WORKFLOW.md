@@ -1,7 +1,7 @@
 # Agent 工作与协作约定
 
-日期：2026-09-16
-版本：v6
+日期：2026-09-17
+版本：v7
 适用范围：公共交易底座审查、文档整理、控制台和运维。策略接入与参数调优暂停。
 
 ## 1. 总规则
@@ -18,7 +18,7 @@
 | 执行 Agent | 审查订单状态、资金预留、账户/用户流、Polymarket 适配器、关闭和恢复 | `_external/btc-5m-market-trading-bot/src/platform/`、`src/live/` |
 | 数据 Agent | 审查行情深度、时间戳、来源新鲜度、账户数据范围和历史证据 | `src/live/feeds/`、`scripts/dashboard/`、数据契约 |
 | QA Agent | 编写故障用例，复跑测试、类型检查、构建、差分检查和发布核验 | `tests/`、`*.test.ts`、验证清单 |
-| 产品/API Agent | 检查六页页面、任务树、接口状态和用户可见数据；不伪造在线数值 | `web/`、`docs/task-view.json`、`docs/API.md` |
+| 产品/API Agent | 检查总览、自动交易、策略、收益、设置和任务视图，确认行情/订单归属与接口状态；不伪造在线数值 | `web/`、`docs/task-view.json`、`docs/API.md` |
 | 量化 Agent | 当前仅维护历史研究索引；不接入策略、不改策略参数 | `docs/evidence/`、`docs/research/` |
 
 策略 Agent 在本阶段不运行。任何策略代码变更必须等待底座阶段恢复，并通过独立策略审查。
