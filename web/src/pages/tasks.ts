@@ -19,7 +19,7 @@ function liveLine(status: Status | null, error: string | null) {
   if (!status) return error ? `实时运行状态读取失败：${error}` : '实时运行状态尚未获取';
   const stats = status.stats || {};
   const run = status.run_id ? `运行 ${status.run_id}` : '暂无运行';
-  return `${status.running ? '服务器正在运行' : '服务器未运行'} · ${status.mode || '未知模式'} · ${run} · ${status.mode === 'paper' ? '模拟' : ''}成交 ${number(stats.fills)} · 成交额 ${money(stats.fill_notional)}${status.live_unlocked ? ' · 实盘开关已开' : ' · 实盘开关关闭'}`;
+  return `${status.running ? '交易运行中' : '交易已停止'} · ${status.mode || '未知模式'} · ${run} · ${status.mode === 'paper' ? '模拟' : ''}成交 ${number(stats.fills)} · 成交额 ${money(stats.fill_notional)}${status.live_unlocked ? ' · 实盘开关已开' : ' · 实盘开关关闭'}`;
 }
 
 function phaseMarkup(phase: TaskPhase, selected: string, collapsed: Set<string>) {
