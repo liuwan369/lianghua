@@ -45,6 +45,7 @@
 #view-tasks .task-node.done .task-node-dot{background:#78dca9}
 #view-tasks .task-node.partial .task-node-dot,#view-tasks .task-node.review .task-node-dot{background:#f3c06e}
 #view-tasks .task-node.running .task-node-dot,#view-tasks .task-node.deferred .task-node-dot{background:#8bbcec}
+#view-tasks .task-node.paused .task-node-dot{background:none;border-radius:0;border-inline:2px solid #c1c8ce;box-sizing:border-box}
 #view-tasks .task-node.blocked .task-node-dot{background:#e48f9e}
 #view-tasks .task-badge{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:4px;background:#25323b;color:#c0ccd3;font-size:11px;white-space:nowrap}
 #view-tasks .task-badge i{width:6px;height:6px;border-radius:50%;background:currentColor}
@@ -52,6 +53,8 @@
 #view-tasks .task-badge.running,#view-tasks .task-badge.deferred{background:#223a50;color:#abd2f1}
 #view-tasks .task-badge.partial,#view-tasks .task-badge.review{background:#443821;color:#f1ce8b}
 #view-tasks .task-badge.blocked{background:#492d38;color:#f5aebc}
+#view-tasks .task-badge.paused{background:#343b40;color:#d0d6dc}
+#view-tasks .task-badge.paused i{background:none;border-radius:0;border-inline:2px solid currentColor;box-sizing:border-box}
 #view-tasks .task-detail-panel{position:sticky;top:16px;border-left:1px solid var(--task-line);padding:0 0 0 24px}
 #view-tasks .task-detail-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border-bottom:1px solid var(--task-line);padding-bottom:14px}
 #view-tasks .task-detail-top>div{min-width:0;overflow-wrap:anywhere}

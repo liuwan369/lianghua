@@ -1,6 +1,7 @@
-# 配置契约 v1
+# 配置契约 v1（控制台兼容配置）
 
-实现：`scripts/dashboard/config.py` 与 `scripts/system-dashboard-server.py`。核对日期：2026-09-10。
+实现：`scripts/dashboard/config.py` 与 `scripts/system-dashboard-server.py`。核对日期：2026-09-16。
+本文件描述现有控制台的版本化启动配置，不是 `StrategyPlugin` 契约，也不代表当前存在生产策略。策略接入已暂停；公共交易底座的接口边界以 [`docs/STRATEGY-INTERFACE.md`](../docs/STRATEGY-INTERFACE.md) 和 [`docs/TECHNICAL.md`](../docs/TECHNICAL.md) 为准。
 
 ## 读写与生效
 
@@ -32,7 +33,7 @@
 
 capabilities 明确 effectivePolicy=next_start、versionedStartModes=[paper]、accountScoped=false、separatePairTargetAndHardCap=false、pairCostMaxIsUniversalHardCap=false。API 支持的九项字段不等于页面九项都有对应控件。
 
-成本目标、普通补仓和紧急候选参数有不同语义。当前 target_clone 开启 dynamicHedgeSizing，单边补腿最终受 hedgePairCostCeiling=0.99 约束；候选放宽并不保证可下单或一定对冲。
+`pair_cost_max` 是旧控制台/兼容引擎字段，不能解释为公共平台的统一风险上限，也不能作为新策略默认值。`stableLive`、`target_clone`、补仓和库存规则属于暂停的历史兼容路径；公共平台只执行策略插件返回的订单意图和统一风险校验。
 
 ## 存储与错误
 

@@ -1,9 +1,10 @@
 import type { Book, GatewayAck, Instrument, OrderGateway, OrderRequest, TradeFill } from "./contracts.js";
 
 const EPS = 1e-8;
-type PaperOrder = { request: OrderRequest; left: number; seq: number; placedAt: number };
+type PaperOrder = { request: OrderRequest; left: number; seq: number; placedAt: number;
+  cancelQueued?: boolean; cancellation?: Promise<void> };
 type Liquidity = { book: Book; bid: number; ask: number };
-type Delivery = { kind: "fill"; fill: TradeFill } | { kind: "cancel"; orderId: string };
+type Delivery = { kind: "fill"; fill: TradeFill } | { kind: "cancel"; orderId: string; done: () => void };
 
 /** Independent paper venue. Public trades drive passive fills; a quote alone is never a fill. */
 export class PaperGateway implements OrderGateway {
@@ -68,18 +69,29 @@ export class PaperGateway implements OrderGateway {
       if (request.direction === "BUY") liquidity!.ask -= amount; else liquidity!.bid -= amount;
       this.fill(id, amount, opposing!, book!.ts, false, feeUsd);
     }
-    if (request.timeInForce !== "GTC" && this.orders.delete(id)) {
-      this.enqueue({ kind: "cancel", orderId: id });
+    if (request.timeInForce !== "GTC") {
+      const paperOrder = this.orders.get(id);
+      if (paperOrder) {
+        // Keep the order addressable until committed fills and remainder
+        // cancellation reach the core after the submission ACK.
+        void this.queueCancel(id, paperOrder);
+      }
     }
     return { status: "accepted", orderId: id };
   }
-  async cancel(orderId: string): Promise<boolean> { this.orders.delete(orderId); return true; }
+  async cancel(orderId: string): Promise<boolean> {
+    const order = this.orders.get(orderId);
+    if (!order) return false;
+    await this.queueCancel(orderId, order);
+    if (this.callbackErrors.length) throw new AggregateError(this.callbackErrors, "paper callback failed");
+    return true;
+  }
   trade(tokenId: string, takerDirection: "BUY" | "SELL", price: number, shares: number, ts: number): void {
     this.assertOpen();
     if (!tokenId || !["BUY", "SELL"].includes(takerDirection) || ![price, shares, ts].every(Number.isFinite)
       || price <= 0 || price >= 1 || shares <= 0 || ts < 0) throw new Error("invalid paper trade");
     let remaining = shares;
-    const matches = [...this.orders].filter(([, o]) => o.request.tokenId === tokenId
+    const matches = [...this.orders].filter(([, o]) => !o.cancelQueued && o.left > EPS && o.request.tokenId === tokenId
       && ts >= o.placedAt
       && o.request.direction !== takerDirection && (o.request.direction === "BUY" ? price <= o.request.price : price >= o.request.price))
       .sort(([, a], [, b]) => (a.request.direction === "BUY" ? b.request.price - a.request.price : a.request.price - b.request.price) || a.seq - b.seq);
@@ -87,6 +99,16 @@ export class PaperGateway implements OrderGateway {
       if (remaining <= 0) break;
       const size = Math.min(remaining, order.left);
       this.fill(id, size, order.request.price, ts, true, this.fillFee(order.request, size, order.request.price, true));
+      const liquidity = this.books.get(tokenId);
+      if (liquidity) {
+        if (takerDirection === "SELL" && liquidity.book.bid != null
+          && Math.abs(liquidity.book.bid - order.request.price) <= EPS) {
+          liquidity.bid = Math.max(0, liquidity.bid - size);
+        } else if (takerDirection === "BUY" && liquidity.book.ask != null
+          && Math.abs(liquidity.book.ask - order.request.price) <= EPS) {
+          liquidity.ask = Math.max(0, liquidity.ask - size);
+        }
+      }
       remaining -= size;
     }
   }
@@ -103,20 +125,32 @@ export class PaperGateway implements OrderGateway {
     const order = this.orders.get(id);
     if (!order) return;
     order.left -= shares;
-    if (order.left <= EPS) this.orders.delete(id);
     this.enqueue({ kind: "fill", fill: { tradeId: `paper-trade-${++this.next}`, orderId: id, tokenId: order.request.tokenId,
       direction: order.request.direction, price, shares, feeUsd, ts, isMaker } });
   }
   private enqueue(delivery: Delivery): void {
     this.deliveries.push(delivery);
-    // Matching is committed immediately; events reach the account only after its submission ACK.
+    // A new turn lets every submission ACK bind before callbacks, including
+    // submissions made while another delivery or cancellation is in progress.
     this.timer ??= setTimeout(() => { this.timer = undefined; this.drain(); }, 0);
+  }
+  private queueCancel(orderId: string, order: PaperOrder): Promise<void> {
+    order.cancelQueued = true;
+    return order.cancellation ??= new Promise<void>(done => this.enqueue({ kind: "cancel", orderId, done }));
   }
   private drain(): void {
     for (const delivery of this.deliveries.splice(0)) {
       try {
         if (delivery.kind === "fill") this.onFill(delivery.fill); else this.onCancel(delivery.orderId);
       } catch (error) { this.callbackErrors.push(error); }
+      finally {
+        const orderId = delivery.kind === "fill" ? delivery.fill.orderId : delivery.orderId;
+        const order = this.orders.get(orderId);
+        if (order && (delivery.kind === "cancel" || (order.left <= EPS && !order.cancelQueued))) {
+          this.orders.delete(orderId);
+        }
+        if (delivery.kind === "cancel") delivery.done();
+      }
     }
   }
   close(): Promise<void> {
@@ -124,12 +158,7 @@ export class PaperGateway implements OrderGateway {
   }
   private async closeOnce(): Promise<void> {
     this.closed = true;
-    // Existing submit continuations must receive their ACK before committed events are delivered.
-    await Promise.resolve();
-    if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
-    for (const orderId of this.orders.keys()) this.deliveries.push({ kind: "cancel", orderId });
-    this.orders.clear();
-    this.drain();
+    await Promise.all([...this.orders].map(([orderId, order]) => this.queueCancel(orderId, order)));
     this.books.clear();
     if (this.callbackErrors.length) throw new AggregateError(this.callbackErrors, "paper callback failed");
   }

@@ -11,9 +11,10 @@ export interface Event { id: number; event: string; market: string | null; time:
 export interface Events { control_source?: ControlSource; schemaVersion: 1; run_id: string; events: Event[]; next_before_id: number | null }
 export interface Summary extends Obj { run_id: string; mode: string; account_id: string | null; fill_count: number; fill_notional: number | null; fees: number | null; settled_markets: number; settled_pnl: number | null; pnl_semantics: string; completeness: string; order_lifecycle_available: boolean }
 export interface SummaryResponse { control_source?: ControlSource; schemaVersion: 1; summary: Summary }
-export interface TaskItem { id: string; title: string; status: string; owner: string; detail: string; next: string; runId?: string }
-export interface TaskPhase { id: string; title: string; status: string; owner: string; detail: string; tasks: TaskItem[] }
-export type ArchitectureStatus = 'DONE' | 'PARTIAL' | 'TODO' | 'DEFERRED';
+export type TaskStatus = 'DONE' | 'RUNNING' | 'REVIEW' | 'TODO' | 'BLOCKED' | 'PAUSED';
+export interface TaskItem { id: string; title: string; status: TaskStatus; owner: string; detail: string; next: string; runId?: string }
+export interface TaskPhase { id: string; title: string; status: TaskStatus; owner: string; detail: string; tasks: TaskItem[] }
+export type ArchitectureStatus = 'DONE' | 'PARTIAL' | 'TODO' | 'DEFERRED' | 'PAUSED';
 export type ArchitectureScope = 'CORE' | 'STRATEGY' | 'DELIVERY';
 export interface ArchitectureItem { id: string; title: string; status: ArchitectureStatus; detail: string; next: string; verification: string }
 export interface ArchitectureGroup { id: string; title: string; owner: string; scope: ArchitectureScope; detail: string; items: ArchitectureItem[] }

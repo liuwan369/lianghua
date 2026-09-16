@@ -1,97 +1,45 @@
-# 参数、接口与执行语义
+# 技术实现与执行语义
 
-本文描述六页控制台、Python 服务与 TypeScript 引擎的实际连接边界。金额、费用、持仓和运行状态必须携带所属运行及数据来源；未知值不能默认为零。
+更新时间：2026-09-16。本文以 `_external/btc-5m-market-trading-bot/src/platform/` 当前源码为准；旧 `src/live/engine.ts` 的策略参数不属于公共底座默认值。
 
-## 页面保存与后台参数
+## 公共接口
 
-现有页面 `web/src/forms.ts` 提交以下九项映射；这是当前实现，基本硬条件与动态参数的后续改造见 [交付规划](STRATEGY-DELIVERY-PLAN-2026-09-13.md)。
+`contracts.ts` 定义 `Instrument`、`Book`、`AccountSnapshot`、`OrderRequest`、`OrderRecord`、`TradeFill`、`RiskView`、`TradingEvent` 和 `StrategyAction`。`TradingPlatform` 对外暴露 market/account/orders/portfolio/risk/history/settlement/telemetry 八类能力。
 
-| 页面字段 ID 后缀 | 后台参数 | 含义 |
-|---|---|---|
-| `order` | `order_usd` | 单笔金额上限 |
-| `life` | `maker_life_sec` | 挂单寿命，秒 |
-| `mode` | `mode` | paper/live，保存不启动 |
-| `duration` | `duration_min` | 运行时长，分钟 |
-| `submitted` | `max_total_usd` | 累计提交名义金额上限，不是当前净持仓 |
-| `maxOrders` | `max_orders` | 订单数上限 |
-| `pairCost` | `pair_cost_max` | 配对及加仓成本参数 |
-| `decisionInterval` | `decision_interval_ms` | 最短决策间隔 |
-| `defensiveCancel` | `defensive_cancel_bps` | 防御撤单阈值 |
+独立 `trading-platform` CLI 已接入平台。控制台 `/api/v1/trading/start` 仍启动旧 `live.js run`，进程恢复和读模型也使用旧日志契约；这部分迁移是当前未完成工作。
 
-其他高级输入仅保留本页草稿，不持久化、不生效。当前后台配置范围如下；本轮规划尚未改变这些校验或生产参数：
+`Book` 可以包含完整 `bids/asks`，档位必须按 best-first 排列：买方降序、卖方升序；平台拒绝重复或倒序深度。价格不再固定按 `0.001` 取整，行情保留交易所支持的 `0.0001/0.001/0.0025/0.005/0.01/0.1` 等合法精度。
 
-| 参数 | 默认值 | 校验范围 |
-|---|---|---|
-| `order_usd` | 2 | 0.01–1000 |
-| `pair_cost_max` | 0.99 | 0.90–1.00 |
-| `max_orders` | 50 | 整数 1–10000 |
-| `max_total_usd` | paper 100 / live 10 | 0.01–100000 |
-| `duration_min` | paper 5 / live 15 | 0 表示不限时，否则 0.1–1440 |
-| `maker_life_sec` | 15 | 1–300 |
-| `decision_interval_ms` | 0 | 0–60000 |
-| `defensive_cancel_bps` | 0 | 0–1000 |
-| `mode` | paper | paper/live |
+## 订单状态和资金
 
-数值必须是有限 JSON number，字符串、布尔值、NaN、未知字段均拒绝。配置保存采用 `{params, expected_revision}`，版本冲突返回 409；成功后下次启动生效。损坏或已保存后丢失的配置会报错，不静默恢复可运行默认值。省略字段按明确的模式默认值补齐，前端保存则携带已有参数全量快照。
+订单状态为 `SUBMITTING`、`OPEN`、`PARTIAL`、`FILLED`、`CANCELLED`、`REJECTED` 或 `UNKNOWN`。BUY 预留名义金额加费用，SELL 预留份额和费用。成交按 `tradeId + orderId` 去重，成交先更新现金、持仓和成本，再通知策略。
 
-## HTTP 接口
+撤单 ACK 可能与已发生但尚未到达的成交竞态。收到真实撤单确认后，订单变为 `CANCELLED` 但保留 `reconciliationPending` 和剩余预留；直到账户核对确认没有开放订单，才释放预留。paper 的网关在已排队成交全部交付后可明确释放。未知提交、未知撤单和持久化失败保持风险停机。
 
-| 方法与路径 | 用途及边界 |
-|---|---|
-| GET `/api/v1/config` | 参数、版本及能力说明 |
-| POST `/api/v1/config` | 非敏感配置保存 |
-| GET `/api/v1/status` | 运行状态及数据来源 |
-| GET `/api/v1/markets` | 市场与盘口状态 |
-| GET `/api/v1/runs?limit=50&before_id=...` | 运行列表游标分页 |
-| GET `/api/v1/events?run_id=...&limit=50&before_id=...` | 指定运行事件游标分页 |
-| GET `/api/v1/summary?run_id=...` | 运行账本摘要，不是钱包账单 |
-| GET `/api/v1/account-data` | 同账户后台缓存：抵押余额、未完成委托、成交、持仓、关闭持仓、活动；各来源有时间及分页完整性 |
-| GET `/api/account/status` | 脱敏账户状态 |
-| POST `/api/account/check` | 只读账户检查，不保存 |
-| POST `/api/account/save` | 检查后持久化账户；失败不覆盖配置 |
-| GET `/api/live` | 采集行情/分析适配数据 |
-| POST `/api/v1/trading/start` | 按版本化配置启动，仅支持 paper |
-| POST `/api/v1/trading/stop` | 停止请求及退出状态 |
-| POST `/api/trading/start`、`/api/trading/stop` | 底层控制接口；live 使用独立解锁及授权 |
+恢复核对只允许同账户、无在途请求进行，并拒绝早于上一次已接受时间的账户快照。活动订单缺少账户或明确撤单证据会失败关闭；断线恢复拿到稳定的撤单证据时先标记待核对，下一次账户读取确认不存在后才释放预留。取消单的账户快照不能静默推进成交数量，成交必须由去重的成交事件补入；已终态订单出现在新的开放订单快照中会报错，不能被覆盖成 `OPEN/PARTIAL`。停止 live 平台时先冻结用户事件，再做最终账户读取；无法证明最终状态就保持失败关闭。
 
-前端普通请求超时 8 秒，按约 5 秒刷新并检查行情/事件新鲜度；账户操作超时 55 秒。账户只读后端主要 RPC 尝试 25 秒，失败时备用尝试 20 秒；并发检查返回 429，校验、上游或超时错误按情况返回 400/502/503/504。HTTP 成功只证明此次接口请求结果，不能代替业务端到端验收。
+## 行情与延迟
 
-公网页面登录关闭。账户写入要求正确公网 origin/代理配置；真实交易控制另外要求 control token、明确确认及 `PM_TRADING_LIVE_UNLOCK=1`。账户检查或保存不创建交易所订单、不自动进行链上授权。
+账户核对在候选副本上完成验证，通过后才替换账本；缺少成交或终态冲突等验证失败不会提前更新余额、持仓、快照时间或释放预留。
 
-## 账户 V2
+实盘新单门禁同时要求每个市场的 Up/Down 完整 L2 盘口新鲜、认证用户 WebSocket 健康连续。快速 `best_bid_ask` 只用于短时顶价显示，不刷新完整深度的健康时间；WebSocket 已连接本身不是健康证据，超过新鲜度阈值时 `isHealthy()` 返回 false。
 
-真实执行适配使用 `@polymarket/clob-client-v2` 1.1.0，版本端点必须返回原始数值 `2`。账户检查使用 `@polymarket/client` 0.9.0，但 readiness 只评估实际 V2 标准和 neg-risk 路径所需的 allowance/operator，不把其他产品授权纳入本系统门槛。
+延迟必须分段记录：本地决策、签名、HTTP ACK、用户订单事件、REST 首次可见、成交事件和补偿查询。成交事件直接进入内存账本和策略事件队列，REST 读模型不能作为补单或撤单触发条件。
 
-2026-09-10 私有只读验证完成已有 API key 派生、未结订单、成交和 collateral 查询；未创建新 key、未提交订单或链上交易。凭据仅在检查内存使用，不能把私有查询通过写成资金执行验收通过。账户检查编译缓存与 RPC 配置见 [QUICK_REF.md](QUICK_REF.md)。
+## Paper 与真实网关
 
-## 策略与风险约束
+`PaperGateway` 使用当前显示深度完成主动成交，公共成交按价格/时间分配被动订单并消耗对应显示流动性；没有公开成交不会因为报价存在而自动成交。它支持 GTC/FOK/FAK、部分成交和关闭时的取消回报，但不模拟真实队列优先级。
 
-在线 `Engine` 默认 `target_clone`，不是 `stableLive` 锁定预设。默认启用 `dynamicHedgeSizing`；基础补腿参数 `hedgePairCostCeiling=0.99`，当前源码的实际阶段门槛由 `hedgeLimit()` 统一计算。CLI `--pair-cost-max` 改变 `pairCostMax` 与 `pairAddCostMax`，不是所有风险阈值的通用替换。
+`PolymarketGateway` 只负责 CLOB 请求和用户事件适配；账户、订单、成交和结算到账仍需通过各自来源核对。接口成功不能替代真实资金验收。
 
-每边 maker 价格先按该 token 的真实 tick 向下量化；缺少有效 tick 则拒绝挂单，不使用 0.01 猜测值。数量经过预算、单边限制、最坏结算亏损及挂单未成交负债检查，至少满足策略 5 份门槛；执行器再校验市场真实最小数量，不能扩大已批准数量。估算手续费计入成本，返佣奖励不抵扣下单成本。
+## 配置和策略
 
-2026-09-13 源码核对：`strategy.ts` 的 `hedgeLimit()` 让决策和最终动态份数使用同一配置政策。单边裸露在普通阶段从基础值逐步调整至最多 0.999；达到 `maxUnhedgedSecs` 或进入 `forceFlattenSec` 时使用 `pairCostEmergencyStop`，当前 target_clone 继承的值分别为 30 秒、75 秒和 1.05。最终构建仍核对资金、份数、不平衡和最坏损失；通过成本门槛不等于保证成交。旧文档“最终始终限制 0.99”的说明已失效。
+现有六页配置仍可保存九项后台字段，但策略暂停期间不把它们当作新策略默认参数。新策略必须实现 `StrategyPlugin`，不能导入 CLOB client、写账本或修改风险上限。策略研究和参数冻结等公共底座通过后再恢复。
 
-例如已持 DOWN 均价 0.18，UP ask 为 0.95，模型费用为 `0.07 × 0.95 × 0.05 = 0.003325`，候选总成本 1.133325，超过 1.05 会拒绝。这是模型估计，不是交易所真实费用凭证。小于最小数量的残余、预算不足或缺边过贵均可能留有未配对库存；尚无已验证的强制亏损平仓政策或盈利保证。
+## 持久化与结算
 
-部分成交只扣减匹配订单的剩余负债；撤单请求发出后必须等确认才释放。订单替换使用身份匹配，迟到事件不能清除新挂单。live taker 在途期间冻结新提交，固定份数 FOK 避免更优价格导致数量膨胀。拒绝原因变化记录为 `decision_rejected`。
+`PlatformStore` 按账户/模式使用独占锁、临时文件、`fsync` 和原子替换；启动时若存在完整 `.next` 恢复快照，优先读取它，避免丢失资金预留。当前结算适配器明确只接受两个不同 token 的二元市场请求；广播交易回执不是到账，最终余额必须重新核对。
 
-退出先排空提交、撤单并核对剩余订单和稳定成交，记录迟到成交且只处理本运行所属订单。Python 等待 8 秒未完成时返回 pending，不强杀引擎；重复停止不反复向同一 PID 发信号。这些路径有模拟测试覆盖，真实资金退出仍需验收。
+## 当前限制
 
-## 存储与回放
-
-引擎根目录下 `results/dashboard/config.json` 存非敏感配置，`results/dashboard/ledger.sqlite3` 存投影账本；同目录 `snapshot.json` 为账本数据快照，`heartbeat.json` 为 worker 检查心跳。证据库位于部署根目录 `data/pm-r25-live/days`；行情投影位于部署根目录 `data/dashboard/market-snapshot.json`，与账本快照用途不同。日志、证据与账本各自保留来源，不把模拟 fill 当作真实交易所回报。
-
-`scripts/dashboard/market_snapshot.py` 持有最近 180 秒已解码块及盘口，约每秒在一个只读 SQLite 事务内读取行情与元数据。每轮仍读取窗口内压缩块进行内容比较；未变化的块不重复解压，普通追加只应用新增事件。相同秒块的更改、删除或晚到事件会从已解码窗口纠正重放。日库切换、文件身份变化、事件编号回退时重置；处理异常丢弃内存投影，下次从证据库重新构建。`projection_metrics` 的累计解码、应用、读取字节、纠正回放及重置计数用于核对实际开销。
-
-行情由后台原子发布，HTTP 只读内存快照。本地预览 SSH 只读都柏林快照文件，不调用远端 Python 重放。源 `checked_at` 超过 15 秒或超前超过 5 秒会返回离线及空当前市场；本机缓存停止更新超过 15 秒也降级。双边 `quote_at` 使用两边真实报价更新时间的较早值，成交消息和无效增量不会续鲜；前端及引擎各自的报价过期校验继续生效。
-
-账本 `ingest_if_changed` 仅供单写入 worker 使用：缓存已追平且无摄取错误的源指纹（设备、inode、大小、mtime、ctime），无变化时跳过摄取 SQL；缓存最多 256 个 run。指纹变化仍进入原摄取检查，保留前缀/尾部指纹、替换及截断检测。pending 和错误不走空闲缓存，历史 run 保留逐次轮询；空闲优化不表示零 SQL。
-
-投影数据只有在选中 run、偏移、摄取状态或记录变化时重新生成；`legacy_stats` 复用同次摘要。账本 schema 2 将数据 `as_of` 与每秒心跳分开，心跳必须匹配 `run_id` 和 `snapshot_version`，`age_seconds` 按匹配心跳计算。worker 退出、心跳超过 3 秒或版本不匹配都会 stale；错误和无效记录保持 incomplete，不会因心跳存在变成完整数据。旧 schema 1 快照仍按数据时间判定新鲜度。
-
-24 小时历史分析由独立 oneshot 服务在同机 `pm-analysis.slice` 内执行，CPU 配额 20%（0.2 核），CPU/IO 权重均为 10，并设置低调度优先级和内存上限。该服务不参与在线接口的同步链路；隔离限制分析争用，不增加宿主机可用 CPU。
-
-回测快照必须包含两边 token 当时真实 `tick_size` 或 `tickSize`；无效或冲突元数据直接报错。时间戳保留显式时区，无时区按 UTC；非法时间报错。详见 [BACKTEST-TICK-DATA.md](BACKTEST-TICK-DATA.md)。
-
-账户只读后台与前端展示口径见 [账户接入](ACCOUNT-DATA-INTEGRATION-2026-09-10.md)。HTTP读取不重新派生凭据；Node进程驻留并在账户变化时销毁。
+真实部分成交、撤改竞态、断线中成交、异常恢复、持续账户联合对账、连续结算和网页五档/完整延迟展示仍未完成。当前服务器交易停止，实盘锁关闭。

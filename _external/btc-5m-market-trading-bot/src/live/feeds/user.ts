@@ -21,6 +21,8 @@ export interface UserFeedOptions {
   fetchRecentTrades?: (afterUnix: number) => Promise<unknown[]>;
   /** Authoritative open-order read used to prove a reconnect sweep covered cancels. */
   fetchOpenOrders?: () => Promise<unknown[]>;
+  /** Full account reconciliation required before a reconnect can reopen the order gate. */
+  reconcileAfterReconnect?: (afterUnix: number, openOrders: unknown[]) => Promise<void>;
   /** Signed L2 account read used as authentication evidence when WS omits a ready event. */
   verifyAuthenticated?: () => Promise<boolean>;
   /** Proxy/funder address used to identify our maker leg in authenticated trades. */
@@ -546,10 +548,19 @@ export function runUserFeed(
             const key = (value: unknown[] | null) => value?.map((row) => JSON.stringify(row)).sort().join("|");
             if (first && rows && firstOpen && secondOpen && key(first) === key(rows) && key(firstOpen) === key(secondOpen)) {
               for (const row of rows) for (const event of parseAuthenticatedTrade(row, opts, seenTrades)) emitEvent(event);
-              opts.ledger?.markResynced("authenticated REST trade compensation");
-              discontinuity = false;
-              gapStartUnix = undefined;
-              if (authenticated) setReady(true);
+              try {
+                await opts.reconcileAfterReconnect?.(afterUnix, secondOpen);
+                opts.ledger?.markResynced("authenticated REST trade and account compensation");
+                discontinuity = false;
+                gapStartUnix = undefined;
+                if (authenticated) setReady(true);
+              } catch {
+                // Stable REST lists do not prove the local ledger is current.
+                discontinuity = true;
+                setReady(false);
+                ws.terminate();
+                throw new Error("authenticated account reconciliation failed after reconnect");
+              }
             }
           }
         } else {

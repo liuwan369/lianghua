@@ -118,6 +118,30 @@ describe('system architecture task view', () => {
     click('[data-task-tab="architecture"]');
     expect(document.querySelector('[data-task-tree]')?.textContent).toContain('功能架构尚未发布');
   });
+  it('shows paused work separately in both views and preserves the pause on live refresh', async () => {
+    const data = fixture();
+    data.phases[0].status = 'PAUSED';
+    data.phases[0].tasks[1].status = 'PAUSED';
+    data.architecture!.groups[1].items[0].status = 'PAUSED';
+    vi.mocked(api.tasks).mockResolvedValue(data);
+    vi.mocked(api.status).mockResolvedValue({ ...status, running: true });
+    await mount();
+    select('[data-task-filter]', 'incomplete');
+    select('[data-task-scope]', 'STRATEGY');
+    expect(nodes()).toHaveLength(1);
+    expect(nodes()[0].classList.contains('paused')).toBe(true);
+    expect(detail()).toContain('已暂停');
+    expect(document.querySelector('[data-task-progress]')?.textContent).toContain('已暂停 1');
+    expect(document.querySelector('[data-task-legend] .paused')?.textContent).toBe('已暂停');
+    click('[data-task-tab="delivery"]');
+    const paper = () => nodes().find(node => node.textContent?.includes('PAPER-01'))!;
+    expect(paper().textContent).toContain('已暂停');
+    expect(document.querySelector('[data-group-id="delivery:P1"] .task-phase-head .paused')?.textContent).toBe('已暂停');
+    expect(document.querySelector('[data-task-progress]')?.textContent).toContain('已暂停 1');
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(paper().textContent).toContain('已暂停');
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('交易运行中');
+  });
   it('clears stale completed nodes on errors, recovers on refresh, and removes all listeners on cleanup', async () => {
     await mount();
     vi.mocked(api.tasks).mockRejectedValue(new Error('任务接口断开'));

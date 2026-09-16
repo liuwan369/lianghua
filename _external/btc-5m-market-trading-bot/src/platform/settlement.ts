@@ -8,6 +8,11 @@ export interface RedemptionTransaction { to: Address; data: Hex; value: bigint }
 /** The wallet-specific signer/relayer consumes the same transaction plan. */
 export function redemptionPlan(request: SettlementRequest): RedemptionTransaction {
   if (!/^0x[0-9a-fA-F]{64}$/.test(request.marketId)) throw new Error("invalid condition ID");
+  if (!Array.isArray(request.tokenIds) || request.tokenIds.length !== 2
+    || request.tokenIds.some(token => typeof token !== "string" || !token)
+    || new Set(request.tokenIds).size !== 2) {
+    throw new Error("settlement adapter only supports explicit binary token sets");
+  }
   return { to: CTF, value: 0n, data: encodeFunctionData({ abi, functionName: "redeemPositions",
     args: [PUSD, `0x${"0".repeat(64)}`, request.marketId as Hex, [1n, 2n]] }) };
 }

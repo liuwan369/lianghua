@@ -60,6 +60,8 @@ export interface OrderRecord extends OrderRequest {
   tradeIds?: string[];
   signLatencyMs?: number;
   ackLatencyMs?: number;
+  /** A venue cancel ACK can race with a fill already in flight. */
+  reconciliationPending?: boolean;
 }
 export interface TradeFill {
   tradeId: string;
@@ -107,6 +109,8 @@ export interface RiskView {
 export interface CoreState {
   schemaVersion: 1;
   accountId: string;
+  /** Last ordinary account snapshot accepted by reconcile(). */
+  accountAt?: number;
   mode: TradingMode;
   cashUsd: number;
   positions: Position[];
@@ -142,6 +146,8 @@ export interface SettlementResult {
 export interface PlatformAdapters {
   gateway: OrderGateway;
   readAccount?: () => Promise<AccountSnapshot>;
+  /** Freeze authenticated event sources before the final account read on stop. */
+  beforeFinalReconcile?: () => void;
   discoverMarkets?: () => Promise<MarketInfo[]>;
   settle?: (request: SettlementRequest) => Promise<SettlementResult>;
   /** A fee reserve is a venue rule, not a strategy parameter. */

@@ -1,6 +1,6 @@
 # BTC 5 分钟 TypeScript 交易引擎
 
-本目录负责 Polymarket BTC Up/Down 5 分钟市场的行情驱动策略、paper 模拟和 V2 CLOB 交易执行。正式页面和服务位于仓库其他目录；公网控制台是 **https://34-242-206-196.sslip.io/console/**，在线节点为都柏林。
+本目录提供 Polymarket BTC Up/Down 5 分钟市场的公共交易底座、行情适配、paper 模拟和 V2 CLOB 执行适配。策略通过 `src/platform/contracts.ts` 的 `StrategyPlugin` 插件接口接入；当前策略接入暂停。正式页面和服务位于仓库其他目录；公网控制台是 **https://34-242-206-196.sslip.io/console/**，在线节点为都柏林。
 
 当前状态为 **NOT_READY_FOR_LIVE_TRADING**：实际 V2 账户授权与私有只读请求通过，但真实订单全生命周期、完整资金对账和全部前端功能仍需验收。代码和模拟测试通过不代表真实成交、成功对冲或盈利。
 
@@ -14,7 +14,7 @@ npm test
 npm run build
 ```
 
-2026-09-10 记录为 201 个测试通过、20 个测试文件通过，TypeScript 构建通过。依赖使用 `package-lock.json` 固定安装；执行适配为 `@polymarket/clob-client-v2` 1.1.0，账户检查使用 `@polymarket/client` 0.9.0 并限定实际 V2 授权范围。
+当前基线为 43 个测试文件、411 项 TypeScript 测试通过，`npm run typecheck` 和 `npm run build` 通过。依赖使用 `package-lock.json` 固定安装；执行适配为 `@polymarket/clob-client-v2` 1.1.0，账户检查使用 `@polymarket/client` 0.9.0 并限定实际 V2 授权范围。
 
 ## 显式纸面运行
 
@@ -37,6 +37,8 @@ CLI 的默认值与后台配置默认值不同：单笔 2 USD，配对参数 0.9
 | 位置 | 职责 |
 |---|---|
 | `src/cli/live.ts` | 命令参数、显式 paper/live 选择 |
+| `src/cli/platform.ts` | 独立公共平台 CLI；默认 paper，可选加载 `StrategyPlugin` |
+| `src/platform/` | 市场、订单、账户、风险、结算、持久化和策略隔离接口 |
 | `src/live/orchestrator.ts` | 行情、运行周期、订单回报、退出编排 |
 | `src/live/engine.ts` | 在线策略入口与运行状态 |
 | `src/live-maker.ts`、`src/strategy.ts` | maker 候选、库存补仓和风险约束 |
@@ -47,9 +49,13 @@ CLI 的默认值与后台配置默认值不同：单笔 2 USD，配对参数 0.9
 
 Polymarket 公开盘口/成交、Binance BTC 和 Chainlink RTDS 构成行情来源。paper 可以使用都柏林采集器数据；live 使用经认证的用户 WebSocket 接收账户订单回报。每次运行必须核实来源与新鲜度。
 
-## 实际策略行为
+## 旧策略兼容路径（当前暂停）
 
-在线 `Engine` 默认 `target_clone`，启用 `dynamicHedgeSizing`；不是 `stableLive` 锁定预设。`target_clone` 默认 clip 20，关闭 edge scaling，`pairAddCostMax=0.98`、`hedgePairCostCeiling=0.99`、目标不平衡 0.02、硬不平衡限制 0.04。CLI 默认 `--pair-cost-max 0.99` 会把 `pairCostMax` 和 `pairAddCostMax` 设为 0.99，不修改所有其他门槛。
+`src/live/engine.ts`、`PairCostMarketMaker`、`stableLive` 和 `target_clone` 仍保留用于历史回放和兼容验证，但不属于公共平台 CLI 的默认策略，也没有在当前服务器运行。它们的参数、paper PnL 和参考地址行为不能作为生产默认值或盈利证明。恢复策略时必须通过独立插件验收和新的回放、paper、真实校准。
+
+以下行为说明只用于阅读兼容代码，不代表当前运行策略：
+
+`target_clone` 启用 `dynamicHedgeSizing`；`pairAddCostMax=0.98`、`hedgePairCostCeiling=0.99`、目标不平衡 0.02、硬不平衡限制 0.04。CLI 默认 `--pair-cost-max 0.99` 会把 `pairCostMax` 和 `pairAddCostMax` 设为 0.99，不修改所有其他门槛。
 
 两边挂单必须各用真实 token tick 向下量化价格；元数据缺失则拒绝，不猜测 0.01。最终数量受预算、单边数量、最坏结算亏损、费用模型及尚未成交订单负债限制。策略至少 5 份，执行器再校验市场真实最小数量，不能为满足最小量扩大已批准订单。
 

@@ -301,17 +301,14 @@ export function runPolymarketFeed(
                     side != null &&
                     bb != null &&
                     ba != null &&
+                    bb > 0 && bb < 1 && ba > 0 && ba < 1 && bb <= ba &&
                     (eventMs == null || eventMs >= lastMs)
                   ) {
                     const top = { bid: bb, ask: ba, atMs: Date.now() };
                     if (side) {
                       fastUp = top;
-                      lastUpAtMs = top.atMs;
-                      if (eventMs != null) applied.upMs = Math.max(applied.upMs, eventMs);
                     } else {
                       fastDown = top;
-                      lastDownAtMs = top.atMs;
-                      if (eventMs != null) applied.downMs = Math.max(applied.downMs, eventMs);
                     }
                   }
                 } else {

@@ -63,7 +63,8 @@ export class TradingPlatform {
       return job;
     },
     // A slow read is never silently substituted into the live event ledger.
-    reconcile: (snapshot: AccountSnapshot, netCashFlowUsd = 0): void => this.core.reconcile(snapshot, netCashFlowUsd),
+    reconcile: (snapshot: AccountSnapshot, netCashFlowUsd = 0, cancelledOrderIds?: readonly string[]): void =>
+      this.core.reconcile(snapshot, netCashFlowUsd, cancelledOrderIds),
   };
   readonly orders = {
     submit: (order: OrderRequest) => this.core.submit(order),
@@ -102,11 +103,11 @@ export class TradingPlatform {
     return () => this.listeners.delete(listener);
   }
   attach(strategy: StrategyPlugin): () => void {
-    if (this.closing || !strategy.id || this.plugins.has(strategy.id)) throw new Error("strategy ID unavailable");
+    if (this.closing || !strategy.id || strategy.id === "external" || this.plugins.has(strategy.id)) throw new Error("strategy ID unavailable");
     this.plugins.set(strategy.id, strategy);
     return () => {
       if (this.core.orders().some(o => o.strategyId === strategy.id
-        && ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(o.status))) {
+        && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(o.status) || o.reconciliationPending))) {
         throw new Error("cancel or transfer owned orders before detaching strategy");
       }
       this.plugins.delete(strategy.id); strategy.onStop?.();

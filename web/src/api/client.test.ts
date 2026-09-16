@@ -58,6 +58,17 @@ describe('versioned API validation', () => {
     expect(()=>validate('tasks',{...base,phases:[{...phase,tasks:[item,item]}]})).toThrow();
     expect(()=>validate('tasks',{...base,phases:[phase,phase]})).toThrow();
   });
+  it('accepts explicit paused phases, tasks and architecture items while rejecting unknown statuses',()=>{
+    const task={id:'STRATEGY-01',title:'策略研究',owner:'策略',status:'PAUSED',detail:'按要求暂停',next:'底座完成后恢复'};
+    const phase={id:'P4',title:'策略阶段',owner:'策略',status:'PAUSED',detail:'已暂停',tasks:[task]};
+    const item={...task,verification:'未运行'};
+    const group={id:'strategy',title:'策略',owner:'策略',scope:'STRATEGY',detail:'独立插件',items:[item]};
+    const base={schemaVersion:1,title:'任务',updatedAt:'2026-09-16T00:00:00Z',summary:'说明',hardRules:[],phases:[phase],architecture:{title:'架构',summary:'说明',groups:[group]}};
+    expect(()=>validate('tasks',base)).not.toThrow();
+    expect(()=>validate('tasks',{...base,phases:[{...phase,status:'UNKNOWN'}]})).toThrow();
+    expect(()=>validate('tasks',{...base,phases:[{...phase,tasks:[{...task,status:'UNKNOWN'}]}]})).toThrow();
+    expect(()=>validate('tasks',{...base,architecture:{...base.architecture,groups:[{...group,items:[{...item,status:'UNKNOWN'}]}]}})).toThrow();
+  });
   it('does not reflect submitted credentials in an account failure', async () => {
     const owner_key='a'.repeat(64), relayer_key='synthetic-relayer-test-only', builder_secret='builder-secret-test-only';
     vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({ok:false,error:`rejected ${owner_key} ${relayer_key} ${builder_secret}`} ),{status:400})));

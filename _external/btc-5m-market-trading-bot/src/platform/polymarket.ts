@@ -104,10 +104,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const controls: { stop: () => void }[] = [];
   const users: UserFeedControl[] = [];
   const booksHealthy = new Map<string, boolean>();
+  const bookHealth = new Map<string, () => boolean>();
   const userHealthy = new Map<string, boolean>();
   const registered = new Set<string>();
   let started = false;
   let stopped = false;
+  let acceptUserEvents = true;
   let stopHeartbeat: (() => void) | undefined;
   const fee = (order: OrderRequest, shares = order.shares) => order.postOnly ? 0
     // Reserve the maximum convex fee at p=0.50; the actual fill uses its own price.
@@ -125,20 +127,25 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     client = await ClobWrapper.connect({ key });
     for (const market of options.markets) await client.warmMarket(market.id);
     gateway = new PolymarketGateway(client, () => !stopped && options.markets.every(m =>
-      booksHealthy.get(m.id) && userHealthy.get(m.id)) && users.every(u => u.isHealthy() && (u.isContinuous?.() ?? true)));
+      booksHealthy.get(m.id) && bookHealth.get(m.id)?.() && userHealthy.get(m.id))
+      && users.every(u => u.isHealthy() && (u.isContinuous?.() ?? true)));
   } else {
     account = options.paperAccount ?? { accountId: "paper", at: Date.now() / 1000,
       cashUsd: options.paperCashUsd ?? 1000, positions: [], openOrders: [], complete: true };
     if (account.openOrders.length) throw new Error("paper imported orders require explicit broker restoration");
     paper = new PaperGateway(fill => platform.ingest({ kind: "fill", fill }),
       (_order, shares, execution) => polymarketFillFee(shares, execution.price, execution.isMaker, 0.07, 0, 1),
-      orderId => platform.core.confirmCancelled(orderId));
+      orderId => platform.core.confirmCancelled(orderId, true));
     gateway = paper;
   }
   platform = new TradingPlatform({ account, instruments: options.markets.flatMap(m => m.instruments),
     limits: options.limits, restored: options.restored,
     adapters: { gateway, readAccount, discoverMarkets: discoverBtcMarket, estimateFee: fee,
-      persist: options.persist, record: options.record, settle: options.settle } });
+      persist: options.persist, record: options.record, settle: options.settle,
+      beforeFinalReconcile: () => {
+        acceptUserEvents = false;
+        for (const user of users) user.stop();
+      } } });
   if (options.mode === "live" && options.restored) {
     // Resolve persisted in-flight orders against the fresh ordinary account read
     // before starting feeds. Missing or changed orders fail closed in reconcile().
@@ -182,6 +189,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       } else if (event.kind === "btc" || event.kind === "oracle") {
         platform.ingest({ kind: "reference", symbol: event.kind === "btc" ? "BTC" : "BTC_ORACLE", price: event.price, ts: event.tsUnix });
       } else if (event.kind === "user") {
+        if (!acceptUserEvents) return;
         const userEvent = event.event;
         if (userEvent.kind === "orderCancelled") {
           if (platform.orders.get(userEvent.orderId)) platform.core.confirmCancelled(userEvent.orderId);
@@ -209,6 +217,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         const [up, down] = market.instruments;
         const feed = runPolymarketFeed(sink(market), up.tokenId, down.tokenId, deadline);
         controls.push(feed);
+        bookHealth.set(market.id, feed.isHealthy);
         if (client) {
           const user = runUserFeed(sink(market), { creds: client.creds, conditionId: market.id,
             upToken: up.tokenId, downToken: down.tokenId, accountAddress: client.funder,
@@ -216,6 +225,19 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
             isOurOrder: id => !!platform.orders.get(id),
             fetchTrades: ids => client!.getTradesByIds(ids), fetchRecentTrades: after => client!.getRecentTrades(market.id, after),
             fetchOpenOrders: () => client!.getOpenOrders(market.id),
+            reconcileAfterReconnect: async (_afterUnix, openRows) => {
+              const openIds = new Set(openRows.flatMap(raw => {
+                if (!raw || typeof raw !== "object") return [];
+                const row = raw as Record<string, unknown>;
+                const id = row.id ?? row.order_id;
+                return typeof id === "string" ? [id] : [];
+              }));
+              const cancelledIds = platform.orders.list()
+                .filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
+                  && order.orderId && !openIds.has(order.orderId))
+                .map(order => order.orderId!);
+              platform.account.reconcile(await readAccount!(), 0, cancelledIds);
+            },
             verifyAuthenticated: async () => { await client!.getOpenOrders(market.id); return true; },
           }, deadline);
           users.push(user); controls.push(user);
@@ -232,7 +254,10 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       stopped = true;
       // Keep user events alive while cancellation requests finish.
       try { await platform.stop(reason); }
-      finally { for (const control of controls) control.stop(); stopHeartbeat?.(); client?.stopHeartbeat(); }
+      finally {
+        for (const control of controls) control.stop();
+        bookHealth.clear(); stopHeartbeat?.(); client?.stopHeartbeat();
+      }
     },
   };
 }

@@ -1,8 +1,8 @@
 import { api } from '../api/client';
 import { esc, date, money, number } from '../ui';
-import type { ArchitectureGroup, ArchitectureScope, Resource, Status, TaskPhase, TaskView } from '../api/types';
+import type { ArchitectureGroup, ArchitectureScope, Resource, Status, TaskItem, TaskPhase, TaskView } from '../api/types';
 
-const labels: Record<string, string> = { DONE: '已完成', PARTIAL: '部分完成', DEFERRED: '延期增强', RUNNING: '进行中', REVIEW: '复核中', TODO: '待完成', BLOCKED: '已阻塞' };
+const labels: Record<string, string> = { DONE: '已完成', PARTIAL: '部分完成', DEFERRED: '延期增强', RUNNING: '进行中', REVIEW: '复核中', TODO: '待完成', BLOCKED: '已阻塞', PAUSED: '已暂停' };
 const scopes: Record<ArchitectureScope, string> = { CORE: '通用底座', STRATEGY: '独立策略', DELIVERY: '交付与增强' };
 const statusClass = (status: string) => Object.prototype.hasOwnProperty.call(labels, status) ? status.toLowerCase() : 'todo';
 const key = (parentId: string, itemId: string) => JSON.stringify([parentId, itemId]);
@@ -58,10 +58,10 @@ export function mountTasks() {
     const data = taskResource.data;
     const architecture = data?.architecture;
     if (data && !tabChosen) tab = architecture ? 'architecture' : 'delivery';
-    const phases = (data?.phases || []).map(phase => ({ ...phase, tasks: phase.tasks.map(task => {
+    const phases = (data?.phases || []).map(phase => ({ ...phase, tasks: phase.tasks.map((task): TaskItem => {
       const status = statusResource.data;
       // Only the linked paper run can alter the display of this delivery task.
-      if (task.id !== 'PAPER-01' || !task.runId || task.runId !== status?.run_id || status.mode !== 'paper') return task;
+      if (task.status === 'PAUSED' || task.id !== 'PAPER-01' || !task.runId || task.runId !== status?.run_id || status.mode !== 'paper') return task;
       if (status.running) return { ...task, status: 'RUNNING' };
       return task.status === 'RUNNING' ? { ...task, status: 'REVIEW' } : task;
     }) }));
@@ -69,8 +69,8 @@ export function mountTasks() {
     const allTasks = architectureActive ? (architecture?.groups.flatMap(group => group.items) || []) : phases.flatMap(phase => phase.tasks);
     const completed = allTasks.filter(item => item.status === 'DONE').length;
     const counts = architectureActive
-      ? `部分完成 ${allTasks.filter(item => item.status === 'PARTIAL').length} · 待完成 ${allTasks.filter(item => item.status === 'TODO').length} · 延期增强 ${allTasks.filter(item => item.status === 'DEFERRED').length}`
-      : `进行中 ${allTasks.filter(item => item.status === 'RUNNING').length} · 复核中 ${allTasks.filter(item => item.status === 'REVIEW').length}`;
+      ? `部分完成 ${allTasks.filter(item => item.status === 'PARTIAL').length} · 待完成 ${allTasks.filter(item => item.status === 'TODO').length} · 已暂停 ${allTasks.filter(item => item.status === 'PAUSED').length} · 延期增强 ${allTasks.filter(item => item.status === 'DEFERRED').length}`
+      : `进行中 ${allTasks.filter(item => item.status === 'RUNNING').length} · 复核中 ${allTasks.filter(item => item.status === 'REVIEW').length} · 已暂停 ${allTasks.filter(item => item.status === 'PAUSED').length}`;
     text('[data-task-updated]', data?.updatedAt ? `规划更新 ${date(Date.parse(data.updatedAt) / 1000)}` : taskResource.error ? '规划读取失败' : '规划读取中');
     text('[data-task-live]', liveLine(statusResource.data, statusResource.error));
     text('[data-task-summary]', taskResource.error || (architectureActive ? architecture?.summary : data?.summary) || (data ? '暂无功能架构数据' : '任务数据读取中'));
@@ -81,7 +81,7 @@ export function mountTasks() {
     const filters = root.querySelector<HTMLElement>('[data-task-filters]');
     if (filters) filters.hidden = !architectureActive;
     const legend = root.querySelector('[data-task-legend]');
-    if (legend) legend.innerHTML = (architectureActive ? ['DONE','PARTIAL','TODO','DEFERRED'] : ['DONE','RUNNING','REVIEW','TODO','BLOCKED']).map(badge).join('');
+    if (legend) legend.innerHTML = (architectureActive ? ['DONE','PARTIAL','TODO','PAUSED','DEFERRED'] : ['DONE','RUNNING','REVIEW','TODO','BLOCKED','PAUSED']).map(badge).join('');
     const tree = root.querySelector('[data-task-tree]')!;
     const detail = root.querySelector('[data-task-detail]')!;
     if (architectureActive) {

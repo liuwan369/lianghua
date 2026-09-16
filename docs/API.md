@@ -1,6 +1,6 @@
 # 控制台 API
 
-实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。
+更新时间：2026-09-16。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。策略暂停，本文只描述平台和控制台能力。
 
 ## 读取
 
@@ -17,7 +17,7 @@
 | GET /api/trading/status | 兼容运行状态 |
 | GET /api/trading/log | 有上限的引擎事件与控制台日志尾部 |
 
-运行事件不等于完整真实委托生命周期；当前 `order_lifecycle_available=false`。进程重启后账户 `last_check` 可以为空，不能把它当成授权失效。
+运行事件不等于完整真实委托生命周期；当前 `order_lifecycle_available=false`。平台底座的订单接口和控制台历史接口是两条边界，不能互相冒充。进程重启后账户 `last_check` 可以为空，不能把它当成授权失效。
 
 ## 写入与检查
 
@@ -32,7 +32,7 @@
 
 请求须为 JSON 对象，最大 32,000 字节。配置完整替换和边界见 [配置契约](../contracts/config-v1.md)。账户字段只接受 wallet、owner_key、relayer_key、relayer_address、builder_api_key、builder_secret、builder_passphrase；Builder 三项必须同时填写或同时留空。服务运行交易期间拒绝检查/更换账户。
 
-公网没有登录认证。账户操作要求 Origin/Host、JSON 类型、可信 HTTPS 代理及所配置公开来源匹配；此来源规则不识别用户身份。交易控制令牌与实盘解锁是另一组条件，公开访问不等于允许真实交易。当前六页启停按钮仍未接通。
+公网登录认证按当前部署配置关闭。账户操作要求 Origin/Host、JSON 类型、可信 HTTPS 代理及所配置公开来源匹配；此来源规则不识别用户身份。交易控制令牌与实盘解锁是另一组条件，公开访问不等于允许真实交易。正式页面的纸面启动仍调用旧策略引擎；当前交易已停止，策略开发暂停，但尚未增加禁止旧 paper 启动的后台开关。新平台启停/恢复/日志迁移见任务 UI-00。
 
 ## 错误语义
 

@@ -1,8 +1,8 @@
 # 配置说明
 
-核对日期：2026-09-10。配置实现见 `scripts/dashboard/config.py`、账户实现见 `scripts/dashboard_account.py`，引擎预设见 `_external/btc-5m-market-trading-bot/src/config.ts`。
+核对日期：2026-09-16。配置实现见 `scripts/dashboard/config.py`、账户实现见 `scripts/dashboard_account.py`；公共交易平台配置见 `_external/btc-5m-market-trading-bot/src/platform/`。
 
-2026-09-13 更新：用户已授权主 Agent 自主维护与部署，基本条件为本金 50 美元和单日最大亏损 30 美元。现有前端与配置入口保留，策略测试后再接入推荐默认值及必要防错；动态参数按 [交付规划 v2](STRATEGY-DELIVERY-PLAN-2026-09-13.md) 增量实现。下文现有配置字段不等于新的默认参数或自适应能力已经接线。
+当前策略接入暂停。现有前端配置入口保留，但页面字段不能被解释为新策略默认参数或自动调参已经接线。策略恢复前不冻结 `pair-cost`、`stableLive` 或 `target_clone` 的生产默认值。基础资金边界仍为本金 `$50`、北京时间单日损失 `$30`。
 
 ## 页面与引擎参数
 
@@ -24,7 +24,7 @@
 
 默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改，作用于下次启动；版本化启动仅支持 paper。当前为单服务器配置，不按账户隔离。
 
-`pair_cost_max` 不应解释为所有预设的统一硬上限。当前 `target_clone` 以 `hedgePairCostCeiling=0.99` 为基础，`strategy.ts` 的 `hedgeLimit()` 随裸仓/尾盘阶段计算实际门槛，候选与最终份数计算共用该政策。完整说明见 [技术实现](TECHNICAL.md)，不能把基础值描述为所有阶段的固定最终上限。
+历史兼容路径中的 `pair_cost_max` 不应解释为所有预设的统一硬上限。旧 `target_clone` 的 `hedgeLimit()` 说明只用于历史代码核对，当前策略暂停，不能把它当作新平台生产参数。完整公共执行语义见 [技术实现](TECHNICAL.md)。
 
 ## 部署环境
 

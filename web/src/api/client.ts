@@ -16,7 +16,7 @@ function validArchitecture(value: unknown): boolean {
       || !['CORE','STRATEGY','DELIVERY'].includes(String(group.scope)) || !Array.isArray(group.items) || !uniqueIds(group.items)) return false;
     for (const item of group.items) {
       if (!object(item) || !['title','detail','next','verification'].every(key => typeof item[key] === 'string')
-        || !['DONE','PARTIAL','TODO','DEFERRED'].includes(String(item.status))) return false;
+        || !['DONE','PARTIAL','TODO','DEFERRED','PAUSED'].includes(String(item.status))) return false;
       itemIds.push(item);
     }
   }
@@ -85,9 +85,9 @@ export function validate(kind: string, data: unknown): void {
   if (kind === 'tasks') valid = data.schemaVersion === 1 && typeof data.title === 'string' && typeof data.updatedAt === 'string'
     && typeof data.summary === 'string' && Array.isArray(data.hardRules) && data.hardRules.every(v => typeof v === 'string')
     && Array.isArray(data.phases) && uniqueIds(data.phases) && data.phases.every(p => object(p) && typeof p.id === 'string' && typeof p.title === 'string'
-      && typeof p.status === 'string' && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(p.status) && typeof p.owner === 'string' && typeof p.detail === 'string' && Array.isArray(p.tasks)
+      && typeof p.status === 'string' && ['DONE','RUNNING','REVIEW','TODO','BLOCKED','PAUSED'].includes(p.status) && typeof p.owner === 'string' && typeof p.detail === 'string' && Array.isArray(p.tasks)
       && uniqueIds(p.tasks) && p.tasks.every(t => object(t) && typeof t.id === 'string' && typeof t.title === 'string' && typeof t.status === 'string'
-        && ['DONE','RUNNING','REVIEW','TODO','BLOCKED'].includes(t.status) && typeof t.owner === 'string' && typeof t.detail === 'string' && typeof t.next === 'string'
+        && ['DONE','RUNNING','REVIEW','TODO','BLOCKED','PAUSED'].includes(t.status) && typeof t.owner === 'string' && typeof t.detail === 'string' && typeof t.next === 'string'
         && (t.runId === undefined || typeof t.runId === 'string')))
     && (data.architecture === undefined || validArchitecture(data.architecture));
   if (kind === 'anti-signal') {

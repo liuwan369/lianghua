@@ -33,6 +33,13 @@ export class PlatformStore {
     writeSync(this.lockFd, JSON.stringify({ pid: process.pid }));
   }
   load(): CoreState | undefined {
+    const recovery = `${this.path}.next`;
+    // A crash or rename failure can leave the newest complete snapshot in the
+    // recovery file. Prefer it so a durable reservation is never silently lost.
+    if (existsSync(recovery)) {
+      try { return JSON.parse(readFileSync(recovery, "utf8")) as CoreState; }
+      catch { /* fall through to the last committed primary snapshot */ }
+    }
     if (!existsSync(this.path)) return undefined;
     return JSON.parse(readFileSync(this.path, "utf8")) as CoreState;
   }

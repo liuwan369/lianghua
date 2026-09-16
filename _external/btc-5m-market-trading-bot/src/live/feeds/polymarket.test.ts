@@ -68,6 +68,15 @@ describe("Polymarket websocket health", () => {
       asks: [[0.41, 9], [0.42, 7]],
     });
   });
+
+  it("preserves venue prices below the legacy 0.001 precision", () => {
+    const book = new OrderBook();
+    book.applySnapshot([[0.4001, 10], [0.4, 8]], [[0.4025, 9], [0.403, 7]]);
+    expect(book.bestBid()).toEqual([0.4001, 10]);
+    expect(book.bestAsk()).toEqual([0.4025, 9]);
+    expect(book.bidLevels()).toEqual([[0.4001, 10], [0.4, 8]]);
+    expect(book.askLevels()).toEqual([[0.4025, 9], [0.403, 7]]);
+  });
   it("requires both Up and Down books to be fresh", () => {
     expect(bookFeedHealthy(true, true, 9_900, 9_800, 10_000, 500)).toBe(true);
     expect(bookFeedHealthy(true, true, 9_900, 9_000, 10_000, 500)).toBe(false);

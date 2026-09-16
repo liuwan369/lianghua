@@ -1,9 +1,6 @@
-function tick(price: number): number {
-  return Math.round(price * 1000);
-}
-
-function untick(t: number): number {
-  return t / 1000;
+/** Normalize venue decimals without assuming a 0.001 tick size. */
+function key(price: number): number {
+  return Number(price.toFixed(10));
 }
 
 /** Local L2 order-book replica synced from Polymarket CLOB WS. */
@@ -15,17 +12,17 @@ export class OrderBook {
     this.bids.clear();
     this.asks.clear();
     for (const [p, s] of bids) {
-      if (p > 0 && p < 1 && s > 0) this.bids.set(tick(p), s);
+      if (p > 0 && p < 1 && s > 0) this.bids.set(key(p), s);
     }
     for (const [p, s] of asks) {
-      if (p > 0 && p < 1 && s > 0) this.asks.set(tick(p), s);
+      if (p > 0 && p < 1 && s > 0) this.asks.set(key(p), s);
     }
   }
 
   applyChange(price: number, size: number, isBuy: boolean): void {
     if (!(price > 0 && price < 1)) return;
     const book = isBuy ? this.bids : this.asks;
-    const t = tick(price);
+    const t = key(price);
     if (size > 0) book.set(t, size);
     else book.delete(t);
   }
@@ -36,7 +33,7 @@ export class OrderBook {
       if (best == null || k > best) best = k;
     }
     if (best == null) return undefined;
-    return [untick(best), this.bids.get(best)!];
+    return [best, this.bids.get(best)!];
   }
 
   bestAsk(): [number, number] | undefined {
@@ -45,19 +42,19 @@ export class OrderBook {
       if (best == null || k < best) best = k;
     }
     if (best == null) return undefined;
-    return [untick(best), this.asks.get(best)!];
+    return [best, this.asks.get(best)!];
   }
 
   bidLevels(): [number, number][] {
     return [...this.bids.entries()]
       .sort((a, b) => b[0] - a[0])
-      .map(([p, s]) => [untick(p), s]);
+      .map(([p, s]) => [p, s]);
   }
 
   askLevels(): [number, number][] {
     return [...this.asks.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([p, s]) => [untick(p), s]);
+      .map(([p, s]) => [p, s]);
   }
 
   levels(limit = Number.POSITIVE_INFINITY): { bids: [number, number][]; asks: [number, number][] } {

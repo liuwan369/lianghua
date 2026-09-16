@@ -10,13 +10,13 @@ npm --prefix web test
 npm --prefix web run build
 ```
 
-2026-09-13 本批统一验证通过，manifest 为 `20260912T193457Z-f1a5cb36`：Python 286 passed / 1 skipped、引擎 264 passed / 25 files、前端 49 passed，双方构建通过。随后完整消息解码修复的 Python 全量复跑为 289 passed / 1 skipped；回放定向 12 项通过。前端结果包含本地已有用户修改，这些修改不属于本批部署。以上时间戳为 UTC，风险日仍按 Asia/Shanghai。
+当前 2026-09-16 复跑：引擎 418 passed / 43 files，前端 64 passed / 8 files，TypeScript 类型检查、引擎构建和前端构建均通过。本批未修改 Python，沿用前次 546 passed / 1 skipped 记录。以上是离线和替身测试，不是资金或盈利保证。
 
 随后报价最优价扫描优化：Python 全量 **293 passed / 1 skipped**，其中 shadow 定向 **37 passed**；独立审查另做 25,000 次对原 `345dc21` 源码的报价差分，结果一致且输入未修改。200 档深度微基准约提速 1.40 倍，只表示报价函数耗时变化，不能代表整段回放或实盘延迟。证据及复现方法见 [自动接续与回放优化](evidence/2026-09-13/automation-replay-progress.md)。本批不涉及 TypeScript 或前端代码，没有重复双方构建。
 
 ## 测试覆盖
 
-2026-09-16 低延迟回归随引擎 `npm test` 自动执行，CI 无需另加线上步骤。定向运行：
+2026-09-16 低延迟和平台回归随引擎 `npm test` 自动执行。定向运行：
 
 ```powershell
 npm --prefix _external/btc-5m-market-trading-bot test -- src/live/orchestrator-reactivity.test.ts src/live/orchestrator.test.ts src/live/account-control.test.ts src/live/account-state-store.test.ts src/live-maker.test.ts
@@ -30,7 +30,9 @@ npm --prefix _external/btc-5m-market-trading-bot test -- src/live/orchestrator-r
 
 账户/下单单元测试使用替身，不产生真实交易。历史 maker 回测必须有真实 tick 元数据；缺失或时间非法直接报错，见 [数据要求](BACKTEST-TICK-DATA.md)。
 
-## 已有真实环境证据
+## 历史真实环境证据
+
+本节记录旧版本和当时的验证限制，不覆盖当前状态；最新结论以本文首段和当前状态页为准。
 
 本轮部署后六个页面/状态接口均为 HTTP 200，31 次行情采样跨两市场全部在线，账户只读检查 23.817 秒返回 HTTP 200/ok=true，详见 [CPU 验收](CPU-DIAGNOSIS-2026-09-10.md)。此前公网 HTTP 接口、六页导航和账户只读操作完成核验；当前 V2 必需授权、签名和私有 CLOB 只读查询通过。相关证据见 [运行验收](LIVE-READINESS-AUDIT-2026-09-10.md)。
 
@@ -43,6 +45,6 @@ npm --prefix _external/btc-5m-market-trading-bot test -- src/live/orchestrator-r
 本批增加失败/待确认成交口径、奖励期间筛选、表格空闲复用、观察订单撤单与失效状态、分页重叠去重、九项参数保存回归。90秒独立无凭据 paper 运行取得真实行情和1笔模拟成交，因配对成本拒绝补仓，到时未结算退出；未完成双边对冲。证据见 [模拟检查](evidence/2026-09-10/repair-paper-check.json)。本轮浏览器连接工具返回 Transport closed，未完成真实点击验收。
 # 2026-09-16 功能架构与策略接口验证
 
-本批引擎 `npm test` 为 353 项 / 37 文件通过，typecheck 和 build 通过。覆盖独立 BUY 策略注入、默认算法兼容、观察无订单、未知策略拒绝，以及 live observe 在网络连接前拒绝；成交即时补单回归保留。
+本批历史记录中的 353 项 / 37 文件结果已被后续基线覆盖。当前 418 项 / 43 文件结果覆盖平台接口、订单生命周期、paper 网关、深度契约、用户流恢复、策略隔离和存储恢复；包括核对失败账本不变、FAK 剩余量不再成交、提交 ACK 与并发撤单的回调顺序；策略交易接入仍暂停。
 
-前端 `npm --prefix web test` 为 62 项 / 8 文件通过，构建通过。功能架构包括 schema 校验、重复 ID、失败清空、刷新保留筛选及选择、旧任务数据兼容和匹配 runId 的实时状态。实际 62 项 JSON 在 1440 / 736 / 390 / 360px 检查无横向溢出和浏览器错误；筛选与详情操作通过。离线模拟接口用于浏览器检查，不构成真实交易测试。
+前端 `npm --prefix web test` 为 64 项 / 8 文件通过，构建通过。功能架构覆盖 schema 校验、重复 ID、失败清空、刷新保留筛选及选择、旧任务数据兼容、匹配 runId 的实时状态和 PAUSED 状态。本轮 40 个架构条目在 1440 / 390px 检查无横向溢出和浏览器错误，未完成筛选、暂停详情和页面切换通过。离线模拟接口用于本地浏览器检查，不构成真实交易测试。
