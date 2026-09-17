@@ -34,13 +34,13 @@ config价格用0..1，stageShares数组，maxStages整数，roundBudgetUsd/total
 | `cash_before_usd` | 提交赎回前读取的现金余额；可能受同时发生的其他钱包活动影响 |
 | `cash_after_usd` | 赎回确认后读取的现金余额；不能单独以余额差替代回执到账金额 |
 
-前端只有在结算 `state=confirmed` 且 `payout_verified=true` 时显示 `credited_usd` 为真实到账。没有剩余持仓可以结束结算流程，但该结果的 `payout_verified=false`，不能显示成已到账。上述字段已完成本地测试，尚待本批发布和真实赎回证据。
+前端只有在结算 `state=confirmed` 且 `payout_verified=true` 时显示 `credited_usd` 为真实到账。没有剩余持仓可以结束结算流程，但该结果的 `payout_verified=false`，不能显示成已到账。上述字段已随软件基线 `70d2b55` 发布；本轮真实赎回证据仍未完成。
 
 控制和保存使用既有 `X-PM-Control-Token`（部署配置时要求）。暂停响应control_pending不等于引擎已暂停，最终以运行投影paused为准。成交trade_status按trade_id+order_id更新，FAILED冲正，CONFIRMED/FAILED终态不能被旧消息倒退。fee_source=estimate/rate-derived时只显示估算，不归入已核实手续费。
 
 # 控制台 API
 
-更新时间：2026-09-18。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。本文描述当前已实现或本批已完成本地测试的平台和控制台 API；是否已经部署以 [当前状态](CURRENT-STATUS.md) 为准。
+更新时间：2026-09-18 01:44。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。本文描述软件发布基线 `70d2b55` 的平台和控制台 API；真实验收范围以 [当前状态](CURRENT-STATUS.md) 为准。
 
 ## 读取
 
