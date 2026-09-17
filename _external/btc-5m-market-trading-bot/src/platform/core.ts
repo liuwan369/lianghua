@@ -1,4 +1,4 @@
-import type { AccountSnapshot, Book, CashFlowTracking, CoreOptions, CoreState, GatewayAck, Instrument, MarketInfo, OrderRecord,
+import type { AccountSnapshot, Book, CashFlowTracking, CoreOptions, CoreState, ExecutionTiming, GatewayAck, Instrument, MarketInfo, OrderRecord,
   OrderRequest, Position, RiskView, TradeFill, TradingEvent } from "./contracts.js";
 
 const EPS = 1e-8;
@@ -15,7 +15,9 @@ export class TradingCore {
   private books = new Map<string, Book>();
   private jobs = new Set<Promise<unknown>>();
   private submissions = new Map<string, Promise<OrderRecord>>();
+  private submissionRequests = new Map<string, OrderRequest>();
   private cancellations = new Map<string, Promise<OrderRecord>>();
+  private preparationTail: Promise<void> = Promise.resolve();
   private seenFills = new Set<string>();
   private clock: () => number;
   private stopped = false;
@@ -124,6 +126,9 @@ export class TradingCore {
         || (o.cancelRequestedAt !== undefined && (!finite(o.cancelRequestedAt) || o.cancelRequestedAt < 0))
         || (o.cancelAckAt !== undefined && (!finite(o.cancelAckAt) || o.cancelAckAt < 0))
         || (o.cancelAckLatencyMs !== undefined && (!finite(o.cancelAckLatencyMs) || o.cancelAckLatencyMs < 0))
+        || [o.signLatencyMs, o.ackLatencyMs, o.totalLatencyMs, o.triggerToPostLatencyMs, o.reactionLatencyMs,
+          o.decisionToPostLatencyMs, o.durableCommitLatencyMs]
+          .some(value => value !== undefined && (!finite(value) || value < 0))
         || (o.cancelAckAt !== undefined && o.cancelRequestedAt === undefined)
         || (o.cancelAckLatencyMs !== undefined && o.cancelAckAt === undefined)
         || (reservationPending(o) && o.direction === "BUY" && o.reservedUsd + EPS < (o.shares - o.filledShares) * o.price)
@@ -211,7 +216,24 @@ export class TradingCore {
   }
 
   mark(book: Book): boolean {
-    if (!this.instruments.has(book.tokenId) || !finite(book.ts) || book.ts < (this.books.get(book.tokenId)?.ts ?? -Infinity)) return false;
+    return this.markBatch([book]);
+  }
+
+  /** Validate and apply one venue frame as a single state transition. */
+  markBatch(books: readonly Book[]): boolean {
+    if (!books.length || new Set(books.map(book => book.tokenId)).size !== books.length) return false;
+    const staged = new Map(this.books);
+    for (const book of books) {
+      if (!this.validBook(book, staged.get(book.tokenId))) return false;
+      staged.set(book.tokenId, copy(book));
+    }
+    for (const book of books) this.books.set(book.tokenId, copy(book));
+    this.updateRisk();
+    return true;
+  }
+
+  private validBook(book: Book, previous?: Book): boolean {
+    if (!this.instruments.has(book.tokenId) || !finite(book.ts) || book.ts < (previous?.ts ?? -Infinity)) return false;
     if ([book.bid, book.ask].some(p => p != null && (!finite(p) || p < 0 || p > 1))
       || [book.bidSize, book.askSize].some(s => s != null && (!finite(s) || s < 0))
       || (book.bid != null && book.ask != null && book.bid > book.ask)
@@ -222,8 +244,6 @@ export class TradingCore {
       || (book.askSize != null && book.asks?.[0] != null && Math.abs(book.askSize - book.asks[0][1]) > EPS)
       || (book.sourceAgeMs != null && !finite(book.sourceAgeMs))
       || (book.processingLatencyMs != null && (!finite(book.processingLatencyMs) || book.processingLatencyMs < 0))) return false;
-    this.books.set(book.tokenId, copy(book));
-    this.updateRisk();
     return true;
   }
 
@@ -267,7 +287,9 @@ export class TradingCore {
   setStrategyState(strategyId: string, state: unknown): void {
     this.state.strategyStates ??= {};
     this.state.strategyStates[strategyId] = copy(state);
-    this.persist(true);
+    // A live signed-order commit immediately following this update makes the
+    // stage and order identity durable together. Non-order changes batch normally.
+    this.persist();
   }
   rememberMarket(market: MarketInfo): void {
     this.state.markets ??= [];
@@ -382,15 +404,38 @@ export class TradingCore {
     void job.then(() => this.jobs.delete(job), () => this.jobs.delete(job));
     return job;
   }
-  submit(request: OrderRequest): Promise<OrderRecord> {
-    const job = this.submitOrder(copy(request));
-    if (!this.submissions.has(request.clientOrderId)) {
-      this.submissions.set(request.clientOrderId, job);
-      void job.then(() => this.submissions.delete(request.clientOrderId), () => this.submissions.delete(request.clientOrderId));
+  private async acquirePreparation(): Promise<() => void> {
+    const previous = this.preparationTail;
+    let release!: () => void;
+    this.preparationTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    let released = false;
+    return () => { if (!released) { released = true; release(); } };
+  }
+  submit(request: OrderRequest, timing?: ExecutionTiming): Promise<OrderRecord> {
+    const pending = this.submissions.get(request.clientOrderId);
+    if (pending) {
+      const original = this.submissionRequests.get(request.clientOrderId)
+        ?? this.state.orders.find(order => order.clientOrderId === request.clientOrderId);
+      if (original && ["strategyId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"]
+        .some(field => original[field as keyof OrderRequest] !== request[field as keyof OrderRequest])) {
+        return Promise.reject(new Error("clientOrderId reused for a different order"));
+      }
+      return pending;
     }
+    const job = this.submitOrder(copy(request), timing && copy(timing));
+    this.submissions.set(request.clientOrderId, job);
+    this.submissionRequests.set(request.clientOrderId, copy(request));
+    const release = () => {
+      if (this.submissions.get(request.clientOrderId) === job) {
+        this.submissions.delete(request.clientOrderId);
+        this.submissionRequests.delete(request.clientOrderId);
+      }
+    };
+    void job.then(release, release);
     return this.track(job);
   }
-  private async submitOrder(request: OrderRequest): Promise<OrderRecord> {
+  private async submitOrder(request: OrderRequest, timing?: ExecutionTiming): Promise<OrderRecord> {
     const previous = this.state.orders.find(o => o.clientOrderId === request.clientOrderId);
     if (previous) {
       for (const field of ["strategyId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"] as const) {
@@ -436,21 +481,60 @@ export class TradingCore {
       const reservedUsd = this.state.orders.filter(reservationPending).reduce((sum, o) => sum + o.reservedUsd, 0);
       if (fee > this.state.cashUsd - reservedUsd + EPS) throw new Error("insufficient fee balance");
     }
+    const releasePreparation = this.options.adapters.gateway.durableIdentity === true
+      ? await this.acquirePreparation() : undefined;
+    try {
+      // Another order can reserve cash while this request waits for the short
+      // signed-identity commit lock. Recheck every mutable execution gate here.
+      this.updateRisk();
+      if (this.recovering) throw new Error("account recovery in progress");
+      const reducingAfterWait = this.state.risk.reason === "daily loss limit" && request.direction === "SELL";
+      if (this.stopped || (this.state.risk.halted && !reducingAfterWait)) {
+        throw new Error(this.state.risk.reason ?? "platform stopped");
+      }
+      if (request.roundBudgetUsd != null) {
+        const tokens = new Set([...this.instruments.values()].filter(item => item.marketId === instrument.marketId).map(item => item.tokenId));
+        const occupied = this.state.positions.filter(position => tokens.has(position.tokenId)).reduce((sum, position) => sum + position.costUsd, 0)
+          + this.state.orders.filter(order => tokens.has(order.tokenId) && reservationPending(order)).reduce((sum, order) => sum + order.reservedUsd, 0);
+        if (request.direction === "BUY" && occupied + amount + fee > request.roundBudgetUsd + EPS) {
+          throw new Error("round budget including fees and pending orders exceeded");
+        }
+      }
+      if (this.state.orders.filter(active).length >= this.options.limits.maxOpenOrders) throw new Error("open-order limit");
+      if (request.direction === "BUY" && amount + fee > this.state.risk.availableUsd + EPS) throw new Error("insufficient cash or capital");
+      if (request.direction === "SELL") {
+        const reservedShares = this.state.orders.filter(o => reservationPending(o) && o.tokenId === request.tokenId)
+          .reduce((sum, o) => sum + o.reservedShares, 0);
+        if (request.shares > this.position(request.tokenId).shares - reservedShares + EPS) throw new Error("insufficient sellable shares");
+        const reservedUsd = this.state.orders.filter(reservationPending).reduce((sum, o) => sum + o.reservedUsd, 0);
+        if (fee > this.state.cashUsd - reservedUsd + EPS) throw new Error("insufficient fee balance");
+      }
+    } catch (error) {
+      releasePreparation?.();
+      throw error;
+    }
     const order: OrderRecord = { ...request, status: "SUBMITTING", filledShares: 0,
       identityProtocol: this.options.adapters.gateway.durableIdentity ? "signed-before-post" : undefined,
       reservedUsd: request.direction === "BUY" ? amount + fee : fee,
       reservedShares: request.direction === "SELL" ? request.shares : 0,
       createdAt: this.clock(), updatedAt: this.clock() };
     this.state.orders.push(order);
-    // Persist the reservation before sending; subsequent lifecycle updates may be coalesced.
-    try { this.persist(true); }
+    // A live durable-identity gateway cannot POST until its signed identity is
+    // committed. Keep this reservation in the pending snapshot and fsync once
+    // from the prepared callback, together with the strategy stage and hash.
+    try {
+      if (this.options.adapters.gateway.durableIdentity === true) this.options.adapters.deferPersistence?.();
+      else this.persist(true);
+    }
     catch (error) {
+      releasePreparation?.();
       order.status = "REJECTED"; order.error = "reservation persistence failed before submission";
       order.reservedUsd = 0; order.reservedShares = 0;
       this.emit({ kind: "order", order: copy(order) });
       throw error;
     }
     this.emit({ kind: "order", order: copy(order) });
+    let ackOutcome: GatewayAck["status"] | undefined;
     try {
       const ack = await this.options.adapters.gateway.submit(request, copy(instrument), prepared => {
         if (!prepared.orderHash || !prepared.signedPayload) throw new Error("signed order identity missing");
@@ -459,9 +543,18 @@ export class TradingCore {
           throw new Error("duplicate signed order identity");
         }
         order.prepared = copy(prepared); order.orderId = prepared.orderHash;
-        this.notify(order, true);
-      });
+        order.updatedAt = Math.max(order.updatedAt, this.clock());
+        const started = performance.now();
+        this.persist(true);
+        releasePreparation?.();
+        order.durableCommitLatencyMs = Math.max(0, performance.now() - started);
+        this.emit({ kind: "order", order: copy(order) });
+        queueMicrotask(() => this.emitLatency("durable_commit", order.durableCommitLatencyMs, order));
+      }, timing);
+      ackOutcome = ack.status;
       order.tradeIds = ack.tradeIds; order.signLatencyMs = ack.signLatencyMs; order.ackLatencyMs = ack.ackLatencyMs;
+      order.totalLatencyMs = ack.totalLatencyMs; order.triggerToPostLatencyMs = ack.triggerToPostLatencyMs;
+      order.decisionToPostLatencyMs = ack.decisionToPostLatencyMs; order.reactionLatencyMs = ack.reactionLatencyMs;
       if (order.prepared && ack.orderId && order.prepared.orderHash !== ack.orderId) {
         order.orderId = ack.orderId;
         order.status = "UNKNOWN"; order.error = "signed hash differs from venue order ID";
@@ -488,12 +581,23 @@ export class TradingCore {
       }
       order.error = ack.error;
     } catch (error) {
+      releasePreparation?.();
       if (!(order.orderId && ["FILLED", "PARTIAL"].includes(order.status))) {
         order.status = "UNKNOWN"; this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
       }
       order.error = error instanceof Error ? error.message : "submission failed";
     }
-    return this.notify(order, true);
+    for (const [metric, duration] of [
+      ["order_sign", order.signLatencyMs], ["order_submit_roundtrip", order.totalLatencyMs],
+      ["trigger_to_http_post", order.triggerToPostLatencyMs],
+      ["decision_to_http_post", order.decisionToPostLatencyMs],
+    ] as const) this.emitLatency(metric, duration, order, ackOutcome);
+    if (ackOutcome === "accepted") {
+      this.emitLatency("order_http_ack", order.ackLatencyMs, order, ackOutcome);
+      this.emitLatency("reaction", order.reactionLatencyMs, order, ackOutcome);
+    }
+    releasePreparation?.();
+    return this.notify(order, order.status === "REJECTED" || !order.prepared);
   }
 
   cancel(id: string): Promise<OrderRecord> {
@@ -539,7 +643,16 @@ export class TradingCore {
       order.status = "UNKNOWN"; order.error = error instanceof Error ? error.message : "cancellation failed";
       this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
     }
-    return this.notify(order, true);
+    const result = this.notify(order, true);
+    this.emitLatency("cancel_http_ack", order.cancelAckLatencyMs, order);
+    return result;
+  }
+
+  private emitLatency(metric: string, durationMs: number | undefined, order: OrderRecord, outcome?: string): void {
+    if (durationMs == null || !finite(durationMs) || durationMs < 0) return;
+    this.emit({ kind: "latency", metric, durationMs, ts: this.clock(),
+      marketId: this.instruments.get(order.tokenId)?.marketId, tokenId: order.tokenId,
+      strategyId: order.strategyId, clientOrderId: order.clientOrderId, orderId: order.orderId, outcome });
   }
   async replace(id: string, request: OrderRequest): Promise<OrderRecord> {
     const old = this.find(id);

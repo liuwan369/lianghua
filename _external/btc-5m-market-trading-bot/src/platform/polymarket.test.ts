@@ -73,6 +73,25 @@ describe("continuous market platform adapter", () => {
     expect(result.at).toBe(Date.parse("2026-09-17T12:00:03.000Z") / 1000);
   });
 
+  it("excludes explicit settled zero-value residue from executable positions", () => {
+    const result = accountSnapshot({ wallet: "wallet", checked_at: "2026-09-17T12:00:03.000Z",
+      collateral: { available: true, complete: true, value: 200 },
+      positions: { available: true, complete: true, items: [
+        { asset: "lost", size: "33.3333", avgPrice: "0.4499", currentValue: "0", redeemable: true, realizedPnl: "-15" },
+        { asset: "active", size: "5", avgPrice: "0.6", currentValue: "3", redeemable: false, realizedPnl: "0" },
+      ] }, open_orders: { available: true, complete: true, items: [] } });
+    expect(result.positions).toEqual([{ tokenId: "active", shares: 5, costUsd: 3, realizedPnlUsd: 0 }]);
+  });
+
+  it("retains unresolved position rows when value classification is unavailable", () => {
+    const result = accountSnapshot({ wallet: "wallet", checked_at: "2026-09-17T12:00:03.000Z",
+      collateral: { available: true, complete: true, value: 200 },
+      positions: { available: true, complete: true, items: [
+        { asset: "unknown", size: "5", avgPrice: "0.6", redeemable: true, realizedPnl: "0" },
+      ] }, open_orders: { available: true, complete: true, items: [] } });
+    expect(result.positions).toEqual([{ tokenId: "unknown", shares: 5, costUsd: 3, realizedPnlUsd: 0 }]);
+  });
+
   it("does not wait for a background funding scan before cancelling on stop", async () => {
     const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
     let finishScan!: () => void;

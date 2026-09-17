@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { mountLayout } from './layout';
-import { connectAccountData, csvCell, ownFills, usableSection, type AccountData, type AccountSection } from './account-data';
+import { classifyPositions, connectAccountData, csvCell, ownFills, usableSection, type AccountData, type AccountSection } from './account-data';
 import { validate } from './api/client';
 const wallet='0x'+'1'.repeat(40);
 const section=(items:Record<string,unknown>[]=[]):AccountSection=>({available:true,complete:true,items,checked_at:new Date().toISOString(),source:'test'});
@@ -24,6 +24,26 @@ it('counts own maker matches instead of the full taker transaction',()=>{
 });
 it('escapes spreadsheet formula fields including leading whitespace',()=>{
   expect(csvCell(' =WEBSERVICE("secret")')).toBe('"\' =WEBSERVICE(""secret"")"');
+});
+it('separates active, pending settlement, settled residual and unknown positions',()=>{
+  const groups=classifyPositions([
+    {asset:'active',size:5,currentValue:3,redeemable:false},
+    {asset:'pending',size:5,currentValue:5,redeemable:true},
+    {asset:'settled',size:33.3333,currentValue:0,redeemable:true},
+    {asset:'unknown',size:2,currentValue:0},
+  ]);
+  expect(groups.active.map(v=>v.asset)).toEqual(['active']);
+  expect(groups.pending.map(v=>v.asset)).toEqual(['pending']);
+  expect(groups.settled.map(v=>v.asset)).toEqual(['settled']);
+  expect(groups.unknown.map(v=>v.asset)).toEqual(['unknown']);
+});
+it('does not present redeemable zero-value history as current holdings',async()=>{
+  const d=data();d.positions=section([{title:'settled-loss',outcome:'DOWN',size:33.3333,avgPrice:.4499,currentValue:0,cashPnl:-15,redeemable:true}]);
+  const ui=await mounted(d);
+  expect(document.querySelector('#view-home')!.textContent).toContain('当前持仓0 项');
+  expect(document.querySelector('#account-positions > .table-wrap tbody')!.textContent).toContain('当前账户无有效持仓');
+  expect(document.querySelector('#account-positions details')!.textContent).toContain('已结算零价值残留 1 项');
+  ui.close();
 });
 it('renders real balances and positions, escapes upstream text, and clears after a read failure',async()=>{
   document.body.innerHTML='<div id="app"></div>';mountLayout(document.getElementById('app')!);

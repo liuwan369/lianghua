@@ -1,4 +1,4 @@
-import type { Account, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, TaskView } from './types';
+import type { Account, Config, Events, Markets, Obj, Runs, Status, SummaryResponse, SystemMetrics, TaskView } from './types';
 
 const object = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
@@ -107,6 +107,15 @@ export function validate(kind: string, data: unknown): void {
       && integer(s.fill_count) && integer(s.settled_markets) && ['fill_notional','fees','settled_pnl'].every(k => nullableNumber(s[k]))
       && typeof s.completeness === 'string' && typeof s.pnl_semantics === 'string' && typeof s.order_lifecycle_available === 'boolean';
   }
+  if (kind === 'system-metrics') {
+    const metric=(v:unknown,keys:string[])=>object(v)&&keys.every(key=>key in v&&nullableNumber(v[key]));
+    const nonnegative=(v:unknown)=>v===null||integer(v);
+    valid=nullableNumber(data.asOf)&&metric(data.cpu,['percent','cores'])&&metric(data.load,['one','five','fifteen'])
+      &&metric(data.memory,['used_bytes','total_bytes','percent'])&&metric(data.disk,['used_bytes','total_bytes','free_bytes','percent'])
+      &&object(data.services)&&Object.values(data.services).every(s=>object(s)&&typeof s.state==='string'
+        &&nonnegative(s.pid)&&nullableNumber(s.rss_bytes)&&nullableNumber(s.uptime_seconds))
+      &&nullableNumber(data.journal_backlog)&&nullableNumber(data.event_loop_lag_ms);
+  }
   if (kind === 'tasks') valid = data.schemaVersion === 1 && typeof data.title === 'string' && typeof data.updatedAt === 'string'
     && typeof data.summary === 'string' && Array.isArray(data.hardRules) && data.hardRules.every(v => typeof v === 'string')
     && Array.isArray(data.phases) && uniqueIds(data.phases) && data.phases.every(p => object(p) && typeof p.id === 'string' && typeof p.title === 'string'
@@ -184,5 +193,6 @@ export const api = {
   runs: (before?: number) => get<Runs>('runs', `/api/v1/runs?limit=50${before == null ? '' : `&before_id=${before}`}`),
   events: (run: string, before?: number) => get<Events>('events', `/api/v1/events?run_id=${encodeURIComponent(run)}&limit=50${before == null ? '' : `&before_id=${before}`}`),
   summary: (run: string) => get<SummaryResponse>('summary', `/api/v1/summary?run_id=${encodeURIComponent(run)}`),
+  systemMetrics: () => get<SystemMetrics>('system-metrics', '/api/v1/system-metrics'),
   tasks: () => get<TaskView>('tasks', '/task-view.json'),
 };

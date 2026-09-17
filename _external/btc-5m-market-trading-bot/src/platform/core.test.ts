@@ -190,6 +190,214 @@ describe("strategy-independent account core", () => {
       price: 0.5, shares: 1, feeUsd: 0.01, ts: 103, isMaker: true })).toThrow("invalid or unowned fill");
   });
 
+  it("commits stage, reservation and signed identity in one critical persistence call", async () => {
+    const saves: Array<{ critical: boolean; state: ReturnType<TradingCore["snapshot"]> }> = [];
+    let deferred = 0;
+    const gateway: OrderGateway = { mode: "live", durableIdentity: true, cancel: async () => true,
+      submit: async (_request, _instrument, prepared) => {
+        prepared!({ orderHash: "signed-1", signedPayload: { signature: "signed" }, preparedAt: 101 });
+        return { status: "accepted", orderId: "signed-1", signLatencyMs: 2, ackLatencyMs: 40 };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway, deferPersistence: () => { deferred += 1; },
+      persist: (state, critical) => saves.push({ critical, state }) } });
+    core.setStrategyState("s", { stage: 1 });
+    const order = await core.submit(request());
+    expect(deferred).toBe(1);
+    expect(saves.filter(save => save.critical)).toHaveLength(1);
+    expect(saves.find(save => save.critical)?.state).toMatchObject({
+      strategyStates: { s: { stage: 1 } },
+      orders: [{ clientOrderId: "buy-1", orderId: "signed-1", status: "SUBMITTING" }],
+    });
+    expect(order).toMatchObject({ status: "OPEN", orderId: "signed-1", signLatencyMs: 2, ackLatencyMs: 40 });
+  });
+
+  it("does not include an unprepared concurrent order in another order's durable commit", async () => {
+    const critical: Array<ReturnType<TradingCore["snapshot"]>> = [];
+    const acknowledgements: Array<() => void> = [];
+    let calls = 0;
+    const gateway: OrderGateway = { mode: "live", durableIdentity: true, cancel: async () => true,
+      submit: async (submitted, _instrument, prepared) => {
+        calls += 1;
+        prepared!({ orderHash: `signed-${submitted.clientOrderId}`, signedPayload: { signature: submitted.clientOrderId }, preparedAt: 101 });
+        await new Promise<void>(resolve => acknowledgements.push(resolve));
+        return { status: "accepted", orderId: `signed-${submitted.clientOrderId}` };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway, deferPersistence: () => undefined,
+      persist: (state, isCritical) => { if (isCritical) critical.push(state); } } });
+    const first = core.submit(request({ clientOrderId: "one", shares: 1 }));
+    const second = core.submit(request({ clientOrderId: "two", shares: 1 }));
+    await vi.waitFor(() => expect(calls).toBe(2));
+    expect(critical).toHaveLength(2);
+    for (const state of critical) {
+      expect(state.orders.filter(order => order.status === "SUBMITTING").every(order => !!order.prepared)).toBe(true);
+    }
+    acknowledgements.forEach(resolve => resolve());
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("rechecks available capital after a concurrent durable order reserves funds", async () => {
+    let acknowledge!: () => void;
+    let calls = 0;
+    const gateway: OrderGateway = { mode: "live", durableIdentity: true, cancel: async () => true,
+      submit: async (submitted, _instrument, prepared) => {
+        calls += 1;
+        prepared!({ orderHash: `signed-${submitted.clientOrderId}`,
+          signedPayload: { signature: submitted.clientOrderId }, preparedAt: 101 });
+        await new Promise<void>(resolve => { acknowledge = resolve; });
+        return { status: "accepted", orderId: `signed-${submitted.clientOrderId}` };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 3, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway, estimateFee: () => 0, deferPersistence: () => undefined } });
+
+    const first = core.submit(request({ clientOrderId: "one" }));
+    const rejected = expect(core.submit(request({ clientOrderId: "two" })))
+      .rejects.toThrow("insufficient cash or capital");
+    await vi.waitFor(() => expect(calls).toBe(1));
+    await rejected;
+    expect(core.orders()).toHaveLength(1);
+    expect(core.risk().availableUsd).toBe(1);
+    acknowledge();
+    await expect(first).resolves.toMatchObject({ status: "OPEN", orderId: "signed-one" });
+  });
+
+  it("durably saves a signed explicit rejection before releasing its reservation", async () => {
+    const critical: Array<ReturnType<TradingCore["snapshot"]>> = [];
+    const gateway: OrderGateway = { mode: "live", durableIdentity: true, cancel: async () => true,
+      submit: async (_submitted, _instrument, prepared) => {
+        prepared!({ orderHash: "signed-rejected", signedPayload: { signature: "rejected" }, preparedAt: 101 });
+        return { status: "rejected", error: "venue rejected" };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway, deferPersistence: () => undefined,
+      persist: (state, isCritical) => { if (isCritical) critical.push(state); } } });
+    await expect(core.submit(request())).resolves.toMatchObject({ status: "REJECTED", reservedUsd: 0 });
+    expect(critical.at(-1)?.orders[0]).toMatchObject({ status: "REJECTED", reservedUsd: 0, reservedShares: 0 });
+  });
+
+  it("durably saves an unknown halt when the venue ACK changes the signed order identity", async () => {
+    const critical: Array<ReturnType<TradingCore["snapshot"]>> = [];
+    const gateway: OrderGateway = { mode: "live", durableIdentity: true, cancel: async () => true,
+      submit: async (_submitted, _instrument, prepared) => {
+        prepared!({ orderHash: "signed-order", signedPayload: { signature: "signed" }, preparedAt: 101 });
+        return { status: "accepted", orderId: "different-venue-order" };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway, deferPersistence: () => undefined,
+      persist: (state, isCritical) => { if (isCritical) critical.push(state); } } });
+
+    await expect(core.submit(request())).resolves.toMatchObject({
+      status: "UNKNOWN", orderId: "different-venue-order",
+      error: "signed hash differs from venue order ID",
+    });
+    expect(critical.at(-1)).toMatchObject({
+      risk: { halted: true, reason: "signed identity requires reconciliation" },
+      orders: [{ status: "UNKNOWN", orderId: "different-venue-order" }],
+    });
+  });
+
+  it("durably saves an unknown halt when a venue order ID collides", async () => {
+    const critical: Array<ReturnType<TradingCore["snapshot"]>> = [];
+    let calls = 0;
+    const gateway: OrderGateway = { mode: "live", cancel: async () => true,
+      submit: async () => {
+        calls += 1;
+        return { status: "accepted", orderId: "venue-one" };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway,
+      persist: (state, isCritical) => { if (isCritical) critical.push(state); } } });
+
+    await expect(core.submit(request({ clientOrderId: "one" }))).resolves.toMatchObject({ status: "OPEN" });
+    await expect(core.submit(request({ clientOrderId: "two" }))).resolves.toMatchObject({
+      status: "UNKNOWN", error: "duplicate venue order ID requires reconciliation",
+    });
+    expect(critical.at(-1)).toMatchObject({
+      risk: { halted: true, reason: "unknown order requires reconciliation" },
+      orders: [{ status: "OPEN", orderId: "venue-one" },
+        { status: "UNKNOWN", error: "duplicate venue order ID requires reconciliation" }],
+    });
+  });
+
+  it("records ACK and reaction latency only for an explicitly accepted result", async () => {
+    const events: string[] = [];
+    const accepted = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway: { mode: "paper", cancel: async () => true, submit: async () => ({
+      status: "accepted", orderId: "accepted", signLatencyMs: 2, ackLatencyMs: 40,
+      totalLatencyMs: 50, triggerToPostLatencyMs: 8, decisionToPostLatencyMs: 3, reactionLatencyMs: 55,
+    }) } }, onEvent: event => { if (event.kind === "latency") events.push(event.metric); } });
+    await accepted.submit(request());
+    expect(events).toEqual(expect.arrayContaining(["order_sign", "order_submit_roundtrip", "trigger_to_http_post",
+      "decision_to_http_post", "order_http_ack", "reaction"]));
+
+    const rejectedEvents: string[] = [];
+    const rejected = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway: { mode: "paper", cancel: async () => true, submit: async () => ({
+      status: "rejected", signLatencyMs: 2, ackLatencyMs: 10, totalLatencyMs: 12, reactionLatencyMs: 15,
+    }) } }, onEvent: event => { if (event.kind === "latency") rejectedEvents.push(event.metric); } });
+    await rejected.submit(request());
+    expect(rejectedEvents).not.toContain("order_http_ack");
+    expect(rejectedEvents).not.toContain("reaction");
+  });
+
+  it("deduplicates an in-flight submission by client order ID", async () => {
+    let calls = 0;
+    let acknowledge!: () => void;
+    const gateway: OrderGateway = { mode: "paper", cancel: async () => true,
+      submit: async () => { calls += 1; await new Promise<void>(resolve => { acknowledge = resolve; });
+        return { status: "accepted", orderId: "one" }; } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway } });
+    const first = core.submit(request()), duplicate = core.submit(request());
+    expect(first).toBe(duplicate);
+    await expect(core.submit(request({ shares: 3 }))).rejects.toThrow("different order");
+    expect(calls).toBe(1);
+    acknowledge();
+    await expect(Promise.all([first, duplicate])).resolves.toHaveLength(2);
+    expect(calls).toBe(1);
+  });
+
+  it("rejects a different request while a durable submission waits before reservation", async () => {
+    let acknowledge!: () => void;
+    let calls = 0;
+    const gateway: OrderGateway = { mode: "live", durableIdentity: true, cancel: async () => true,
+      submit: async (submitted, _instrument, prepared) => {
+        calls += 1;
+        prepared!({ orderHash: "signed-one", signedPayload: { signature: "signed" }, preparedAt: 101 });
+        await new Promise<void>(resolve => { acknowledge = resolve; });
+        return { status: "accepted", orderId: "signed-one", tradeIds: [String(submitted.shares)] };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway, deferPersistence: () => undefined } });
+
+    const first = core.submit(request({ shares: 4 }));
+    await expect(core.submit(request({ shares: 8 }))).rejects.toThrow("different order");
+    await vi.waitFor(() => expect(calls).toBe(1));
+    acknowledge();
+    await expect(first).resolves.toMatchObject({ status: "OPEN", shares: 4, tradeIds: ["4"] });
+  });
+
+  it("rejects an entire book batch when either side is invalid", () => {
+    const down = { ...instrument, tokenId: "down", outcome: "DOWN" };
+    const core = new TradingCore({ account, instruments: [instrument, down], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway: { mode: "paper", submit: async () => ({ status: "rejected" }), cancel: async () => true } } });
+    expect(core.markBatch([{ tokenId: "up", ts: 1, bid: 0.4, ask: 0.41 },
+      { tokenId: "down", ts: 1, bid: 0.59, ask: 0.58 }])).toBe(false);
+    expect(core.mark({ tokenId: "up", ts: 0.5, bid: 0.4, ask: 0.41 })).toBe(true);
+  });
+
   it("records the cancel request and measures the confirmed ACK with a monotonic clock", async () => {
     let now = 100;
     const monotonic = vi.spyOn(performance, "now").mockReturnValueOnce(10).mockReturnValueOnce(135);

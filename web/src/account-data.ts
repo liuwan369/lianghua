@@ -4,6 +4,18 @@ import { date, esc, finite, money, number, price } from './ui';
 
 export interface AccountSection { available: boolean; complete: boolean; items: Obj[]; checked_at: string; source: string; value?: number; error_code?: string; coverage?: string; historical_complete?: boolean }
 export interface AccountData { schemaVersion: 1; account_id?: string | null; wallet: string | null; checked_at: string | null; stale: boolean; refreshing?: boolean; read_only: true; collateral?: AccountSection; open_orders?: AccountSection; order_history?: AccountSection; trades?: AccountSection; positions?: AccountSection; closed_positions?: AccountSection; activity?: AccountSection; fees?: FinanceSection; rewards?: FinanceSection; reconciliation?: FinanceSection; occupancy?: Occupancy }
+export function classifyPositions(items:Obj[]) {
+  const groups:{active:Obj[];pending:Obj[];settled:Obj[];unknown:Obj[]}={active:[],pending:[],settled:[],unknown:[]};
+  for(const item of items){
+    const size=numeric(item.size),currentValue=numeric(item.currentValue);
+    if(size===null||size<0||currentValue===null||currentValue<0||typeof item.redeemable!=='boolean')groups.unknown.push(item);
+    else if(item.redeemable===true){
+      if(currentValue>0)groups.pending.push(item);else groups.settled.push(item);
+    }else if(size>0)groups.active.push(item);
+    else groups.unknown.push(item);
+  }
+  return groups;
+}
 interface FinanceSection { available:boolean; complete:boolean; checked_at:string; known_amount?:number|null; items?: Record<string,unknown>[]; reason?:string; wallet_net_profit?:number|null; receipts_checked?:number; receipts_pending?:number }
 interface Occupancy { available:boolean; complete:boolean; open_buy_notional:number|null; balance_after_open_buy_notional:number|null; spendable_balance:number|null; source?:string; reason?:string }
 const numeric = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() && Number.isFinite(Number(v)) ? Number(v) : null;
@@ -73,13 +85,12 @@ export function connectAccountData() {
   const changed=(before:unknown[],after:unknown[])=>before.length!==after.length||after.some((v,i)=>v!==before[i]);
   const note=document.querySelector('#trade-orders .note')!;
   const toolbar=document.createElement('div');toolbar.className='subnav';
-  toolbar.innerHTML='<label>订单来源 <select id="orders-source"><option value="strategy">当前策略订单</option><option value="account">账户已获取订单</option></select></label><label>场次 <select id="orders-round"><option value="all">全部场次</option><option value="current">当前场次</option></select></label><label>每页 <select id="orders-page-size"><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label><button id="account-previous">上一页</button><button id="account-next">下一页</button><span id="account-data-state" role="status"></span>';
+  toolbar.innerHTML='<label>订单来源 <select id="orders-source"><option value="strategy">本次策略订单</option><option value="account">账户历史（已获取范围）</option></select></label><label>场次 <select id="orders-round"><option value="all">全部场次</option><option value="current">当前场次</option></select></label><label>每页 <select id="orders-page-size"><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label><button id="account-previous">上一页</button><button id="account-next">下一页</button><span id="account-data-state" role="status"></span>';
   note.before(toolbar);
   const selector=toolbar.querySelector<HTMLSelectElement>('select')!;
   const orderButtons=Array.from(document.querySelector('#trade-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button'));
   const exportButton=document.querySelector<HTMLButtonElement>('#trade-orders .head-actions button')!;
-  const positions=document.createElement('div');positions.className='table-wrap';positions.id='account-positions';
-  positions.innerHTML='<table class="table"><caption>真实账户持仓</caption><thead><tr><th>市场</th><th>方向</th><th>份数</th><th>平均价</th><th>当前估值</th><th>平台报告盈亏</th></tr></thead><tbody></tbody></table>';
+  const positions=document.createElement('section');positions.id='account-positions';
   document.querySelector('#view-home .grid')!.after(positions);
   const bindings:Array<()=>void>=[];
   const on=(el:Element,event:string,fn:EventListener)=>{el.addEventListener(event,fn);bindings.push(()=>el.removeEventListener(event,fn));};
@@ -108,7 +119,7 @@ export function connectAccountData() {
     const history=section('order_history');
     const scope=filter===3?history?`已观察订单范围 · ${history.complete?'状态查询完成':history.error_code==='order_details_unavailable'?'官方未返回部分订单详情，撤单状态无法核对':'状态尚未全部查明'} · 非账户全部历史`:'已撤订单状态尚无来源':complete?'当前挂单与成交查询已完整返回':'来源未就绪或分页不完整';
     text('#account-data-state',error||`${wallet||'未配置账户'} · 第 ${page+1} 页 · 每页 ${pageSize} 条 · ${scope}`);
-    text('#trade-orders .note','每行对应一个真实订单。成交份数仅计已确认回报；展开可查看分笔成交。历史页保持当前顺序，返回第 1 页查看最新订单。');
+    text('#trade-orders .note','账户历史包含手工和其他程序交易，不代表本次策略下单。每行一个真实订单，成交份数仅计已确认回报；此处仅为已获取范围。');
     document.querySelector('#trade-orders tbody')!.innerHTML=slice.length?slice.map(r=>`<tr><td>${date(r.time)}</td><td>${esc(r.market)}<details><summary>订单详情</summary><small>${esc(r.id)}</small>${r.fills.map(f=>`<div>${date(numeric(f.match_time))} · ${price(numeric(f.price))} × ${number(numeric(f.size),4)} · ${esc(f.status)}</div>`).join('')}</details></td><td>${esc(r.side)}</td><td>${price(r.price)}</td><td>${number(r.shares,4)}</td><td>${money(r.amount)}</td><td>--</td><td>${esc(r.status)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty">${esc(error|| (filter===3?history?'已观察订单中暂无确认撤单记录；不代表账户历史没有撤单':'平台已撤订单历史尚无来源，不能推断为空':complete?'当前筛选无记录':'等待真实账户数据，不能判断为空'))}</td></tr>`;
     (document.getElementById('account-previous') as HTMLButtonElement).disabled=page===0;
     (document.getElementById('account-next') as HTMLButtonElement).disabled=(page+1)*pageSize>=all.length;
@@ -119,10 +130,15 @@ export function connectAccountData() {
     const occupancy=cash&&orders?.complete?data?.occupancy:null;
     const balanceLabel=cash&&finite(cash.value)?`${money(cash.value)} · CLOB 抵押资产余额${occupancy?.available&&finite(occupancy.open_buy_notional)?` · 未结买单占用 ${money(occupancy.open_buy_notional)}`:''}`:`-- · ${error||'账户余额等待同步'}`;
     row('#view-home','账户余额',balanceLabel);
-    row('#view-home','当前持仓',pos?`${pos.items.length} 项 · 真实账户${pos.complete?'':' · 未完整'}`:'-- · 持仓未获取或已过期');
+    const grouped=classifyPositions(pos?.items||[]);
+    row('#view-home','当前持仓',pos?`${grouped.active.length} 项${grouped.unknown.length?` · ${grouped.unknown.length} 项待核对`:''}${pos.complete?'':' · 未完整'}${grouped.pending.length?` · ${grouped.pending.length} 项待到账`:''}`:'-- · 持仓未获取或已过期');
     if(pos!==lastPositions){
       lastPositions=pos;
-      positions.querySelector('tbody')!.innerHTML=pos?.items.length?pos.items.map(p=>`<tr><td>${esc(p.title||p.slug||p.conditionId)}</td><td>${esc(p.outcome)}</td><td>${number(numeric(p.size),4)}</td><td>${price(numeric(p.avgPrice))}</td><td>${money(numeric(p.currentValue))}</td><td>${money(numeric(p.cashPnl))}</td></tr>`).join(''):`<tr><td colspan="6">${pos?.complete?'当前账户无持仓':'持仓尚未完整获取'}</td></tr>`;
+      const table=(items:Obj[],caption:string,empty:string)=>`<div class="table-wrap"><table class="table"><caption>${caption}</caption><thead><tr><th>市场</th><th>方向</th><th>份数</th><th>平均价</th><th>当前估值</th><th>平台报告盈亏</th></tr></thead><tbody>${items.length?items.map(p=>`<tr><td>${esc(p.title||p.slug||p.conditionId)}</td><td>${esc(p.outcome)}</td><td>${number(numeric(p.size),4)}</td><td>${price(numeric(p.avgPrice))}</td><td>${money(numeric(p.currentValue))}</td><td>${money(numeric(p.cashPnl))}</td></tr>`).join(''):`<tr><td colspan="6">${empty}</td></tr>`}</tbody></table></div>`;
+      positions.innerHTML=table(grouped.active,'当前有效持仓',pos?.complete&&!grouped.unknown.length?'当前账户无有效持仓':'持仓尚待完整核对')
+        +(grouped.pending.length?table(grouped.pending,'待到账持仓',''):'')
+        +(grouped.unknown.length?`<p class="position-warning">${grouped.unknown.length} 项持仓状态待核对，当前持仓数量未包含这些项目。</p>${table(grouped.unknown,'待核对持仓','')}`:'')
+        +(grouped.settled.length?`<details class="position-history"><summary>已结算零价值残留 ${grouped.settled.length} 项</summary>${table(grouped.settled,'已结算历史残留','')}</details>`:'');
     }
     if(orders?.complete){text('#homeOrders',number(orders.items.length));text('#homeOrders + small','当前真实未完成委托 · 不是今日/月累计');}
     else {text('#homeOrders','--');text('#homeOrders + small','真实未完成委托尚未完整获取');}

@@ -29,6 +29,7 @@ from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
 from dashboard.market_snapshot import MarketSnapshot, publish_snapshot, validate_snapshot
 from dashboard.account_data import AccountData
+from dashboard.system_metrics import SystemMetrics
 
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
@@ -66,6 +67,8 @@ _trading_request_id: str | None = None
 _trading_engine: str | None = None
 _projection_pending: deque = deque()
 _evidence_download_lock = threading.BoundedSemaphore(6)
+_system_metrics: SystemMetrics | None = None
+_system_metrics_lock = threading.Lock()
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -136,6 +139,40 @@ def account_data() -> AccountData:
         if _account_data is None:
             _account_data = AccountData(TRADING_ROOT, _account_values)
         return _account_data
+
+
+def _metric_services() -> dict:
+    """Return process identities from memory; the sampler performs OS reads."""
+    with _trading_lock:
+        trader_pid, trader_log = _trading_pid, _trading_log
+    trader_running = _process_matches(trader_pid, trader_log)
+    with _live_lock:
+        collector_online = bool(_live_cache.get("collector_online"))
+    with _read_model_init_lock:
+        projection_process = getattr(_read_model, "_process", None) if _read_model else None
+        projection_pid = getattr(projection_process, "pid", None)
+        projection_running = bool(projection_process and projection_process.poll() is None)
+    return {
+        "dashboard": {"pid": os.getpid(), "state": "active"},
+        "collector": {"pid": None, "state": "active" if collector_online else "unavailable"},
+        "trader": {"pid": trader_pid if trader_running else None, "state": "active" if trader_running else "stopped"},
+        "projection": {"pid": projection_pid if projection_running else None, "state": "active" if projection_running else "stopped"},
+        "journal_backlog": len(_projection_pending),
+        "event_loop_lag_ms": None,
+    }
+
+
+def system_metrics() -> SystemMetrics:
+    global _system_metrics
+    with _system_metrics_lock:
+        if _system_metrics is None:
+            _system_metrics = SystemMetrics(Path(__file__).resolve().parents[1], _metric_services,
+                                           _live_config()["collector_service"] if _live_config()["collector_is_local"] else None)
+        return _system_metrics
+
+
+def refresh_system_metrics(stop: threading.Event) -> None:
+    system_metrics().run(stop)
 
 
 def _persist_trading_state() -> None:
@@ -1043,6 +1080,8 @@ def make_handler(root: Path):
                     value = {"schemaVersion": 1, "asOf": time.time(), **cached_live_status()}
                 elif path == "/api/v1/account-data":
                     value = account_data().snapshot()
+                elif path == "/api/v1/system-metrics":
+                    value = system_metrics().snapshot()
                 elif path == "/api/v1/orders":
                     query = parse_qs(urlsplit(self.path).query)
                     run_id = query.get("run_id", [None])[0]
@@ -1214,12 +1253,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         parser.error("交易控制台只允许监听本机地址")
+    system_metrics().refresh()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(Path(args.root).resolve()))
     stop = threading.Event()
     collector = threading.Thread(target=refresh_live_background, args=(stop,), daemon=True)
     collector.start()
     threading.Thread(target=supervise_projection, args=(stop,), daemon=True).start()
     threading.Thread(target=account_data().run, args=(stop,), daemon=True).start()
+    threading.Thread(target=refresh_system_metrics, args=(stop,), daemon=True).start()
     try:
         server.serve_forever()
     finally:

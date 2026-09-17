@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { OrderBook } from "../orderbook.js";
-import { applyMessage, bookFeedHealthy, marketTrades, tickSizeChanges } from "./polymarket.js";
+import { applyMessage, bestBidAskChanges, bookFeedHealthy, marketTrades, tickSizeChanges } from "./polymarket.js";
 
 describe("Polymarket market feed metadata", () => {
   it("loads initial tick metadata from each token's book snapshot", () => {
@@ -50,6 +50,36 @@ describe("Polymarket public trade flow", () => {
 });
 
 describe("Polymarket websocket health", () => {
+  it("keeps every valid best-bid-ask update from one bilateral frame", () => {
+    expect(bestBidAskChanges([
+      { event_type: "best_bid_ask", asset_id: "up", best_bid: "0.65", best_ask: "0.67", timestamp: "2000" },
+      { event_type: "best_bid_ask", asset_id: "down", best_bid: "0.68", best_ask: "0.70", timestamp: "2000" },
+    ], "up", "down", { upMs: 1_900_000, downMs: 1_900_000 })).toEqual([
+      { side: "up", bid: 0.65, ask: 0.67, exchangeMs: 2_000_000, order: 0 },
+      { side: "down", bid: 0.68, ask: 0.7, exchangeMs: 2_000_000, order: 1 },
+    ]);
+  });
+
+  it("rejects a buffered fast top older than the applied L2 state", () => {
+    expect(bestBidAskChanges({ event_type: "best_bid_ask", asset_id: "up",
+      best_bid: "0.65", best_ask: "0.67", timestamp: "1999" },
+    "up", "down", { upMs: 2_000_000, downMs: 0 })).toEqual([]);
+  });
+
+  it("keeps the newest same-side fast top when a frame contains multiple updates", () => {
+    expect(bestBidAskChanges([
+      { event_type: "best_bid_ask", asset_id: "up", best_bid: "0.65", best_ask: "0.67", timestamp: "2001" },
+      { event_type: "best_bid_ask", asset_id: "up", best_bid: "0.60", best_ask: "0.62", timestamp: "2000" },
+    ], "up", "down", { upMs: 1_999_000, downMs: 0 })).toEqual([
+      { side: "up", bid: 0.65, ask: 0.67, exchangeMs: 2_001_000, order: 0 },
+    ]);
+  });
+
+  it("rejects fast top updates without a venue timestamp", () => {
+    expect(bestBidAskChanges({ event_type: "best_bid_ask", asset_id: "up",
+      best_bid: "0.65", best_ask: "0.67" }, "up", "down")).toEqual([]);
+  });
+
   it("clears old liquidity when an empty book snapshot arrives", () => {
     const up = new OrderBook();
     const down = new OrderBook();

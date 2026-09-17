@@ -65,6 +65,11 @@ export interface OrderRecord extends OrderRequest {
   tradeIds?: string[];
   signLatencyMs?: number;
   ackLatencyMs?: number;
+  totalLatencyMs?: number;
+  triggerToPostLatencyMs?: number;
+  decisionToPostLatencyMs?: number;
+  reactionLatencyMs?: number;
+  durableCommitLatencyMs?: number;
   /** Wall-clock seconds when the core started the venue cancel request. */
   cancelRequestedAt?: number;
   /** Wall-clock seconds when the venue confirmed the cancellation. */
@@ -193,11 +198,22 @@ export interface GatewayAck {
   tradeIds?: string[];
   signLatencyMs?: number;
   ackLatencyMs?: number;
+  totalLatencyMs?: number;
+  triggerToPostLatencyMs?: number;
+  decisionToPostLatencyMs?: number;
+  reactionLatencyMs?: number;
+}
+export interface ExecutionTiming {
+  /** Monotonic receive time of the market frame that produced this action. */
+  triggerReceivedAtMonoMs?: number;
+  /** Monotonic time immediately after the synchronous strategy decision. */
+  decisionAtMonoMs?: number;
 }
 export interface OrderGateway {
   readonly mode: TradingMode;
   readonly durableIdentity?: boolean;
-  submit(request: OrderRequest, instrument: Instrument, prepared?: (value: PreparedOrder) => void): Promise<GatewayAck>;
+  submit(request: OrderRequest, instrument: Instrument, prepared?: (value: PreparedOrder) => void,
+    timing?: ExecutionTiming): Promise<GatewayAck>;
   cancel(orderId: string): Promise<boolean>;
   /** No hidden position selection or automatic account-wide cancellation. */
   close?(): Promise<void>;
@@ -228,6 +244,8 @@ export interface PlatformAdapters {
   settle?: (request: SettlementRequest) => Promise<SettlementResult>;
   /** A fee reserve is a venue rule, not a strategy parameter. */
   estimateFee?: (request: OrderRequest) => number;
+  /** Hold a pending background snapshot until a signed identity can join it. */
+  deferPersistence?: () => void;
   persist?: (state: CoreState, critical: boolean) => void;
   record?: (event: TradingEvent) => void;
 }
@@ -240,6 +258,8 @@ export type TradingEvent =
   | { kind: "account"; snapshot: AccountSnapshot }
   | { kind: "settlement"; result: SettlementResult }
   | { kind: "timer"; ts: number }
+  | { kind: "latency"; metric: string; durationMs: number; ts: number; marketId?: string;
+      tokenId?: string; strategyId?: string; clientOrderId?: string; orderId?: string; outcome?: string }
   | { kind: "stopped"; reason: string }
   | { kind: "error"; message: string; strategyId?: string; clientOrderId?: string; orderId?: string; marketId?: string; code?: string };
 export type StrategyAction =

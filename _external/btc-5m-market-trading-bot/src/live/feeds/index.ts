@@ -12,6 +12,14 @@ export interface BookSnapshot {
   /** Exchange timestamps for each side; receive time is not a live freshness signal. */
   upExchangeTsUnix?: number;
   downExchangeTsUnix?: number;
+  upReceivedAtUnix?: number;
+  downReceivedAtUnix?: number;
+  upReceivedAtMonoMs?: number;
+  downReceivedAtMonoMs?: number;
+  upProcessedAtMonoMs?: number;
+  downProcessedAtMonoMs?: number;
+  upMarketAgeMs?: number;
+  downMarketAgeMs?: number;
   upBid?: number;
   upAsk?: number;
   downBid?: number;

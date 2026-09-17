@@ -60,6 +60,8 @@ export interface SubmitOrderArgs {
   timeInForce?: "GTC" | "FOK" | "FAK";
   postOnly?: boolean;
   onPrepared?: (prepared: PreparedOrder) => void;
+  triggerReceivedAtMonoMs?: number;
+  decisionAtMonoMs?: number;
 }
 
 /** Mirrors the installed v2 SDK's ExchangeOrderBuilderV2 typed-data hash. */
@@ -84,6 +86,9 @@ export interface SubmitOrderResult {
   latencyMs?: number;
   signLatencyMs?: number;
   ackLatencyMs?: number;
+  triggerToPostLatencyMs?: number;
+  decisionToPostLatencyMs?: number;
+  reactionLatencyMs?: number;
   tradeIds?: string[];
   /** The request may have reached CLOB even though no ACK was received. */
   stateUnknown?: boolean;
@@ -312,11 +317,11 @@ export class ClobWrapper {
     path: string,
     init: RequestInit,
     timeoutMs = this.requestTimeoutMs,
+    onRequestStart?: (atMonoMs: number) => void,
   ): Promise<unknown> {
-    const response = await fetch(`${DEFAULT_HOST}${path}`, {
-      ...init,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const request: RequestInit = { ...init, signal: AbortSignal.timeout(timeoutMs) };
+    onRequestStart?.(performance.now());
+    const response = await fetch(`${DEFAULT_HOST}${path}`, request);
     const text = await response.text();
     let payload: unknown = {};
     if (text) {
@@ -344,6 +349,7 @@ export class ClobWrapper {
     path: string,
     method: "POST" | "DELETE",
     data?: unknown,
+    onRequestStart?: (atMonoMs: number) => void,
   ): Promise<unknown> {
     const body = data == null ? undefined : JSON.stringify(data);
     const signer = this.client.signer;
@@ -357,7 +363,7 @@ export class ClobWrapper {
       method,
       headers: { ...headers, "Content-Type": "application/json" },
       body,
-    });
+    }, this.requestTimeoutMs, onRequestStart);
   }
 
   private async currentVersion(): Promise<2> {
@@ -373,11 +379,12 @@ export class ClobWrapper {
     order: SignedOrder,
     orderType: OrderType,
     postOnly: boolean,
+    onRequestStart?: (atMonoMs: number) => void,
   ): Promise<OrderResponse> {
     const payload = isV2Order(order)
       ? orderToJsonV2(order, this.creds.key, orderType, postOnly, true)
       : orderToJsonV1(order, this.creds.key, orderType, postOnly, true);
-    return (await this.l2Json(POST_ORDER_PATH, "POST", payload)) as OrderResponse;
+    return (await this.l2Json(POST_ORDER_PATH, "POST", payload, onRequestStart)) as OrderResponse;
   }
 
   /** Warm all metadata used by the signing path before the first order. */
@@ -476,6 +483,8 @@ export class ClobWrapper {
       const negRisk = await this.negRisk(args.tokenId);
       let signLatencyMs = 0;
       let ackLatencyMs = 0;
+      let triggerToPostLatencyMs: number | undefined;
+      let decisionToPostLatencyMs: number | undefined;
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const signStarted = performance.now();
@@ -498,13 +507,19 @@ export class ClobWrapper {
           args.onPrepared({ orderHash: signedV2OrderHash(order, negRisk), signedPayload: order, preparedAt: Date.now() / 1000 });
         }
 
-        const ackStarted = performance.now();
-        postAttempted = true;
+        let ackStarted: number | undefined;
         const orderType = args.timeInForce === "FOK" ? OrderType.FOK
           : args.timeInForce === "FAK" ? OrderType.FAK : OrderType.GTC;
-        const resp = await this.postSignedOrder(order, orderType, args.postOnly ?? true);
+        const resp = await this.postSignedOrder(order, orderType, args.postOnly ?? true, postStarted => {
+          ackStarted = postStarted;
+          triggerToPostLatencyMs ??= args.triggerReceivedAtMonoMs == null
+            ? undefined : Math.max(0, postStarted - args.triggerReceivedAtMonoMs);
+          decisionToPostLatencyMs ??= args.decisionAtMonoMs == null
+            ? undefined : Math.max(0, postStarted - args.decisionAtMonoMs);
+          postAttempted = true;
+        });
         postAttempted = false;
-        ackLatencyMs += performance.now() - ackStarted;
+        if (ackStarted != null) ackLatencyMs += performance.now() - ackStarted;
         const orderId = resp?.orderID;
         const apiError = responseError(resp);
         const success = !apiError && Boolean(resp?.success ?? orderId);
@@ -517,6 +532,10 @@ export class ClobWrapper {
             latencyMs: performance.now() - started,
             signLatencyMs,
             ackLatencyMs,
+            triggerToPostLatencyMs,
+            decisionToPostLatencyMs,
+            reactionLatencyMs: success && args.triggerReceivedAtMonoMs != null
+              ? Math.max(0, performance.now() - args.triggerReceivedAtMonoMs) : undefined,
             tradeIds: responseTradeIds(resp),
           };
         }

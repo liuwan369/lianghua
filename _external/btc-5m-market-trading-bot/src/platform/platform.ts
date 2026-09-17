@@ -1,4 +1,4 @@
-import type { AccountSnapshot, Book, CoreOptions, CoreState, MarketInfo, OrderRequest,
+import type { AccountSnapshot, Book, CoreOptions, CoreState, ExecutionTiming, MarketInfo, OrderRequest,
   SettlementRequest, StrategyAction, StrategyContext, StrategyPlugin, TradingEvent } from "./contracts.js";
 import { TradingCore } from "./core.js";
 
@@ -67,7 +67,7 @@ export class TradingPlatform {
       this.core.reconcile(snapshot, netCashFlowUsd, cancelledOrderIds),
   };
   readonly orders = {
-    submit: (order: OrderRequest) => this.core.submit(order),
+    submit: (order: OrderRequest, timing?: ExecutionTiming) => this.core.submit(order, timing),
     cancel: (id: string) => this.core.cancel(id),
     replace: (id: string, order: OrderRequest) => this.core.replace(id, order),
     cancelAll: (strategyId?: string) => this.core.cancelAll(strategyId),
@@ -125,14 +125,32 @@ export class TradingPlatform {
       this.core.rememberMarket(event.market);
       this.markets.set(event.market.id, clone(event.market));
     }
-    if (event.kind === "book") {
-      const previous = this.books.get(event.book.tokenId);
-      if (previous && event.book.ts < previous.ts) return;
-      if (!this.core.mark(event.book)) return;
-      this.books.set(event.book.tokenId, clone(event.book));
-    }
+    if (event.kind === "book") { this.ingestBooks([event.book]); return; }
     try { this.options.adapters.record?.(clone(event)); } catch { /* Background logging is not an order gate. */ }
     this.publish(event);
+  }
+  /** Apply all token books from one venue frame before one strategy callback. */
+  ingestBooks(books: readonly Book[]): void {
+    const appliedAt = performance.now();
+    if (!books.length || !this.core.markBatch(books)) return;
+    for (const book of books) {
+      this.books.set(book.tokenId, clone(book));
+      try { this.options.adapters.record?.({ kind: "book", book: clone(book) }); }
+      catch { /* Background logging is not an order gate. */ }
+    }
+    const trigger = books.reduce((latest, book) => (book.receivedAtMonoMs ?? -Infinity) >= (latest.receivedAtMonoMs ?? -Infinity) ? book : latest);
+    const completedAt = performance.now();
+    this.publish({ kind: "book", book: clone(trigger) });
+    const ts = this.options.now?.() ?? Date.now() / 1000;
+    const marketId = this.core.instrument(trigger.tokenId)?.marketId;
+    this.publish({ kind: "latency", metric: "book_batch_apply", durationMs: completedAt - appliedAt, ts, marketId });
+    if (trigger.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "book_processing",
+      durationMs: Math.max(0, completedAt - trigger.receivedAtMonoMs), ts, marketId });
+    for (const book of books) if (book.sourceAgeMs != null && book.sourceAgeMs >= 0
+      && book.receivedAtMonoMs === trigger.receivedAtMonoMs) {
+      this.publish({ kind: "latency", metric: "market_age", durationMs: book.sourceAgeMs, ts, marketId,
+        tokenId: book.tokenId });
+    }
   }
   private context(): StrategyContext {
     return freeze({ mode: this.options.adapters.gateway.mode, now: this.options.now?.() ?? Date.now() / 1000,
@@ -160,13 +178,28 @@ export class TradingPlatform {
         for (const listener of this.listeners) {
           try { listener(freeze(clone(current))); } catch { /* Observers cannot block execution. */ }
         }
-        if (this.closing || (current.kind === "error" && !current.strategyId) || current.kind === "stopped") continue;
+        if (this.closing || current.kind === "latency"
+          || (current.kind === "error" && !current.strategyId) || current.kind === "stopped") continue;
         for (const strategy of this.plugins.values()) {
           if (current.kind === "error" && current.strategyId !== strategy.id) continue;
           try {
+            const decisionStarted = performance.now();
             const actions = strategy.onEvent(freeze(clone(current)), this.context());
+            const decisionAtMonoMs = performance.now();
             if (!Array.isArray(actions)) throw new Error("strategy callbacks must be synchronous action arrays");
-            for (const action of actions) this.dispatch(strategy.id, action);
+            const timing: ExecutionTiming | undefined = current.kind === "book" ? {
+              triggerReceivedAtMonoMs: current.book.receivedAtMonoMs,
+              decisionAtMonoMs,
+            } : undefined;
+            for (const action of actions) this.dispatch(strategy.id, action, timing);
+            if (current.kind === "book") {
+              const marketId = this.core.instrument(current.book.tokenId)?.marketId;
+              this.publish({ kind: "latency", metric: "strategy_decision", durationMs: decisionAtMonoMs - decisionStarted,
+                ts: this.options.now?.() ?? Date.now() / 1000, marketId, tokenId: current.book.tokenId, strategyId: strategy.id });
+              if (current.book.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "ws_receive_to_decision",
+                durationMs: Math.max(0, decisionAtMonoMs - current.book.receivedAtMonoMs),
+                ts: this.options.now?.() ?? Date.now() / 1000, marketId, tokenId: current.book.tokenId, strategyId: strategy.id });
+            }
           } catch (error) {
             this.plugins.delete(strategy.id);
             this.publish({ kind: "error", message: `strategy ${strategy.id}: ${error instanceof Error ? error.message : "failed"}` });
@@ -176,9 +209,9 @@ export class TradingPlatform {
       }
     } finally { this.dispatching = false; }
   }
-  private dispatch(strategyId: string, action: StrategyAction): void {
+  private dispatch(strategyId: string, action: StrategyAction, timing?: ExecutionTiming): void {
     if (action.kind === "submit") {
-      this.track(this.orders.submit({ ...action.order, strategyId }), { strategyId, clientOrderId: action.order.clientOrderId }); return;
+      this.track(this.orders.submit({ ...action.order, strategyId }, timing), { strategyId, clientOrderId: action.order.clientOrderId }); return;
     }
     const order = this.orders.get(action.orderId);
     if (!order || order.strategyId !== strategyId) throw new Error("strategy cannot modify another strategy's order");

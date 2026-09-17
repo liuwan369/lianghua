@@ -68,6 +68,23 @@ def test_observation_has_zero_orders_unknown_profit_and_survives_restart(tmp_pat
     assert second["summary"]["event_count"] == 1
 
 
+def test_latency_keeps_milliseconds_percentiles_and_current_window(tmp_path, monkeypatch):
+    worker, journal = selected(tmp_path)
+    now = time.time()
+    monkeypatch.setattr(time, "time", lambda: now)
+    append(journal, *[{"event": "latency", "metric": "order_http_ack", "duration_ms": duration,
+                       "engine_ts": now - 10 + i, "recv_ts": now - 10 + i} for i, duration in enumerate([2, 3, 9])],
+           {"event": "latency", "metric": "reaction", "duration_ms": 14, "engine_ts": now - 2, "recv_ts": now - 2},
+           {"event": "latency", "metric": "order_http_ack", "duration_ms": 888, "recv_ts": now - 1, "mode": "live"},
+           {"event": "latency", "metric": "order_http_ack", "duration_ms": 999, "recv_ts": now - 301})
+    worker.step()
+    metrics = worker.ledger.summary("one")["latency"]["metrics"]
+    assert metrics["order_http_ack"] | {"latest_at": None, "expires_at": None} == {
+        "latest_ms": 9, "p50_ms": 3, "p95_ms": 9, "p99_ms": 9, "max_ms": 9,
+        "samples": 3, "latest_at": None, "expires_at": None, "limit_reached": False}
+    assert metrics["reaction"]["latest_ms"] == 14
+
+
 @pytest.mark.parametrize("state,verified,credit,visible", [
     ("confirmed", True, 5, 5), ("confirmed", True, 0, 0),
     ("pending", True, 5, None), ("confirmed", False, 5, None),

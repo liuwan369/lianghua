@@ -9,6 +9,7 @@ export class PlatformStore {
   private timer?: ReturnType<typeof setTimeout>;
   private failure?: Error;
   private closed = false;
+  private deferred = false;
   private lockFd: number;
   constructor(private readonly path: string) {
     mkdirSync(dirname(path), { recursive: true });
@@ -47,11 +48,23 @@ export class PlatformStore {
     if (this.closed) throw new Error("state store closed");
     if (this.failure) throw this.failure;
     this.pending = structuredClone(state);
-    if (critical) { clearTimeout(this.timer); this.timer = undefined; this.flush(); return; }
+    if (critical) {
+      this.deferred = false;
+      clearTimeout(this.timer); this.timer = undefined; this.flush(); return;
+    }
+    if (this.deferred) return;
     if (!this.timer) this.timer = setTimeout(() => {
       this.timer = undefined;
       try { this.flush(); } catch (error) { this.failure = error instanceof Error ? error : new Error("state write failed"); }
     }, 25);
+  }
+  /** Keep the newest in-memory snapshot pending without letting its timer fsync mid-signature. */
+  defer(): void {
+    if (this.closed) throw new Error("state store closed");
+    if (this.failure) throw this.failure;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.deferred = true;
   }
   private flush(): void {
     if (!this.pending) return;
@@ -63,7 +76,7 @@ export class PlatformStore {
   close(): void {
     if (this.closed) return;
     clearTimeout(this.timer);
-    try { this.flush(); if (this.failure) throw this.failure; }
+    try { this.deferred = false; this.flush(); if (this.failure) throw this.failure; }
     finally { closeSync(this.lockFd); unlinkSync(`${this.path}.lock`); this.closed = true; }
   }
 }

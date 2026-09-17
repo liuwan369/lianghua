@@ -1,7 +1,7 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { PlatformStore } from "./store.js";
 import type { CoreState } from "./contracts.js";
 
@@ -12,6 +12,7 @@ const state = (cashUsd: number): CoreState => ({
 });
 
 describe("platform store recovery", () => {
+  afterEach(() => vi.useRealTimers());
   it("loads a complete recovery snapshot left beside the primary file", () => {
     const path = join(mkdtempSync(join(tmpdir(), "pm-store-")), "state.json");
     const store = new PlatformStore(path);
@@ -21,5 +22,19 @@ describe("platform store recovery", () => {
     const recovered = new PlatformStore(path);
     expect(recovered.load()?.cashUsd).toBe(19);
     recovered.close();
+  });
+
+  it("can hold a background snapshot for one later durable commit", () => {
+    vi.useFakeTimers();
+    const path = join(mkdtempSync(join(tmpdir(), "pm-store-defer-")), "state.json");
+    const store = new PlatformStore(path);
+    store.save(state(20), false);
+    store.defer();
+    store.save(state(18), false);
+    vi.advanceTimersByTime(100);
+    expect(existsSync(path)).toBe(false);
+    store.save(state(19), true);
+    expect(store.load()?.cashUsd).toBe(19);
+    store.close();
   });
 });

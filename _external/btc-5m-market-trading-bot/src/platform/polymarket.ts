@@ -7,7 +7,7 @@ import { runBtcFeed } from "../live/feeds/btc.js";
 import type { FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
-import type { AccountSnapshot, Book, CoreState, GatewayAck, HardLimits, Instrument, MarketInfo,
+import type { AccountSnapshot, Book, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
 import { PaperGateway } from "./paper.js";
 import { TradingPlatform } from "./platform.js";
@@ -54,10 +54,14 @@ export function accountSnapshot(raw: unknown): AccountSnapshot {
     ...(data.cashFlowCoverage ? { cashFlowCoverage: data.cashFlowCoverage as AccountSnapshot["cashFlowCoverage"] } : {}),
     ...(data.externalFlows ? { externalFlows: data.externalFlows as AccountSnapshot["externalFlows"] } : {}),
     cashUsd: numeric(collateral.value), openOrders: orders,
-    positions: positions.items.map(rawPosition => {
+    positions: positions.items.flatMap(rawPosition => {
       const p = row(rawPosition), shares = numeric(p.size), avg = numeric(p.avgPrice);
       if (!p.asset || !Number.isFinite(shares) || shares < 0 || !Number.isFinite(avg) || avg < 0) throw new Error("invalid account position basis");
-      return { tokenId: String(p.asset), shares, costUsd: shares * avg, realizedPnlUsd: numeric(p.realizedPnl ?? 0) };
+      const currentValue = numeric(p.currentValue);
+      // Data API marks resolved outcome tokens redeemable. A redeemable loser
+      // with an explicit zero value is historical residue, not executable inventory.
+      if (p.redeemable === true && Number.isFinite(currentValue) && currentValue === 0) return [];
+      return [{ tokenId: String(p.asset), shares, costUsd: shares * avg, realizedPnlUsd: numeric(p.realizedPnl ?? 0) }];
     }) };
   return result;
 }
@@ -67,15 +71,20 @@ export class PolymarketGateway implements OrderGateway {
   readonly mode = "live" as const;
   readonly durableIdentity = true;
   constructor(readonly client: ClobWrapper, private readonly ready: (instrument: Instrument) => boolean = () => true) {}
-  async submit(request: OrderRequest, instrument: Instrument, prepared?: (value: PreparedOrder) => void): Promise<GatewayAck> {
+  async submit(request: OrderRequest, instrument: Instrument, prepared?: (value: PreparedOrder) => void,
+    timing?: ExecutionTiming): Promise<GatewayAck> {
     if (!this.ready(instrument)) return { status: "rejected", error: "authenticated feed is not ready" };
     const response = await this.client.submitOrder({ tokenId: request.tokenId, price: request.price,
       size: request.shares, tickSize: instrument.tickSize, direction: request.direction,
-      timeInForce: request.timeInForce, postOnly: request.postOnly, onPrepared: prepared });
+      timeInForce: request.timeInForce, postOnly: request.postOnly, onPrepared: prepared,
+      triggerReceivedAtMonoMs: timing?.triggerReceivedAtMonoMs, decisionAtMonoMs: timing?.decisionAtMonoMs });
     return { status: response.success && response.orderId ? "accepted"
       : response.stateUnknown || response.orderId || response.success ? "unknown" : "rejected",
       orderId: response.orderId, error: response.errorMsg, tradeIds: response.tradeIds,
-      signLatencyMs: response.signLatencyMs, ackLatencyMs: response.ackLatencyMs };
+      signLatencyMs: response.signLatencyMs, ackLatencyMs: response.ackLatencyMs,
+      totalLatencyMs: response.latencyMs, triggerToPostLatencyMs: response.triggerToPostLatencyMs,
+      decisionToPostLatencyMs: response.decisionToPostLatencyMs,
+      reactionLatencyMs: response.reactionLatencyMs };
   }
   cancel(orderId: string): Promise<boolean> { return this.client.cancel(orderId); }
 }
@@ -89,6 +98,7 @@ export interface ConnectOptions {
   paperAccount?: AccountSnapshot;
   restored?: CoreState;
   persist?: PlatformAdapters["persist"];
+  deferPersistence?: PlatformAdapters["deferPersistence"];
   record?: PlatformAdapters["record"];
   settle?: PlatformAdapters["settle"];
   durationSec?: number;
@@ -203,7 +213,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   platform = new TradingPlatform({ account, instruments: options.markets.flatMap(m => m.instruments),
     limits: options.limits, restored: options.restored,
     adapters: { gateway, readAccount, discoverMarkets: discoverBtcMarket, estimateFee: fee,
-      persist: options.persist, record: options.record, settle: options.settle,
+      persist: options.persist, deferPersistence: options.deferPersistence,
+      record: options.record, settle: options.settle,
       beforeFinalReconcile: () => {
         acceptUserEvents = false;
         for (const user of users) user.stop();
@@ -235,20 +246,22 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         const b = event.snapshot;
         const values: Book[] = [
           { tokenId: market.instruments[0].tokenId, ts: b.upExchangeTsUnix ?? b.tsUnix, exchangeTs: b.upExchangeTsUnix,
-            receivedAt: b.receivedAtUnix, receivedAtMonoMs: b.receivedAtMonoMs, processedAtMonoMs: b.processedAtMonoMs,
-            processingLatencyMs: b.receivedAtMonoMs != null && b.processedAtMonoMs != null ? b.processedAtMonoMs - b.receivedAtMonoMs : undefined,
-            sourceAgeMs: b.marketAgeMs, source: b.source, bid: b.upBid, ask: b.upAsk, bidSize: b.upBidSz, askSize: b.upAskSz,
+            receivedAt: b.upReceivedAtUnix ?? b.receivedAtUnix, receivedAtMonoMs: b.upReceivedAtMonoMs ?? b.receivedAtMonoMs,
+            processedAtMonoMs: b.upProcessedAtMonoMs ?? b.processedAtMonoMs,
+            processingLatencyMs: (b.upReceivedAtMonoMs ?? b.receivedAtMonoMs) != null && (b.upProcessedAtMonoMs ?? b.processedAtMonoMs) != null
+              ? (b.upProcessedAtMonoMs ?? b.processedAtMonoMs)! - (b.upReceivedAtMonoMs ?? b.receivedAtMonoMs)! : undefined,
+            sourceAgeMs: b.upMarketAgeMs ?? b.marketAgeMs, source: b.source, bid: b.upBid, ask: b.upAsk, bidSize: b.upBidSz, askSize: b.upAskSz,
             bids: b.upBidLevels, asks: b.upAskLevels },
           { tokenId: market.instruments[1].tokenId, ts: b.downExchangeTsUnix ?? b.tsUnix, exchangeTs: b.downExchangeTsUnix,
-            receivedAt: b.receivedAtUnix, receivedAtMonoMs: b.receivedAtMonoMs, processedAtMonoMs: b.processedAtMonoMs,
-            processingLatencyMs: b.receivedAtMonoMs != null && b.processedAtMonoMs != null ? b.processedAtMonoMs - b.receivedAtMonoMs : undefined,
-            sourceAgeMs: b.marketAgeMs, source: b.source, bid: b.downBid, ask: b.downAsk, bidSize: b.downBidSz, askSize: b.downAskSz,
+            receivedAt: b.downReceivedAtUnix ?? b.receivedAtUnix, receivedAtMonoMs: b.downReceivedAtMonoMs ?? b.receivedAtMonoMs,
+            processedAtMonoMs: b.downProcessedAtMonoMs ?? b.processedAtMonoMs,
+            processingLatencyMs: (b.downReceivedAtMonoMs ?? b.receivedAtMonoMs) != null && (b.downProcessedAtMonoMs ?? b.processedAtMonoMs) != null
+              ? (b.downProcessedAtMonoMs ?? b.processedAtMonoMs)! - (b.downReceivedAtMonoMs ?? b.receivedAtMonoMs)! : undefined,
+            sourceAgeMs: b.downMarketAgeMs ?? b.marketAgeMs, source: b.source, bid: b.downBid, ask: b.downAsk, bidSize: b.downBidSz, askSize: b.downAskSz,
             bids: b.downBidLevels, asks: b.downAskLevels },
         ];
-        for (const book of values) {
-          if (!options.observationOnly) paper?.book(book);
-          platform.ingest({ kind: "book", book });
-        }
+        for (const book of values) if (!options.observationOnly) paper?.book(book);
+        platform.ingestBooks(values);
       } else if (event.kind === "tickSize") {
         const instrument = platform.core.instrument(event.token);
         if (instrument) {
@@ -271,6 +284,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           if (!userEvent.orderId || !userEvent.tradeId || !userEvent.tokenId || !userEvent.direction
             || !platform.orders.get(userEvent.orderId)) throw new Error("account trade requires order ownership reconciliation");
           const f = userEvent.fill;
+          if (userEvent.reportLatencyMs != null) platform.ingest({ kind: "latency", metric: "authenticated_trade_report",
+            durationMs: userEvent.reportLatencyMs, ts: Date.now() / 1000, marketId: market.id,
+            tokenId: userEvent.tokenId, orderId: userEvent.orderId });
           const feeRule = client?.feeRule(userEvent.tokenId);
           platform.ingest({ kind: "fill", fill: { tradeId: userEvent.tradeId, orderId: userEvent.orderId,
             tokenId: userEvent.tokenId, direction: userEvent.direction, price: f.price, shares: f.shares,

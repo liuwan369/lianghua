@@ -69,11 +69,13 @@ function applyMessage(
   up: OrderBook,
   dn: OrderBook,
   applied: AppliedBookTimes = { upMs: 0, downMs: 0 },
-): { upUpdated: boolean; downUpdated: boolean } {
+): { upUpdated: boolean; downUpdated: boolean; upOrder: number; downOrder: number } {
   let upUpdated = false;
   let downUpdated = false;
   const events = Array.isArray(v) ? v : [v];
-  for (const raw of events) {
+  let upOrder = -1;
+  let downOrder = -1;
+  for (const [eventOrder, raw] of events.entries()) {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
     const eventMs = exchangeTimeMs(e);
@@ -96,9 +98,11 @@ function applyMessage(
           ob.applySnapshot(bids, asks);
           if (side) {
             upUpdated = true;
+            upOrder = eventOrder;
             if (eventMs != null) applied.upMs = Math.max(applied.upMs, eventMs);
           } else {
             downUpdated = true;
+            downOrder = eventOrder;
             if (eventMs != null) applied.downMs = Math.max(applied.downMs, eventMs);
           }
         }
@@ -134,16 +138,56 @@ function applyMessage(
           ob.applyChange(price, size, isBuy);
           if (side) {
             upUpdated = true;
+            upOrder = eventOrder;
             if (eventMs != null) applied.upMs = Math.max(applied.upMs, eventMs);
           } else {
             downUpdated = true;
+            downOrder = eventOrder;
             if (eventMs != null) applied.downMs = Math.max(applied.downMs, eventMs);
           }
         }
       }
     }
   }
-  return { upUpdated, downUpdated };
+  return { upUpdated, downUpdated, upOrder, downOrder };
+}
+
+export interface BestBidAskChange {
+  side: "up" | "down";
+  bid: number;
+  ask: number;
+  exchangeMs: number;
+  order: number;
+  receivedAtUnix?: number;
+  receivedAtMonoMs?: number;
+  processedAtMonoMs?: number;
+}
+
+/** Parse every fast top update in a frame; callers apply the frame atomically. */
+function bestBidAskChanges(
+  v: unknown,
+  upToken: string,
+  downToken: string,
+  applied: AppliedBookTimes = { upMs: 0, downMs: 0 },
+): BestBidAskChange[] {
+  const changes: BestBidAskChange[] = [];
+  const accepted = { ...applied };
+  for (const [order, raw] of (Array.isArray(v) ? v : [v]).entries()) {
+    if (!raw || typeof raw !== "object") continue;
+    const event = raw as Record<string, unknown>;
+    if (String(event.event_type ?? "").toLowerCase() !== "best_bid_ask") continue;
+    const token = typeof event.asset_id === "string" ? event.asset_id : undefined;
+    const side = token ? sideOf(token, upToken, downToken) : undefined;
+    const bid = num(event.best_bid), ask = num(event.best_ask), exchangeMs = exchangeTimeMs(event);
+    if (side == null || bid == null || ask == null || exchangeMs == null || !(bid > 0 && bid < 1)
+      || !(ask > 0 && ask < 1) || bid > ask) continue;
+    const lastMs = side ? accepted.upMs : accepted.downMs;
+    if (exchangeMs < lastMs) continue;
+    changes.push({ side: side ? "up" : "down", bid, ask, exchangeMs, order });
+    if (side) accepted.upMs = Math.max(accepted.upMs, exchangeMs);
+    else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
+  }
+  return changes;
 }
 
 function tickSizeChanges(v: unknown): Array<{ token: string; tickSize: number; tsUnix?: number }> {
@@ -260,9 +304,12 @@ export function runPolymarketFeed(
         const dn = new OrderBook();
         const applied: AppliedBookTimes = { upMs: 0, downMs: 0 };
         const tickSizes: { up?: number; down?: number } = {};
-        let fastUp: { bid: number; ask: number; atMs: number } | undefined;
-        let fastDown: { bid: number; ask: number; atMs: number } | undefined;
-        let lastSent: Array<number | undefined> | undefined;
+        const fastApplied: AppliedBookTimes = { upMs: 0, downMs: 0 };
+        let fastUp: BestBidAskChange | undefined;
+        let fastDown: BestBidAskChange | undefined;
+        let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
+        let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
+        let upProcessedAtMonoMs = 0, downProcessedAtMonoMs = 0;
         const trace = process.env.PM_TRACE != null;
 
         const ping = setInterval(() => {
@@ -286,84 +333,90 @@ export function runPolymarketFeed(
               for (const trade of marketTrades(v)) {
                 sink({ kind: "marketTrade", ...trade });
               }
-              // Fast top-of-book updates (requires custom_feature_enabled).
-              if (v && typeof v === "object" && !Array.isArray(v)) {
-                const e = v as Record<string, unknown>;
-                if (e.event_type === "best_bid_ask") {
-                  const tok =
-                    typeof e.asset_id === "string" ? e.asset_id : undefined;
-                  const side = tok ? sideOf(tok, upToken, downToken) : undefined;
-                  const bb = num(e.best_bid);
-                  const ba = num(e.best_ask);
-                  const eventMs = exchangeTimeMs(e);
-                  const lastMs = side === true ? applied.upMs : applied.downMs;
-                  if (
-                    side != null &&
-                    bb != null &&
-                    ba != null &&
-                    bb > 0 && bb < 1 && ba > 0 && ba < 1 && bb <= ba &&
-                    (eventMs == null || eventMs >= lastMs)
-                  ) {
-                    const top = { bid: bb, ask: ba, atMs: Date.now() };
-                    if (side) {
-                      fastUp = top;
-                    } else {
-                      fastDown = top;
-                    }
-                  }
-                } else {
-                  const changed = applyMessage(v, upToken, downToken, up, dn, applied);
-                  const atMs = Date.now();
-                  if (changed.upUpdated) { lastUpAtMs = atMs; fastUp = undefined; }
-                  if (changed.downUpdated) { lastDownAtMs = atMs; fastDown = undefined; }
-                }
-              } else {
-                const changed = applyMessage(v, upToken, downToken, up, dn, applied);
-                const atMs = Date.now();
-                if (changed.upUpdated) { lastUpAtMs = atMs; fastUp = undefined; }
-                if (changed.downUpdated) { lastDownAtMs = atMs; fastDown = undefined; }
+              // Apply the full frame before producing one paired snapshot. The
+              // fast top is authoritative until a newer L2 update catches up.
+              const changed = applyMessage(v, upToken, downToken, up, dn, applied);
+              const atMs = Date.now();
+              if (changed.upUpdated) {
+                lastUpAtMs = atMs; upReceivedAtUnix = receivedAtUnix; upReceivedAtMonoMs = receivedAtMonoMs;
+                if (fastUp && applied.upMs >= fastUp.exchangeMs) fastUp = undefined;
               }
+              if (changed.downUpdated) {
+                lastDownAtMs = atMs; downReceivedAtUnix = receivedAtUnix; downReceivedAtMonoMs = receivedAtMonoMs;
+                if (fastDown && applied.downMs >= fastDown.exchangeMs) fastDown = undefined;
+              }
+              const fastChanges = bestBidAskChanges(v, upToken, downToken, {
+                upMs: Math.max(applied.upMs, fastApplied.upMs),
+                downMs: Math.max(applied.downMs, fastApplied.downMs),
+              });
+              for (const change of fastChanges) {
+                if (change.side === "up") {
+                  if (changed.upUpdated && change.order < changed.upOrder && change.exchangeMs <= applied.upMs) continue;
+                  fastUp = { ...change, receivedAtUnix, receivedAtMonoMs };
+                  lastUpAtMs = atMs;
+                  fastApplied.upMs = Math.max(fastApplied.upMs, change.exchangeMs);
+                } else {
+                  if (changed.downUpdated && change.order < changed.downOrder && change.exchangeMs <= applied.downMs) continue;
+                  fastDown = { ...change, receivedAtUnix, receivedAtMonoMs };
+                  lastDownAtMs = atMs;
+                  fastApplied.downMs = Math.max(fastApplied.downMs, change.exchangeMs);
+                }
+              }
+              if (!changed.upUpdated && !changed.downUpdated && !fastChanges.length) return;
               const ub = up.bestBid();
               const ua = up.bestAsk();
               const db = dn.bestBid();
               const da = dn.bestAsk();
-              if (!ub || !ua || !db || !da) { hasCompleteBook = false; return; }
+              if (!ub || !ua || !db || !da) {
+                if (hasCompleteBook) sink({ kind: "bookStatus", healthy: false, tsUnix: nowUnix() });
+                hasCompleteBook = false;
+                return;
+              }
+              if (!hasCompleteBook) sink({ kind: "bookStatus", healthy: true, tsUnix: nowUnix() });
               hasCompleteBook = true;
-              const nowMs = Date.now();
-              const upTop = fastUp && nowMs - fastUp.atMs <= 1_000 ? fastUp : undefined;
-              const downTop = fastDown && nowMs - fastDown.atMs <= 1_000 ? fastDown : undefined;
+              const upTop = fastUp;
+              const downTop = fastDown;
               const upBid = upTop?.bid ?? ub[0];
               const upAsk = upTop?.ask ?? ua[0];
               const downBid = downTop?.bid ?? db[0];
               const downAsk = downTop?.ask ?? da[0];
-              const upBidSz = ub[0] === upBid ? ub[1] : undefined;
-              const upAskSz = ua[0] === upAsk ? ua[1] : undefined;
-              const downBidSz = db[0] === downBid ? db[1] : undefined;
-              const downAskSz = da[0] === downAsk ? da[1] : undefined;
-              const key = [
-                upBid,
-                upAsk,
-                downBid,
-                downAsk,
-                upBidSz,
-                upAskSz,
-                downBidSz,
-                downAskSz,
-                applied.upMs,
-                applied.downMs,
-              ];
-              if (lastSent && lastSent.every((value, i) => value === key[i])) return;
-              lastSent = key;
+              const upBidSz = !upTop && ub[0] === upBid ? ub[1] : undefined;
+              const upAskSz = !upTop && ua[0] === upAsk ? ua[1] : undefined;
+              const downBidSz = !downTop && db[0] === downBid ? db[1] : undefined;
+              const downAskSz = !downTop && da[0] === downAsk ? da[1] : undefined;
+              const processedAtMonoMs = performance.now();
+              if (fastChanges.some(change => change.side === "up") && fastUp) fastUp.processedAtMonoMs = processedAtMonoMs;
+              if (fastChanges.some(change => change.side === "down") && fastDown) fastDown.processedAtMonoMs = processedAtMonoMs;
+              if (changed.upUpdated || fastChanges.some(change => change.side === "up")) upProcessedAtMonoMs = processedAtMonoMs;
+              if (changed.downUpdated || fastChanges.some(change => change.side === "down")) downProcessedAtMonoMs = processedAtMonoMs;
+              const upDepthAuthoritative = !upTop;
+              const downDepthAuthoritative = !downTop;
+              const upExchangeMs = Math.max(applied.upMs, upTop?.exchangeMs ?? 0);
+              const downExchangeMs = Math.max(applied.downMs, downTop?.exchangeMs ?? 0);
+              const selectedUpReceivedAtUnix = upTop?.receivedAtUnix ?? upReceivedAtUnix;
+              const selectedDownReceivedAtUnix = downTop?.receivedAtUnix ?? downReceivedAtUnix;
+              const selectedUpReceivedAtMonoMs = upTop?.receivedAtMonoMs ?? upReceivedAtMonoMs;
+              const selectedDownReceivedAtMonoMs = downTop?.receivedAtMonoMs ?? downReceivedAtMonoMs;
+              const selectedUpProcessedAtMonoMs = upTop?.processedAtMonoMs ?? upProcessedAtMonoMs;
+              const selectedDownProcessedAtMonoMs = downTop?.processedAtMonoMs ?? downProcessedAtMonoMs;
               const snap: BookSnapshot = {
                 tsUnix: nowUnix(),
                 source: "polymarket-ws",
                 receivedAtUnix,
                 receivedAtMonoMs,
-                processedAtMonoMs: performance.now(),
-                marketAgeMs: Math.max(applied.upMs, applied.downMs) > 0
-                  ? receivedAtUnix * 1000 - Math.max(applied.upMs, applied.downMs) : undefined,
-                upExchangeTsUnix: applied.upMs > 0 ? applied.upMs / 1000 : undefined,
-                downExchangeTsUnix: applied.downMs > 0 ? applied.downMs / 1000 : undefined,
+                processedAtMonoMs,
+                marketAgeMs: Math.min(upExchangeMs, downExchangeMs) > 0
+                  ? receivedAtUnix * 1000 - Math.min(upExchangeMs, downExchangeMs) : undefined,
+                upExchangeTsUnix: upExchangeMs > 0 ? upExchangeMs / 1000 : undefined,
+                downExchangeTsUnix: downExchangeMs > 0 ? downExchangeMs / 1000 : undefined,
+                upReceivedAtUnix: selectedUpReceivedAtUnix || undefined,
+                downReceivedAtUnix: selectedDownReceivedAtUnix || undefined,
+                upReceivedAtMonoMs: selectedUpReceivedAtMonoMs || undefined,
+                downReceivedAtMonoMs: selectedDownReceivedAtMonoMs || undefined,
+                upProcessedAtMonoMs: selectedUpProcessedAtMonoMs || undefined,
+                downProcessedAtMonoMs: selectedDownProcessedAtMonoMs || undefined,
+                upMarketAgeMs: upExchangeMs > 0 ? selectedUpReceivedAtUnix * 1000 - upExchangeMs : undefined,
+                downMarketAgeMs: downExchangeMs > 0 ? selectedDownReceivedAtUnix * 1000 - downExchangeMs : undefined,
                 upBid,
                 upAsk,
                 downBid,
@@ -372,10 +425,10 @@ export function runPolymarketFeed(
                 upAskSz,
                 downBidSz,
                 downAskSz,
-                upBidLevels: up.bidLevels(),
-                upAskLevels: up.askLevels(),
-                downBidLevels: dn.bidLevels(),
-                downAskLevels: dn.askLevels(),
+                upBidLevels: upDepthAuthoritative ? up.bidLevels() : undefined,
+                upAskLevels: upDepthAuthoritative ? up.askLevels() : undefined,
+                downBidLevels: downDepthAuthoritative ? dn.bidLevels() : undefined,
+                downAskLevels: downDepthAuthoritative ? dn.askLevels() : undefined,
                 tickSize: tickSizes.up ?? tickSizes.down,
                 upTickSize: tickSizes.up,
                 downTickSize: tickSizes.down,
@@ -430,4 +483,4 @@ export function runPolymarketFeed(
   };
 }
 
-export { applyMessage, sideOf, levelList, marketTrades, tickSizeChanges };
+export { applyMessage, bestBidAskChanges, sideOf, levelList, marketTrades, tickSizeChanges };

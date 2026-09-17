@@ -12,6 +12,8 @@ export interface Event { id: number; event: string; market: string | null; time:
 export interface Events { control_source?: ControlSource; schemaVersion: 1; run_id: string; events: Event[]; next_before_id: number | null }
 export interface Summary extends Obj { run_id: string; mode: string; account_id: string | null; fill_count: number; fill_notional: number | null; fees: number | null; settled_markets: number; settled_pnl: number | null; pnl_semantics: string; completeness: string; order_lifecycle_available: boolean }
 export interface SummaryResponse { control_source?: ControlSource; schemaVersion: 1; summary: Summary }
+export interface SystemProcess { state: string; pid: number | null; rss_bytes: number | null; uptime_seconds: number | null }
+export interface SystemMetrics { control_source?: ControlSource; schemaVersion: 1; asOf: number | null; cpu: {percent:number|null;cores:number|null}; load:{one:number|null;five:number|null;fifteen:number|null}; memory:{used_bytes:number|null;total_bytes:number|null;percent:number|null}; disk:{used_bytes:number|null;total_bytes:number|null;free_bytes:number|null;percent:number|null}; services:Record<string,SystemProcess>; journal_backlog:number|null; event_loop_lag_ms:number|null }
 export type TaskStatus = 'DONE' | 'RUNNING' | 'REVIEW' | 'TODO' | 'BLOCKED' | 'PAUSED';
 export interface TaskItem { id: string; title: string; status: TaskStatus; owner: string; detail: string; next: string; runId?: string }
 export interface TaskPhase { id: string; title: string; status: TaskStatus; owner: string; detail: string; tasks: TaskItem[] }

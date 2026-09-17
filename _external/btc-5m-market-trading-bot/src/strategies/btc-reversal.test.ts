@@ -71,6 +71,38 @@ describe("BTC five-minute reversal strategy", () => {
     expect(f.tick(1000.2, 0.32, 0.69)).toEqual([]);
   });
 
+  it("processes distinct same-millisecond frames, resolves ambiguity and never duplicates a stage", () => {
+    const f = fixture();
+    expect(f.tick(1000, 0.68, 0.68)).toEqual([]);
+    expect(f.strategy.snapshot().rounds[0]).toMatchObject({ pendingAmbiguity: true, reason: "双边价格冲突，等待明确方向" });
+    const order = submit(f.tick(1000, 0.69, 0.31));
+    expect(order).toMatchObject({ tokenId: "UP1000", shares: 5 });
+    expect(f.strategy.snapshot().rounds[0].pendingAmbiguity).toBe(false);
+    expect(f.tick(1000, 0.69, 0.31)).toEqual([]);
+    expect(f.strategy.snapshot().rounds[0].stages).toHaveLength(1);
+  });
+
+  it("persists an invalidated ambiguity before accepting a later crossing", () => {
+    const f = fixture();
+    expect(f.tick(1000, 0.68, 0.68)).toEqual([]);
+    expect(f.tick(1000, 0.66, 0.35)).toEqual([]);
+    expect(f.persist.mock.lastCall?.[0].rounds[0]).toMatchObject({ pendingAmbiguity: false,
+      reason: "双边均已回落，本次冲突信号作废" });
+    expect(submit(f.tick(1000, 0.68, 0.33))).toMatchObject({ tokenId: "UP1000", shares: 5 });
+  });
+
+  it("does not add the same direction after ambiguity but adds the opposite direction once", () => {
+    const f = fixture();
+    expect(submit(f.tick(1000, 0.68, 0.33))).toMatchObject({ tokenId: "UP1000", shares: 5 });
+    expect(f.tick(1000, 0.68, 0.68)).toEqual([]);
+    expect(f.tick(1000, 0.69, 0.31)).toEqual([]);
+    expect(f.strategy.snapshot().rounds[0].stages).toHaveLength(1);
+    expect(f.tick(1000, 0.68, 0.68)).toEqual([]);
+    expect(submit(f.tick(1000, 0.31, 0.69))).toMatchObject({ tokenId: "DOWN1000", shares: 18 });
+    expect(f.tick(1000, 0.31, 0.69)).toEqual([]);
+    expect(f.strategy.snapshot().rounds[0].stages).toHaveLength(2);
+  });
+
   it("counts confirmations independently after the configured stage limit", () => {
     const f = fixture({ stageShares: [5, 6] });
     f.tick(1000, 0.68, 0.33);
@@ -121,6 +153,16 @@ describe("BTC five-minute reversal strategy", () => {
     expect(submit(f.tick(1003.6, 0.31, 0.70)).shares).toBe(18);
   });
 
+  it("drops a pending ambiguous signal across reconnect and rebases before trading", () => {
+    const f = fixture();
+    expect(f.tick(1000, 0.68, 0.68)).toEqual([]);
+    f.strategy.onEvent({ kind: "error", strategyId: "btc-reversal", message: "market_feed_disconnected" }, f.ctx);
+    expect(f.strategy.snapshot().rounds[0]).toMatchObject({ pendingAmbiguity: false, rebuildingReference: true });
+    expect(f.tick(1000.1, 0.69, 0.31)).toEqual([]);
+    expect(f.tick(1000.2, 0.66, 0.35)).toEqual([]);
+    expect(submit(f.tick(1000.3, 0.69, 0.31))).toMatchObject({ tokenId: "UP1000", shares: 5 });
+  });
+
   it("waits for both sides after a short disconnect rather than using one cached side", () => {
     const f = fixture();
     f.tick(1000, 0.66, 0.35);
@@ -164,13 +206,24 @@ describe("BTC five-minute reversal strategy", () => {
     expect(submit(f.tick(1008.2, 0.69, 0.32)).shares).toBe(5);
   });
 
-  it("does not choose an arbitrary side from contradictory books or confirmation prices", () => {
+  it("does not turn an ambiguous first frame after a long feed gap into a trade signal", () => {
+    const f = fixture();
+    f.tick(1000, 0.66, 0.35);
+    expect(f.tick(1008, 0.68, 0.68)).toEqual([]);
+    expect(f.strategy.snapshot().rounds[0]).toMatchObject({ pendingAmbiguity: false, rebuildingReference: false,
+      reason: "行情已恢复，等待下一次跨价" });
+    expect(f.tick(1008.1, 0.69, 0.31)).toEqual([]);
+    expect(f.tick(1008.2, 0.66, 0.35)).toEqual([]);
+    expect(submit(f.tick(1008.3, 0.69, 0.31))).toMatchObject({ tokenId: "UP1000", shares: 5 });
+  });
+
+  it("waits for contradictory books to resolve before choosing a side", () => {
     const f = fixture();
     expect(f.tick(1000, 0.70, 0.70)).toEqual([]);
     expect(f.strategy.snapshot().rounds[0].lastConfirmedDirection).toBeUndefined();
-    expect(f.tick(1000.1, 0.72, 0.30)).toEqual([]);
-    f.tick(1000.2, 0.66, 0.35);
-    expect(submit(f.tick(1000.3, 0.67, 0.34)).tokenId).toBe("UP1000");
+    expect(submit(f.tick(1000.1, 0.72, 0.30)).tokenId).toBe("UP1000");
+    expect(f.tick(1000.2, 0.66, 0.35)).toEqual([]);
+    expect(f.tick(1000.3, 0.67, 0.34)).toEqual([]);
   });
 
   it("retains stages across restart, rebases prices, and never resubmits an already known order", () => {

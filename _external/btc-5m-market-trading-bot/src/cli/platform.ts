@@ -254,6 +254,11 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
         price: order.price, shares: order.shares, direction: order.direction, ...marketIdentity(order.tokenId),
         sign_latency_ms: order.signLatencyMs ?? null, ack_latency_ms: order.ackLatencyMs ?? null,
+        total_ack_latency_ms: order.totalLatencyMs ?? null,
+        trigger_to_post_latency_ms: order.triggerToPostLatencyMs ?? null,
+        decision_to_post_latency_ms: order.decisionToPostLatencyMs ?? null,
+        reaction_latency_ms: order.reactionLatencyMs ?? null,
+        durable_commit_latency_ms: order.durableCommitLatencyMs ?? null,
         cancel_requested_at: order.cancelRequestedAt ?? null, cancel_ack_at: order.cancelAckAt ?? null,
         cancel_ack_latency_ms: order.cancelAckLatencyMs ?? null,
         updated_at: order.updatedAt });
@@ -265,6 +270,11 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         fee: fill.feeUsd, fee_source: fill.feeSource ?? null, trade_status: fill.status ?? "CONFIRMED",
         is_maker: fill.isMaker, direction: fill.direction, ...marketIdentity(fill.tokenId),
         engine_ts: fill.ts }, `fill:${JSON.stringify([fill.tradeId, fill.orderId])}${fill.status ? `:${fill.status}:${fill.feeSource ?? "estimate"}:${fill.feeUsd}` : ""}`);
+    } else if (event.kind === "latency") {
+      journal?.write("latency", { metric: event.metric, duration_ms: event.durationMs,
+        market_id: event.marketId ?? null, token_id: event.tokenId ?? null,
+        strategy_id: event.strategyId ?? null, client_order_id: event.clientOrderId ?? null,
+        order_id: event.orderId ?? null, outcome: event.outcome ?? null, engine_ts: event.ts });
     } else if (event.kind === "error") {
       reportError("event", "platform_event_failed");
     } else if (event.kind === "stopped") {
@@ -397,6 +407,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         : undefined;
       connection = await connectPolymarketPlatform({ mode: options.mode, markets, limits: options.limits,
         paperCashUsd: options.limits.capitalUsd, restored, persist: (state, critical) => store!.save(state, critical),
+        deferPersistence: () => store!.defer(),
         settle,
         observationOnly: !strategy,
         // Before connection resolution the adapter records initialization;

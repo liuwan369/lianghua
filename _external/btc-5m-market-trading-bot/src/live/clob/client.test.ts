@@ -184,12 +184,15 @@ describe("ClobWrapper low-latency order path", () => {
       createOrder: vi.fn().mockResolvedValue({ signed: true }),
     };
     const wrapper = wrapperWith(client);
+    const triggerReceivedAtMonoMs = performance.now();
 
     const result = await wrapper.submitOrder({
       tokenId: "token",
       price: 0.48,
       size: 5,
       tickSize: 0.01,
+      triggerReceivedAtMonoMs,
+      decisionAtMonoMs: triggerReceivedAtMonoMs,
     });
 
     expect(result.success).toBe(true);
@@ -202,7 +205,38 @@ describe("ClobWrapper low-latency order path", () => {
       deferExec: true,
     });
     expect(result.ackLatencyMs).toBeTypeOf("number");
+    expect(result.triggerToPostLatencyMs).toBeTypeOf("number");
+    expect(result.decisionToPostLatencyMs).toBeTypeOf("number");
+    expect(result.reactionLatencyMs).toBeTypeOf("number");
     expect(result.tradeIds).toEqual(["trade-1"]);
+  });
+
+  it("starts POST and ACK timing after asynchronous request headers are ready", async () => {
+    let monoMs=100;
+    vi.spyOn(performance,"now").mockImplementation(()=>monoMs);
+    sdkMocks.createL2Headers.mockImplementationOnce(async()=>{
+      monoMs+=40;
+      return {"POLY-API-KEY":"k"};
+    });
+    let fetchAt: number|undefined;
+    vi.stubGlobal("fetch",vi.fn().mockImplementation(()=>{
+      fetchAt=monoMs;
+      monoMs+=7;
+      return Promise.resolve(jsonResponse({success:true,orderID:"order-timed",status:"live"}));
+    }));
+    const wrapper=wrapperWith({
+      getNegRisk:vi.fn().mockResolvedValue(false),
+      createOrder:vi.fn().mockResolvedValue({signed:true}),
+    });
+
+    const result=await wrapper.submitOrder({tokenId:"token",price:0.48,size:5,tickSize:0.01,
+      triggerReceivedAtMonoMs:90,decisionAtMonoMs:95});
+
+    expect(result.success).toBe(true);
+    expect(fetchAt).toBe(140);
+    expect(result.triggerToPostLatencyMs).toBe(50);
+    expect(result.decisionToPostLatencyMs).toBe(45);
+    expect(result.ackLatencyMs).toBe(7);
   });
 
   it("signs a fixed-share FOK hedge so price improvement cannot expand the share budget", async () => {

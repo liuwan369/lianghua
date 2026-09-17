@@ -75,8 +75,13 @@ CREATE TABLE IF NOT EXISTS trade_details (
 """
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
                          "order", "settlement", "platform_status"})
-LATENCY_METRICS = ("market_age", "book_processing", "strategy_decision", "order_sign",
-                   "order_ack", "cancel_ack", "fill_report", "reaction")
+LATENCY_METRICS = frozenset({
+    "market_age", "book_processing", "book_batch_apply", "strategy_decision", "ws_receive_to_decision",
+    "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
+    "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
+    # Retained while old journals remain readable.
+    "order_ack", "cancel_ack", "fill_report",
+})
 LATENCY_LIMIT = 5000
 RUNTIME_MAX_AGE = 10
 ORDER_STATUSES = frozenset({"SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN"})
@@ -400,9 +405,10 @@ class Ledger:
                         record = {**record, "event": kind}
                     if kind == "latency":
                         metric, duration, at = record.get("metric"), _number(record.get("duration_ms")), _number(record.get("recv_ts"))
+                        event_mode = record.get("mode")
                         if (metric in LATENCY_METRICS and duration is not None and duration >= 0
                                 and at is not None and at > 0
-                                and record.get("mode") == ("live" if run["mode"] == "live" else "paper")):
+                                and (event_mode is None or event_mode == ("live" if run["mode"] == "live" else "paper"))):
                             db.execute("INSERT OR IGNORE INTO latency_samples VALUES(?,?,?,?,?)",
                                        (run_id, metric, record_offset, at, duration))
                             latency_metrics.add(metric)
@@ -710,7 +716,8 @@ class Ledger:
                 values = [sample[1] for sample in samples]
                 ordered = sorted(values)
                 latency["metrics"][metric] = {"latest_ms": values[-1], "p50_ms": ordered[(len(ordered)-1)//2],
-                    "p95_ms": ordered[math.ceil(len(ordered)*.95)-1], "samples": len(values),
+                    "p95_ms": ordered[math.ceil(len(ordered)*.95)-1],
+                    "p99_ms": ordered[math.ceil(len(ordered)*.99)-1], "max_ms": ordered[-1], "samples": len(values),
                     "latest_at": samples[-1][0], "expires_at": samples[0][0]+300,
                     "limit_reached": len(values) == LATENCY_LIMIT}
             result["latency"] = latency

@@ -6,7 +6,8 @@ import { connectStrategy } from './pages/strategy';
 import { renderReversal } from './pages/reversal-runtime';
 import { connectStrategyOrders } from './pages/strategy-orders';
 import { pageTelemetry } from './page-telemetry';
-import type { Account, Config, Events, Markets, Resource, Status } from './api/types';
+import { renderSystemMetrics } from './system-metrics';
+import type { Account, Config, Events, Markets, Resource, Status, SystemMetrics } from './api/types';
 import { activeMarkets, date, esc, executionName, fresh, money, modeName, number, platformRuntime, price, quotePair, usableMarket, marketMessage } from './ui';
 
 const set = (selector: string, value: unknown) => { const node = document.querySelector(selector); if (node) node.textContent = String(value ?? '--'); };
@@ -41,12 +42,12 @@ export function connect() {
   const trading=connectTradingControls(refresh);
   const strategyConfig=connectStrategy(value=>trading.receiveStrategy(value));
   const strategyOrders=connectStrategyOrders();
-  const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>();
+  const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>(), system=resource<SystemMetrics>();
   const runtimeRows=document.createElement('div');runtimeRows.dataset.platformRuntime='';runtimeRows.hidden=true;
   runtimeRows.innerHTML='<div class="row"><span>平台模拟现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><div class="row"><span>日内结果 / 停止线</span><b data-runtime-daily-loss>--</b></div><p class="muted" data-runtime-flow-coverage></p><p class="muted" data-runtime-source role="status"></p>';
   document.getElementById('homeStrategy')!.closest('.panel')!.append(runtimeRows);
   document.querySelector('[data-depth-count]')?.addEventListener('change',renderStatus);
-  let closed=false, refreshing=false, runLoading=false, runsLoading=false, historyGeneration=0;
+  let closed=false, refreshing=false, systemLoading=false, runLoading=false, runsLoading=false, historyGeneration=0;
   let configGeneration=0, accountGeneration=0;
   const forms = connectForms({
     config: value => {
@@ -81,6 +82,7 @@ export function connect() {
   }
   function renderStatus() {
     const s=fresh(status);
+    telemetry.selectRun(s?.run_id||null);
     const mode=s?executionName(s):'模式未知';
     const clock=s ? s.asOf+(Date.now()-status.receivedAt)/1000 : Date.now()/1000;
     const runtime=platformRuntime(s,clock);
@@ -189,16 +191,23 @@ export function connect() {
       if(r===config)forms.receiveConfig(config.data,config.error);
       if(r===account){forms.receiveAccount(account.data);accountData.receiveAccount(account.data);}
       renderMarkets();renderStatus();renderConfig();accountData.render();
+      if(r===system)renderSystemMetrics(system.data,system.error);
     }
+  }
+  async function loadSystemMetrics(){
+    if(systemLoading||closed)return;systemLoading=true;
+    try{await load(system,api.systemMetrics);}finally{systemLoading=false;}
   }
   async function refresh() {
     if(refreshing||closed)return;refreshing=true;
     const started=performance.now();
-    try{await Promise.allSettled([load(status,api.status),load(markets,api.markets),load(config,api.config),load(account,api.account),strategyConfig.refresh()]);
+    try{await Promise.allSettled([load(status,api.status),load(markets,api.markets),load(config,api.config),load(account,api.account),loadSystemMetrics(),strategyConfig.refresh()]);
       await Promise.allSettled([accountData.refresh(),strategyOrders.refresh()]);
       await loadRuns(undefined,true);
       if(selectedRun&&!runLoading)await loadEvents(selectedRun,historyCursor);
-      if(selectedRun){ try { telemetrySummary=(await api.summary(selectedRun)).summary; telemetry.renderServer(telemetrySummary); } catch { telemetrySummary=null; } }
+      const telemetryRun=fresh(status)?.run_id||null;
+      if(telemetryRun){ try { telemetrySummary=(await api.summary(telemetryRun)).summary; telemetry.renderServer(telemetrySummary,telemetryRun); } catch { telemetrySummary=null;telemetry.renderServer(null,telemetryRun); } }
+      else {telemetrySummary=null;telemetry.renderServer(null,null);}
     }finally{refreshing=false;renderEvents();if(fresh(status))telemetry.record(performance.now()-started);}
   }
   // refresh() owns the run/event refresh sequence. Triggering the paginated
@@ -207,6 +216,6 @@ export function connect() {
   document.querySelectorAll('[data-refresh]:not(#view-tasks [data-refresh])').forEach(b=>b.addEventListener('click',()=>{void refresh();}));
   renderMarkets();renderStatus();renderConfig();renderEvents();void refresh();
   const poll=window.setInterval(()=>void refresh(),5000);
-  const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();},1000);
+  const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();renderSystemMetrics(system.data,system.error);void loadSystemMetrics();},1000);
   return ()=>{closed=true;strategyConfig.close();strategyOrders.close();forms.close();accountData.close();trading.close();historyGeneration++;window.clearInterval(poll);window.clearInterval(tick);};
 }

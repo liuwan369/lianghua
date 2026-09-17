@@ -18,6 +18,12 @@ describe('versioned API validation', () => {
     expect(() => validate('account', {wallet:'',wallet_configured:false,owner_signer_configured:false,relayer_api_configured:false,builder_api_configured:false,config_error:null,last_check:null})).not.toThrow();
     expect(() => validate('account', {wallet:'',wallet_configured:false})).toThrow();
   });
+  it('requires complete nullable system metrics instead of accepting empty cards',()=>{
+    const valid={schemaVersion:1,asOf:100,cpu:{percent:null,cores:2},load:{one:.1,five:.2,fifteen:.3},memory:{used_bytes:1,total_bytes:2,percent:50},disk:{used_bytes:1,total_bytes:2,free_bytes:1,percent:50},services:{dashboard:{state:'active',pid:10,rss_bytes:null,uptime_seconds:null}},journal_backlog:0,event_loop_lag_ms:null};
+    expect(()=>validate('system-metrics',valid)).not.toThrow();
+    expect(()=>validate('system-metrics',{...valid,cpu:{}})).toThrow();
+    expect(()=>validate('system-metrics',{...valid,services:{dashboard:{...valid.services.dashboard,pid:-1}}})).toThrow();
+  });
   it('uses no cached network response when the endpoint fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('no', {status:503})));
     const { api } = await import('./client');
