@@ -17,7 +17,7 @@ NOW = 1_800_000_000.
 
 @pytest.fixture
 def projection(tmp_path, monkeypatch):
-    path = tmp_path / "dublin-evidence-2027.sqlite3"
+    path = tmp_path / "dublin-evidence-2027-01-15.sqlite3"
     create_db(path)
     monkeypatch.setattr(MarketSnapshot, "_service", lambda _: "active")
     return MarketSnapshot(tmp_path, "dublin-evidence-*.sqlite3", "test.service", "都柏林节点"), path
@@ -102,7 +102,7 @@ def test_day_roll_and_same_path_database_replacement_reset(projection):
     reader, path = projection
     chunk(path, NOW-2, [book(), book("down")])
     assert market(reader)["up_ask"] == .5
-    new = path.with_name("dublin-evidence-2028.sqlite3")
+    new = path.with_name("dublin-evidence-2027-01-16.sqlite3")
     create_db(new)
     assert market(reader)["up_ask"] is None
     chunk(new, NOW-1, [book(ask=.8), book("down")])
@@ -112,6 +112,29 @@ def test_day_roll_and_same_path_database_replacement_reset(projection):
     replacement.replace(new)
     assert market(reader)["up_ask"] is None
     assert reader.metrics["database_resets"] == 3
+
+
+def test_empty_or_old_compact_database_does_not_hide_live_database(projection):
+    reader, path = projection
+    chunk(path, NOW-2, [book(), book("down")])
+    invalid = path.with_name("dublin-evidence-20990101.sqlite3")
+    invalid.touch()
+    older = path.with_name("dublin-evidence-20260101.sqlite3")
+    create_db(older)
+    assert market(reader)["up_ask"] == .5
+    assert reader.identity[0] == str(path.resolve())
+
+
+def test_same_day_archive_mtime_does_not_override_newer_internal_health(projection):
+    reader, path = projection
+    chunk(path, NOW-2, [book(), book("down")])
+    compact = path.with_name("dublin-evidence-20270115.sqlite3")
+    create_db(compact)
+    chunk(compact, NOW-1, [book(ask=.9), book("down")])
+    with closing(sqlite3.connect(compact)) as db, db:
+        db.execute("UPDATE health SET recorded_at=?", (iso(NOW-60),))
+    assert market(reader)["up_ask"] == .5
+    assert reader.identity[0] == str(path.resolve())
 
 
 def test_empty_book_and_bbo_clear_side_and_old_bbo_does_not_override_depth(projection):

@@ -11,6 +11,7 @@ import json
 from contextlib import closing
 import math
 import os
+import re
 import sqlite3
 import subprocess
 import time
@@ -83,6 +84,38 @@ class MarketSnapshot:
         self.last_received_ns = 0
         self.max_event_id = 0
         self.metrics["database_resets"] += 1
+
+    def _latest_database(self) -> Path | None:
+        required = {"events", "event_chunks", "health"}
+        candidates: list[tuple[float, int, int, str, Path]] = []
+        for path in self.data_dir.glob(self.evidence_glob):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if stat.st_size == 0:
+                continue
+            match = re.search(r"(\d{4})-?(\d{2})-?(\d{2})$", path.stem)
+            try:
+                day = datetime.strptime("".join(match.groups()), "%Y%m%d").date().toordinal() if match else -1
+            except ValueError:
+                day = -1
+            try:
+                with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=3)) as conn:
+                    tables = {row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events','event_chunks','health')"
+                    )}
+                    if tables != required:
+                        continue
+                    row = conn.execute("SELECT recorded_at FROM health ORDER BY id DESC LIMIT 1").fetchone()
+                try:
+                    health_at = datetime.fromisoformat(str(row[0])).timestamp() if row else float("-inf")
+                except (TypeError, ValueError):
+                    health_at = float("-inf")
+                candidates.append((health_at, day, stat.st_mtime_ns, path.name, path))
+            except sqlite3.Error:
+                continue
+        return max(candidates)[-1] if candidates else None
 
     def _apply(self, row: list) -> None:
         event_type, received_ns, source_ms, _slug, token, payload = row
@@ -176,12 +209,11 @@ class MarketSnapshot:
     def _snapshot(self, now: float | None = None) -> dict:
         now = time.time() if now is None else now
         result = {"checked_at": iso(now), "service": self._service(), "node_label": self.node_label, "current_markets": [], "collector_online": False}
-        paths = sorted(self.data_dir.glob(self.evidence_glob))
-        if not paths:
+        path = self._latest_database()
+        if path is None:
             self._reset(None)
-            result["error"] = self.node_label + " SQLite missing"
+            result["error"] = self.node_label + " SQLite missing or invalid"
             return result
-        path = paths[-1]
         stat = path.stat()
         identity = (str(path.resolve()), stat.st_dev, stat.st_ino)
         if identity != self.identity:
