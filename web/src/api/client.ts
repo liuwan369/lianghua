@@ -29,6 +29,16 @@ export function validate(kind: string, data: unknown): void {
     || typeof data.control_source.label !== 'string' || typeof data.control_source.market_node !== 'string'))
     throw new Error('数据来源不明确，已清空该板块');
   let valid = false;
+  if (kind === 'strategy-config') {
+    const c = data.config;
+    valid = data.strategyId === 'btc-reversal' && integer(data.savedRevision) && object(c)
+      && ['triggerPrice','confirmationPrice','maxBuyPrice'].every(k => num(c[k]) && Number(c[k]) > 0 && Number(c[k]) < 1)
+      && Array.isArray(c.stageShares) && c.stageShares.length > 0 && c.stageShares.every(v => num(v) && Number(v) > 0)
+      && integer(c.maxStages) && c.maxStages === c.stageShares.length
+      && ['roundBudgetUsd','totalBudgetUsd','dailyLossUsd'].every(k => nullableNumber(c[k]) && (c[k] === null || Number(c[k]) > 0))
+      && num(c.durationMinutes) && Number(c.durationMinutes) >= 0 && c.mode === 'live'
+      && num(c.maxQuoteAgeSeconds) && num(c.maxQuoteSkewSeconds);
+  }
   if (kind === 'config') valid = integer(data.revision) && nullableString(data.savedAt) && object(data.params) && object(data.capabilities);
   if (kind === 'status') valid = typeof data.running === 'boolean' && typeof data.live_unlocked === 'boolean' && num(data.asOf)
     && nullableString(data.run_id) && nullableString(data.account_id) && nullableString(data.mode)
@@ -85,6 +95,7 @@ export function validate(kind: string, data: unknown): void {
     const o=data.occupancy;
     if (o!==undefined && (!object(o)||typeof o.available!=='boolean'||typeof o.complete!=='boolean'||!nullableNumber(o.open_buy_notional)||!nullableNumber(o.balance_after_open_buy_notional)||!nullableNumber(o.spendable_balance))) valid=false;
   }
+  if (kind === 'orders') valid = Array.isArray(data.orders) && data.orders.every(o => object(o) && typeof o.status === 'string' && typeof o.client_order_id === 'string' && nullableString(o.order_id)) && integer(data.total) && integer(data.limit) && integer(data.offset) && typeof data.has_more === 'boolean' && num(data.asOf) && integer(data.snapshotEventId);
   if (kind === 'runs') valid = nullableNumber(data.next_before_id) && Array.isArray(data.runs) && data.runs.every(r => object(r)
     && integer(r.id) && typeof r.run_id === 'string' && typeof r.mode === 'string' && nullableString(r.account_id) && num(r.created_at));
   if (kind === 'events') valid = typeof data.run_id === 'string' && nullableNumber(data.next_before_id) && Array.isArray(data.events)
@@ -122,16 +133,28 @@ export async function get<T>(kind: string, path: string): Promise<T> {
   } finally { window.clearTimeout(timeout); }
 }
 
+export function mutationHeaders(): Record<string,string> {
+  const token=document.querySelector<HTMLInputElement>('#controlToken')?.value.trim();
+  return {'Content-Type':'application/json',...(token?{'X-PM-Control-Token':token}:{})};
+}
+export function mutationError(value:unknown,status:number):string {
+  if(status===401) return '请在设置 → 系统诊断填写交易控制密码，然后重试';
+  let message=object(value)&&typeof value.error==='string'?value.error:`操作失败（HTTP ${status}）`;
+  const token=document.querySelector<HTMLInputElement>('#controlToken')?.value.trim();
+  if(token)message=message.split(token).join('[已隐藏]');
+  return message.replace(/(?:0x)?[a-fA-F0-9]{64}/g,'[已隐藏]').slice(0,240);
+}
+
 // Mutation errors may originate in proxies. Never display request bodies or credentials.
 export async function post(path: string, payload: Obj, timeoutMs = 15000): Promise<Obj> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal });
+      headers: mutationHeaders(), body: JSON.stringify(payload), signal: controller.signal });
     const value: unknown = await response.json().catch(() => null);
     if (!response.ok || !object(value) || value.ok !== true) {
-      let message = object(value) && typeof value.error === 'string' ? value.error : '服务器未确认操作成功';
+      let message = mutationError(value,response.status);
       for (const key of ['owner_key', 'relayer_key', 'builder_api_key', 'builder_secret', 'builder_passphrase']) {
         const secret = payload[key];
         if (typeof secret === 'string' && secret) message = message.split(secret).join('[已隐藏]');

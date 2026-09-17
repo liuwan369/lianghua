@@ -31,51 +31,87 @@ export function ownFills(trade: Obj): Obj[] {
   return [{...trade,order_id:trade.taker_order_id}];
 }
 
+export interface OrderRow { id:string; time:number|null; market:unknown; side:string; price:number|null; shares:number|null; amount:number|null; status:string; kind:string; fills:Obj[] }
+/** One exchange order per row; repeated reports of the same trade do not add fills twice. */
+export function aggregateOrders(orders: Obj[], trades: Obj[], history: Obj[]): OrderRow[] {
+  const grouped = new Map<string,OrderRow>();
+  for (const order of [...history, ...orders]) {
+    if (typeof order.id !== 'string' || !order.id) continue;
+    const state = String(order.status || '').toUpperCase();
+    const open = orders.some(item => item.id === order.id);
+    const canceled = !open && order.status_stale === false && ['CANCELED','CANCELLED'].includes(state);
+    grouped.set(order.id, {id:order.id,time:numeric(order.created_at),market:order.market,side:`${order.outcome || ''} ${order.side || ''}`.trim(),price:numeric(order.price),shares:null,amount:null,status:open?'未完成':canceled?'已撤单':order.status_stale?'状态待更新':state === 'MATCHED'?'成交待确认':'状态待核对',kind:open?'open':canceled?'canceled':'pending',fills:[]});
+  }
+  const reports = new Map<string,Obj>();
+  for (const trade of trades) for (const fill of ownFills(trade)) {
+    if (typeof fill.order_id !== 'string' || !fill.order_id) continue;
+    const key = `${fill.order_id}:${fill.id ?? [fill.match_time,fill.transaction_hash,fill.price,fill.size].join(':')}`;
+    const prior = reports.get(key);
+    const priority = (v:Obj) => ['FAILED','CONFIRMED'].includes(String(v.status).toUpperCase()) ? 2 : 1;
+    if (!prior || priority(fill) >= priority(prior)) reports.set(key, fill);
+  }
+  for (const fill of reports.values()) {
+    const id = String(fill.order_id), state = String(fill.status).toUpperCase();
+    let row = grouped.get(id);
+    if (!row) { row = {id,time:numeric(fill.match_time),market:fill.market,side:`${fill.outcome || ''} ${fill.side || ''}`.trim(),price:numeric(fill.price),shares:null,amount:null,status:'成交待确认',kind:'pending',fills:[]}; grouped.set(id,row); }
+    row.fills.push(fill);
+    if (state === 'CONFIRMED') {
+      const q=numeric(fill.size),p=numeric(fill.price);
+      if (q !== null && p !== null) { row.shares=(row.shares ?? 0)+q;row.amount=(row.amount ?? 0)+q*p; }
+      if (row.kind !== 'open' && row.kind !== 'canceled') { row.kind='fill';row.status='已确认成交'; }
+    } else if (state === 'FAILED' && row.kind === 'pending') { row.kind='failed';row.status='成交失败'; }
+  }
+  return [...grouped.values()].sort((a,b)=>(b.time ?? 0)-(a.time ?? 0)||a.id.localeCompare(b.id));
+}
+
 export function connectAccountData() {
   let data:AccountData|null=null, wallet='', sourceLabel='服务器', error:string|null=null, closed=false, loading=false, generation=0;
-  let source='account', filter=0, page=0;
+  let source='strategy', filter=0, page=0, pageSize=10, currentMarket='', roundScope='all';
+  let orderedIds:string[]=[]; let lastRows:OrderRow[]=[];
   let lastOrders:unknown[]=[],lastPositions:AccountSection|null|undefined;
   let lastFinancial:unknown[]=[],financialBoundary=0;
   const changed=(before:unknown[],after:unknown[])=>before.length!==after.length||after.some((v,i)=>v!==before[i]);
   const note=document.querySelector('#trade-orders .note')!;
   const toolbar=document.createElement('div');toolbar.className='subnav';
-  toolbar.innerHTML='<label>数据来源 <select id="orders-source"><option value="account">真实账户订单与成交</option><option value="run">运行事件（按运行模式）</option></select></label><button id="account-previous">上一页</button><button id="account-next">下一页</button><span id="account-data-state" role="status"></span>';
+  toolbar.innerHTML='<label>订单来源 <select id="orders-source"><option value="strategy">当前策略订单</option><option value="account">账户已获取订单</option></select></label><label>场次 <select id="orders-round"><option value="all">全部场次</option><option value="current">当前场次</option></select></label><label>每页 <select id="orders-page-size"><option value="10">10 条</option><option value="20">20 条</option><option value="50">50 条</option></select></label><button id="account-previous">上一页</button><button id="account-next">下一页</button><span id="account-data-state" role="status"></span>';
   note.before(toolbar);
   const selector=toolbar.querySelector<HTMLSelectElement>('select')!;
   const orderButtons=Array.from(document.querySelector('#trade-orders > .subnav')!.querySelectorAll<HTMLButtonElement>('button'));
   const exportButton=document.querySelector<HTMLButtonElement>('#trade-orders .head-actions button')!;
   const positions=document.createElement('div');positions.className='table-wrap';positions.id='account-positions';
-  positions.innerHTML='<table class="table"><caption>真实账户持仓 · 与模拟运行库存分开</caption><thead><tr><th>市场</th><th>方向</th><th>份数</th><th>平均价</th><th>当前估值</th><th>平台报告盈亏</th></tr></thead><tbody></tbody></table>';
+  positions.innerHTML='<table class="table"><caption>真实账户持仓</caption><thead><tr><th>市场</th><th>方向</th><th>份数</th><th>平均价</th><th>当前估值</th><th>平台报告盈亏</th></tr></thead><tbody></tbody></table>';
   document.querySelector('#view-home .grid')!.after(positions);
   const bindings:Array<()=>void>=[];
   const on=(el:Element,event:string,fn:EventListener)=>{el.addEventListener(event,fn);bindings.push(()=>el.removeEventListener(event,fn));};
   function section(name:keyof AccountData){return usableSection(data,name,wallet);}
   function rows() {
-    const orders=section('open_orders'),trades=section('trades'),history=section('order_history');
-    const a=(orders?.items||[]).map(o=>({time:numeric(o.created_at),market:o.market,side:`${o.outcome||''} ${o.side||''}`,price:numeric(o.price),shares:numeric(o.size_matched),amount:null,fee:null,status:`未完成 · ${o.status||'平台挂单'}`,kind:'open',id:o.id}));
-    const b=(trades?.items||[]).flatMap(ownFills).map(t=>{const p=numeric(t.price),confirmed=String(t.status).toUpperCase()==='CONFIRMED',failed=String(t.status).toUpperCase()==='FAILED',q=confirmed?numeric(t.size):null;return {time:numeric(t.match_time),market:t.market,side:`${t.outcome||''} ${t.side||''}`,price:p,shares:q,amount:p!==null&&q!==null?p*q:null,fee:null,status:`${confirmed?'已确认成交':failed?'成交失败':'成交待确认'} · ${t.status||'未知'}`,kind:confirmed?'fill':failed?'failed':'pending',id:t.order_id};});
-    const c=(history?.items||[]).filter(o=>o.status_stale===false&&['CANCELED','CANCELLED'].includes(String(o.status).toUpperCase())).map(o=>({time:numeric(o.created_at),market:o.market,side:`${o.outcome||''} ${o.side||''}`,price:numeric(o.price),shares:null,amount:null,fee:null,status:`已撤单 · ${o.status}`,kind:'canceled',id:o.id}));
-    return [...a,...b,...c].filter(r=>filter===0||filter===1&&r.kind==='open'||filter===2&&r.kind==='fill'||filter===3&&r.kind==='canceled'||filter===4&&r.kind==='failed').sort((a,b)=>(b.time||0)-(a.time||0));
+    return aggregateOrders(section('open_orders')?.items || [], section('trades')?.items || [], section('order_history')?.items || [])
+      .filter(r => (roundScope !== 'current' || !!currentMarket && r.market === currentMarket) && (filter===0||filter===1&&r.kind==='open'||filter===2&&r.kind==='fill'||filter===3&&r.kind==='canceled'||filter===4&&r.kind==='failed'));
   }
   function renderOrders() {
-    const signature=[source,filter,page,wallet,error,section('open_orders'),section('trades'),section('order_history')];
+    const signature=[source,filter,page,pageSize,currentMarket,roundScope,wallet,error,section('open_orders'),section('trades'),section('order_history')];
     if(!changed(lastOrders,signature))return;
     lastOrders=signature;
     document.getElementById('trade-orders')!.dataset.source=source;
-    const runHistory=document.getElementById('history-run')?.closest<HTMLElement>('.subnav');if(runHistory)runHistory.hidden=source==='account';
+    const runHistory=document.getElementById('history-run')?.closest<HTMLElement>('.subnav');if(runHistory)runHistory.hidden=true;
     for(const id of ['account-previous','account-next','account-data-state'])document.getElementById(id)!.hidden=source!=='account';
-    orderButtons.forEach((b,i)=>{b.disabled=source!=='account';b.classList.toggle('active',i===filter);});
+    orderButtons.forEach((b,i)=>{b.disabled=false;if(source==='account')b.classList.toggle('active',i===filter);});
     exportButton.disabled=source!=='account'||!rows().length;
+    toolbar.querySelectorAll<HTMLElement>('label').forEach(label=>{if(!label.contains(selector))label.hidden=source!=='account';});
     if(source!=='account')return;
-    const all=rows();page=Math.min(page,Math.max(0,Math.ceil(all.length/50)-1));const slice=all.slice(page*50,(page+1)*50);
+    const currentRows=rows(), byId=new Map(currentRows.map(r=>[r.id,r]));
+    // Preserve historical membership as new orders arrive; page 1 follows latest orders.
+    if(page===0) orderedIds=currentRows.map(r=>r.id);
+    const all=orderedIds.map(id=>byId.get(id)).filter((r):r is OrderRow=>!!r);
+    lastRows=all; const slice=all.slice(page*pageSize,(page+1)*pageSize);
     const complete=section('open_orders')?.complete&&section('trades')?.complete;
     const history=section('order_history');
     const scope=filter===3?history?`已观察订单范围 · ${history.complete?'状态查询完成':history.error_code==='order_details_unavailable'?'官方未返回部分订单详情，撤单状态无法核对':'状态尚未全部查明'} · 非账户全部历史`:'已撤订单状态尚无来源':complete?'当前挂单与成交查询已完整返回':'来源未就绪或分页不完整';
-    text('#account-data-state',error||`${wallet||'未配置账户'} · 第 ${page+1} 页 · ${scope}`);
-    text('#trade-orders .note','仅 CONFIRMED 回报列入已成交；待确认与失败回报不计成交份数和金额。撤单状态取自官方订单查询，仅覆盖已观察的订单，不推断消失挂单已撤。费率不是实际扣费。导出覆盖当前筛选下已获取记录。');
-    document.querySelector('#trade-orders tbody')!.innerHTML=slice.length?slice.map(r=>`<tr><td>${date(r.time)}</td><td>${esc(r.market)}<small> ${esc(r.id)}</small></td><td>${esc(r.side)}</td><td>${price(r.price)}</td><td>${number(r.shares,4)}</td><td>${money(r.amount)}</td><td>--</td><td>${esc(r.status)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty">${esc(error|| (filter===3?history?'已观察订单中暂无确认撤单记录；不代表账户历史没有撤单':'平台已撤订单历史尚无来源，不能推断为空':complete?'当前筛选无记录':'等待真实账户数据，不能判断为空'))}</td></tr>`;
+    text('#account-data-state',error||`${wallet||'未配置账户'} · 第 ${page+1} 页 · 每页 ${pageSize} 条 · ${scope}`);
+    text('#trade-orders .note','每行对应一个真实订单。成交份数仅计已确认回报；展开可查看分笔成交。历史页保持当前顺序，返回第 1 页查看最新订单。');
+    document.querySelector('#trade-orders tbody')!.innerHTML=slice.length?slice.map(r=>`<tr><td>${date(r.time)}</td><td>${esc(r.market)}<details><summary>订单详情</summary><small>${esc(r.id)}</small>${r.fills.map(f=>`<div>${date(numeric(f.match_time))} · ${price(numeric(f.price))} × ${number(numeric(f.size),4)} · ${esc(f.status)}</div>`).join('')}</details></td><td>${esc(r.side)}</td><td>${price(r.price)}</td><td>${number(r.shares,4)}</td><td>${money(r.amount)}</td><td>--</td><td>${esc(r.status)}</td></tr>`).join(''):`<tr><td colspan="8" class="empty">${esc(error|| (filter===3?history?'已观察订单中暂无确认撤单记录；不代表账户历史没有撤单':'平台已撤订单历史尚无来源，不能推断为空':complete?'当前筛选无记录':'等待真实账户数据，不能判断为空'))}</td></tr>`;
     (document.getElementById('account-previous') as HTMLButtonElement).disabled=page===0;
-    (document.getElementById('account-next') as HTMLButtonElement).disabled=(page+1)*50>=all.length;
+    (document.getElementById('account-next') as HTMLButtonElement).disabled=(page+1)*pageSize>=all.length;
   }
   function render() {
     if(closed)return;
@@ -90,11 +126,8 @@ export function connectAccountData() {
     }
     if(orders?.complete){text('#homeOrders',number(orders.items.length));text('#homeOrders + small','当前真实未完成委托 · 不是今日/月累计');}
     else {text('#homeOrders','--');text('#homeOrders + small','真实未完成委托尚未完整获取');}
-    // The trade panel follows a run; do not place account-wide inventory inside a paper run.
-    const holder=document.querySelector('#view-trade .panel .empty');
-    if(holder){holder.textContent=orders?`真实账户未完成委托 ${orders.items.length} 条${orders.complete?'':'（未完整）'}；详见订单页。此数值不代表模拟委托。`:'真实账户委托等待同步；模拟委托需按运行核对。';}
     const timing=data?.checked_at?new Date(data.checked_at).toLocaleString('zh-CN',{hour12:false}):'--';
-    text('.side-note',`${sourceLabel}\n账户数据：${error|| (data?.stale?'已过期':timing)}\n账户记录与运行事件分开`);
+    text('.side-note',`${sourceLabel}\n账户数据：${error|| (data?.stale?'已过期':timing)}\nBTC 五分钟反转`);
     renderOrders();renderFinancial();
   }
   function renderFinancial() {
@@ -154,13 +187,15 @@ export function connectAccountData() {
       body.querySelectorAll('tr').forEach(tr=>{const href=tr.querySelector('a')?.getAttribute('href')||'';if(payments.some(p=>href.toLowerCase().endsWith('/'+String(p.transaction_hash).toLowerCase()))||tr.querySelector('[colspan]'))tr.remove();});
       body.insertAdjacentHTML('afterbegin',payments.map(p=>`<tr><td>${esc(Array.isArray(p.types)?p.types.join(' / '):'奖励')}</td><td>${date(numeric(p.timestamp))}</td><td>${esc(p.token)}</td><td>${number(numeric(p.received_amount),6)}</td><td>链上到账与活动匹配 · 非完整历史</td><td><a target="_blank" rel="noopener noreferrer" href="https://polygonscan.com/tx/${esc(p.transaction_hash)}">查看交易</a></td></tr>`).join(''));
     }
-    text('#reward-center .reward-banner','账户费用回执与奖励到账核对已接入；仅展示已获取范围，资格、完整账单及钱包净收益仍待核对。未知不视为零。');
+    text('#reward-center .reward-banner','账户费用回执与奖励到账核对已接入；仅展示已获取范围，资格、完整账单及钱包净收益仍待核对。');
     text('#reward-payments .reward-status',activity||payments.length?`已核对到账 ${payments.length} 笔 · ${['今日 UTC','本月 UTC','近 30 天','全部已获取历史'][period]} · ${activity?.complete?'活动查询完整':'部分记录'}${activity?.items.some(a=>['REWARD','MAKER_REBATE','TAKER_REBATE'].includes(String(a.type))&&numeric(a.timestamp)===null)?' · 存在日期不明记录，未计入所选期间':''}`:'账户活动等待同步');
     // Neither fee rate nor an activity label proves the wallet's final net profit.
   }
   on(selector,'change',()=>{source=selector.value;page=0;renderOrders();});
   orderButtons.forEach((b,i)=>on(b,'click',()=>{filter=i;page=0;renderOrders();}));
-  on(document.getElementById('account-previous')!,'click',()=>{page--;renderOrders();});
+  on(document.getElementById('account-previous')!,'click',()=>{page=Math.max(0,page-1);renderOrders();});
+  on(document.getElementById('orders-page-size')!,'change',event=>{pageSize=Number((event.target as HTMLSelectElement).value);page=0;renderOrders();});
+  on(document.getElementById('orders-round')!,'change',event=>{roundScope=(event.target as HTMLSelectElement).value;page=0;renderOrders();});
   on(document.getElementById('account-next')!,'click',()=>{page++;renderOrders();});
   on(document.getElementById('reward-period')!,'change',renderFinancial);
   on(exportButton,'click',()=>{
@@ -174,5 +209,5 @@ export function connectAccountData() {
     catch(e){if(epoch===generation){data=null;error=e instanceof SyntaxError?'账户数据格式错误，已清空旧值':e instanceof Error?e.message:'账户数据读取失败';}}
     finally{loading=false;render();}
   }
-  return { refresh, render, receiveAccount(a:Account|null){sourceLabel=a?.control_source?.label||'来源未标注';const next=a?.wallet||'';if(next.toLowerCase()!==wallet.toLowerCase()){wallet=next;data=null;generation++;page=0;}render();}, close(){closed=true;bindings.forEach(f=>f());} };
+  return { refresh, render, receiveMarket(market:string|null){const next=market||'';if(next!==currentMarket){currentMarket=next;if(roundScope==='current')page=0;}renderOrders();}, receiveAccount(a:Account|null){sourceLabel=a?.control_source?.label||'来源未标注';const next=a?.wallet||'';if(next.toLowerCase()!==wallet.toLowerCase()){wallet=next;data=null;generation++;page=0;}render();}, close(){closed=true;bindings.forEach(f=>f());} };
 }

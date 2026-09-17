@@ -24,6 +24,90 @@ function setup() {
 }
 
 describe("strategy-independent account core", () => {
+  it("applies a later reported fee once after confirmation", async () => {
+    const core = setup(), order = await core.submit(request());
+    const fill = { tradeId: "fee-fix", orderId: order.orderId!, tokenId: "up", direction: "BUY" as const,
+      price: 0.5, shares: 2, feeUsd: 0.05, feeSource: "estimate" as const, ts: 101, isMaker: false, status: "MATCHED" as const };
+    core.applyFill(fill); core.applyFill({ ...fill, status: "CONFIRMED" });
+    expect(core.applyFill({ ...fill, feeUsd: 0.03, feeSource: "reported", status: "CONFIRMED" })).toBe(true);
+    expect(core.snapshot().cashUsd).toBeCloseTo(18.97);
+    expect(core.positions()[0].costUsd).toBeCloseTo(1.03);
+    expect(core.applyFill({ ...fill, feeUsd: 0.03, feeSource: "reported", status: "CONFIRMED" })).toBe(false);
+  });
+
+  it("halts strategy context while account recovery is in progress", async () => {
+    const core = setup();
+    core.setRecovering(true);
+    expect(core.contextSnapshot().risk).toMatchObject({ halted: true, reason: "账户恢复中" });
+    await expect(core.submit(request())).rejects.toThrow("account recovery in progress");
+    expect(core.orders()).toHaveLength(0);
+    core.setRecovering(false);
+  });
+  it("reserves venue fees inside the user round budget before any request reaches the gateway", async () => {
+    const core = setup();
+    await expect(core.submit(request({ roundBudgetUsd: 2 }))).rejects.toThrow("round budget including fees");
+    expect(core.orders()).toHaveLength(0);
+    const accepted = await core.submit(request({ roundBudgetUsd: 2.01 }));
+    expect(accepted.status).toBe("OPEN");
+  });
+
+  it("keeps a prepared identity and fill received before a missing HTTP ACK", async () => {
+    let core!: TradingCore;
+    const gateway: OrderGateway = { mode: "live", cancel: async () => true,
+      submit: async (_request, _instrument, prepared) => {
+        prepared!({ orderHash: "venue-hash", signedPayload: { signature: "signed" }, preparedAt: 101 });
+        core.applyFill({ tradeId: "early", orderId: "venue-hash", tokenId: "up", direction: "BUY",
+          price: 0.5, shares: 4, feeUsd: 0, ts: 101, isMaker: false, status: "MATCHED" });
+        return { status: "accepted", orderId: "venue-hash" };
+      } };
+    core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway } });
+    const order = await core.submit(request());
+    expect(order).toMatchObject({ orderId: "venue-hash", status: "FILLED", filledShares: 4 });
+    expect(core.snapshot().cashUsd).toBe(18);
+  });
+
+  it("preserves prepared identity and reservations when the HTTP ACK is unknown", async () => {
+    const gateway: OrderGateway = { mode: "live", cancel: async () => true,
+      submit: async (_request, _instrument, prepared) => {
+        prepared!({ orderHash: "lost-ack-hash", signedPayload: { signature: "signed" }, preparedAt: 101 });
+        return { status: "unknown", error: "timeout" };
+      } };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway } });
+    const order = await core.submit(request());
+    expect(order).toMatchObject({ orderId: "lost-ack-hash", status: "UNKNOWN", reservedUsd: 2 });
+    expect(core.risk().halted).toBe(true);
+  });
+  it("compensates a failed provisional fill exactly once and blocks duplicate resubmission", async () => {
+    const core = setup(), order = await core.submit(request());
+    const fill = { tradeId: "provisional", orderId: order.orderId!, tokenId: "up", direction: "BUY" as const,
+      price: 0.5, shares: 2, feeUsd: 0.01, ts: 101, isMaker: false, status: "MATCHED" as const };
+    core.applyFill(fill);
+    expect(core.snapshot().cashUsd).toBeCloseTo(18.99);
+    expect(core.applyFill({ ...fill, status: "FAILED" })).toBe(true);
+    expect(core.snapshot().cashUsd).toBe(20);
+    expect(core.positions()[0]).toMatchObject({ shares: 0, costUsd: 0 });
+    expect(core.order(order.orderId!)?.status).toBe("UNKNOWN");
+    expect(core.order(order.orderId!)?.reservedUsd).toBeCloseTo(2.01);
+    expect(core.risk().halted).toBe(true);
+    expect(core.applyFill({ ...fill, status: "FAILED" })).toBe(false);
+    expect(core.applyFill({ ...fill, status: "MATCHED" })).toBe(false);
+    expect((await core.submit(request())).orderId).toBe(order.orderId);
+  });
+
+  it("processes confirmation without charging a fill twice and ignores a late failure", async () => {
+    const core = setup(), order = await core.submit(request());
+    const fill = { tradeId: "confirmed", orderId: order.orderId!, tokenId: "up", direction: "BUY" as const,
+      price: 0.5, shares: 2, feeUsd: 0.01, ts: 101, isMaker: false, status: "MATCHED" as const };
+    core.applyFill(fill); core.applyFill({ ...fill, status: "MINED" }); core.applyFill({ ...fill, status: "CONFIRMED" });
+    expect(core.applyFill({ ...fill, status: "FAILED" })).toBe(false);
+    expect(core.snapshot().cashUsd).toBeCloseTo(18.99);
+    expect(core.snapshot().fills).toHaveLength(1);
+    expect(core.snapshot().fills[0].status).toBe("CONFIRMED");
+  });
   it("accounts BUY and SELL fills by order identity and reserves shares separately", async () => {
     const core = setup();
     const buy = await core.submit(request());

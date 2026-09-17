@@ -1,16 +1,8 @@
 import { api } from './api/client';
 import type { Account, Config, Obj } from './api/types';
 
-export const fieldMap: Record<string, string> = {
-  order: 'order_usd', life: 'maker_life_sec', mode: 'mode', duration: 'duration_min',
-  submitted: 'max_total_usd', maxOrders: 'max_orders',
-  pairCost: 'pair_cost_max', decisionInterval: 'decision_interval_ms', defensiveCancel: 'defensive_cancel_bps',
-};
-type Control = HTMLInputElement | HTMLSelectElement;
-
 /** Form drafts live only in the current page; polling never replaces edited fields. */
 export function connectForms(saved?: { config: (value: Config) => void; account: () => void }) {
-  const fields = Array.from(document.querySelectorAll<Control>('#settings-strategy [id^="setting-"],#settings-run [id^="setting-"]'));
   const accountPanel = document.querySelector<HTMLElement>('#settings-account .form');
   if (accountPanel && !accountPanel.querySelector('[data-builder-credentials]')) {
     accountPanel.insertAdjacentHTML('beforeend', `<div data-builder-credentials class="field"><label for="accountBuilderApiKey">Builder API Key（选填）</label><input id="accountBuilderApiKey" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"><small class="field-help">Deposit Wallet 赎回等 Builder Relayer 操作需要，与 Builder Code 不同。</small></div><div data-builder-credentials class="field"><label for="accountBuilderSecret">Builder Secret（配套填写）</label><input id="accountBuilderSecret" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"><small class="field-help">从 Polymarket Settings → Builder 创建 Profile 后获取。</small></div><div data-builder-credentials class="field"><label for="accountBuilderPassphrase">Builder Passphrase（配套填写）</label><input id="accountBuilderPassphrase" type="password" maxlength="512" autocomplete="new-password" spellcheck="false"><small class="field-help">三项必须同时填写；不会回显或写入浏览器存储。</small></div>`);
@@ -21,19 +13,10 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
   const liveAuthState = document.querySelector<HTMLElement>('[data-live-auth-state]');
   const liveAuthMessage = document.querySelector<HTMLElement>('[data-live-auth-message]');
   const globalSave = document.querySelector<HTMLButtonElement>('[data-save]')!;
-  const saves = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-save]'));
-  const resets = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-settings-reset]'));
-  const dirty = new Set<string>();
   const accountDirty = new Set<HTMLInputElement>();
   const bindings: Array<() => void> = [];
-  let latest: Config | null = null, baseline: Config | null = null;
-  let savedWallet = '', configBusy = false, accountBusy = false, closed = false;
+  let savedWallet = '', accountBusy = false, closed = false;
   let liveAuthBusy = false;
-  let configError: string | null = null, configMessage = '';
-  const key = (field: Control) => field.id.slice('setting-'.length);
-  const supported = (field: Control) => !!fieldMap[key(field)];
-  const observation = () => latest?.capabilities.executionTarget === 'platform' && latest.capabilities.executionMode === 'observation';
-  const originalHelp = new Map(fields.map(field => [field, document.getElementById(`help-${key(field)}`)?.textContent || '']));
   const on = (el: Element, event: string, handler: EventListener) => {
     el.addEventListener(event, handler); bindings.push(() => el.removeEventListener(event, handler));
   };
@@ -41,73 +24,13 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     const node = document.querySelector('#settings-account .note');
     if (node) { node.textContent = message; node.setAttribute('role', 'status'); }
   };
-  function feedback() {
-    const drafts = fields.filter(field => !supported(field) && field.value !== '').length;
-    const scope = observation() ? '平台观察仅应用运行模式和运行时长；其余旧引擎参数可保存，但本次不应用。未加载策略，不下单。' : '';
-    const message = [configError, configMessage || '已接入字段可保存到服务器；其余字段仅供本页填写，尚未接入引擎。', scope,
-      drafts ? `${drafts} 项未接入字段仅保留在本页，刷新后丢弃，不会保存或生效。` : ''].filter(Boolean).join(' ');
-    document.querySelectorAll('[data-settings-message]').forEach(el => el.textContent = message);
-  }
-  function applyCapabilities() {
-    const active = observation();
-    const applied = latest?.capabilities.runtimeAppliedFields;
-    const preserved = latest?.capabilities.preservedLegacyFields;
-    for (const field of fields.filter(supported)) {
-      const name = fieldMap[key(field)];
-      const inRuntime = active && Array.isArray(applied) && applied.includes(name);
-      const legacy = active && Array.isArray(preserved) && preserved.includes(name);
-      const message = active ? inRuntime ? '平台观察：下次启动生效。' : legacy ? '旧引擎参数：可保存，平台观察不应用。' : '可保存；平台观察未声明应用此字段。' : '保存到服务器，下次启动生效。';
-      field.dataset.runtime = active ? inRuntime ? 'applied' : 'preserved' : 'legacy';
-      field.title = message;
-      const help = document.getElementById(`help-${key(field)}`);
-      if (help) help.textContent = `${message} ${originalHelp.get(field) || ''}`;
-    }
-    if (active) {
-      for (const selector of ['#settings-strategy .settings-intro', '#settings-run .settings-intro']) {
-        const node = document.querySelector(selector);
-        if (node) node.textContent = '平台观察 · 未加载策略。只应用运行模式与时长；旧策略参数保留，不用于当前运行。模拟初始资金与风险采用平台默认值，非真实账户资金。';
-      }
-      document.querySelectorAll('[data-check-state]').forEach(el => el.textContent = '观察模式');
-      document.querySelectorAll('[data-setting-checks]').forEach(el => el.textContent = '本次不加载策略、不创建订单；旧订单金额和配对参数不控制平台观察。');
-      document.querySelectorAll('.settings-checks > .settings-check-foot').forEach(el => el.textContent = '平台模拟资金与真实账户余额分别显示。');
-      if (modeLive) modeLive.textContent = '实盘 · 当前平台观察启动仅支持纸面';
-    }
-  }
   function buttons() {
-    saves.forEach(button => button.disabled = configBusy);
-    resets.forEach(button => button.disabled = configBusy);
     accountButtons.forEach(button => button.disabled = accountBusy);
     const active = document.querySelector('[data-setting].active')?.getAttribute('data-setting');
-    globalSave.disabled = active === 'system' || (active === 'account' ? accountBusy : configBusy);
-    globalSave.title = active === 'system' ? '系统诊断没有可保存的配置' : '';
-    globalSave.textContent = active === 'account' ? '保存账户' : '保存设置';
+    globalSave.disabled = active === 'system' || accountBusy;
+    globalSave.textContent = '保存账户';
     if (liveAuthButton) liveAuthButton.disabled = liveAuthBusy || closed;
   }
-  for (const field of fields) {
-    field.disabled = false;
-    field.title = supported(field) ? '保存到服务器，下次启动生效' : '仅本页草稿：未接入引擎，不会保存或生效';
-    field.dataset.persistence = supported(field) ? 'server' : 'draft';
-    if (field instanceof HTMLInputElement) {
-      field.placeholder = supported(field) ? '等待服务器配置，可先填写' : '仅本页草稿 · 未接入';
-      field.required = supported(field);
-    }
-    if (field instanceof HTMLSelectElement) {
-      const blank = Array.from(field.options).find(option => option.value === '');
-      if (blank) blank.textContent = supported(field) ? '等待服务器配置' : '仅本页草稿 · 未接入';
-    }
-    if (!supported(field)) {
-      const help = document.getElementById(`help-${key(field)}`);
-      if (help) help.textContent = `${help.textContent} 仅本页草稿，未保存、未生效。`;
-    }
-    const changed = () => {
-      if (!dirty.size) baseline = latest;
-      dirty.add(key(field)); configMessage = '修改尚未保存。'; feedback();
-    };
-    on(field, 'input', changed); on(field, 'change', changed);
-  }
-  document.querySelectorAll<HTMLInputElement>('[data-example-price]').forEach(field => { field.disabled = false; field.title = '示例输入，不是实时行情或启动校验'; });
-  const modeLive = document.querySelector<HTMLOptionElement>('#setting-mode option[value="live"]');
-  if (modeLive) modeLive.textContent = '真实交易 · 保存不会解锁或启动';
   const accountNames = ['wallet', 'owner_key', 'relayer_key', 'relayer_address', 'builder_api_key', 'builder_secret', 'builder_passphrase'];
   const accountLabels = ['资金钱包地址', 'Owner 签名私钥', 'Relayer API Key', 'Relayer 地址', 'Builder API Key', 'Builder Secret', 'Builder Passphrase'];
   accountFields.forEach((field, index) => {
@@ -119,62 +42,6 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     if (index === 0) field.required = true;
     on(field, 'input', () => { accountDirty.add(field); accountMessage('账户修改尚未保存。请通过当前 HTTPS 页面提交；保存不会启动交易。'); });
   });
-  const inventoryMode = document.querySelector<HTMLSelectElement>('#setting-inventoryMode');
-  const inventory = document.querySelector<HTMLInputElement>('#setting-inventory');
-  function syncInventoryMode() {
-    if (!inventoryMode || !inventory) return;
-    // An empty value is the read-only/unknown state; keep the manual control
-    // locked until the user explicitly selects manual sizing.
-    const automatic = inventoryMode.value !== 'manual';
-    inventory.disabled = automatic;
-    inventory.setAttribute('aria-disabled', String(automatic));
-    inventory.title = automatic
-      ? '自动模式根据单场预算和成本上限计算；手动份数不会生效。'
-      : '手动模式下使用此份数；仍需通过启动前风险检查。';
-  }
-  if (inventoryMode) on(inventoryMode, 'change', syncInventoryMode);
-  syncInventoryMode();
-  function validateCrossFields(modified: Control[]) {
-    const order = document.querySelector<HTMLInputElement>('#setting-order');
-    const submitted = document.querySelector<HTMLInputElement>('#setting-submitted');
-    const orderValue = order ? Number(order.value) : NaN;
-    const submittedValue = submitted ? Number(submitted.value) : NaN;
-    if (order) order.setCustomValidity('');
-    if (submitted) submitted.setCustomValidity('');
-    if (Number.isFinite(orderValue) && Number.isFinite(submittedValue) && orderValue > submittedValue) {
-      const message = '每笔投入不能超过本次累计提交金额上限。';
-      if (order) order.setCustomValidity(message);
-      if (submitted) submitted.setCustomValidity(message);
-      const target = modified.find(field => field === order || field === submitted);
-      if (target) target.focus();
-      return false;
-    }
-    return true;
-  }
-  async function saveSettings() {
-    if (configBusy || closed) return;
-    if (!latest || configError) { configMessage = '配置读取失败或尚未完成，请刷新后再保存；草稿已保留。'; feedback(); return; }
-    const modified = fields.filter(field => supported(field) && dirty.has(key(field)));
-    if (!modified.length) { configMessage = '没有已接入字段需要保存。未接入字段不会提交到服务器。'; feedback(); return; }
-    for (const field of modified) {
-      if (!field.reportValidity()) { configMessage = '请修正已接入字段的格式或范围，尚未保存。'; feedback(); return; }
-    }
-    if (!validateCrossFields(modified)) { configMessage = '请修正已接入字段之间的金额关系，尚未保存。'; feedback(); return; }
-    const base = baseline || latest;
-    const params: Obj = { ...base.params };
-    const submitted = new Map(modified.map(field => [field, field.value]));
-    for (const field of modified) params[fieldMap[key(field)]] = field instanceof HTMLSelectElement ? field.value : Number(field.value);
-    configBusy = true; configMessage = '正在保存已接入字段…'; buttons(); feedback();
-    try {
-      const result = await api.saveConfig(params, base.revision);
-      if (closed) return;
-      for (const [field, value] of submitted) if (field.value === value) dirty.delete(key(field));
-      baseline = result; receiveConfig(result, null);
-      saved?.config(result);
-      configMessage = observation() ? `配置已保存为版本 ${result.revision}；平台观察只应用模式与时长，旧参数已保留；未启动运行。` : `已接入字段已保存为版本 ${result.revision}，下次启动生效；未启动或解锁交易。`;
-    } catch (error) { configMessage = `${error instanceof Error ? error.message : '保存失败'}；草稿已保留。版本冲突时请先核对或撤销未保存修改。`; }
-    finally { configBusy = false; if (!closed) { buttons(); feedback(); } }
-  }
   async function accountAction(save: boolean) {
     if (accountBusy || closed) return;
     for (const field of accountFields) if (!field.reportValidity()) return;
@@ -202,34 +69,11 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     } catch (error) { accountMessage(`${error instanceof Error ? error.message : '账户操作失败'}；未确认保存成功，输入已保留。`); }
     finally { accountBusy = false; if (!closed) buttons(); }
   }
-  function receiveConfig(config: Config | null, error: string | null) {
-    configError = error;
-    if (config && (!latest || config.revision >= latest.revision)) {
-      latest = config;
-      if (!dirty.size) baseline = config;
-      for (const field of fields) if (supported(field) && !dirty.has(key(field))) {
-        const value = config.params[fieldMap[key(field)]];
-        field.value = typeof value === 'string' || typeof value === 'number' ? String(value) : '';
-      }
-      applyCapabilities();
-    }
-    feedback();
-  }
+  function receiveConfig(_config: Config | null, _error: string | null) {}
   function receiveAccount(account: Account | null) {
     if (!account || accountBusy) return;
     savedWallet = account.wallet;
     if (!accountDirty.has(accountFields[0])) accountFields[0].value = savedWallet;
-  }
-  for (const button of saves) on(button, 'click', () => void saveSettings());
-  for (const button of resets) {
-    button.textContent = '撤销未保存修改';
-    on(button, 'click', () => {
-      if (configBusy) return;
-      dirty.clear(); baseline = latest;
-      for (const field of fields) if (!supported(field)) field.value = '';
-      configMessage = '已撤销本页未保存修改；已接入字段恢复为最近读取的服务器配置，未向服务器写入。';
-      receiveConfig(latest, configError);
-    });
   }
   on(accountButtons[0], 'click', () => void accountAction(false));
   on(accountButtons[1], 'click', () => void accountAction(true));
@@ -244,8 +88,8 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
       const unlocked = status.live_unlocked === true;
       if (liveAuthState) liveAuthState.textContent = unlocked ? '服务器已解锁' : '服务器仍锁定';
       if (liveAuthMessage) liveAuthMessage.textContent = unlocked
-        ? '服务器允许进入下一步账户检查；仍需账户就绪和明确的实盘确认，检查本身不会下单。'
-        : '服务器实盘锁定。页面授权开启与实盘测量流程尚未接入，本次只完成状态查询。';
+        ? '服务器交易连接已开启；策略使用已保存参数启动。检查本身不会下单。'
+        : '服务器暂未开放真实交易；请查看运行状态中的具体原因。';
     } catch (error) {
       if (closed) return;
       if (liveAuthState) liveAuthState.textContent = '检查失败';
@@ -256,10 +100,10 @@ export function connectForms(saved?: { config: (value: Config) => void; account:
     const active = document.querySelector('[data-setting].active')?.getAttribute('data-setting');
     if (active === 'account') void accountAction(true);
     else if (active === 'system') { accountMessage('系统诊断没有可保存的配置。'); globalSave.title = '系统诊断没有可保存的配置'; }
-    else void saveSettings();
+    else void accountAction(true);
   });
   document.querySelectorAll('[data-setting]').forEach(button => on(button, 'click', buttons));
   accountMessage('可通过当前 HTTPS 页面检查、保存账户。空白密钥在钱包不变时保留服务器配置，换钱包不会继承旧密钥。检查不会保存，保存不会启动交易。');
-  buttons(); feedback();
+  buttons();
   return { receiveConfig, receiveAccount, close: () => { closed = true; bindings.forEach(remove => remove()); accountFields.filter(field => field.type === 'password').forEach(field => field.value = ''); } };
 }

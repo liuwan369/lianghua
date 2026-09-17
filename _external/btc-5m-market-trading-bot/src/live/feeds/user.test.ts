@@ -5,6 +5,7 @@ import {
   parseAuthenticatedTrade,
   PendingUserEvents,
   isUserChannelEvidence,
+  isUserChannelFailure,
   type UserFeedOptions,
 } from "./user.js";
 
@@ -337,5 +338,23 @@ describe("user report latency provenance", () => {
     const noTimestamp={...raw,matchtime:undefined};
     const unmeasurable=parseUserMessage(noTimestamp,opts,new Map(),new Set());
     if(unmeasurable[0].kind === "exchangeFill") expect(unmeasurable[0].reportLatencyMs).toBeUndefined();
+  });
+});
+
+
+describe("platform authenticated trade status lifecycle", () => {
+  it("keeps status transitions for the same trade and does not treat FAILED as authentication failure", () => {
+    const lifecycle = { ...opts, includeSellTrades: true, includeTradeStatusUpdates: true };
+    const seen = new Set<string>(), matched = new Map<string, number>();
+    const raw = { event_type: "trade", id: "status-trade", taker_order_id: "our-taker",
+      asset_id: "up-tok", side: "BUY", price: "0.7", size: "5", fee_rate_bps: "700" };
+    for (const status of ["MATCHED", "MINED", "RETRYING", "FAILED"]) {
+      const events = parseUserMessage({ ...raw, status }, lifecycle, matched, seen);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ kind: "exchangeFill", fill: { status, feeRateBps: 700 } });
+      expect(parseUserMessage({ ...raw, status }, lifecycle, matched, seen)).toHaveLength(0);
+    }
+    expect(isUserChannelFailure({ ...raw, status: "FAILED" })).toBe(false);
+    expect(isUserChannelFailure({ event_type: "error", status: "unauthorized" })).toBe(true);
   });
 });

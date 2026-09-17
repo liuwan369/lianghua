@@ -186,7 +186,7 @@ def test_executor_receives_checked_wallet_not_old_funder(monkeypatch):
 
 
 def test_live_start_rechecks_unlock_after_acquiring_lock(monkeypatch, tmp_path):
-    cli = tmp_path / "dist" / "cli" / "live.js"
+    cli = tmp_path / "dist" / "cli" / "platform.js"
     cli.parent.mkdir(parents=True)
     cli.touch()
     monkeypatch.setattr(SERVER, "TRADING_ROOT", tmp_path)

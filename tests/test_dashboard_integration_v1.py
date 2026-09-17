@@ -116,7 +116,7 @@ def test_revision_bound_start_is_idempotent_and_does_not_switch_mode(monkeypatch
 @pytest.mark.parametrize("field", ["order_usd", "duration_min", "max_orders"])
 @pytest.mark.parametrize("value", [None, True, {}, "2", 10 ** 400])
 def test_legacy_start_rejects_invalid_numbers_before_process_creation(monkeypatch, tmp_path, field, value):
-    cli = tmp_path / "dist" / "cli" / "live.js"
+    cli = tmp_path / "dist" / "cli" / "platform.js"
     cli.parent.mkdir(parents=True)
     cli.touch()
     monkeypatch.setattr(SERVER, "TRADING_ROOT", tmp_path)

@@ -3,6 +3,7 @@ import type { ApiKeyCreds } from "../clob/client.js";
 import { Side, type Fill } from "../../models.js";
 import { type FeedSink, num, nowUnix, sleep } from "./index.js";
 import type { AccountEventLedger } from "../account-event-ledger.js";
+import type { TradeStatus } from "../../platform/contracts.js";
 
 const USER_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 const DEFAULT_PENDING_EVENT_TTL_MS = 10_000;
@@ -33,6 +34,8 @@ export interface UserFeedOptions {
   isOurOrder: (orderId: string) => boolean;
   /** Retain both directions for the generic platform; legacy BUY sessions opt out. */
   includeSellTrades?: boolean;
+  /** Platform consumers process provisional states and FAILED compensation. */
+  includeTradeStatusUpdates?: boolean;
   orderDirection?: (orderId: string) => "BUY" | "SELL" | undefined;
   /** Observe authenticated order lifecycle messages with their WS receive time. */
   onOrderEvent?: (event: {
@@ -44,7 +47,7 @@ export interface UserFeedOptions {
 }
 
 export type UserFeedEvent =
-  | { kind: "exchangeFill"; fill: Fill; reportLatencyMs?: number; orderId?: string; tradeId?: string;
+  | { kind: "exchangeFill"; fill: Fill & { status?: TradeStatus; feeRateBps?: number; feeUsd?: number }; reportLatencyMs?: number; orderId?: string; tradeId?: string;
       tokenId?: string; direction?: "BUY" | "SELL" }
   | { kind: "orderCancelled"; orderId: string; side?: Side };
 
@@ -84,6 +87,14 @@ function directionFields(opts: UserFeedOptions, orderId: string | undefined, raw
   const owned = orderId ? opts.orderDirection?.(orderId) : undefined;
   const value = String(raw ?? "").toUpperCase();
   return { tokenId, direction: owned ?? (value === "BUY" || value === "SELL" ? value : undefined) };
+}
+
+function tradeMetadata(event: Record<string, unknown>, status: string, opts: UserFeedOptions) {
+  if (!opts.includeTradeStatusUpdates) return {};
+  const feeUsd = num(event.fee_usd), feeRateBps = num(event.fee_rate_bps);
+  return { status: status as TradeStatus,
+    ...(feeUsd != null && feeUsd >= 0 ? { feeUsd } : {}),
+    ...(feeRateBps != null && feeRateBps >= 0 ? { feeRateBps } : {}) };
 }
 
 /** Parse one user-channel WS message into feed events. Exported for tests. */
@@ -128,8 +139,8 @@ export function parseUserMessage(
     }
 
     if (eventType !== "trade") continue;
-    const status = String(e.status ?? "").toUpperCase();
-    if (status !== "MATCHED" && status !== "CONFIRMED") continue;
+    const status = String(e.status ?? "").toUpperCase().replace(/^TRADE_STATUS_/, "");
+    if (!["MATCHED", "MATCHED_NOT_BROADCASTED", "MINED", "RETRYING", "CONFIRMED", "FAILED"].includes(status)) continue;
 
     const tradeId =
       typeof e.id === "string"
@@ -137,7 +148,9 @@ export function parseUserMessage(
         : typeof e.trade_id === "string"
           ? e.trade_id
           : undefined;
-    if (tradeId && seenTrades.has(tradeId)) continue;
+    if (!opts.includeTradeStatusUpdates && !["MATCHED", "CONFIRMED"].includes(status)) continue;
+    const dedupeKey = opts.includeTradeStatusUpdates ? `${tradeId}:${status}${num(e.fee_usd) != null ? `:fee:${num(e.fee_usd)}` : ""}` : tradeId;
+    if (dedupeKey && seenTrades.has(dedupeKey)) continue;
     const eventStart = events.length;
     const receivedAtUnix = num(e.__receivedAtUnix);
     const timestamp = num(e.match_time_nano ?? e.matchtime ?? e.match_time ?? e.timestamp);
@@ -155,7 +168,7 @@ export function parseUserMessage(
       if (side != null && price != null && size != null && size > 0) {
         events.push({
           kind: "exchangeFill",
-          fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: false },
+          fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: false, ...tradeMetadata(e, status, opts) },
           ...directionFields(opts, takerId, e.side, tok!),
           reportLatencyMs,
           orderId: takerId,
@@ -175,7 +188,7 @@ export function parseUserMessage(
         if (side == null || price == null || size == null || size <= 0) continue;
         events.push({
           kind: "exchangeFill",
-          fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: true },
+          fill: { side, shares: size, price, tsUnix: exchangeUnix ?? nowUnix(), isMaker: true, ...tradeMetadata(e, status, opts) },
           ...directionFields(opts, orderId, maker.side, tok!),
           reportLatencyMs,
           orderId,
@@ -183,7 +196,7 @@ export function parseUserMessage(
         });
       }
     }
-    if (tradeId && events.length > eventStart) seenTrades.add(tradeId);
+    if (tradeId && events.length > eventStart) { seenTrades.add(tradeId); if (dedupeKey) seenTrades.add(dedupeKey); }
   }
 
   return events;
@@ -215,12 +228,14 @@ export function parseAuthenticatedTrade(
 ): UserFeedEvent[] {
   if (!raw || typeof raw !== "object") return [];
   const e = raw as Record<string, unknown>;
-  const status = String(e.status ?? "").toUpperCase();
-  if (!["MATCHED", "MINED", "CONFIRMED"].includes(status)) return [];
+  const status = String(e.status ?? "").toUpperCase().replace(/^TRADE_STATUS_/, "");
+  if (!["MATCHED", "MATCHED_NOT_BROADCASTED", "MINED", "RETRYING", "CONFIRMED", "FAILED"].includes(status)) return [];
   const market = typeof e.market === "string" ? e.market : undefined;
   if (market && opts.conditionId && market !== opts.conditionId) return [];
   const tradeId = typeof e.id === "string" ? e.id : undefined;
-  if (!tradeId || seenTrades.has(tradeId)) return [];
+  if (!opts.includeTradeStatusUpdates && !["MATCHED", "MINED", "CONFIRMED"].includes(status)) return [];
+  const dedupeKey = opts.includeTradeStatusUpdates ? `${tradeId}:${status}${num(e.fee_usd) != null ? `:fee:${num(e.fee_usd)}` : ""}` : tradeId;
+  if (!tradeId || (dedupeKey && seenTrades.has(dedupeKey))) return [];
 
   const tsRaw = num(e.match_time_nano ?? e.match_time);
   const tsUnix = tsRaw == null
@@ -245,7 +260,7 @@ export function parseAuthenticatedTrade(
     if (side != null && price != null && size != null && size > 0) {
       out.push({
         kind: "exchangeFill",
-        fill: { side, shares: size, price, tsUnix, isMaker: false },
+        fill: { side, shares: size, price, tsUnix, isMaker: false, ...tradeMetadata(e, status, opts) },
         ...directionFields(opts, orderId, e.side, tok!),
         orderId,
         tradeId,
@@ -269,7 +284,7 @@ export function parseAuthenticatedTrade(
       if (side == null || price == null || size == null || size <= 0) continue;
       out.push({
         kind: "exchangeFill",
-        fill: { side, shares: size, price, tsUnix, isMaker: true },
+        fill: { side, shares: size, price, tsUnix, isMaker: true, ...tradeMetadata(e, status, opts) },
         ...directionFields(opts, orderId, maker.side, tok!),
         orderId,
         tradeId,
@@ -277,7 +292,7 @@ export function parseAuthenticatedTrade(
     }
   }
 
-  if (out.length > 0) seenTrades.add(tradeId);
+  if (out.length > 0) { seenTrades.add(tradeId); if (dedupeKey) seenTrades.add(dedupeKey); }
   return out;
 }
 
@@ -339,6 +354,7 @@ export function isUserChannelFailure(raw: unknown): boolean {
   if (typeof raw === "string") return /invalid.*auth|unauthori[sz]ed|authentication.*fail/i.test(raw);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
   const event = raw as Record<string, unknown>;
+  if (String(event.event_type ?? "").toLowerCase() === "trade") return false;
   return Boolean(event.error || event.error_msg) ||
     [event.type, event.event_type, event.status].some((value) =>
       ["error", "failed", "failure", "rejected", "unauthorized"].includes(String(value ?? "").toLowerCase()));
@@ -454,7 +470,7 @@ export function runUserFeed(
 
   const emitEvent = (event: UserFeedEvent): void => {
     const id = event.kind === "exchangeFill"
-      ? (event.tradeId && event.orderId ? `fill:${event.tradeId}:${event.orderId}` : undefined)
+      ? (event.tradeId && event.orderId ? `fill:${event.tradeId}:${event.orderId}${event.fill.status ? `:${event.fill.status}${event.fill.feeUsd != null ? `:fee:${event.fill.feeUsd}` : ""}` : ""}` : undefined)
       : `cancel:${event.orderId}`;
     if (opts.ledger && id && !opts.ledger.append(id, event)) return;
     sink({ kind: "user", event });

@@ -35,16 +35,14 @@
     if (!market) {
       set('currentMarket', '暂无可交易市场');
       ['upBook', 'downBook', 'askSum'].forEach(id => set(id, '--'));
-      set('strategyGate', '暂无盘口，停止补仓');
+      set('strategyGate', '暂无盘口，平台不接受策略订单');
       return;
     }
     set('currentMarket', market.slug || '--');
     set('upBook', price(market.up_bid) + ' / ' + price(market.up_ask));
     set('downBook', price(market.down_bid) + ' / ' + price(market.down_ask));
     set('askSum', market.ask_sum == null ? '--' : price(market.ask_sum));
-    const cap = Number(runningParams.pair_cost_max ?? $('pairCostMax')?.value ?? 0.99);
-    // Ask sum describes immediate buying, not maker eligibility or inventory cost.
-    set('strategyGate', '补仓成本上限 $' + cap.toFixed(3) + ' · 挂单由库存和盘口共同决定');
+    set('strategyGate', '策略暂停 · 仅展示公共盘口，平台不自动挂单');
   }
 
   async function loadLive() {

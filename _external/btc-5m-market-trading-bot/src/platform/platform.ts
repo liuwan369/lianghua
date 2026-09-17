@@ -102,6 +102,10 @@ export class TradingPlatform {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
+  /** Replay durable identities before fresh market events can produce intentions. */
+  replayOrders(): void {
+    for (const order of this.core.orders()) this.publish({ kind: "order", order });
+  }
   attach(strategy: StrategyPlugin): () => void {
     if (this.closing || !strategy.id || strategy.id === "external" || this.plugins.has(strategy.id)) throw new Error("strategy ID unavailable");
     this.plugins.set(strategy.id, strategy);
@@ -118,6 +122,7 @@ export class TradingPlatform {
     if (event.kind === "order" || event.kind === "account") throw new Error("use authenticated order/account service methods");
     if (event.kind === "market") {
       this.core.register(event.market.instruments);
+      this.core.rememberMarket(event.market);
       this.markets.set(event.market.id, clone(event.market));
     }
     if (event.kind === "book") {
@@ -131,7 +136,9 @@ export class TradingPlatform {
   }
   private context(): StrategyContext {
     return freeze({ mode: this.options.adapters.gateway.mode, now: this.options.now?.() ?? Date.now() / 1000,
-      markets: this.market.list(), books: this.market.books(), account: this.core.contextSnapshot() });
+      markets: this.market.list(), books: this.market.books(), account: this.core.contextSnapshot(),
+      estimateFee: (order: Omit<OrderRequest, "strategyId">) =>
+        this.options.adapters.estimateFee?.({ ...order, strategyId: "estimate" }) ?? 0 });
   }
   private publish(event: TradingEvent): void {
     this.records.push(clone(event));
@@ -182,7 +189,11 @@ export class TradingPlatform {
   }
   private track(job: Promise<unknown>, correlation: { strategyId?: string; clientOrderId?: string; orderId?: string } = {}): void {
     this.jobs.add(job);
-    void job.catch(error => this.publish({ kind: "error", ...correlation, message: error instanceof Error ? error.message : "action failed" }))
+    void job.catch(error => {
+      const order = correlation.clientOrderId ? this.core.order(correlation.clientOrderId) : undefined;
+      const code = correlation.clientOrderId && (!order || order.status === "REJECTED") ? "order_not_submitted" : undefined;
+      this.publish({ kind: "error", ...correlation, code, message: error instanceof Error ? error.message : "action failed" });
+    })
       .finally(() => this.jobs.delete(job));
   }
   async idle(): Promise<void> {

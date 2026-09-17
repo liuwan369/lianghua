@@ -1,6 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OrderType } from "@polymarket/clob-client-v2";
-import { apiOrderRegionAllowed, ClobWrapper, geocheck } from "./client.js";
+import { getContractConfig, OrderType, Side as ClobSide, type SignedOrder } from "@polymarket/clob-client-v2";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
+import { apiOrderRegionAllowed, ClobWrapper, geocheck, signedV2OrderHash } from "./client.js";
+
+describe("persisted signed order identity", () => {
+  it("matches the installed official SDK v2 typed-data hash for both exchange domains", async () => {
+    const sdkDirectory = dirname(createRequire(import.meta.url).resolve("@polymarket/clob-client-v2"));
+    const sdk = await import(pathToFileURL(join(sdkDirectory, "order-utils/exchangeOrderBuilderV2.js")).href);
+    const order = { salt: "123456", maker: "0x0000000000000000000000000000000000000001",
+      signer: "0x0000000000000000000000000000000000000001", tokenId: "123456789", makerAmount: "3500000",
+      takerAmount: "5000000", side: ClobSide.BUY, signatureType: 0, timestamp: "1800000000000",
+      metadata: `0x${"0".repeat(64)}`, builder: `0x${"0".repeat(64)}`, expiration: "0", signature: "0x1234" } as SignedOrder;
+    for (const negRisk of [false, true]) {
+      const config = getContractConfig(137);
+      const builder = new sdk.ExchangeOrderBuilderV2(negRisk ? config.negRiskExchangeV2 : config.exchangeV2, 137, {});
+      expect(signedV2OrderHash(order, negRisk)).toBe(builder.buildOrderHash(builder.buildOrderTypedData(order)));
+    }
+  });
+});
 
 describe("API geographic rules", () => {
   afterEach(() => {

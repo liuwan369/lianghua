@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE UNIQUE INDEX IF NOT EXISTS stable_event ON events(run_id, kind, stable_id)
  WHERE stable_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS event_page ON events(run_id, id);
+CREATE INDEX IF NOT EXISTS order_event_page ON events(run_id, kind, id);
 CREATE TABLE IF NOT EXISTS markets (
  run_id TEXT NOT NULL REFERENCES runs(run_id), market TEXT NOT NULL,
  fills INTEGER NOT NULL DEFAULT 0, settled INTEGER NOT NULL DEFAULT 0,
@@ -66,6 +67,10 @@ CREATE TABLE IF NOT EXISTS order_details (
  accepted INTEGER NOT NULL DEFAULT 0, cancelled INTEGER NOT NULL DEFAULT 0,
  updated_at REAL NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id,client_order_id)
 );
+CREATE TABLE IF NOT EXISTS trade_details (
+ run_id TEXT NOT NULL REFERENCES runs(run_id), trade_id TEXT NOT NULL, order_id TEXT NOT NULL,
+ payload TEXT NOT NULL, PRIMARY KEY(run_id,trade_id,order_id)
+);
 """
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
                          "order", "settlement", "platform_status"})
@@ -90,6 +95,60 @@ def _text(value, maximum=200):
     return value[:maximum] if isinstance(value, str) else None
 
 
+def _trade_revision(prior, event):
+    if not prior or prior.get("trade_status") not in ("CONFIRMED", "FAILED"):
+        return event
+    if (prior.get("trade_status") == event.get("trade_status") == "CONFIRMED"
+            and (prior.get("fee_source") != "reported" or prior.get("fee") is None)
+            and event.get("fee_source") == "reported" and event.get("fee") is not None
+            and event["fee"] >= 0):
+        # A final fee can improve without changing an already final trade's size or price.
+        return {**prior, "fee": event["fee"], "fee_source": "reported", "fee_estimate": None}
+    return None
+
+
+def _strategy_projection(value):
+    if not isinstance(value, dict) or value.get("strategyId") != "btc-reversal":
+        return None
+    def config(source):
+        if not isinstance(source, dict):
+            return None
+        result = {key: _number(source.get(key)) for key in (
+            "triggerPrice", "confirmationPrice", "maxBuyPrice", "maxStages", "roundBudgetUsd",
+            "totalBudgetUsd", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds")}
+        result.update(revision=_text(str(source["revision"])) if source.get("revision") is not None else None,
+                      stageShares=[_number(n) for n in source.get("stageShares", [])[:100]]
+                      if isinstance(source.get("stageShares"), list) else [])
+        return result
+    def round_view(source):
+        if not isinstance(source, dict):
+            return None
+        result = {key: _text(source.get(key)) for key in (
+            "marketId", "name", "upTokenId", "downTokenId", "status", "reason", "lastStageDirection",
+            "lastConfirmedDirection", "nextDirection", "resultScope", "resultReason")}
+        result.update({key: _number(source.get(key)) for key in (
+            "startsAt", "endsAt", "confirmationCount", "nextStage", "nextShares",
+            "costUsd", "reservedUsd", "upShares", "downShares", "netIfUpUsd", "netIfDownUsd")})
+        result["feesVerified"] = source.get("feesVerified") if isinstance(source.get("feesVerified"), bool) else None
+        result["configRevision"] = _text(str(source["configRevision"])) if source.get("configRevision") is not None else None
+        result["config"] = config(source.get("config"))
+        stages = source.get("stages") if isinstance(source.get("stages"), list) else []
+        result["stages"] = [{**{key: _text(stage.get(key)) for key in (
+            "direction", "tokenId", "clientOrderId", "orderId", "trigger", "status", "error")},
+            **{key: _number(stage.get(key)) for key in ("stage", "price", "shares", "createdAt", "filledShares")}}
+            for stage in stages[:100] if isinstance(stage, dict)]
+        return result
+    rounds = value.get("rounds") if isinstance(value.get("rounds"), list) else []
+    result = {"strategyId": "btc-reversal", "schemaVersion": 1,
+              "instanceId": _text(value.get("instanceId")), "paused": value.get("paused") is True,
+              "savedRevision": _text(str(value["savedRevision"])) if value.get("savedRevision") is not None else None,
+              "config": config(value.get("config")),
+              "currentRound": round_view(value.get("currentRound")),
+              "rounds": [round_view(r) for r in rounds[-8:] if isinstance(r, dict)],
+              "truncated": len(rounds) > 8}
+    return result
+
+
 def _runtime_projection(value, mode):
     if (not isinstance(value, dict) or type(value.get("schemaVersion")) is not int
             or value.get("schemaVersion") != 1 or value.get("engine") != "platform"
@@ -99,6 +158,11 @@ def _runtime_projection(value, mode):
         return None
     result = {key: value[key] for key in ("schemaVersion", "engine", "execution", "status", "mode")}
     result["strategy_id"] = _text(value.get("strategy_id"))
+    result["strategy_runtime"] = _strategy_projection(value.get("strategy_runtime"))
+    positions = value.get("positions") if isinstance(value.get("positions"), list) else []
+    result["positions"] = [{"tokenId": _text(p.get("tokenId")),
+                            **{key: _number(p.get(key)) for key in ("shares", "costUsd", "realizedPnlUsd")}}
+                           for p in positions[:1000] if isinstance(p, dict)]
     if ((result["execution"] == "observation" and result["strategy_id"] is not None)
             or (result["execution"] == "strategy" and not result["strategy_id"])):
         return None
@@ -117,7 +181,13 @@ def _runtime_projection(value, mode):
     markets = value.get("markets") if isinstance(value.get("markets"), list) else []
     books = value.get("books") if isinstance(value.get("books"), list) else []
     result.update(markets=[], books=[], truncated=len(markets) > 8 or len(books) > 16)
-    for market in markets[:8]:
+    now = time.time()
+    def market_priority(market):
+        start, end = _number(market.get("startsAt")), _number(market.get("endsAt"))
+        return (int(start is not None and end is not None and start <= now < end),
+                int(start is not None and start > now), end or 0)
+    selected_markets = sorted((m for m in markets if isinstance(m, dict)), key=market_priority, reverse=True)[:8]
+    for market in selected_markets:
         if not isinstance(market, dict):
             continue
         item = {key: _text(market.get(key)) for key in ("id", "name")}
@@ -128,7 +198,10 @@ def _runtime_projection(value, mode):
                                for i in instruments[:2] if isinstance(i, dict)]
         result["truncated"] |= len(instruments) > 2
         result["markets"].append(item)
-    for book in books[:16]:
+    selected_tokens = {i["tokenId"] for m in result["markets"] for i in m["instruments"]}
+    selected_books = sorted((b for b in books if isinstance(b, dict)),
+                            key=lambda b: (b.get("tokenId") in selected_tokens, _number(b.get("ts")) or 0), reverse=True)[:16]
+    for book in selected_books:
         if not isinstance(book, dict):
             continue
         item = {"tokenId": _text(book.get("tokenId")), "source": _text(book.get("source"))}
@@ -139,7 +212,7 @@ def _runtime_projection(value, mode):
             item[field] = book.get(field) if isinstance(book.get(field), bool) else None
         for side in ("bids", "asks"):
             levels = book.get(side) if isinstance(book.get(side), list) else []
-            item[side] = [[_number(level[0]), _number(level[1])] for level in levels[:5]
+            item[side] = [[_number(level[0]), _number(level[1])] for level in levels[:10]
                           if isinstance(level, list) and len(level) == 2
                           and all(_number(n) is not None for n in level)]
         result["books"].append(item)
@@ -157,6 +230,12 @@ def _projection(record):
                           ("price", "price"), ("shares", "shares"), ("fee", "fee"), ("pnl", "pnl")):
         result[field] = _number(record.get(source))
     result["is_maker"] = record.get("is_maker") if isinstance(record.get("is_maker"), bool) else None
+    result["trade_status"] = record.get("trade_status") if record.get("trade_status") in (
+        "MATCHED", "MATCHED_NOT_BROADCASTED", "MINED", "RETRYING", "CONFIRMED", "FAILED") else None
+    result["fee_source"] = record.get("fee_source") if record.get("fee_source") in ("reported", "rate-derived", "estimate") else None
+    if result["fee_source"] in ("rate-derived", "estimate"):
+        result["fee_estimate"] = result["fee"]
+        result["fee"] = None
     for field in ("client_order_id", "order_id", "token_id", "strategy_id", "trade_id", "code", "phase",
                   "market_id", "transaction_id"):
         result[field] = _text(record.get(field))
@@ -405,6 +484,9 @@ class Ledger:
     @staticmethod
     def _accumulate(db, run_id, event):
         kind, market = event["event"], event["market"]
+        if kind == "fill" and event.get("trade_status") and event.get("trade_id") and event.get("order_id"):
+            Ledger._accumulate_trade(db, run_id, event)
+            return
         db.execute("INSERT INTO kind_counts VALUES(?,?,1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id, kind))
         if kind == "fill" and event["is_maker"] is False:
             db.execute("INSERT INTO kind_counts VALUES(?,'taker_fill',1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id,))
@@ -450,6 +532,92 @@ class Ledger:
                 db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND market=?", (run_id, market))
         elif kind in {"stopped", "unresolved"} and market:
             db.execute("UPDATE market_details SET status='未结算（已停止）' WHERE run_id=? AND market=? AND pnl IS NULL", (run_id, market))
+
+    @staticmethod
+    def _accumulate_trade(db, run_id, event):
+        """A trade's status changes its contribution, never creates a second fill."""
+        row = db.execute("SELECT payload FROM trade_details WHERE run_id=? AND trade_id=? AND order_id=?",
+                         (run_id, event["trade_id"], event["order_id"])).fetchone()
+        prior = json.loads(row[0]) if row else None
+        event = _trade_revision(prior, event)
+        if event is None:
+            return
+        for item, sign in ((prior, -1), (event, 1)):
+            if item is None or item["trade_status"] == "FAILED":
+                continue
+            amount, fee, market = item.get("amount"), item.get("fee"), item.get("market")
+            db.execute("""UPDATE runs SET fill_count=fill_count+?,fill_notional=fill_notional+?,
+                missing_notional=missing_notional+?,known_fees=known_fees+?,missing_fees=missing_fees+? WHERE run_id=?""",
+                       (sign, sign * (amount or 0), sign * int(amount is None), sign * (fee or 0), sign * int(fee is None), run_id))
+            for kind in (["fill", "taker_fill"] if item.get("is_maker") is False else ["fill"]):
+                db.execute("INSERT INTO kind_counts VALUES(?,?,?) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+excluded.count",
+                           (run_id, kind, sign))
+            if market:
+                db.execute("INSERT OR IGNORE INTO markets(run_id,market) VALUES(?,?)", (run_id, market))
+                db.execute("UPDATE markets SET fills=fills+? WHERE run_id=? AND market=?", (sign, run_id, market))
+                db.execute("INSERT OR IGNORE INTO market_details(run_id,market,last_time) VALUES(?,?,?)", (run_id, market, item.get("time") or 0))
+                db.execute("UPDATE market_details SET turnover=turnover+?,last_time=MAX(last_time,?) WHERE run_id=? AND market=?",
+                           (sign * (amount or 0), item.get("time") or 0, run_id, market))
+        db.execute("INSERT INTO trade_details VALUES(?,?,?,?) ON CONFLICT(run_id,trade_id,order_id) DO UPDATE SET payload=excluded.payload",
+                   (run_id, event["trade_id"], event["order_id"], json.dumps(event, allow_nan=False)))
+
+    def orders_page(self, run_id, *, limit=10, offset=0, status=None, market=None, as_of=None, snapshot_event_id=None):
+        """Page order snapshots at one journal cutoff so new events do not shift pages."""
+        if type(limit) is not int or limit not in (10, 20, 50) or type(offset) is not int or offset < 0:
+            raise ValueError("invalid order page")
+        if status is not None and status not in ORDER_STATUSES | {"active", "failed"}:
+            raise ValueError("invalid order status")
+        if market is not None and (not isinstance(market, str) or len(market) > 200):
+            raise ValueError("invalid market")
+        stamp = time.time() if as_of is None else _number(as_of)
+        if stamp is None or stamp <= 0 or stamp > time.time() + 1:
+            raise ValueError("invalid order snapshot time")
+        if snapshot_event_id is not None and (type(snapshot_event_id) is not int or snapshot_event_id < 0):
+            raise ValueError("invalid snapshot event id")
+        cte = """WITH selected AS (
+            SELECT id,payload,
+                   ROW_NUMBER() OVER (PARTITION BY json_extract(payload,'$.client_order_id') ORDER BY id DESC) AS n,
+                   MIN(id) OVER (PARTITION BY json_extract(payload,'$.client_order_id')) AS first_id
+            FROM events WHERE run_id=? AND kind='order' AND id<=?
+              AND json_extract(payload,'$.client_order_id') IS NOT NULL
+              AND json_extract(payload,'$.time')<=?
+        ), filtered AS (SELECT * FROM selected WHERE n=1
+            AND (? IS NULL OR json_extract(payload,'$.status')=?
+              OR (?='active' AND json_extract(payload,'$.status') IN ('SUBMITTING','OPEN','PARTIAL','UNKNOWN'))
+              OR (?='failed' AND json_extract(payload,'$.status')='REJECTED'))
+            AND (? IS NULL OR json_extract(payload,'$.market')=?)) """
+        with self._connect() as db:
+            self._run(db, run_id)
+            cutoff = snapshot_event_id if snapshot_event_id is not None else db.execute(
+                "SELECT COALESCE(MAX(id),0) FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
+            args = (run_id, cutoff, stamp, status, status, status, status, market, market)
+            total = db.execute(cte + "SELECT COUNT(*) FROM filtered", args).fetchone()[0]
+            rows = db.execute(cte + "SELECT payload FROM filtered ORDER BY first_id DESC LIMIT ? OFFSET ?",
+                              (*args, limit, offset)).fetchall()
+            orders = [json.loads(row[0]) for row in rows]
+            order_ids = [order["order_id"] for order in orders if order.get("order_id")]
+            fills = {}
+            if order_ids:
+                fill_rows = db.execute("SELECT payload FROM events WHERE run_id=? AND kind='fill' AND id<=? "
+                    "AND (json_extract(payload,'$.time')<=? OR json_extract(payload,'$.time') IS NULL) "
+                    f"AND json_extract(payload,'$.order_id') IN ({','.join('?' for _ in order_ids)}) ORDER BY id",
+                    (run_id, cutoff, stamp, *order_ids))
+                for row in fill_rows:
+                    fill = json.loads(row[0])
+                    key = (fill.get("trade_id"), fill["order_id"])
+                    prior = fills.get(key)
+                    revision = _trade_revision(prior, fill)
+                    if revision is not None:
+                        fills[key] = revision
+        for order in orders:
+            actual = [f for f in fills.values() if f["order_id"] == order.get("order_id") and f.get("trade_status") != "FAILED"]
+            complete = abs(sum(f.get("shares") or 0 for f in actual) - (order.get("filled_shares") or 0)) < 1e-6
+            order["order_notional"] = order.get("amount")
+            order["amount"] = sum(f["amount"] for f in actual) if complete and all(f.get("amount") is not None for f in actual) else None
+            order["fee"] = sum(f["fee"] for f in actual) if complete and all(f.get("fee") is not None for f in actual) else None
+            order["fills"] = actual
+        return {"orders": orders, "total": total, "limit": limit, "offset": offset,
+                "has_more": offset + len(orders) < total, "asOf": stamp, "snapshotEventId": cutoff}
 
     def legacy_stats(self, run_id, *, summary=None):
         """Old UI shape, built only from the same deduplicated ledger."""

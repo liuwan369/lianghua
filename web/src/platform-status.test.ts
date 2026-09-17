@@ -43,7 +43,7 @@ it('renders simulated platform values separately and removes current values when
   expect(document.querySelector('[data-runtime-source]')!.textContent).toContain('都柏林服务器');
   expect(document.querySelector('[data-runtime-counts]')!.textContent).toBe('0 / 0');
   expect(document.querySelector('#homeOrders')!.textContent).toBe('--');
-  expect(document.querySelector('[data-start]')!.textContent).toBe('启动平台观察');
+  expect(document.querySelector('[data-start]')!.textContent).toBe('启动 BTC 反转');
   status.asOf+=11;
   await vi.advanceTimersByTimeAsync(5100);
   expect(document.querySelector('[data-runtime-cash]')!.textContent).not.toContain('$1,000');

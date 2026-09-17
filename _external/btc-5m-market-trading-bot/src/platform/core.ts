@@ -1,4 +1,4 @@
-import type { AccountSnapshot, Book, CoreOptions, CoreState, Instrument, OrderRecord,
+import type { AccountSnapshot, Book, CoreOptions, CoreState, GatewayAck, Instrument, MarketInfo, OrderRecord,
   OrderRequest, Position, RiskView, TradeFill, TradingEvent } from "./contracts.js";
 
 const EPS = 1e-8;
@@ -18,10 +18,12 @@ export class TradingCore {
   private seenFills = new Set<string>();
   private clock: () => number;
   private stopped = false;
+  private recovering = false;
 
   constructor(private readonly options: CoreOptions) {
     this.clock = options.now ?? (() => Date.now() / 1000);
     for (const n of Object.values(options.limits)) {
+      if (n == null) continue;
       if (!finite(n) || n <= 0) throw new Error("hard limits must be positive and finite");
     }
     if (!Number.isInteger(options.limits.maxOpenOrders)) throw new Error("maxOpenOrders must be an integer");
@@ -52,6 +54,13 @@ export class TradingCore {
       this.state.risk.halted = false; delete this.state.risk.reason;
     }
     for (const fill of this.state.fills) this.seenFills.add(this.fillKey(fill));
+    for (const order of this.state.orders) {
+      if (["SUBMITTING", "UNKNOWN"].includes(order.status) && order.identityProtocol === "signed-before-post" && !order.prepared) {
+        // In this protocol HTTP cannot begin until the signed identity commit.
+        order.status = "REJECTED"; order.error = "process interrupted before signed submission";
+        order.reservedUsd = 0; order.reservedShares = 0; order.reconciliationPending = false;
+      }
+    }
     // Restored in-flight requests must be reconciled with the venue before another submission.
     if (options.restored && this.state.orders.some(active)) {
       this.state.risk.halted = true;
@@ -137,11 +146,29 @@ export class TradingCore {
   }
 
   snapshot(): CoreState { this.updateRisk(); return copy(this.state); }
+  setRecovering(recovering: boolean): void { this.recovering = recovering; }
+  requireReconciliation(reason: string): void {
+    this.state.risk.halted = true; this.state.risk.reason = `${reason}: reconciliation required`;
+    this.persist(true);
+  }
+  setStrategyState(strategyId: string, state: unknown): void {
+    this.state.strategyStates ??= {};
+    this.state.strategyStates[strategyId] = copy(state);
+    this.persist(true);
+  }
+  rememberMarket(market: MarketInfo): void {
+    this.state.markets ??= [];
+    const index = this.state.markets.findIndex(item => item.id === market.id);
+    if (index >= 0) this.state.markets[index] = copy(market);
+    else this.state.markets.push(copy(market));
+    this.persist();
+  }
   contextSnapshot(): Omit<CoreState, "fills"> {
     this.updateRisk();
     return copy({ schemaVersion: this.state.schemaVersion, accountId: this.state.accountId,
       mode: this.state.mode, cashUsd: this.state.cashUsd, positions: this.state.positions,
-      orders: this.state.orders.filter(reservationPending), risk: this.state.risk });
+      orders: this.state.orders.filter(reservationPending), risk: this.recovering
+        ? { ...this.state.risk, halted: true, reason: "账户恢复中" } : this.state.risk });
   }
   orders(): OrderRecord[] { return copy(this.state.orders); }
   positions(): Position[] { return copy(this.state.positions); }
@@ -149,6 +176,20 @@ export class TradingCore {
   order(id: string): OrderRecord | undefined {
     const order = this.find(id);
     return order && copy(order);
+  }
+  markPreparedReplay(id: string): void {
+    const order = this.find(id);
+    if (!order?.prepared || !["SUBMITTING", "UNKNOWN"].includes(order.status)) throw new Error("order is not eligible for signed replay");
+    if ((order.preparedReplayAttempts ?? 0) >= 2) throw new Error("signed replay attempt limit");
+    order.preparedReplayAttempts = (order.preparedReplayAttempts ?? 0) + 1;
+    this.notify(order, true);
+  }
+  recoverPreparedAck(id: string, ack: GatewayAck): void {
+    const order = this.find(id);
+    if (!order?.prepared || ack.status !== "accepted" || ack.orderId !== order.prepared.orderHash) return;
+    order.orderId = ack.orderId; order.tradeIds = [...new Set([...(order.tradeIds ?? []), ...(ack.tradeIds ?? [])])];
+    if (["SUBMITTING", "UNKNOWN"].includes(order.status)) order.status = order.filledShares > 0 ? "PARTIAL" : "OPEN";
+    this.notify(order, true);
   }
   private find(id: string): OrderRecord | undefined {
     return this.state.orders.find(order => order.orderId === id || order.clientOrderId === id);
@@ -180,9 +221,21 @@ export class TradingCore {
     risk.occupiedUsd = held + reserved;
     risk.availableUsd = Math.max(0, Math.min(this.state.cashUsd - reserved,
       this.options.limits.capitalUsd - risk.occupiedUsd));
-    if (risk.dailyPnlUsd <= -this.options.limits.dailyLossUsd + EPS && (!risk.halted || risk.reason === "daily loss limit")) {
+    if (this.options.limits.dailyLossUsd != null && risk.dailyPnlUsd <= -this.options.limits.dailyLossUsd + EPS && (!risk.halted || risk.reason === "daily loss limit")) {
       risk.halted = true; risk.reason = "daily loss limit";
     }
+  }
+  updateLimits(limits: Partial<CoreOptions["limits"]>): void {
+    const next = { ...this.options.limits, ...limits };
+    for (const value of Object.values(next)) {
+      if (value != null && (!finite(value) || value <= 0)) throw new Error("hard limits must be positive and finite");
+    }
+    if (!Number.isInteger(next.maxOpenOrders)) throw new Error("maxOpenOrders must be an integer");
+    Object.assign(this.options.limits, next);
+    if (next.dailyLossUsd == null && this.state.risk.reason === "daily loss limit") {
+      this.state.risk.halted = false; delete this.state.risk.reason;
+    }
+    this.updateRisk(); this.persist(true);
   }
   private persist(critical = false): void {
     try { this.options.adapters.persist?.(this.snapshot(), critical); }
@@ -216,7 +269,7 @@ export class TradingCore {
   private async submitOrder(request: OrderRequest): Promise<OrderRecord> {
     const previous = this.state.orders.find(o => o.clientOrderId === request.clientOrderId);
     if (previous) {
-      for (const field of ["strategyId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly"] as const) {
+      for (const field of ["strategyId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"] as const) {
         if (previous[field] !== request[field]) throw new Error("clientOrderId reused for a different order");
       }
       return copy(previous);
@@ -225,6 +278,7 @@ export class TradingCore {
       throw new Error("clientOrderId conflicts with a venue order ID");
     }
     this.updateRisk();
+    if (this.recovering) throw new Error("account recovery in progress");
     const reducingAfterLoss = this.state.risk.reason === "daily loss limit" && request.direction === "SELL";
     if (this.stopped || (this.state.risk.halted && !reducingAfterLoss)) throw new Error(this.state.risk.reason ?? "platform stopped");
     const instrument = this.instruments.get(request.tokenId);
@@ -239,6 +293,15 @@ export class TradingCore {
     const amount = request.price * request.shares;
     const fee = this.options.adapters.estimateFee?.(request) ?? 0;
     if (!finite(fee) || fee < 0) throw new Error("invalid fee reserve");
+    if (request.roundBudgetUsd != null) {
+      if (!finite(request.roundBudgetUsd) || request.roundBudgetUsd <= 0) throw new Error("invalid round budget");
+      const tokens = new Set([...this.instruments.values()].filter(item => item.marketId === instrument.marketId).map(item => item.tokenId));
+      const occupied = this.state.positions.filter(position => tokens.has(position.tokenId)).reduce((sum, position) => sum + position.costUsd, 0)
+        + this.state.orders.filter(order => tokens.has(order.tokenId) && reservationPending(order)).reduce((sum, order) => sum + order.reservedUsd, 0);
+      if (request.direction === "BUY" && occupied + amount + fee > request.roundBudgetUsd + EPS) {
+        throw new Error("round budget including fees and pending orders exceeded");
+      }
+    }
     if (amount > this.options.limits.maxOrderUsd + EPS) throw new Error("per-order limit");
     if (this.state.orders.filter(active).length >= this.options.limits.maxOpenOrders) throw new Error("open-order limit");
     if (request.direction === "BUY" && amount + fee > this.state.risk.availableUsd + EPS) throw new Error("insufficient cash or capital");
@@ -250,6 +313,7 @@ export class TradingCore {
       if (fee > this.state.cashUsd - reservedUsd + EPS) throw new Error("insufficient fee balance");
     }
     const order: OrderRecord = { ...request, status: "SUBMITTING", filledShares: 0,
+      identityProtocol: this.options.adapters.gateway.durableIdentity ? "signed-before-post" : undefined,
       reservedUsd: request.direction === "BUY" ? amount + fee : fee,
       reservedShares: request.direction === "SELL" ? request.shares : 0,
       createdAt: this.clock(), updatedAt: this.clock() };
@@ -264,8 +328,22 @@ export class TradingCore {
     }
     this.emit({ kind: "order", order: copy(order) });
     try {
-      const ack = await this.options.adapters.gateway.submit(request, copy(instrument));
+      const ack = await this.options.adapters.gateway.submit(request, copy(instrument), prepared => {
+        if (!prepared.orderHash || !prepared.signedPayload) throw new Error("signed order identity missing");
+        if (this.state.orders.some(existing => existing !== order
+          && (existing.orderId === prepared.orderHash || existing.clientOrderId === prepared.orderHash))) {
+          throw new Error("duplicate signed order identity");
+        }
+        order.prepared = copy(prepared); order.orderId = prepared.orderHash;
+        this.notify(order, true);
+      });
       order.tradeIds = ack.tradeIds; order.signLatencyMs = ack.signLatencyMs; order.ackLatencyMs = ack.ackLatencyMs;
+      if (order.prepared && ack.orderId && order.prepared.orderHash !== ack.orderId) {
+        order.orderId = ack.orderId;
+        order.status = "UNKNOWN"; order.error = "signed hash differs from venue order ID";
+        this.state.risk.halted = true; this.state.risk.reason = "signed identity requires reconciliation";
+        return this.notify(order, true);
+      }
       if (ack.orderId && (ack.orderId === order.clientOrderId || this.state.orders.some(o => o !== order
         && (o.orderId === ack.orderId || o.clientOrderId === ack.orderId)))) {
         order.status = "UNKNOWN";
@@ -275,16 +353,21 @@ export class TradingCore {
         return this.notify(order, true);
       }
       if (ack.orderId) order.orderId = ack.orderId;
-      if (ack.status === "accepted" && ack.orderId) order.status = "OPEN";
+      if (ack.status === "accepted" && ack.orderId && ["SUBMITTING", "UNKNOWN"].includes(order.status)) order.status = "OPEN";
+      else if (ack.status === "accepted" && ack.orderId) { /* A fill can arrive before the HTTP ACK. */ }
       else if (ack.status === "rejected" && !ack.orderId) {
         order.status = "REJECTED"; order.reservedUsd = 0; order.reservedShares = 0;
+      } else if (ack.status === "unknown" && order.orderId && ["FILLED", "PARTIAL"].includes(order.status)) {
+        // Authenticated fills already proved this signed order reached the venue.
       } else {
         order.status = "UNKNOWN"; this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
       }
       order.error = ack.error;
     } catch (error) {
-      order.status = "UNKNOWN"; order.error = error instanceof Error ? error.message : "submission failed";
-      this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
+      if (!(order.orderId && ["FILLED", "PARTIAL"].includes(order.status))) {
+        order.status = "UNKNOWN"; this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
+      }
+      order.error = error instanceof Error ? error.message : "submission failed";
     }
     return this.notify(order, true);
   }
@@ -343,7 +426,18 @@ export class TradingCore {
     this.notify(order, true);
   }
   applyFill(fill: TradeFill): boolean {
-    if (this.seenFills.has(this.fillKey(fill))) return false;
+    const previous = this.state.fills.find(item => this.fillKey(item) === this.fillKey(fill));
+    if (previous) return this.updateFill(previous, fill);
+    if (fill.status === "FAILED") {
+      const order = this.find(fill.orderId);
+      if (!order || order.tokenId !== fill.tokenId || order.direction !== fill.direction || !fill.tradeId) {
+        throw new Error("invalid or unowned failed trade");
+      }
+      order.status = "UNKNOWN"; order.reconciliationPending = true;
+      this.state.risk.halted = true; this.state.risk.reason = "failed trade requires reconciliation";
+      this.state.fills.push(copy(fill)); this.seenFills.add(this.fillKey(fill));
+      this.notify(order, true); this.emit({ kind: "fill", fill: copy(fill) }); return true;
+    }
     const order = this.find(fill.orderId);
     if (!order || order.tokenId !== fill.tokenId || order.direction !== fill.direction
       || order.status === "FILLED" || (order.status === "CANCELLED" && !order.reconciliationPending)
@@ -359,6 +453,7 @@ export class TradingCore {
     } else {
       if (fill.shares > position.shares + EPS) throw new Error("sell fill exceeds recorded inventory; reconciliation required");
       const basis = position.shares > EPS ? position.costUsd * fill.shares / position.shares : 0;
+      fill = { ...fill, accountingBasisUsd: basis, accountingInventoryBeforeShares: position.shares };
       position.shares = Math.max(0, position.shares - fill.shares);
       position.costUsd = Math.max(0, position.costUsd - basis);
       position.realizedPnlUsd += amount - fill.feeUsd - basis;
@@ -381,6 +476,72 @@ export class TradingCore {
     // Inventory is authoritative in the event context before the strategy sees the fill.
     this.emit({ kind: "fill", fill: copy(fill) });
     this.emit({ kind: "order", order: copy(order) });
+    return true;
+  }
+
+  private updateFill(previous: TradeFill, incoming: TradeFill): boolean {
+    const oldStatus = previous.status ?? "CONFIRMED", nextStatus = incoming.status ?? "CONFIRMED";
+    const improvesFee = incoming.feeSource === "reported" && previous.feeSource !== "reported" && nextStatus !== "FAILED";
+    if (oldStatus === "FAILED" || (oldStatus === "CONFIRMED" && (nextStatus !== "CONFIRMED" || !improvesFee))
+      || (oldStatus === nextStatus && !improvesFee)) return false;
+    if (["tokenId", "direction", "shares", "price"].some(key =>
+      previous[key as keyof TradeFill] !== incoming[key as keyof TradeFill])) throw new Error("trade identity changed during status update");
+    if (nextStatus !== "FAILED") {
+      const rank = { MATCHED_NOT_BROADCASTED: 0, MATCHED: 1, RETRYING: 1, MINED: 2, CONFIRMED: 3, FAILED: 3 };
+      if (rank[nextStatus] < rank[oldStatus]) return false;
+      if (!finite(incoming.feeUsd) || incoming.feeUsd < 0) throw new Error("invalid confirmed trade fee");
+      if (incoming.feeSource === "reported" && previous.feeSource !== "reported") {
+        const delta = incoming.feeUsd - previous.feeUsd;
+        const position = this.position(previous.tokenId);
+        if (previous.direction === "BUY") {
+          let retained = 1;
+          const subsequentSells = this.state.fills.slice(this.state.fills.indexOf(previous) + 1)
+            .filter(later => later.tokenId === previous.tokenId && later.direction === "SELL" && later.status !== "FAILED");
+          if (subsequentSells.some(later => !later.accountingInventoryBeforeShares || later.accountingBasisUsd == null)) {
+            throw new Error("fee correction requires historical sell inventory reconciliation");
+          }
+          for (const later of subsequentSells) {
+            const fraction = Math.min(1, later.shares / later.accountingInventoryBeforeShares!);
+            later.accountingBasisUsd! += delta * retained * fraction;
+            retained *= 1 - fraction;
+          }
+          position.costUsd += delta * retained;
+          position.realizedPnlUsd -= delta * (1 - retained);
+        }
+        else position.realizedPnlUsd -= delta;
+        this.state.cashUsd -= delta;
+        previous.feeUsd = incoming.feeUsd; previous.feeSource = "reported";
+      }
+      previous.status = nextStatus;
+      this.persist(true); this.emit({ kind: "fill", fill: copy(previous) }); return true;
+    }
+    const order = this.find(previous.orderId);
+    if (!order) throw new Error("failed trade has no owned order");
+    const position = this.position(previous.tokenId), amount = previous.shares * previous.price;
+    if (previous.direction === "BUY") {
+      if (position.shares + EPS < previous.shares || position.costUsd + EPS < amount + previous.feeUsd) {
+        this.state.risk.halted = true; this.state.risk.reason = "failed trade requires account reconciliation";
+        this.persist(true); throw new Error("failed provisional buy was already disposed; account reconciliation required");
+      }
+      position.shares = Math.max(0, position.shares - previous.shares);
+      position.costUsd = Math.max(0, position.costUsd - (amount + previous.feeUsd));
+      this.state.cashUsd += amount + previous.feeUsd;
+    } else {
+      const basis = previous.accountingBasisUsd;
+      if (basis == null) throw new Error("failed provisional sell has no basis");
+      position.shares += previous.shares; position.costUsd += basis;
+      position.realizedPnlUsd -= amount - previous.feeUsd - basis;
+      this.state.cashUsd -= amount - previous.feeUsd;
+    }
+    previous.status = "FAILED";
+    order.filledShares = Math.max(0, order.filledShares - previous.shares);
+    order.status = "UNKNOWN"; order.reconciliationPending = true;
+    const remaining = order.shares - order.filledShares;
+    order.reservedUsd = (order.direction === "BUY" ? remaining * order.price : 0)
+      + (this.options.adapters.estimateFee?.({ ...order, shares: remaining }) ?? 0);
+    order.reservedShares = order.direction === "SELL" ? remaining : 0;
+    this.state.risk.halted = true; this.state.risk.reason = "failed trade requires reconciliation";
+    this.notify(order, true); this.emit({ kind: "fill", fill: copy(previous) });
     return true;
   }
 

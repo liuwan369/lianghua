@@ -7,13 +7,13 @@
       <button data-view="earnings">收益</button>
       <button data-view="settings">设置</button>
     </div>
-    <p class="side-note">服务器数据接入中<br>未接入功能保留原位</p>
+    <p class="side-note">BTC 五分钟反转<br>服务器状态读取中</p>
   </aside>
   <main class="content">
     <section class="view active" id="view-home">
       <div class="head">
         <div><div class="eyebrow">DASHBOARD CENTER</div><h1>总览</h1><p>查看运行状态、订单结果、账户和风险摘要。</p></div>
-        <div class="head-actions"><span class="chip" id="status">安全模式 · 未启动</span><button class="primary" data-start>启动自动交易</button><button data-refresh>刷新状态</button><button class="stop" data-exit>退出程序</button></div>
+        <div class="head-actions"><span class="chip" id="status">状态读取中</span><button class="primary" data-start>启动自动交易</button><button data-refresh>刷新状态</button></div>
       </div>
       <div class="stats">
         <div class="stat"><label>未完成订单</label><strong id="homeOrders">--</strong><small>真实账户当前委托</small></div>
@@ -31,13 +31,15 @@
     </section>
 
     <section class="view" id="view-trade">
-      <div class="head"><div><div class="eyebrow">LIVE CONTROL</div><h1>自动交易</h1><p>盘口、持仓、挂单和订单生命周期集中查看。</p></div><div class="head-actions"><span class="chip">模式读取中</span><button class="primary" data-start>启动自动交易</button><button class="stop" data-stop>停止并撤单</button></div></div>
+      <div class="head"><div><div class="eyebrow">LIVE CONTROL</div><h1>自动交易</h1><p>盘口、持仓、挂单和订单生命周期集中查看。</p></div><div class="head-actions"><span class="chip">模式读取中</span><button class="primary" data-start>启动自动交易</button><button data-pause>暂停新增</button><button class="stop" data-stop>停止并撤余量</button></div></div>
+      <div class="stats reversal-summary"><div class="stat"><label>当前场次</label><strong data-reversal-round>--</strong><small data-reversal-countdown>等待场次</small></div><div class="stat"><label>当前阶段</label><strong data-reversal-stage>--</strong><small data-reversal-confirmations>确认反转 -- 次</small></div><div class="stat"><label>下一笔</label><strong data-reversal-next>--</strong><small data-reversal-revision>参数版本 --</small></div><div class="stat"><label>策略状态</label><strong data-reversal-status>等待状态</strong><small data-reversal-age>更新时间 --</small></div></div>
       <div class="grid">
-        <div class="panel"><h2>当前盘口</h2><div class="book"><div class="quote"><span>UP 买一 / 卖一</span><b>-- / --</b></div><div class="quote"><span>DOWN 买一 / 卖一</span><b>-- / --</b></div></div><div class="row"><span>两边立即买入成本</span><b>--</b></div><div class="row"><span>目标成本上限</span><b>--</b></div><div class="row"><span>策略判断</span><b class="good">等待策略</b></div></div>
-        <div class="panel"><h2>动态持仓</h2><div class="row"><span>UP 数量 / 平均价</span><b>--</b></div><div class="row"><span>DOWN 数量 / 平均价</span><b>--</b></div><div class="row"><span>两边数量差</span><b>--</b></div><div class="row"><span>补仓状态</span><b class="good">等待策略</b></div></div>
+        <div class="panel"><h2>当前盘口</h2><div class="book"><div class="quote"><span>UP 买一 / 卖一</span><b>-- / --</b></div><div class="quote"><span>DOWN 买一 / 卖一</span><b>-- / --</b></div></div><div class="row"><span>策略判断</span><b data-reversal-reason>等待策略</b></div><div class="row"><span>盘口消息年龄</span><b data-book-age>--</b></div><details class="reversal-depth"><summary>查看买卖深度</summary><label>显示档数 <select data-depth-count><option value="5">5 档</option><option value="10">10 档</option></select></label><div class="grid" data-reversal-depth><p>等待真实盘口深度</p></div></details></div>
+        <div class="panel"><h2>本场持仓与结果</h2><div class="row"><span>UP 份额</span><b data-reversal-up>--</b></div><div class="row"><span>DOWN 份额</span><b data-reversal-down>--</b></div><div class="row"><span>已买入 / 订单占用</span><b data-reversal-capital>-- / --</b></div><div class="row"><span>UP 胜 / DOWN 胜预计结果</span><b data-reversal-outcomes>-- / --</b></div><p class="muted" data-reversal-result-reason>预计结果使用已成交份额与实际成本；最终以官方结果和到账为准。</p></div>
       </div>
+      <div class="panel reversal-stages"><h2>阶段进度</h2><div data-reversal-timeline class="stage-timeline">等待策略运行</div></div>
       <section id="trade-orders" class="trade-orders">
-        <div class="head"><div><div class="eyebrow">ORDER LIFECYCLE</div><h2>订单与成交</h2><p>挂单、成交、撤单和失败记录集中显示。</p></div><div class="head-actions"><button>导出记录</button></div></div>
+        <div class="head"><div><div class="eyebrow">ORDER LIFECYCLE</div><h2>订单与成交</h2><p>每个订单一行，可展开查看分笔成交。</p></div><div class="head-actions"><button>导出记录</button></div></div>
         <div class="subnav"><button class="active">全部</button><button>未完成</button><button>已成交</button><button>已撤单</button><button>失败</button></div>
         <div class="panel table-wrap"><table class="table"><thead><tr><th>时间</th><th>市场</th><th>方向</th><th>委托价</th><th>成交数量</th><th>成交额</th><th>费用</th><th>状态</th></tr></thead><tbody><tr><td colspan="8" class="empty">等待订单数据</td></tr></tbody></table></div>
         <div class="note">订单状态来自真实账户或运行事件来源。确认接单不代表成交，未知状态不会推断。</div>

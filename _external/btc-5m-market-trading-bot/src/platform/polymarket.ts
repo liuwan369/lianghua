@@ -2,13 +2,13 @@ import { ClobWrapper, geocheck } from "../live/clob/client.js";
 import { connectAccountReader } from "../live/account-data.js";
 import { findMarket } from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
-import { runUserFeed, type UserFeedControl } from "../live/feeds/user.js";
+import { parseAuthenticatedTrade, runUserFeed, type UserFeedControl } from "../live/feeds/user.js";
 import { runBtcFeed } from "../live/feeds/btc.js";
 import type { FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
 import type { AccountSnapshot, Book, CoreState, GatewayAck, HardLimits, Instrument, MarketInfo,
-  OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, TradingMode } from "./contracts.js";
+  OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
 import { PaperGateway } from "./paper.js";
 import { TradingPlatform } from "./platform.js";
 
@@ -17,8 +17,8 @@ const row = (value: unknown): Row => typeof value === "object" && value !== null
 const numeric = (value: unknown): number => value === null || value === undefined || value === "" ? NaN : Number(value);
 
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
-export async function discoverBtcMarket(): Promise<MarketInfo[]> {
-  const market = await findMarket(Date.now() / 1000);
+export async function discoverBtcMarket(at = Date.now() / 1000): Promise<MarketInfo[]> {
+  const market = await findMarket(at);
   if (!market) return [];
   const instruments = await Promise.all([[market.upToken, "UP"], [market.downToken, "DOWN"]].map(async ([tokenId, outcome]) => {
     const response = await fetch(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`, { signal: AbortSignal.timeout(8000) });
@@ -61,12 +61,13 @@ export function accountSnapshot(raw: unknown): AccountSnapshot {
 /** One CLOB connection is shared by every strategy and order direction. */
 export class PolymarketGateway implements OrderGateway {
   readonly mode = "live" as const;
-  constructor(readonly client: ClobWrapper, private readonly ready: () => boolean = () => true) {}
-  async submit(request: OrderRequest, instrument: Instrument): Promise<GatewayAck> {
-    if (!this.ready()) return { status: "rejected", error: "authenticated feed is not ready" };
+  readonly durableIdentity = true;
+  constructor(readonly client: ClobWrapper, private readonly ready: (instrument: Instrument) => boolean = () => true) {}
+  async submit(request: OrderRequest, instrument: Instrument, prepared?: (value: PreparedOrder) => void): Promise<GatewayAck> {
+    if (!this.ready(instrument)) return { status: "rejected", error: "authenticated feed is not ready" };
     const response = await this.client.submitOrder({ tokenId: request.tokenId, price: request.price,
       size: request.shares, tickSize: instrument.tickSize, direction: request.direction,
-      timeInForce: request.timeInForce, postOnly: request.postOnly });
+      timeInForce: request.timeInForce, postOnly: request.postOnly, onPrepared: prepared });
     return { status: response.success && response.orderId ? "accepted"
       : response.stateUnknown || response.orderId || response.success ? "unknown" : "rejected",
       orderId: response.orderId, error: response.errorMsg, tradeIds: response.tradeIds,
@@ -96,26 +97,33 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   if (!options.markets.length || options.markets.some(m => m.instruments.length !== 2)) {
     throw new Error("the current Polymarket feed adapter requires explicit binary markets");
   }
-  if (options.mode === "live" && (options.limits.capitalUsd > 50 || options.limits.dailyLossUsd > 30)) {
-    throw new Error("live account limits exceed the configured $50 capital / $30 daily loss budget");
-  }
   let platform!: TradingPlatform;
   let client: ClobWrapper | undefined;
   let readAccount: PlatformAdapters["readAccount"];
   let paper: PaperGateway | undefined;
-  const controls: { stop: () => void }[] = [];
+  const controls = new Set<{ stop: () => void }>();
+  const bookFeeds = new Map<string, { stop: () => void }>();
+  let cleanupTimer: ReturnType<typeof setInterval> | undefined;
   const users: UserFeedControl[] = [];
   const booksHealthy = new Map<string, boolean>();
   const bookHealth = new Map<string, () => boolean>();
   const userHealthy = new Map<string, boolean>();
-  const registered = new Set<string>();
+  const usersByMarket = new Map<string, UserFeedControl>();
+  const connectedMarkets = new Set<string>();
+  const registered = new Map<string, Set<string>>();
   let started = false;
   let stopped = false;
   let acceptUserEvents = true;
   let stopHeartbeat: (() => void) | undefined;
-  const fee = (order: OrderRequest, shares = order.shares) => order.postOnly ? 0
-    // Reserve the maximum convex fee at p=0.50; the actual fill uses its own price.
-    : polymarketFillFee(shares, 0.5, false, 0.07, 0, 1);
+  let recoveryJob: Promise<void> | undefined;
+  let recovering = options.mode === "live" && !!options.restored;
+  const fee = (order: OrderRequest, shares = order.shares) => {
+    if (order.postOnly) return 0;
+    const rule = client?.feeRule(order.tokenId);
+    // All successful live warmups supply current venue fee rules. The paper
+    // reference rate is an estimate and is never labelled a reported fee.
+    return Math.ceil(polymarketFillFee(shares, 0.5, false, rule?.rate ?? 0.07, 0, rule?.exponent ?? 1) * 100_000) / 100_000;
+  };
   let account: AccountSnapshot;
   let gateway: OrderGateway;
   if (options.mode === "live") {
@@ -127,10 +135,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     readAccount = async () => accountSnapshot(await reader());
     account = await readAccount();
     client = await ClobWrapper.connect({ key });
-    for (const market of options.markets) await client.warmMarket(market.id);
-    gateway = new PolymarketGateway(client, () => !stopped && options.markets.every(m =>
-      booksHealthy.get(m.id) && bookHealth.get(m.id)?.() && userHealthy.get(m.id))
-      && users.every(u => u.isHealthy() && (u.isContinuous?.() ?? true)));
+    gateway = new PolymarketGateway(client, instrument => {
+      const user = usersByMarket.get(instrument.marketId);
+      return !stopped && !recovering && !!booksHealthy.get(instrument.marketId) && !!bookHealth.get(instrument.marketId)?.()
+        && !!userHealthy.get(instrument.marketId) && !!user?.isHealthy() && (user.isContinuous?.() ?? true);
+    });
   } else {
     account = options.paperAccount ?? { accountId: "paper", at: Date.now() / 1000,
       cashUsd: options.paperCashUsd ?? 1000, positions: [], openOrders: [], complete: true };
@@ -148,21 +157,28 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         acceptUserEvents = false;
         for (const user of users) user.stop();
       } } });
-  if (options.mode === "live" && options.restored) {
-    // Resolve persisted in-flight orders against the fresh ordinary account read
-    // before starting feeds. Missing or changed orders fail closed in reconcile().
-    platform.account.reconcile(account);
-  }
   for (const market of options.markets) platform.ingest({ kind: "market", market });
   platform.subscribe(event => {
-    if (event.kind !== "order" || !event.order.orderId || registered.has(event.order.orderId)) return;
-    registered.add(event.order.orderId);
-    for (const user of users) user.registerOrder(event.order.orderId, event.order.tradeIds);
+    if (event.kind !== "order" || !event.order.orderId) return;
+    const previous = registered.get(event.order.orderId);
+    const freshTrades = (event.order.tradeIds ?? []).filter(id => !previous?.has(id));
+    if (previous && !freshTrades.length) return;
+    const tradeIds = previous ?? new Set<string>();
+    for (const id of freshTrades) tradeIds.add(id);
+    registered.set(event.order.orderId, tradeIds);
+    const marketId = platform.core.instrument(event.order.tokenId)?.marketId;
+    const user = marketId ? usersByMarket.get(marketId) : undefined;
+    user?.registerOrder(event.order.orderId, freshTrades);
   });
 
   const sink = (market: MarketInfo) => (event: FeedEvent) => {
     try {
-      if (event.kind === "bookStatus") { booksHealthy.set(market.id, event.healthy); return; }
+      if (event.kind === "bookStatus") {
+        booksHealthy.set(market.id, event.healthy);
+        if (!event.healthy && market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error",
+          strategyId: "btc-reversal", marketId: market.id, message: "market_feed_disconnected" });
+        return;
+      }
       if (event.kind === "userStatus") { userHealthy.set(market.id, event.healthy); return; }
       if (event.kind === "book") {
         const b = event.snapshot;
@@ -204,9 +220,13 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           if (!userEvent.orderId || !userEvent.tradeId || !userEvent.tokenId || !userEvent.direction
             || !platform.orders.get(userEvent.orderId)) throw new Error("account trade requires order ownership reconciliation");
           const f = userEvent.fill;
+          const feeRule = client?.feeRule(userEvent.tokenId);
           platform.ingest({ kind: "fill", fill: { tradeId: userEvent.tradeId, orderId: userEvent.orderId,
             tokenId: userEvent.tokenId, direction: userEvent.direction, price: f.price, shares: f.shares,
-            feeUsd: polymarketFillFee(f.shares, f.price, f.isMaker, 0.07, 0, 1), ts: f.tsUnix, isMaker: f.isMaker } });
+            feeUsd: f.isMaker ? 0 : f.feeUsd ?? Math.round(polymarketFillFee(f.shares, f.price, false,
+              feeRule?.rate ?? (f.feeRateBps != null ? f.feeRateBps / 10_000 : 0.07), 0, feeRule?.exponent ?? 1) * 100_000) / 100_000,
+            status: f.status, feeSource: f.isMaker || f.feeUsd != null ? "reported" : feeRule || f.feeRateBps != null ? "rate-derived" : "estimate",
+            ts: f.tsUnix, isMaker: f.isMaker } });
         }
       }
     } catch (error) {
@@ -214,52 +234,159 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       platform.ingest({ kind: "error", message: error instanceof Error ? error.message : "feed processing failed" });
     }
   };
+  const recoverAccount = (): Promise<void> => {
+    if (recoveryJob) return recoveryJob;
+    if (!client || !readAccount) return Promise.resolve();
+    recovering = true;
+    platform.core.setRecovering(true);
+    for (const market of options.markets) if (market.endsAt > Date.now() / 1000) {
+      platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id, message: "market_feed_disconnected" });
+    }
+    recoveryJob = (async () => {
+      await platform.idle();
+      const local = platform.account.current();
+      for (const market of options.markets) {
+        const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
+        const owned = local.orders.filter(order => tokens.has(order.tokenId) && order.strategyId !== "external");
+        if (!owned.length) continue;
+        const after = Math.max(0, Math.min(...owned.map(order => order.createdAt)) - 5);
+        const rows = await client!.getRecentTrades(market.id, after);
+        for (const raw of rows) for (const event of parseAuthenticatedTrade(raw, {
+          creds: client!.creds, conditionId: market.id, upToken: market.instruments[0].tokenId,
+          downToken: market.instruments[1].tokenId, accountAddress: client!.funder,
+          includeSellTrades: true, includeTradeStatusUpdates: true,
+          isOurOrder: id => !!platform.orders.get(id), orderDirection: id => platform.orders.get(id)?.direction,
+        }, new Set())) sink(market)({ kind: "user", event });
+      }
+      await platform.idle();
+      let account = await readAccount!();
+      const openIds = new Set(account.openOrders.map(order => order.orderId));
+      const cancelledIds: string[] = [];
+      let replayed = false;
+      for (const order of platform.orders.list()) {
+        if (!["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || !order.orderId || openIds.has(order.orderId)) continue;
+        let detail: Row;
+        try { detail = row(await client!.getOrder(order.orderId)); }
+        catch (error) {
+          const failure = row(error), response = row(failure.response);
+          if (numeric(failure.status ?? response.status) !== 404) throw error;
+          detail = { status: "NOT_FOUND" };
+        }
+        const missing = detail.status === "NOT_FOUND" || /order.*not found|not found.*order/i.test(String(detail.error ?? ""));
+        const market = options.markets.find(item => item.instruments.some(instrument => instrument.tokenId === order.tokenId));
+        if (missing && order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
+          && (order.preparedReplayAttempts ?? 0) < 2 && market && Date.now() / 1000 < market.endsAt) {
+          // Repeat exactly the persisted signature/hash. Never generate a new
+          // economic order to compensate an uncertain POST.
+          platform.core.markPreparedReplay(order.orderId);
+          const response = await client!.resubmitPrepared(order.prepared, order);
+          platform.core.recoverPreparedAck(order.orderId, { ...response,
+            status: response.success && response.orderId ? "accepted" : "unknown", error: response.errorMsg });
+          replayed = true;
+        }
+        const status = String(detail.status ?? "").toUpperCase();
+        if (["CANCELED", "CANCELLED", "EXPIRED"].includes(status)) cancelledIds.push(order.orderId);
+        // Missing/404 or FILLED without its priced fills cannot release reserve.
+      }
+      if (replayed) account = await readAccount!();
+      platform.account.reconcile(account, 0, cancelledIds);
+    })().catch(error => {
+      platform.core.requireReconciliation("account recovery incomplete");
+      throw error;
+    }).finally(() => { recovering = false; platform.core.setRecovering(false); recoveryJob = undefined; });
+    return recoveryJob;
+  };
+  let feedDeadline = Infinity;
+  const startMarket = async (market: MarketInfo) => {
+    if (stopped || connectedMarkets.has(market.id)) return;
+    if (client && market.endsAt > Date.now() / 1000) await client.warmMarket(market.id);
+    if (stopped) return;
+    if (client) {
+      market.instruments = market.instruments.map(instrument => {
+        const rule = client!.feeRule(instrument.tokenId);
+        return rule ? { ...instrument, feeRate: rule.rate, feeExponent: rule.exponent, takerDelayMs: rule.takerDelayMs } : instrument;
+      });
+      platform.ingest({ kind: "market", market });
+    }
+    connectedMarkets.add(market.id);
+    const [up, down] = market.instruments;
+    if (market.endsAt > Date.now() / 1000) {
+      const feed = runPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt));
+      controls.add(feed); bookFeeds.set(market.id, feed);
+      bookHealth.set(market.id, feed.isHealthy);
+    }
+    if (client) {
+      const user = runUserFeed(sink(market), { creds: client.creds, conditionId: market.id,
+        upToken: up.tokenId, downToken: down.tokenId, accountAddress: client.funder,
+        includeSellTrades: true, includeTradeStatusUpdates: true, orderDirection: id => platform.orders.get(id)?.direction,
+        isOurOrder: id => !!platform.orders.get(id),
+        fetchTrades: ids => client!.getTradesByIds(ids), fetchRecentTrades: after => client!.getRecentTrades(market.id, after),
+        fetchOpenOrders: () => client!.getOpenOrders(market.id),
+        reconcileAfterReconnect: async () => { await recoverAccount(); },
+        verifyAuthenticated: async () => { await client!.getOpenOrders(market.id); return true; },
+      }, feedDeadline);
+      users.push(user); usersByMarket.set(market.id, user); controls.add(user);
+      // Restored orders must be registered too; they need not emit a new ACK.
+      for (const order of platform.orders.list()) {
+        if (order.orderId && market.instruments.some(instrument => instrument.tokenId === order.tokenId)) {
+          user.registerOrder(order.orderId, order.tradeIds);
+        }
+      }
+      await user.waitUntilReady();
+    }
+  };
+  const cleanupExpiredFeeds = () => {
+    const now = Date.now() / 1000;
+    const account = platform.account.current();
+    if (client && !stopped && !recoveryJob && (account.risk.reason?.includes("reconciliation")
+      || account.orders.some(order => order.status === "UNKNOWN" || order.reconciliationPending))) {
+      void recoverAccount().catch(() => platform.ingest({ kind: "error", message: "order recovery remains pending" }));
+    }
+    for (const market of options.markets) {
+      if (market.endsAt > now) continue;
+      const feed = bookFeeds.get(market.id);
+      if (feed) { feed.stop(); controls.delete(feed); bookFeeds.delete(market.id); bookHealth.delete(market.id); booksHealthy.delete(market.id); }
+      const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
+      const needsUser = account.orders.some(order => tokens.has(order.tokenId)
+        && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))
+        || account.fills.some(fill => tokens.has(fill.tokenId) && fill.status && !["CONFIRMED", "FAILED"].includes(fill.status));
+      const user = usersByMarket.get(market.id);
+      if (user && !needsUser) {
+        user.stop(); controls.delete(user); usersByMarket.delete(market.id); userHealthy.delete(market.id);
+        const index = users.indexOf(user); if (index >= 0) users.splice(index, 1);
+      }
+    }
+  };
   return {
     platform,
+    recoverAccount,
+    async addMarkets(markets: MarketInfo[]) {
+      for (const market of markets) {
+        if (!options.markets.some(existing => existing.id === market.id)) options.markets.push(market);
+        platform.ingest({ kind: "market", market });
+        if (started) await startMarket(market);
+      }
+    },
     async start() {
       if (started || stopped) throw new Error("connection already started or stopped");
       started = true;
-      const deadline = Date.now() / 1000 + (options.durationSec ?? 3600);
-      for (const market of options.markets) {
-        const [up, down] = market.instruments;
-        const feed = runPolymarketFeed(sink(market), up.tokenId, down.tokenId, deadline);
-        controls.push(feed);
-        bookHealth.set(market.id, feed.isHealthy);
-        if (client) {
-          const user = runUserFeed(sink(market), { creds: client.creds, conditionId: market.id,
-            upToken: up.tokenId, downToken: down.tokenId, accountAddress: client.funder,
-            includeSellTrades: true, orderDirection: id => platform.orders.get(id)?.direction,
-            isOurOrder: id => !!platform.orders.get(id),
-            fetchTrades: ids => client!.getTradesByIds(ids), fetchRecentTrades: after => client!.getRecentTrades(market.id, after),
-            fetchOpenOrders: () => client!.getOpenOrders(market.id),
-            reconcileAfterReconnect: async (_afterUnix, openRows) => {
-              const openIds = new Set(openRows.flatMap(raw => {
-                if (!raw || typeof raw !== "object") return [];
-                const row = raw as Record<string, unknown>;
-                const id = row.id ?? row.order_id;
-                return typeof id === "string" ? [id] : [];
-              }));
-              const cancelledIds = platform.orders.list()
-                .filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
-                  && order.orderId && !openIds.has(order.orderId))
-                .map(order => order.orderId!);
-              platform.account.reconcile(await readAccount!(), 0, cancelledIds);
-            },
-            verifyAuthenticated: async () => { await client!.getOpenOrders(market.id); return true; },
-          }, deadline);
-          users.push(user); controls.push(user);
-        }
-      }
-      if (options.referenceFeed) controls.push(runBtcFeed(sink(options.markets[0])));
-      if (client) {
-        stopHeartbeat = client.startHeartbeat();
-        try { await Promise.all(users.map(user => user.waitUntilReady())); }
-        catch (error) { for (const control of controls) control.stop(); stopHeartbeat?.(); stopped = true; throw error; }
+      feedDeadline = Date.now() / 1000 + (options.durationSec ?? 3600);
+      if (client) stopHeartbeat = client.startHeartbeat();
+      try {
+        await Promise.all(options.markets.map(startMarket));
+        if (client && options.restored) await recoverAccount().catch(() => {
+          platform.ingest({ kind: "error", message: "startup account recovery remains pending" });
+        });
+        if (options.referenceFeed) controls.add(runBtcFeed(sink(options.markets[0])));
+        cleanupExpiredFeeds(); cleanupTimer = setInterval(cleanupExpiredFeeds, 5000);
+      } catch (error) {
+        for (const control of controls) control.stop();
+        stopHeartbeat?.(); stopped = true; throw error;
       }
     },
     async stop(reason = "operator stop") {
-      stopped = true;
-      // Keep user events alive while cancellation requests finish.
+      stopped = true; clearInterval(cleanupTimer);
+      await recoveryJob?.catch(() => undefined);
       try { await platform.stop(reason); }
       finally {
         for (const control of controls) control.stop();

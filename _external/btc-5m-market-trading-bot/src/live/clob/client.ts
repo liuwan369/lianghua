@@ -6,6 +6,7 @@ import {
   OrderType,
   orderToJsonV1,
   orderToJsonV2,
+  getContractConfig,
   Side as ClobSide,
   type ApiKeyCreds,
   type OrderResponse,
@@ -15,6 +16,7 @@ import {
 import {
   createWalletClient,
   http,
+  hashTypedData,
   type Address,
   type Hex,
   type WalletClient,
@@ -27,6 +29,7 @@ import {
   resolveWallet,
   signatureTypeLabel,
 } from "./wallet.js";
+import type { PreparedOrder } from "../../platform/contracts.js";
 
 export type { ApiKeyCreds };
 
@@ -56,6 +59,21 @@ export interface SubmitOrderArgs {
   direction?: "BUY" | "SELL";
   timeInForce?: "GTC" | "FOK" | "FAK";
   postOnly?: boolean;
+  onPrepared?: (prepared: PreparedOrder) => void;
+}
+
+/** Mirrors the installed v2 SDK's ExchangeOrderBuilderV2 typed-data hash. */
+export function signedV2OrderHash(order: SignedOrder, negRisk: boolean): string {
+  if (!isV2Order(order)) throw new Error("durable order identity requires v2 order");
+  const config = getContractConfig(137);
+  const fields = [
+    ["salt", "uint256"], ["maker", "address"], ["signer", "address"], ["tokenId", "uint256"],
+    ["makerAmount", "uint256"], ["takerAmount", "uint256"], ["side", "uint8"], ["signatureType", "uint8"],
+    ["timestamp", "uint256"], ["metadata", "bytes32"], ["builder", "bytes32"],
+  ].map(([name, type]) => ({ name, type }));
+  return hashTypedData({ domain: { name: "Polymarket CTF Exchange", version: "2", chainId: 137,
+    verifyingContract: (negRisk ? config.negRiskExchangeV2 : config.exchangeV2) as Address },
+    primaryType: "Order", types: { Order: fields }, message: { ...order, side: order.side === ClobSide.BUY ? 0 : 1 } });
 }
 
 export interface SubmitOrderResult {
@@ -154,6 +172,7 @@ export class ClobWrapper {
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
   private marketMinOrderSizes = new Map<string, number>();
   private negRiskByToken = new Map<string, boolean>();
+  private feeRulesByToken = new Map<string, { rate: number; exponent: number; takerDelayMs: number }>();
 
   private constructor(
     client: ClobClient,
@@ -385,7 +404,14 @@ export class ClobWrapper {
               throw new Error(`market ${conditionId} has no valid minimum order size`);
             }
             for (const token of market.t) {
-              if (token?.t) this.marketMinOrderSizes.set(token.t, minOrderSize);
+              if (token?.t) {
+                this.marketMinOrderSizes.set(token.t, minOrderSize);
+                const rate = market.fd?.r ?? 0, exponent = market.fd?.e ?? 0;
+                if (!Number.isFinite(rate) || rate < 0 || !Number.isFinite(exponent) || exponent < 0) {
+                  throw new Error("invalid market fee metadata");
+                }
+                this.feeRulesByToken.set(token.t, { rate, exponent, takerDelayMs: market.itode ? 250 : 0 });
+              }
             }
             this.orderVersion = version;
             if (typeof market.nr === "boolean") {
@@ -429,6 +455,10 @@ export class ClobWrapper {
     if (!Number.isFinite(tickSize) || tickSize <= 0) return;
     this.client.tickSizes[tokenId] = sdkTickSize(tickSize);
   }
+  feeRule(tokenId: string): { rate: number; exponent: number; takerDelayMs: number } | undefined {
+    const rule = this.feeRulesByToken.get(tokenId);
+    return rule && { ...rule };
+  }
 
   private async negRisk(tokenId: string): Promise<boolean> {
     const cached = this.negRiskByToken.get(tokenId);
@@ -463,6 +493,10 @@ export class ClobWrapper {
           },
         ), this.requestTimeoutMs, "CLOB order signing");
         signLatencyMs += performance.now() - signStarted;
+
+        if (args.onPrepared) {
+          args.onPrepared({ orderHash: signedV2OrderHash(order, negRisk), signedPayload: order, preparedAt: Date.now() / 1000 });
+        }
 
         const ackStarted = performance.now();
         postAttempted = true;
@@ -631,6 +665,25 @@ export class ClobWrapper {
         latencyMs: performance.now() - started,
         stateUnknown: postAttempted && requestStateUnknown(e),
       };
+    }
+  }
+  async getOrder(orderId: string): Promise<unknown> {
+    return withTimeout(this.client.getOrder(orderId), 3_000, "order identity reconciliation");
+  }
+  async resubmitPrepared(prepared: PreparedOrder, args: Pick<SubmitOrderArgs, "tokenId" | "timeInForce" | "postOnly">): Promise<SubmitOrderResult> {
+    const signed = prepared.signedPayload as SignedOrder;
+    const negRisk = await this.negRisk(args.tokenId);
+    if (signedV2OrderHash(signed, negRisk) !== prepared.orderHash || signed.tokenId !== args.tokenId) {
+      throw new Error("persisted signed payload identity mismatch");
+    }
+    const type = args.timeInForce === "FOK" ? OrderType.FOK : args.timeInForce === "FAK" ? OrderType.FAK : OrderType.GTC;
+    try {
+      const response = await this.postSignedOrder(signed, type, args.postOnly ?? false);
+      const error = responseError(response);
+      return { success: !error && Boolean(response?.success ?? response?.orderID), orderId: response.orderID,
+        tradeIds: responseTradeIds(response), errorMsg: error };
+    } catch (error) {
+      return { success: false, stateUnknown: true, errorMsg: error instanceof Error ? error.message : "signed replay pending" };
     }
   }
 

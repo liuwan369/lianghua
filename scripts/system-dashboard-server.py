@@ -24,6 +24,7 @@ from urllib.parse import urlsplit, parse_qs
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_account as account_store
 from dashboard.config import ConfigStore, ConfigConflictError
+from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
 from dashboard.market_snapshot import MarketSnapshot, publish_snapshot, validate_snapshot
@@ -55,6 +56,7 @@ _account_data: AccountData | None = None
 _account_data_lock = threading.Lock()
 _read_model: ReadModel | None = None
 _config_store: ConfigStore | None = None
+_strategy_config_store: StrategyConfigStore | None = None
 _config_control_lock = threading.RLock()
 _read_model_init_lock = threading.Lock()
 _trading_run_id: str | None = None
@@ -529,8 +531,8 @@ def trading_status(include_stats: bool = True) -> dict:
             "available": (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file(),
             "execution_target": "platform",
             "engine": _trading_engine,
-            "execution": "observation" if _trading_engine == "platform" else ("legacy" if _trading_engine else None),
-            "strategy_id": None,
+            "execution": ("strategy" if (_trading_params or {}).get("strategy_id") else "observation") if _trading_engine == "platform" else ("legacy" if _trading_engine else None),
+            "strategy_id": (_trading_params or {}).get("strategy_id"),
             "running": running,
             "mode": _trading_mode,
             "pid": process.pid if process and running else (_trading_pid if running else None),
@@ -638,6 +640,77 @@ def config_store() -> ConfigStore:
     return _config_store
 
 
+def strategy_config_store() -> StrategyConfigStore:
+    global _strategy_config_store
+    path = (TRADING_ROOT / "results" / "dashboard" / "btc-reversal-config.json").resolve()
+    if _strategy_config_store is None or _strategy_config_store.path != path:
+        _strategy_config_store = StrategyConfigStore(path)
+    return _strategy_config_store
+
+
+def strategy_config_status() -> dict:
+    saved = strategy_config_store().get()
+    status = trading_status()
+    runtime = (status.get("stats", {}).get("runtime") or {}).get("strategy_runtime") or {}
+    active = (runtime.get("currentRound") or {}).get("configRevision") if status.get("running") else None
+    if isinstance(active, str) and active.isdigit():
+        active = int(active)
+    return {**saved, "activeRevision": active,
+            "nextRoundRevision": saved["savedRevision"] if status.get("running") and active != saved["savedRevision"] else None}
+
+
+def save_strategy_config(payload: dict) -> dict:
+    if set(payload) - {"strategyId", "expectedRevision", "config"} or not {"expectedRevision", "config"} <= set(payload):
+        raise ValueError("请提交策略参数和当前版本")
+    if payload.get("strategyId", STRATEGY_ID) != STRATEGY_ID:
+        raise ValueError("策略不存在")
+    with _config_control_lock:
+        strategy_config_store().save(payload["config"], payload["expectedRevision"])
+        return strategy_config_status()
+
+
+def strategy_control(payload: dict) -> dict:
+    action = payload.get("action")
+    if payload.get("strategy_id", STRATEGY_ID) != STRATEGY_ID:
+        raise ValueError("策略不存在")
+    if action == "stop":
+        return stop_trading()
+    if action in {"pause", "resume"}:
+        with _trading_lock:
+            status = trading_status(include_stats=False)
+            if not status["running"] or status["strategy_id"] != STRATEGY_ID or not _trading_log:
+                raise ValueError("反转策略尚未运行")
+            control = _trading_log.with_suffix(".control.json")
+            temporary = control.with_suffix(".next")
+            temporary.write_text(json.dumps({"paused": action == "pause"}), encoding="utf-8")
+            temporary.replace(control)
+            return {**status, "control_requested": action, "control_pending": True}
+    if action != "start":
+        raise ValueError("操作必须为start、pause、resume或stop")
+    if type(payload.get("revision")) is not int:
+        raise ValueError("启动需要已保存的策略版本")
+    try:
+        request_id = str(uuid.UUID(payload.get("request_id")))
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("启动请求编号必须是UUID") from None
+    with _config_control_lock, _trading_lock:
+        _restore_trading_state()
+        if request_id == _trading_request_id:
+            if payload["revision"] != _trading_config_revision:
+                raise ValueError("同一启动请求不能改变配置版本")
+            return trading_status(include_stats=False)
+        saved = strategy_config_store().get()
+        if payload["revision"] != saved["savedRevision"]:
+            raise ConfigConflictError(saved["savedRevision"])
+        if not saved["savedRevision"]:
+            raise ValueError("请先保存策略参数")
+        config = saved["config"]
+        return start_trading({"mode": config["mode"], "confirm_live": True,
+                              "duration_min": config["durationMinutes"]},
+                             config_revision=saved["savedRevision"], request_id=request_id,
+                             strategy_config=saved)
+
+
 def save_config(payload: dict) -> dict:
     if set(payload) != {"params", "expected_revision"}:
         raise ValueError("请提交参数与预期配置版本")
@@ -669,7 +742,8 @@ def start_configured_paper(payload: dict) -> dict:
         return start_trading(saved["params"], config_revision=saved["revision"], request_id=request_id)
 
 
-def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None) -> dict:
+def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
+                  strategy_config: dict | None = None) -> dict:
     global _trading_process, _trading_pid, _trading_started_at, _trading_mode, _trading_params
     global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
@@ -713,7 +787,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
     maker_life_sec = positive("maker_life_sec", 15, 1)
     decision_interval_ms = positive("decision_interval_ms", 0, 0)
     defensive_cancel_bps = positive("defensive_cancel_bps", 0, 0)
-    if max_total_usd > 100000 or order_usd > 1000 or max_orders > 10000 or duration_min > 1440 or maker_life_sec > 300 or decision_interval_ms > 60000 or defensive_cancel_bps > 1000:
+    if not strategy_config and (max_total_usd > 100000 or order_usd > 1000 or max_orders > 10000 or duration_min > 1440 or maker_life_sec > 300 or decision_interval_ms > 60000 or defensive_cancel_bps > 1000):
         raise ValueError("参数超过安全上限")
     with _trading_lock:
         _restore_trading_state()
@@ -733,6 +807,10 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
         candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
         candidate_state = log_dir / f"dashboard-{run_id}.platform-state.json"
+        account_id = (account_config_status().get("wallet") or None) if mode == "live" else None
+        if strategy_config:
+            identity = hashlib.sha256((account_id or "paper").lower().encode()).hexdigest()[:20]
+            candidate_state = log_dir / f"btc-reversal-{identity}.platform-state.json"
         # Create the selected journal before returning the start response.
         # The status endpoint must never fall back to a previous run while the
         # child process is still starting.
@@ -744,8 +822,10 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
             "--journal-file", str(candidate_log), "--state-file", str(candidate_state),
             "--stop-file", str(candidate_log.with_suffix(".stop")),
         ]
+        if strategy_config:
+            args.extend(["--strategy", STRATEGY_ID, "--strategy-config", str(strategy_config_store().path),
+                         "--control-file", str(candidate_log.with_suffix(".control.json"))])
         env = _trading_environment()
-        account_id = (account_config_status().get("wallet") or None) if mode == "live" else None
         env["LIVE"] = "false" if mode == "paper" else "true"
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
@@ -775,6 +855,9 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
             "decision_interval_ms": decision_interval_ms,
             "defensive_cancel_bps": defensive_cancel_bps,
         }
+        if strategy_config:
+            _trading_params = {"strategy_id": STRATEGY_ID, "mode": mode,
+                               "duration_min": duration_min, "config": strategy_config["config"]}
         _trading_exit_code = None
         _trading_stop_result = None
         _persist_trading_state()
@@ -884,6 +967,12 @@ def make_handler(root: Path):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            if path == "/api/strategy-config":
+                try:
+                    self._send_json(json.dumps(strategy_config_status(), ensure_ascii=False).encode("utf-8"))
+                except (ValueError, RuntimeError, OSError) as exc:
+                    self._send_json(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8"), 503)
+                return
             if path.startswith("/api/v1/"):
                 self._get_v1(path)
                 return
@@ -954,6 +1043,20 @@ def make_handler(root: Path):
                     value = {"schemaVersion": 1, "asOf": time.time(), **cached_live_status()}
                 elif path == "/api/v1/account-data":
                     value = account_data().snapshot()
+                elif path == "/api/v1/orders":
+                    query = parse_qs(urlsplit(self.path).query)
+                    run_id = query.get("run_id", [None])[0]
+                    if not run_id or len(run_id) > 200:
+                        raise ValueError("请指定运行编号")
+                    ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+                    stamp = query.get("as_of", [None])[0]
+                    cutoff = query.get("snapshot_event_id", [None])[0]
+                    value = {"schemaVersion": 1, **ledger.orders_page(run_id,
+                             limit=int(query.get("limit", ["10"])[0]),
+                             offset=int(query.get("offset", ["0"])[0]),
+                             status=query.get("status", [None])[0], market=query.get("market", [None])[0],
+                             as_of=float(stamp) if stamp else None,
+                             snapshot_event_id=int(cutoff) if cutoff else None)}
                 elif path in {"/api/v1/runs", "/api/v1/events", "/api/v1/summary"}:
                     ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
                     query = parse_qs(urlsplit(self.path).query)
@@ -1032,10 +1135,17 @@ def make_handler(root: Path):
             self.end_headers()
             self.wfile.write(body)
 
+        def do_PUT(self) -> None:  # noqa: N802
+            if self.path.split("?", 1)[0] != "/api/strategy-config":
+                self._send_json(b'{"error":"not found"}', 404)
+                return
+            self.do_POST()
+
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
             if path not in {"/api/trading/start", "/api/trading/stop", "/api/account/check", "/api/account/save",
-                            "/api/v1/config", "/api/v1/trading/start", "/api/v1/trading/stop"}:
+                            "/api/v1/config", "/api/v1/trading/start", "/api/v1/trading/stop",
+                            "/api/strategy-config", "/api/trading/control"}:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
@@ -1056,6 +1166,9 @@ def make_handler(root: Path):
                     self._send_json(json.dumps({"ok": True, "report": report}, ensure_ascii=False).encode("utf-8"))
                     return
                 mode = trading_status(include_stats=False).get("mode") if path.endswith("/stop") else payload.get("mode", "paper")
+                if path == "/api/trading/control":
+                    mode = (strategy_config_store().get()["config"]["mode"] if payload.get("action") == "start"
+                            else trading_status(include_stats=False).get("mode"))
                 auth_error = _control_request_error(self.headers, mode)
                 if auth_error:
                     status, message = auth_error
@@ -1064,7 +1177,13 @@ def make_handler(root: Path):
                         status,
                     )
                     return
-                if path == "/api/v1/config":
+                if path == "/api/strategy-config":
+                    result = save_strategy_config(payload)
+                    self._send_json(json.dumps({"ok": True, **result}, ensure_ascii=False).encode("utf-8"))
+                    return
+                elif path == "/api/trading/control":
+                    result = strategy_control(payload)
+                elif path == "/api/v1/config":
                     result = save_config(payload)
                 elif path == "/api/v1/trading/start":
                     result = start_configured_paper(payload)

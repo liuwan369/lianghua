@@ -2,6 +2,9 @@ import { api } from './api/client';
 import { connectForms } from './forms';
 import { connectAccountData } from './account-data';
 import { connectTradingControls } from './trading-controls';
+import { connectStrategy } from './pages/strategy';
+import { renderReversal } from './pages/reversal-runtime';
+import { connectStrategyOrders } from './pages/strategy-orders';
 import { pageTelemetry } from './page-telemetry';
 import type { Account, Config, Events, Markets, Resource, Status } from './api/types';
 import { activeMarkets, date, esc, executionName, fresh, money, modeName, number, platformRuntime, price, quotePair, usableMarket, marketMessage } from './ui';
@@ -17,41 +20,10 @@ const resource = <T>(): Resource<T> => ({data:null,error:null,receivedAt:0,loadi
 const names: Record<string,string> = {quote:'挂单尝试',fill:'成交',cancel:'撤单事件',reset:'切场',stopped:'停止',unresolved:'未结算',resolved:'结算',taker:'吃单尝试',error:'错误',platform_status:'平台快照',platform_order:'平台订单',platform_fill:'平台成交'};
 
 export function prepareReadOnly() {
-  set('.side-note','服务器数据接入中\n未接入功能保留原位');
-  const note=document.querySelector<HTMLElement>('.side-note'); if(note)note.style.whiteSpace='pre-line';
-  disable('[data-start],[data-stop],[data-exit]', '交易控制尚未完成验收');
-  disable('#trade-orders .subnav button,#trade-orders .head-actions button', '筛选及导出尚未接入，功能保留');
-  document.querySelectorAll<HTMLInputElement>('#settings-strategy input,#settings-run input').forEach(el=>{el.value='';el.placeholder='未接入';});
-  document.querySelectorAll<HTMLSelectElement>('#settings-strategy select,#settings-run select').forEach(el=>{
-    const option=document.createElement('option');option.text='未接入';option.value='';el.prepend(option);el.value='';
-  });
-  set('#setting-mode option[value="paper"]','纸面模拟');
-  set('#settings-strategy .settings-intro','原设计参数完整保留，可在原位置填写。已接入字段可保存到服务器；其余字段仅本页草稿，不会保存或生效。');
-  set('.settings-advanced .settings-check-foot','高级选项可填写草稿；对应执行和风控尚未接入，不会保存或生效。');
-  document.querySelectorAll('[data-setting-checks]').forEach(el=>{el.textContent='账户额度、真实市场最小委托、费用和高级参数尚未完成联合检查。';});
-  document.querySelectorAll('[data-check-state]').forEach(el=>el.textContent='待接入验收');
-  document.querySelectorAll('[data-effective-summary]').forEach(el=>el.textContent='服务器配置尚未获取');
-  document.querySelectorAll('[data-settings-save]').forEach(el=>el.textContent='保存设置');
-  document.querySelectorAll('[data-settings-reset]').forEach(el=>el.textContent='撤销未保存修改');
-  document.querySelectorAll('.settings-example label').forEach(el=>el.textContent='市场最小委托与委托价格 · 待接入核验');
-  document.querySelectorAll('.settings-checks > .settings-check-foot').forEach(el=>el.textContent='实际账户额度、市场最小份数和费用尚未完成启动核验。');
-  set('#view-home > .stats:first-of-type .stat:nth-child(1) small','今日 --　当月 -- · 订单生命周期待接入');
-  // Use direct selectors rather than synthetic totals: quote events are not orders.
-  set('#homeOrders','--');
-  set('#homeOrders + small','今日 --　当月 --');
-  set('#homeStrategyMetric','--');
-  set('#view-home .stats .stat:nth-child(3) small','今日 --　当月 -- · 已结算胜率待接入');
-  set('#view-home .section-title > .muted','收益账单未获取 · 纸面与实盘按运行区分');
-  set('#view-home .panel .section-title .pill','服务器事件');
-  set('#view-home .latency-caption','测量接口尚未接入。无样本显示 --；确认接单不代表成交。');
-  set('#settings-account .note','账户可填写；检查与保存由服务器校验授权，不会读取或回显已保存密钥。');
-  set('#view-home .grid .note','可在设置页填写并提交已接入参数。交易启停尚未验收，继续保持锁定。');
-  set('#view-trade .panel .empty','有效订单生命周期尚未接入，不能据此判断是否有挂单。');
-  for(const label of ['UP 数量 / 平均价','DOWN 数量 / 平均价','两边数量差'])row('#view-trade',label,'--');
-  row('#view-trade','补仓状态','未接入');
-  row('#view-home','账户余额','-- · 余额未接入');
-  row('#view-home','当前持仓','-- · 持仓未接入');
-  set('#trade-orders .note','按运行展示服务器事件，费用未知显示 --。完整委托生命周期、筛选和导出尚未接入；挂单尝试不代表平台已接单。');
+  set('.side-note','BTC 五分钟反转 · 正在读取服务器');
+  disable('[data-start],[data-stop],[data-pause]', '读取运行状态中');
+  set('#settings-account .note','账户配置通过服务器保存，已保存的密钥不会回显。');
+
 }
 
 export function connect() {
@@ -59,10 +31,13 @@ export function connect() {
   const accountData=connectAccountData();
   const telemetry=pageTelemetry();
   const trading=connectTradingControls(refresh);
+  const strategyConfig=connectStrategy(value=>trading.receiveStrategy(value));
+  const strategyOrders=connectStrategyOrders();
   const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>();
   const runtimeRows=document.createElement('div');runtimeRows.dataset.platformRuntime='';runtimeRows.hidden=true;
   runtimeRows.innerHTML='<div class="row"><span>平台模拟现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><p class="muted" data-runtime-source role="status"></p>';
   document.getElementById('homeStrategy')!.closest('.panel')!.append(runtimeRows);
+  document.querySelector('[data-depth-count]')?.addEventListener('change',renderStatus);
   let closed=false, refreshing=false, runLoading=false, runsLoading=false, historyGeneration=0;
   let configGeneration=0, accountGeneration=0;
   const forms = connectForms({
@@ -90,7 +65,7 @@ export function connect() {
     const data=fresh(markets), list=activeMarkets(markets), market=list[0], usable=market ? usableMarket(market,markets):false;
     set('#view-trade .quote:nth-child(1) b',market?quotePair(market,'up',usable):'-- / --');
     set('#view-trade .quote:nth-child(2) b',market?quotePair(market,'down',usable):'-- / --');
-    row('#view-trade','两边立即买入成本',usable?price(market.ask_sum):'--');
+    set('[data-book-age]',usable&&market.quote_at?`${number(Math.max(0,Date.now()-Date.parse(market.quote_at)),0)} ms`:'--');
     row('#view-trade','策略判断',fresh(status)?.engine==='platform'&&fresh(status)?.strategy_id===null?'平台观察 · 未加载策略':usable?'盘口已获取 · 策略判断待接入':'行情不可用或已过期');
     row('#view-home','数据连接',data?.collector_online && usable ? `行情已更新 · ${data.node_label}`:marketMessage(markets));
     row('#settings-system','数据节点',data?.node_label || '--');
@@ -109,12 +84,12 @@ export function connect() {
     set('#homeStrategyMetric',strategyText);
     set('#view-trade .chip',s ? `${mode} · ${s.running?'运行中':'未运行'}${strategy ? ` · ${strategy}` : ''}`:'-- · 状态未知');
     row('#settings-system','实盘开关',!s?'未知':s.live_unlocked?'已开启 · 验收状态需核对':'关闭');
-    row('#settings-system','当前版本','六页原设计 · 表单接入');
+    row('#settings-system','当前版本','BTC 五分钟反转');
     const stats=s?.stats;
     const valid=stats?.available===true && s?.projection?.stale===false && s.projection.state==='ready' && (s.run_id===null || s.projection.run_id===s.run_id);
     set('#homeVolume',valid&&(!platform||runtime.current)?`${number(platform?runtime.runtime?.fills_count:stats?.fills)} / ${money(stats?.fill_notional)}`:'-- / --');
     set('#homeVolume + small',s ? `成交笔数 / 成交额 · ${mode} · ${platform&&!runtime.current?'历史或过期快照':'本次运行'}`:'成交笔数 / 成交额 · 状态未获取');
-    row('#view-home','本次投入上限',platform?'不适用 · 平台观察':s?.running?money(s.params.max_total_usd):'-- · 未运行');
+    row('#view-home','本次投入上限',strategyConfig.current?.config.totalBudgetUsd==null?'未设置':money(strategyConfig.current.config.totalBudgetUsd));
     runtimeRows.hidden=!platform;
     const snapshot=runtime.runtime;
     set('[data-runtime-cash]',runtime.current&&snapshot?.mode==='paper'?`${money(snapshot.cash_usd)} · 模拟资金`:'-- · 无当前模拟资金快照');
@@ -124,12 +99,15 @@ export function connect() {
     if(platform){
       row('#view-trade','策略判断',strategy);
       row('#view-trade','补仓状态',s?.strategy_id===null?'未加载策略':'按平台策略运行');
-      set('#view-home .grid .note','平台观察未加载交易策略。平台模拟资金、持仓与真实账户分别核对。');
+      set('#view-home .grid .note',s?.strategy_id==='btc-reversal'?'BTC 五分钟反转 · 订单和持仓由服务器持续管理。':'当前未加载 BTC 反转策略。');
     }
     const rows=valid&&Array.isArray(stats?.events)? stats.events.slice(-6):[];
     const logs=rows.map(e=>`${date(e.time)} · ${names[e.event]||'其他事件'} · ${e.market||'--'}${e.event==='fill'?` · ${number(e.shares,2)} 份 × ${price(e.price)}`:''}`).join('\n');
     set('#homeLog',status.error||logs||'尚无可用运行事件。'); set('#tradeLog',status.error||logs||'尚无可用运行事件。');
     for(const id of ['homeLog','tradeLog'])document.getElementById(id)!.style.whiteSpace='pre-wrap';
+    const currentMarket=renderReversal(s,clock);
+    accountData.receiveMarket(currentMarket?.marketId||null);
+    strategyOrders.receive(s?.run_id||null,currentMarket?.marketName||null);
     const a=fresh(account);
     trading.receive(fresh(config),s);
     row('#view-home','当前账户',account.error?'-- · 读取失败':a?.wallet_configured ? `${a.wallet} · ${a.control_source?.label || '来源未标注'}` : a ? `未配置 · ${a.control_source?.label || '来源未标注'}` : '读取中');
@@ -143,10 +121,10 @@ export function connect() {
   function renderConfig() {
     const c=config.data;
     document.querySelectorAll('[data-effective-summary]').forEach(el=>el.textContent=config.error || (!c?'配置未获取':`${c.control_source?.label || '来源未标注'} · 已保存版本 ${c.revision} · 本次运行版本 ${status.data?.config_revision??'--'}`));
-    row('#view-trade','目标成本上限',c?.capabilities.executionMode==='observation'?'不应用 · 平台观察':'-- · 目标与硬上限尚未分别接入');
+
   }
   function renderEvents() {
-    if(document.getElementById('trade-orders')?.dataset.source==='account')return;
+    if(document.getElementById('trade-orders')?.dataset.source!=='run')return;
     const body=document.querySelector('#trade-orders tbody');
     if (!body) return;
     const expired=events!==null && Date.now()-eventsReceivedAt>=15000;
@@ -204,8 +182,8 @@ export function connect() {
   async function refresh() {
     if(refreshing||closed)return;refreshing=true;
     const started=performance.now();
-    try{await Promise.allSettled([load(status,api.status),load(markets,api.markets),load(config,api.config),load(account,api.account)]);
-      await accountData.refresh();
+    try{await Promise.allSettled([load(status,api.status),load(markets,api.markets),load(config,api.config),load(account,api.account),strategyConfig.refresh()]);
+      await Promise.allSettled([accountData.refresh(),strategyOrders.refresh()]);
       await loadRuns(undefined,true);
       if(selectedRun&&!runLoading)await loadEvents(selectedRun,historyCursor);
       if(selectedRun){ try { telemetrySummary=(await api.summary(selectedRun)).summary; telemetry.renderServer(telemetrySummary); } catch { telemetrySummary=null; } }
@@ -218,5 +196,5 @@ export function connect() {
   renderMarkets();renderStatus();renderConfig();renderEvents();void refresh();
   const poll=window.setInterval(()=>void refresh(),5000);
   const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();},1000);
-  return ()=>{closed=true;forms.close();accountData.close();trading.close();historyGeneration++;window.clearInterval(poll);window.clearInterval(tick);};
+  return ()=>{closed=true;strategyConfig.close();strategyOrders.close();forms.close();accountData.close();trading.close();historyGeneration++;window.clearInterval(poll);window.clearInterval(tick);};
 }

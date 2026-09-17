@@ -9,6 +9,9 @@ export interface Instrument {
   outcome: string;
   tickSize: number;
   minOrderSize: number;
+  feeRate?: number;
+  feeExponent?: number;
+  takerDelayMs?: number;
 }
 export interface MarketInfo {
   id: string;
@@ -46,6 +49,8 @@ export interface OrderRequest {
   shares: number;
   timeInForce: TimeInForce;
   postOnly: boolean;
+  /** Optional strategy round cap; execution includes fee and unknown-order reserves. */
+  roundBudgetUsd?: number;
 }
 export type OrderStatus = "SUBMITTING" | "OPEN" | "PARTIAL" | "FILLED" | "CANCELLED" | "REJECTED" | "UNKNOWN";
 export interface OrderRecord extends OrderRequest {
@@ -62,7 +67,13 @@ export interface OrderRecord extends OrderRequest {
   ackLatencyMs?: number;
   /** A venue cancel ACK can race with a fill already in flight. */
   reconciliationPending?: boolean;
+  /** Signed order identity persisted before HTTP; never exposed in UI journals. */
+  prepared?: PreparedOrder;
+  identityProtocol?: "signed-before-post";
+  preparedReplayAttempts?: number;
 }
+export interface PreparedOrder { orderHash: string; signedPayload: unknown; preparedAt: number }
+export type TradeStatus = "MATCHED" | "MATCHED_NOT_BROADCASTED" | "MINED" | "RETRYING" | "CONFIRMED" | "FAILED";
 export interface TradeFill {
   tradeId: string;
   orderId: string;
@@ -73,6 +84,11 @@ export interface TradeFill {
   feeUsd: number;
   ts: number;
   isMaker: boolean;
+  status?: TradeStatus;
+  feeSource?: "reported" | "rate-derived" | "estimate";
+  /** Basis removed by a provisional SELL, retained for an exact failure compensation. */
+  accountingBasisUsd?: number;
+  accountingInventoryBeforeShares?: number;
 }
 export interface Position {
   tokenId: string;
@@ -91,7 +107,8 @@ export interface AccountSnapshot {
 }
 export interface HardLimits {
   capitalUsd: number;
-  dailyLossUsd: number;
+  /** Unset disables only the optional daily loss stop; cash checks remain active. */
+  dailyLossUsd?: number | null;
   maxOrderUsd: number;
   maxOpenOrders: number;
 }
@@ -117,6 +134,9 @@ export interface CoreState {
   orders: OrderRecord[];
   fills: TradeFill[];
   risk: RiskView;
+  /** Opaque plugin state is persisted in the same commit as the account ledger. */
+  strategyStates?: Record<string, unknown>;
+  markets?: MarketInfo[];
 }
 export interface GatewayAck {
   status: "accepted" | "rejected" | "unknown";
@@ -128,7 +148,8 @@ export interface GatewayAck {
 }
 export interface OrderGateway {
   readonly mode: TradingMode;
-  submit(request: OrderRequest, instrument: Instrument): Promise<GatewayAck>;
+  readonly durableIdentity?: boolean;
+  submit(request: OrderRequest, instrument: Instrument, prepared?: (value: PreparedOrder) => void): Promise<GatewayAck>;
   cancel(orderId: string): Promise<boolean>;
   /** No hidden position selection or automatic account-wide cancellation. */
   close?(): Promise<void>;
@@ -165,7 +186,7 @@ export type TradingEvent =
   | { kind: "settlement"; result: SettlementResult }
   | { kind: "timer"; ts: number }
   | { kind: "stopped"; reason: string }
-  | { kind: "error"; message: string; strategyId?: string; clientOrderId?: string; orderId?: string };
+  | { kind: "error"; message: string; strategyId?: string; clientOrderId?: string; orderId?: string; marketId?: string; code?: string };
 export type StrategyAction =
   | { kind: "submit"; order: Omit<OrderRequest, "strategyId"> }
   | { kind: "cancel"; orderId: string }
@@ -176,6 +197,7 @@ export interface StrategyContext {
   readonly markets: readonly MarketInfo[];
   readonly books: readonly Book[];
   readonly account: Readonly<Omit<CoreState, "fills">>;
+  readonly estimateFee?: (order: Omit<OrderRequest, "strategyId">) => number;
 }
 export interface StrategyPlugin {
   readonly id: string;

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), discover: vi.fn(), load: vi.fn(), save: vi.fn(), close: vi.fn(),
-  open: vi.fn(), start: vi.fn(), stop: vi.fn(), attach: vi.fn(), ingest: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() }));
+  setStrategyState: vi.fn(), updateLimits: vi.fn(), addMarkets: vi.fn(), open: vi.fn(), start: vi.fn(), stop: vi.fn(), attach: vi.fn(), ingest: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn() }));
 vi.mock("../platform/polymarket.js", () => ({ connectPolymarketPlatform: mocks.connect, discoverBtcMarket: mocks.discover }));
 vi.mock("../platform/store.js", () => ({ PlatformStore: class {
   constructor(path: string) { mocks.open(path); }
@@ -26,8 +26,8 @@ beforeEach(() => {
   temporary = mkdtempSync(join(tmpdir(), "platform-cli-"));
   mocks.discover.mockResolvedValue([market]);
   mocks.subscribe.mockReturnValue(mocks.unsubscribe);
-  mocks.connect.mockResolvedValue({ start: mocks.start, stop: mocks.stop,
-    platform: { attach: mocks.attach, ingest: mocks.ingest, subscribe: mocks.subscribe,
+  mocks.connect.mockResolvedValue({ start: mocks.start, stop: mocks.stop, addMarkets: mocks.addMarkets,
+    platform: { core: { setStrategyState: mocks.setStrategyState, updateLimits: mocks.updateLimits }, attach: mocks.attach, ingest: mocks.ingest, subscribe: mocks.subscribe,
       account: { current: () => ({ cashUsd: 1000, positions: [], orders: [], fills: [], risk: { halted: false } }) },
       market: { list: () => [market], books: () => [] }, orders: { get: () => undefined },
       telemetry: { snapshot: () => ({ events: 0 }) },
@@ -41,19 +41,21 @@ describe("generic platform CLI inputs", () => {
   it("defaults to paper observation even when LIVE environment is true", () => {
     vi.stubEnv("LIVE", "true");
     expect(parsePlatformOptions([])).toMatchObject({ mode: "paper", strategyModule: undefined,
-      limits: { capitalUsd: 1000, dailyLossUsd: 1000 } });
-    expect(parsePlatformOptions(["--live"])).toMatchObject({ mode: "live", limits: { capitalUsd: 50, dailyLossUsd: 30 } });
+      limits: { capitalUsd: 1000, dailyLossUsd: null } });
+    expect(parsePlatformOptions(["--live"])).toMatchObject({ mode: "live", limits: { capitalUsd: Number.MAX_SAFE_INTEGER, dailyLossUsd: null } });
   });
 
   it.each([["--duration-sec", "-1"], ["--duration-sec", "NaN"], ["--duration-sec", "Infinity"],
     ["--timer-ms", "0"], ["--status-sec", "-1"], ["--capital-usd", "NaN"], ["--max-open-orders", "1.5"],
-    ["--live", "--paper"], ["--live", "--capital-usd", "51"], ["--live", "--daily-loss-usd", "31"],
+    ["--live", "--paper"], ["--live", "--capital-usd", "0"], ["--live", "--daily-loss-usd", "0"],
     ["--capital-usd", "10", "--order-usd", "11"]])("rejects invalid options before connections: %j", (...args) => {
     expect(() => parsePlatformOptions(args)).toThrow();
     expect(mocks.connect).not.toHaveBeenCalled();
   });
 
-  it("allows larger paper research capital without increasing live budgets", () => {
+  it("accepts user configured live budgets without historical constants", () => {
+    expect(parsePlatformOptions(["--live", "--capital-usd", "148", "--daily-loss-usd", "60"])).toMatchObject({
+      mode: "live", limits: { capitalUsd: 148, dailyLossUsd: 60 } });
     expect(parsePlatformOptions(["--capital-usd", "25000", "--daily-loss-usd", "25000"])).toMatchObject({
       mode: "paper", limits: { capitalUsd: 25000, dailyLossUsd: 25000, maxOrderUsd: 25000 } });
   });
@@ -100,6 +102,42 @@ describe("generic platform CLI inputs", () => {
 });
 
 describe("generic platform CLI lifecycle", () => {
+  it("loads the built-in strategy, persists state and reads pause control without sending orders", async () => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json"), controlPath = join(temporary, "control.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", savedRevision: 1,
+      config: { instanceId: "test", revision: "1", totalBudgetUsd: null, roundBudgetUsd: null, dailyLossUsd: null } }));
+    const running = runPlatformCli(["--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "2", "--control-file", controlPath]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.attach).toHaveBeenCalledWith(expect.objectContaining({ id: "btc-reversal" }));
+    expect(mocks.setStrategyState).toHaveBeenCalledWith("btc-reversal", expect.objectContaining({ instanceId: "test" }));
+    writeFileSync(controlPath, JSON.stringify({ paused: true }));
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(mocks.setStrategyState).toHaveBeenLastCalledWith("btc-reversal", expect.objectContaining({ paused: true }));
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", savedRevision: 2,
+      config: { instanceId: "test", revision: "2", triggerPrice: 0.68 } }));
+    await vi.advanceTimersByTimeAsync(1001);
+    await running;
+    expect(mocks.attach.mock.calls[0][0].exportState().config.revision).toBe("2");
+    expect(mocks.stop).toHaveBeenCalledWith("duration_elapsed");
+  });
+
+  it("continues beyond a round boundary and discovers future markets for the built-in strategy", async () => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    const now = Date.now() / 1000;
+    mocks.discover.mockResolvedValueOnce([{ ...market, startsAt: now - 60, endsAt: now + 1 }])
+      .mockResolvedValue([{ ...market, id: "next", startsAt: now + 1, endsAt: now + 301,
+        instruments: market.instruments.map(instrument => ({ ...instrument, marketId: "next", tokenId: `next-${instrument.tokenId}` })) }]);
+    const running = runPlatformCli(["--strategy", "btc-reversal", "--strategy-config", configPath, "--duration-sec", "0"]);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.addMarkets).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: "next" })]));
+    process.emit("SIGTERM"); await running;
+  });
+
   it("runs without a strategy, emits timer events, then cancels/stops and closes durable state", async () => {
     vi.useFakeTimers();
     const running = runPlatformCli(["--duration-sec", "2", "--timer-ms", "500"]);
@@ -216,8 +254,8 @@ describe("generic platform CLI lifecycle", () => {
     expect(rows[0].runtime).toMatchObject({ schemaVersion: 1, engine: "platform", execution: "observation",
       strategy_id: null, status: "starting", cash_usd: null, risk: null });
     expect(rows.at(-1).runtime).toMatchObject({ status: "stopped", mode: "paper", cash_usd: 1000 });
-    expect(rows.at(-1).runtime.books[0].bids).toHaveLength(5);
-    expect(rows.at(-1).runtime.books[0].asks).toHaveLength(5);
+    expect(rows.at(-1).runtime.books[0].bids).toHaveLength(8);
+    expect(rows.at(-1).runtime.books[0].asks).toHaveLength(8);
     expect(rows.at(-1).runtime.books[0].stale).toBe(true);
     expect(rows.at(-1).runtime.books[0].received_age_ms).toBeGreaterThan(10_000);
     expect(rows[1]).toMatchObject({ event: "order", order_id: "venue", strategy_id: "manual",

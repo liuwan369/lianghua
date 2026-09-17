@@ -2,7 +2,7 @@
 
 核对日期：2026-09-16。配置实现见 `scripts/dashboard/config.py`、账户实现见 `scripts/dashboard_account.py`；公共交易平台配置见 `_external/btc-5m-market-trading-bot/src/platform/`。
 
-当前策略接入暂停。本批源码将控制台启停接入无策略 `TradingPlatform` 观察；本说明不表示已部署。现有前端配置入口保留，页面字段不能被解释为新策略默认参数或自动调参已经接线。实盘资金边界仍为本金 `$50`、北京时间单日损失 `$30`；平台 paper 默认 `$1000` 是独立模拟现金，不是实盘额度。
+做市配置已停止。当前源码已将控制台策略页接到一套可配置 BTC 五分钟反转插件；保存的是策略版本，参数在下一场生效。服务器是否已发布、账户是否可下单须以线上状态和真实回执核对；当前没有本轮真实订单证据。无策略观察仍可单独运行；反转配置和参数版本由策略接口持久化。平台 paper 默认 `$1000` 是独立模拟现金，不是实盘额度。
 
 ## 页面与引擎参数
 
@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | order | order_usd | 旧单笔名义金额上限 | 保留，可保存；不应用 |
 | life | maker_life_sec | 旧 maker 挂单有效秒数 | 保留，可保存；不应用 |
-| mode | mode | paper / live 配置模式 | 应用；前端与版本化启动仅支持 paper |
+| mode | mode | paper / live 配置模式 | 无策略观察仅 paper；反转 live 启动还需服务器解锁和账户检查 |
 | duration | duration_min | 运行分钟数，0 不按时长退出 | 应用 |
 | submitted | max_total_usd | 旧累计提交金额保险丝 | 保留，可保存；不应用 |
 | maxOrders | max_orders | 旧累计订单次数上限 | 保留，可保存；不应用 |
@@ -20,7 +20,7 @@
 | decisionInterval | decision_interval_ms | 旧最短决策间隔 | 保留，可保存；不应用 |
 | defensiveCancel | defensive_cancel_bps | 旧 BTC 逆向波动撤单阈值 | 保留，可保存；不应用 |
 
-九个控件都有保存映射。平台观察依照 capabilities 标出 `runtimeAppliedFields=[mode,duration_min]`，其余七项归入 `preservedLegacyFields`，仍可编辑保存且保留原值，但不传入新平台。其余成本目标、库存、补仓和退出设置仅为本页草稿，不保存、不执行。
+九个控件都有保存映射。平台观察依照 capabilities 标出 `runtimeAppliedFields=[mode,duration_min]`，其余七项归入 `preservedLegacyFields`，仍可编辑保存且保留原值，但不传入新平台。反转策略使用独立策略配置接口；做市库存、补仓和配对字段不属于该策略。
 
 默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改；只把模式、时长应用于下次平台观察启动，不热更新、不加载策略。当前为单服务器配置，不按账户隔离。本批固定订阅的市场全部到期会自动停止，即使 `duration_min=0` 也不表示跨场永久运行。
 
@@ -74,4 +74,4 @@
 
 账户文件不进 Git；Linux 限制为所属用户读写，检查/保存响应不返回密钥。前端不把秘密字段写入浏览器持久存储。完整实盘就绪结论见 [交付状态](DELIVERY.md)。
 
-账户数据缓存默认至少30秒刷新；不受浏览器刷新次数放大。CLOB抵押余额不表示扣除挂单占用后的可花资金。纸面启动要求先保存配置（revision > 0），提交保存版本与唯一请求编号；实盘保存不自动开启交易。
+账户数据缓存默认至少30秒刷新；不受浏览器刷新次数放大。CLOB抵押余额不表示扣除挂单占用后的可花资金。启动要求先保存对应配置版本（revision > 0），提交保存版本与唯一请求编号；实盘保存不自动开启交易。

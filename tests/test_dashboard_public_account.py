@@ -163,7 +163,7 @@ def test_public_account_opt_in_does_not_authorize_live_trading(account_http, mon
     assert status == 401, result
 
     # Even the right control token cannot substitute for the live unlock.
-    cli = tmp_path / "engine" / "dist" / "cli" / "live.js"
+    cli = tmp_path / "engine" / "dist" / "cli" / "platform.js"
     cli.parent.mkdir(parents=True)
     cli.touch()
     monkeypatch.setattr(SERVER, "TRADING_ROOT", tmp_path / "engine")
