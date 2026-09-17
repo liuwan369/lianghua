@@ -272,7 +272,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           if (numeric(failure.status ?? response.status) !== 404) throw error;
           detail = { status: "NOT_FOUND" };
         }
-        const missing = detail.status === "NOT_FOUND" || /order.*not found|not found.*order/i.test(String(detail.error ?? ""));
+        const missing = detail.status === "NOT_FOUND" || numeric(detail.status) === 404
+          || /order.*not found|not found.*order/i.test(String(detail.error ?? ""));
         const market = options.markets.find(item => item.instruments.some(instrument => instrument.tokenId === order.tokenId));
         if (missing && order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
           && (order.preparedReplayAttempts ?? 0) < 2 && market && Date.now() / 1000 < market.endsAt) {

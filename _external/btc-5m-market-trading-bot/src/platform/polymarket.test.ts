@@ -3,10 +3,11 @@ import type { FeedSink } from "../live/feeds/index.js";
 import type { MarketInfo, OrderRequest } from "./contracts.js";
 
 const mocks = vi.hoisted(() => ({ reader: vi.fn(), warm: vi.fn(), submit: vi.fn(), books: vi.fn(), users: vi.fn(),
-  cancel: vi.fn(), trades: vi.fn(), open: vi.fn(), getOrder: vi.fn(), stopHeartbeat: vi.fn() }));
+  cancel: vi.fn(), trades: vi.fn(), open: vi.fn(), getOrder: vi.fn(), replay: vi.fn(), stopHeartbeat: vi.fn() }));
 vi.mock("../live/clob/client.js", () => ({ geocheck: async () => {}, ClobWrapper: { connect: async () => ({
   warmMarket: mocks.warm, submitOrder: mocks.submit, cancel: mocks.cancel, getRecentTrades: mocks.trades,
-  getOpenOrders: mocks.open, getOrder: mocks.getOrder, getTradesByIds: async () => [], feeRule: () => ({ rate: 0.07, exponent: 1 }),
+  getOpenOrders: mocks.open, getOrder: mocks.getOrder, resubmitPrepared: mocks.replay,
+  getTradesByIds: async () => [], feeRule: () => ({ rate: 0.07, exponent: 1 }),
   startHeartbeat: () => mocks.stopHeartbeat, stopHeartbeat: mocks.stopHeartbeat,
   funder: "wallet", creds: { key: "k", secret: "s", passphrase: "p" },
 }) } }));
@@ -42,6 +43,32 @@ beforeEach(() => {
   });
 });
 describe("continuous market platform adapter", () => {
+  it("replays the original signature when the SDK returns a nonthrowing 404", async () => {
+    const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
+    const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],
+      limits: { capitalUsd: 148, dailyLossUsd: null, maxOrderUsd: 148, maxOpenOrders: 10 }, persist: () => {} });
+    await connection.start();
+    const prepared = { orderHash: "persisted-hash", signedPayload: { signature: "same-signature", salt: "same-salt" }, preparedAt: now };
+    mocks.submit.mockImplementation(async args => { args.onPrepared(prepared); return { success: false, stateUnknown: true }; });
+    const order = await connection.platform.orders.submit({ clientOrderId: "stage", strategyId: "btc-reversal", tokenId: "current-UP",
+      direction: "BUY", price: 0.7, shares: 5, postOnly: false, timeInForce: "GTC" });
+    expect(order.status).toBe("UNKNOWN");
+    mocks.getOrder.mockResolvedValue({ error: "Not Found", status: 404 });
+    mocks.replay.mockImplementation(async () => {
+      mocks.reader.mockImplementation(async () => ({ wallet: "wallet", checked_at: new Date().toISOString(),
+        collateral: { available: true, complete: true, value: 200 }, positions: { available: true, complete: true, items: [] },
+        open_orders: { available: true, complete: true, items: [{ id: "persisted-hash", asset_id: "current-UP",
+          side: "BUY", original_size: "5", size_matched: "0", price: "0.7" }] } }));
+      return { success: true, orderId: "persisted-hash" };
+    });
+    await connection.recoverAccount();
+    expect(mocks.replay).toHaveBeenCalledExactlyOnceWith(prepared, expect.objectContaining({ orderId: "persisted-hash" }));
+    expect(mocks.submit).toHaveBeenCalledOnce();
+    expect(connection.platform.orders.get(order.orderId!)?.status).toBe("OPEN");
+    await connection.platform.orders.cancel(order.orderId!);
+    connection.platform.core.confirmCancelled(order.orderId!, true);
+    await connection.stop();
+  });
   it("registers new ACK trade IDs after a signed identity was registered before POST", async () => {
     const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
     const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],

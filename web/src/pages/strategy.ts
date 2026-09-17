@@ -8,7 +8,7 @@ export interface ReversalConfig extends Obj {
 }
 export interface StrategyConfig { schemaVersion: 1; strategyId: 'btc-reversal'; savedRevision: number; config: ReversalConfig; savedAt?: string | null; activeRevision?: number | null; nextRoundRevision?: number | null }
 const input = (key: string, label: string, unit: string, help: string, optional = false) => `<div class="field"><label for="reversal-${key}">${label}</label><div class="settings-unit"><input id="reversal-${key}" data-reversal-field="${key}" type="number" step="any" min="${optional || key === 'durationMinutes' ? '0' : '0.01'}" ${optional ? 'placeholder="未设置"' : 'required'} ${key.includes('Price') ? 'max="99.99"' : ''}><span>${unit}</span></div><small>${help}</small></div>`;
-export const strategyPageMarkup = `<div class="head"><div><h1>策略</h1><p>选择策略后设置参数，保存后由服务器持续执行。</p></div><span class="chip" data-strategy-state>读取配置中</span></div>
+export const strategyPageMarkup = `<div class="head"><div><h1>策略</h1><p>设置并保存参数，再到自动交易页启动。启动后由服务器持续执行。</p></div><span class="chip" data-strategy-state>读取配置中</span></div>
 <nav class="strategy-list" aria-label="策略选择"><button type="button" class="strategy-list-item active" data-strategy-id="btc-reversal"><strong>BTC 五分钟反转</strong><span>跟随方向反转，分阶段买入</span></button></nav>
 <section class="panel strategy-active"><div class="section-title"><h2>BTC 五分钟反转</h2><span class="muted" data-strategy-revision>等待服务器配置</span></div>
 <nav class="subnav" aria-label="策略设置"><button type="button" class="active" data-strategy-tab="parameters" aria-selected="true">策略参数</button><button type="button" data-strategy-tab="run" aria-selected="false">运行设置</button></nav>
@@ -47,8 +47,8 @@ export function connectStrategy(saved?: (value: StrategyConfig) => void) {
   function receive(value: StrategyConfig) {
     latest = value;
     if (!dirty) { baseline = value; populate(value.config); }
-    root.querySelector('[data-strategy-state]')!.textContent = `已保存版本 ${value.savedRevision}`;
-    root.querySelector('[data-strategy-revision]')!.textContent = `当前运行版本 ${value.activeRevision ?? '--'} · 下一场版本 ${value.nextRoundRevision ?? value.savedRevision}`;
+    root.querySelector('[data-strategy-state]')!.textContent = value.savedRevision > 0 ? `已保存版本 ${value.savedRevision}` : '参考参数尚未保存';
+    root.querySelector('[data-strategy-revision]')!.textContent = `当前运行版本 ${value.activeRevision ?? '--'} · 下一场版本 ${value.nextRoundRevision ?? '--'}`;
     controls(); saved?.(value);
   }
   async function refresh() {

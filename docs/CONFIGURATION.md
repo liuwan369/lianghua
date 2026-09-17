@@ -1,77 +1,48 @@
-# 配置说明
+# 当前配置说明
 
-核对日期：2026-09-16。配置实现见 `scripts/dashboard/config.py`、账户实现见 `scripts/dashboard_account.py`；公共交易平台配置见 `_external/btc-5m-market-trading-bot/src/platform/`。
+更新：2026-09-17。版本 `5166c3d` 已部署，检查时策略配置 `savedRevision=0`，尚未保存运行参数；交易未运行、实盘锁未开启。
 
-做市配置已停止。当前源码已将控制台策略页接到一套可配置 BTC 五分钟反转插件；保存的是策略版本，参数在下一场生效。服务器是否已发布、账户是否可下单须以线上状态和真实回执核对；当前没有本轮真实订单证据。无策略观察仍可单独运行；反转配置和参数版本由策略接口持久化。平台 paper 默认 `$1000` 是独立模拟现金，不是实盘额度。
+## 策略页
 
-## 页面与引擎参数
+选择顶部 **BTC 五分钟反转**，按“策略参数 / 运行设置”填写。70/75 参考按钮只填入价格和份额，仍可修改，不改动已有预算和运行时间。
 
-当前策略页的运行与引擎设置中已接入保存的字段共九项：
+| 页面参数 | API 字段 | 生效与含义 |
+| --- | --- | --- |
+| 触发价 / 确认价 / 最高买入价 | `triggerPrice` / `confirmationPrice` / `maxBuyPrice` | 页面单位为美分，API 使用 0–1；确认计数不延迟下单 |
+| 每阶段份额 / 阶段数 | `stageShares` / `maxStages` | 每阶段新增份额，数量须符合实际市场约束 |
+| 单场资金上限 / 策略总资金上限 | `roundBudgetUsd` / `totalBudgetUsd` | 包含持仓成本及工作单预留；留空不加额外上限，真实余额仍约束交易 |
+| 每日亏损停止线 | `dailyLossUsd` | 可选，留空不启用该停止线 |
+| 运行时长 | `durationMinutes` | 0 表示持续运行；修改时长在下次启动生效 |
 
-| 页面字段 | API 字段 | 含义 | 本批平台观察 |
-| --- | --- | --- | --- |
-| order | order_usd | 旧单笔名义金额上限 | 保留，可保存；不应用 |
-| life | maker_life_sec | 旧 maker 挂单有效秒数 | 保留，可保存；不应用 |
-| mode | mode | paper / live 配置模式 | 无策略观察仅 paper；反转 live 启动还需服务器解锁和账户检查 |
-| duration | duration_min | 运行分钟数，0 不按时长退出 | 应用 |
-| submitted | max_total_usd | 旧累计提交金额保险丝 | 保留，可保存；不应用 |
-| maxOrders | max_orders | 旧累计订单次数上限 | 保留，可保存；不应用 |
-| pairCost | pair_cost_max | 旧引擎配对/加仓成本参数 | 保留，可保存；不应用 |
-| decisionInterval | decision_interval_ms | 旧最短决策间隔 | 保留，可保存；不应用 |
-| defensiveCancel | defensive_cancel_bps | 旧 BTC 逆向波动撤单阈值 | 保留，可保存；不应用 |
+保存使用 `PUT /api/strategy-config`，提交完整 `config` 和 `expectedRevision`，服务器返回 `savedRevision`。并发版本冲突会提示重新核对，不静默覆盖。配置存于交易引擎目录的 `results/dashboard/btc-reversal-config.json`。
 
-九个控件都有保存映射。平台观察依照 capabilities 标出 `runtimeAppliedFields=[mode,duration_min]`，其余七项归入 `preservedLegacyFields`，仍可编辑保存且保留原值，但不传入新平台。反转策略使用独立策略配置接口；做市库存、补仓和配对字段不属于该策略。
+价格、阶段和预算修改在下一场生效，当前场保留原版本；保存本身不会启动交易。当前页面运行模式为真实交易。配置还保存行情新鲜度参数 `maxQuoteAgeSeconds=2`、`maxQuoteSkewSeconds=1.5`，页面不需要日常修改。
 
-默认值、数值范围和原子保存语义见 [配置契约](../contracts/config-v1.md)。保存以 `expected_revision` 防止覆盖并发修改；只把模式、时长应用于下次平台观察启动，不热更新、不加载策略。当前为单服务器配置，不按账户隔离。本批固定订阅的市场全部到期会自动停止，即使 `duration_min=0` 也不表示跨场永久运行。
-
-平台初始模拟现金和风险参数使用平台 CLI 默认值，不能用旧 `order_usd/max_total_usd` 推断当前平台限额。当前真实值取 `stats.runtime.cash_usd/risk/limits`。页面将模拟现金、持仓和活跃委托与真实账户分开；来源时间、运行编号与有效期不匹配时不显示为当前值，旧引擎记录另标“旧引擎纸面”。
-
-历史兼容路径中的 `pair_cost_max` 不应解释为所有预设的统一硬上限。旧 `target_clone` 的 `hedgeLimit()` 说明只用于历史代码核对，当前策略暂停，不能把它当作新平台生产参数。完整公共执行语义见 [技术实现](TECHNICAL.md)。
-
-## 部署环境
-
-| 变量 | 都柏林用途 |
-| --- | --- |
-| PM_NODE_LABEL | 页面采集来源标签 |
-| PM_LIVE_LOCAL | 1 表示控制台本机读取采集数据库 |
-| PM_LIVE_DATA_DIR / PM_EVIDENCE_GLOB | 日库目录及 dublin-evidence 文件匹配 |
-| PM_MARKET_SNAPSHOT_PATH | 本机增量行情投影输出；默认项目根目录下 data/dashboard/market-snapshot.json |
-| PM_COLLECTOR_SERVICE | pm-r25-dublin-collector.service |
-| PM_LIVE_URL | 引擎 paper 使用的控制台行情快照 URL |
-| PM_REMOTE_HOST / PM_REMOTE_SSH_KEY | 本地开发预览通过 SSH 读取都柏林快照；不在远端重新分析证据库 |
-| PM_REMOTE_PORT / PM_REMOTE_CONNECT_TIMEOUT | SSH 端口及连接超时 |
-| PM_REMOTE_SNAPSHOT_PATH | SSH 读取文件；默认 /root/pm-system/data/dashboard/market-snapshot.json |
-| PM_ACCOUNT_PROFILE | 服务器账户 JSON 路径 |
-| PM_ACCOUNT_RPC_URL / PM_ACCOUNT_RPC_FALLBACK_URL | 只读账户检查的主备 Polygon RPC |
-| PM_ACCOUNT_NODE_COMPILE_CACHE | 只缓存账户检查 Node 编译产物，不缓存凭据/检查结果 |
-| PM_TRUST_ACCOUNT_PROXY / PM_ACCOUNT_PUBLIC_ORIGIN | 可信 HTTPS 代理及已配置的公开账户操作来源 |
-| PM_DASHBOARD_CONTROL_TOKEN | 独立交易控制令牌 |
-| PM_TRADING_LIVE_UNLOCK | 实盘解锁开关；当前关闭 |
-
-准确部署值使用 `config/pm-system-dashboard-dublin.service` 与 `config/pm-system-dashboard-dublin-public-account.conf`。公开来源检查不是登录认证；当前部署允许访问该公开来源的人检查/保存账户，交易控制仍有独立限制。
-
-`PM_LIVE_LOCAL=1` 时控制台后台持有增量盘口并原子发布快照；非本机采集模式只通过 SSH 读取已发布文件。读取动作不会更新快照内的 `checked_at`。快照超过 15 秒或源时间向未来偏移超过 5 秒时显示离线和空市场，不能靠加快前端刷新续鲜。
-
-## 历史分析资源预算
-
-`config/pm-r25-dublin-live-analyzer.service` 通过 `Slice=pm-analysis.slice` 进入同机专用资源组，配置文件为 `config/pm-analysis.slice`。
-
-| 配置 | 值与含义 |
-| --- | --- |
-| CPUQuota | 20%，相当于最多 0.2 个逻辑核，不是整台服务器 CPU 的 20% |
-| CPUWeight / IOWeight | 均为 10，争用时降低分析任务权重 |
-| MemoryHigh / MemoryMax | 384M / 512M |
-| TasksMax | 32 |
-| Nice / IOSchedulingClass | 服务使用 19 / idle |
-
-分析仍按 timer 运行，配额可能延长完成时间。采集、控制台和交易进程不加入分析 slice；这不是新增服务器，也不会提高云端 CPU 配额。在线行情接口读取行情投影，不等待历史分析完成。
+`POST /api/trading/control` 处理 `start/pause/resume/stop`。启动携带已保存版本、`strategy_id=btc-reversal` 和唯一 `request_id`；服务器读取该版本，检查账户、实盘开关和已有进程。暂停只停止新增，停止则处理本系统工作单并退出；持仓和恢复状态继续保留。
 
 ## 账户与凭据
 
-页面账户字段为 `wallet`、`owner_key`、`relayer_key`、`relayer_address`、`builder_api_key`、`builder_secret`、`builder_passphrase`。Builder 三项必须同时填写或同时留空。同一钱包的空密钥输入保留已有值；更换钱包不会继承原钱包密钥。检查成功不等于保存，保存成功也不启动交易。
+账户设置字段为 `wallet`、`owner_key`、`relayer_key`、`relayer_address`、`builder_api_key`、`builder_secret`、`builder_passphrase`。Builder 三项须一起填写。同钱包留空密钥保留旧值；更换钱包不继承旧密钥。检查为只读，保存才写入服务器，均不会自动启动交易。
 
-资金钱包、Owner 签名、Relayer、Builder、Session Key 各有独立用途。当前路线使用 Owner 为 CLOB V2 订单签名；Builder 和 Session Key 不是下单必需项，但 Deposit Wallet 赎回等免 Gas Relayer 操作需要 Builder 认证。官方 SDK 对其他产品的授权缺项不能用于阻止下单路线。
+资金钱包存放资产，Owner 签名订单。Deposit Wallet 赎回使用 Builder 三项或 Relayer key/address 认证；Session Key 不是本策略下单必需项。当前结算 sender 支持 EOA 和 Deposit Wallet，其他钱包会返回具体不支持原因。
 
-账户文件不进 Git；Linux 限制为所属用户读写，检查/保存响应不返回密钥。前端不把秘密字段写入浏览器持久存储。完整实盘就绪结论见 [交付状态](DELIVERY.md)。
+账户文件不进 Git，响应不返回私钥，前端不将秘密字段写入浏览器持久存储。账户缓存至少 30 秒刷新；CLOB 抵押余额不是已扣除工作单预留的可用余额，实际新增订单由底座检查。
 
-账户数据缓存默认至少30秒刷新；不受浏览器刷新次数放大。CLOB抵押余额不表示扣除挂单占用后的可花资金。启动要求先保存对应配置版本（revision > 0），提交保存版本与唯一请求编号；实盘保存不自动开启交易。
+## 服务器配置
+
+| 变量 | 用途 |
+| --- | --- |
+| `PM_ACCOUNT_PROFILE` | 服务器账户 JSON 路径 |
+| `POLYMARKET_WALLET_ADDRESS` / `POLYMARKET_OWNER_PRIVATE_KEY` | 资金钱包与 Owner 签名身份 |
+| `POLYGON_RPC` | 交易及赎回使用的 Polygon RPC |
+| `PM_ACCOUNT_RPC_URL` / `PM_ACCOUNT_RPC_FALLBACK_URL` | 账户检查主备 RPC |
+| `POLY_BUILDER_API_KEY` / `POLY_BUILDER_SECRET` / `POLY_BUILDER_PASSPHRASE` | Builder Relayer 认证 |
+| `RELAYER_API_KEY` / `RELAYER_API_KEY_ADDRESS` | 可替代 Builder 的 Relayer 认证 |
+| `PM_TRADING_LIVE_UNLOCK` | 服务器实盘开关；本次检查关闭 |
+| `PM_DASHBOARD_CONTROL_TOKEN` | 交易控制认证 |
+| `PM_TRUST_ACCOUNT_PROXY` / `PM_ACCOUNT_PUBLIC_ORIGIN` | 可信 HTTPS 代理及账户操作来源 |
+| `PM_LIVE_LOCAL` / `PM_LIVE_DATA_DIR` / `PM_EVIDENCE_GLOB` | 本机控制台行情数据源 |
+| `PM_MARKET_SNAPSHOT_PATH` | 增量行情投影文件 |
+| `PM_REMOTE_HOST` / `PM_REMOTE_SSH_KEY` / `PM_REMOTE_SNAPSHOT_PATH` | 开发预览读取服务器行情投影 |
+
+部署服务见 `config/pm-system-dashboard-dublin.service`。快照刷新不会更改原始来源时间；过期数据显示不可用。策略预算由用户填写，不存在固定 `$50/$30` 或历史模板资金门槛。

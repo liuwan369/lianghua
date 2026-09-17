@@ -1,6 +1,6 @@
 # 从这里开始
 
-控制台：**https://34-242-206-196.sslip.io/console/**。当前在线仍是已有交易平台，尚未部署反转策略界面。
+控制台：**https://34-242-206-196.sslip.io/console/**。BTC反转策略界面与后台已部署，当前交易停止，尚未产生本轮真实订单。
 
 2026-09-17 起停止做市方向，当前以 [BTC五分钟反转开发规划](docs/REVERSAL-DELIVERY-PLAN-2026-09-17.md)、[技术评估](docs/REVERSAL-TECHNICAL-ASSESSMENT-2026-09-17.md)、[Agent协作规则](docs/AGENT-WORKFLOW.md) 和 [当前状态](docs/CURRENT-STATUS.md) 为准。
 
