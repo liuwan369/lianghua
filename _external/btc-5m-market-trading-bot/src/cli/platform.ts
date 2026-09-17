@@ -254,6 +254,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
         price: order.price, shares: order.shares, direction: order.direction, ...marketIdentity(order.tokenId),
         sign_latency_ms: order.signLatencyMs ?? null, ack_latency_ms: order.ackLatencyMs ?? null,
+        cancel_requested_at: order.cancelRequestedAt ?? null, cancel_ack_at: order.cancelAckAt ?? null,
+        cancel_ack_latency_ms: order.cancelAckLatencyMs ?? null,
         updated_at: order.updatedAt });
     } else if (event.kind === "fill") {
       const fill = event.fill;
@@ -268,8 +270,13 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     } else if (event.kind === "stopped") {
       journal?.write("platform_stopped", { reason: signalReason ?? "run_complete" });
     } else if (event.kind === "settlement") {
-      journal?.write("platform_settlement", { market_id: event.result.marketId, state: event.result.state,
-        transaction_id: event.result.transactionId ?? null });
+      const market = selectedMarkets.find(item => item.id === event.result.marketId);
+      journal?.write("platform_settlement", { market_id: event.result.marketId, market_slug: market?.name ?? null,
+        state: event.result.state, transaction_id: event.result.transactionId ?? null,
+        payout_verified: event.result.payoutVerified === true,
+        credited_usd: event.result.creditedUsd ?? null, expected_payout_usd: event.result.expectedPayoutUsd ?? null,
+        cash_before_usd: event.result.cashBeforeUsd ?? null, cash_after_usd: event.result.cashAfterUsd ?? null },
+      `settlement:${JSON.stringify([event.result.marketId, event.result.state, event.result.transactionId ?? null])}`);
     }
   };
   const summary = (status: "starting" | "running" | "stopped" | "failed") => {

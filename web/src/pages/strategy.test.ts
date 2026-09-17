@@ -20,10 +20,27 @@ it('preserves edited values across polling and reports optimistic version confli
   const sent=JSON.parse(fetch.mock.calls.at(-1)![1]!.body);expect(sent.expectedRevision).toBe(3);expect(sent.config.triggerPrice).toBe(.66);expect(sent.config.totalBudgetUsd).toBeNull();expect(price.value).toBe('66');
 });
 it('presets change editable prices and shares while preserving budgets, then save actual config',async()=>{
-  const {root,fetch}=await setup();input('#reversal-totalBudgetUsd','160');root.querySelector<HTMLButtonElement>('[data-reversal-preset="75"]')!.click();expect(document.querySelector<HTMLInputElement>('#reversal-totalBudgetUsd')!.value).toBe('160');input('#reversal-triggerPrice','71');
+  const {root,fetch}=await setup();input('#reversal-roundBudgetUsd','14.5');input('#reversal-totalBudgetUsd','160');root.querySelector<HTMLButtonElement>('[data-reversal-preset="75"]')!.click();expect(document.querySelector<HTMLInputElement>('#reversal-roundBudgetUsd')!.value).toBe('14.5');expect(document.querySelector<HTMLInputElement>('#reversal-totalBudgetUsd')!.value).toBe('160');input('#reversal-triggerPrice','71');
   fetch.mockImplementationOnce(async(_path,options)=>new Response(JSON.stringify({...envelope(4),config:JSON.parse(options.body).config})));
   root.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(root.querySelector('[data-reversal-message]')!.textContent).toContain('版本 4'));
-  const sent=JSON.parse(fetch.mock.calls.at(-1)![1]!.body);expect(sent.config).toMatchObject({triggerPrice:.71,maxBuyPrice:.75,totalBudgetUsd:160,stageShares:[5,22,75,236]});expect(fetch.mock.calls.at(-1)![1]!.method).toBe('PUT');
+  const sent=JSON.parse(fetch.mock.calls.at(-1)![1]!.body);expect(sent.config).toMatchObject({triggerPrice:.71,maxBuyPrice:.75,roundBudgetUsd:14.5,totalBudgetUsd:160,stageShares:[5,22,75,236]});expect(fetch.mock.calls.at(-1)![1]!.method).toBe('PUT');
+});
+it('shows each stage nominal cost, preserves a deliberate low budget, and marks fees as additional',async()=>{
+  const {root}=await setup();input('#reversal-roundBudgetUsd','14.5');root.querySelector<HTMLButtonElement>('[data-reversal-preset="70"]')!.click();
+  const hint=root.querySelector('[data-reversal-budget-hint]')!.textContent!;
+  expect(hint).toContain('第 1 阶段 $3.50');expect(hint).toContain('第 4 阶段 $91.00');expect(hint).toContain('全部阶段名义成本 $144.90');expect(hint).toContain('单场上限 $14.50 低于');expect(hint).toContain('交易费用另计');
+  input('#reversal-stage-0','6');expect(root.querySelector('[data-reversal-budget-hint]')!.textContent).toContain('第 1 阶段 $4.20');
+});
+it('keeps budget feedback visible on both tabs and includes the total budget boundary',async()=>{
+  const {root}=await setup();const hint=root.querySelector('[data-reversal-budget-hint]')!;
+  expect(hint.closest('[hidden]')).toBeNull();root.querySelector<HTMLButtonElement>('[data-strategy-tab="run"]')!.click();expect(hint.closest('[hidden]')).toBeNull();
+  input('#reversal-totalBudgetUsd','14.5');expect(hint.textContent).toContain('单场上限未设置');expect(hint.textContent).toContain('策略总资金上限 $14.50 低于');
+  input('#reversal-roundBudgetUsd','200');expect(hint.textContent).toContain('单场上限 $200.00');expect(hint.textContent).toContain('策略总资金上限 $14.50 低于');
+});
+it('updates nominal cost immediately when the enabled stage count changes',async()=>{
+  const {root}=await setup();input('#reversal-maxStages','3');const hint=root.querySelector('[data-reversal-budget-hint]')!;
+  expect(hint.textContent).toContain('全部阶段名义成本 $53.90');expect(hint.textContent).not.toContain('第 4 阶段');
+  input('#reversal-maxStages','5');expect(hint.textContent).toContain('填写最高买入价和阶段份额');
 });
 it('rejects invalid prices and blank stage values before saving',async()=>{
   const {root,fetch}=await setup();input('#reversal-triggerPrice','80');root.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));expect(fetch).toHaveBeenCalledTimes(1);expect(root.querySelector('[data-reversal-message]')!.textContent).toContain('不能高于');

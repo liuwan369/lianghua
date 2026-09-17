@@ -19,6 +19,14 @@ function disable(selector: string, reason: string) {
 const resource = <T>(): Resource<T> => ({data:null,error:null,receivedAt:0,loading:false});
 const names: Record<string,string> = {quote:'挂单尝试',fill:'成交',cancel:'撤单事件',reset:'切场',stopped:'停止',unresolved:'未结算',resolved:'结算',taker:'吃单尝试',error:'错误',platform_status:'平台快照',platform_order:'平台订单',platform_fill:'平台成交'};
 
+export function eventLabel(event: {event?:unknown;state?:unknown;payout_verified?:unknown;credited_usd?:unknown}): string {
+  if (event.event !== 'settlement') return names[String(event.event)] || '其他事件';
+  if (event.state === 'confirmed' && event.payout_verified === true
+    && typeof event.credited_usd === 'number' && Number.isFinite(event.credited_usd) && event.credited_usd >= 0)
+    return `结算到账 ${money(event.credited_usd)}`;
+  return event.state === 'confirmed' ? '结算结束 · 未记录到账' : event.state === 'pending' ? '结算等待确认' : '结算待处理';
+}
+
 export function prepareReadOnly() {
   set('.side-note','BTC 五分钟反转 · 正在读取服务器');
   disable('[data-start],[data-stop],[data-pause]', '读取运行状态中');
@@ -106,7 +114,7 @@ export function connect() {
       set('#view-home .grid .note',s?.strategy_id==='btc-reversal'?'BTC 五分钟反转 · 订单和持仓由服务器持续管理。':'当前未加载 BTC 反转策略。');
     }
     const rows=valid&&Array.isArray(stats?.events)? stats.events.slice(-6):[];
-    const logs=rows.map(e=>`${date(e.time)} · ${names[e.event]||'其他事件'} · ${e.market||'--'}${e.event==='fill'?` · ${number(e.shares,2)} 份 × ${price(e.price)}`:''}`).join('\n');
+    const logs=rows.map(e=>`${date(e.time)} · ${eventLabel(e)} · ${e.market||'--'}${e.event==='fill'?` · ${number(e.shares,2)} 份 × ${price(e.price)}`:''}`).join('\n');
     set('#homeLog',status.error||logs||'尚无可用运行事件。'); set('#tradeLog',status.error||logs||'尚无可用运行事件。');
     for(const id of ['homeLog','tradeLog'])document.getElementById(id)!.style.whiteSpace='pre-wrap';
     const currentMarket=renderReversal(s,clock);
@@ -133,7 +141,7 @@ export function connect() {
     if (!body) return;
     const expired=events!==null && Date.now()-eventsReceivedAt>=15000;
     const rows=events?.run_id===selectedRun && Date.now()-eventsReceivedAt<15000 ? events.events:[];
-    body.innerHTML=rows.length ? rows.map(e=>{const fill=e.event==='fill';return `<tr><td>${date(e.time)}</td><td>${esc(e.market)}</td><td>${esc(e.side)}</td><td>${price(e.price)}</td><td>${fill?number(e.shares,2):'--'}</td><td>${fill?money(e.amount):'--'}</td><td>${fill?money(e.fee):'--'}</td><td>${esc(names[e.event]||'其他事件')}</td></tr>`;}).join('') : `<tr><td colspan="8" class="empty">${esc(eventError||'该运行暂无事件')}</td></tr>`;
+    body.innerHTML=rows.length ? rows.map(e=>{const fill=e.event==='fill';return `<tr><td>${date(e.time)}</td><td>${esc(e.market)}</td><td>${esc(e.side)}</td><td>${price(e.price)}</td><td>${fill?number(e.shares,2):'--'}</td><td>${fill?money(e.amount):'--'}</td><td>${fill?money(e.fee):'--'}</td><td>${esc(eventLabel(e))}</td></tr>`;}).join('') : `<tr><td colspan="8" class="empty">${esc(eventError||'该运行暂无事件')}</td></tr>`;
     set('#history-state',eventError|| (expired?'事件快照已过期，正在刷新':selectedRun?`运行：${selectedRun} · ${events?.control_source?.label||'来源未标注'}`:'暂无运行'));
     (document.getElementById('older-events') as HTMLButtonElement).disabled=runLoading||!events?.next_before_id;
     (document.getElementById('older-runs') as HTMLButtonElement).disabled=refreshing||runsLoading||runCursor===null;

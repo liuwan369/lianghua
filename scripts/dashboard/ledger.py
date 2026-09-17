@@ -11,6 +11,7 @@ from contextlib import contextmanager
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -247,7 +248,18 @@ def _projection(record):
     result["direction"] = record.get("direction") if record.get("direction") in ("BUY", "SELL") else None
     result["status"] = record.get("status") if isinstance(record.get("status"), str) and record["status"] in ORDER_STATUSES else None
     result["state"] = record.get("state") if record.get("state") in ("confirmed", "pending", "unsupported") else None
-    for field in ("filled_shares", "reserved_usd", "reserved_shares", "sign_latency_ms", "ack_latency_ms", "updated_at"):
+    if record["event"] == "settlement":
+        amounts = {field: _number(record.get(field)) for field in
+                   ("credited_usd", "expected_payout_usd", "cash_before_usd", "cash_after_usd")}
+        credit, expected = amounts["credited_usd"], amounts["expected_payout_usd"]
+        verified = (record.get("payout_verified") is True and result["state"] == "confirmed"
+                    and bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", result["transaction_id"] or ""))
+                    and credit is not None and expected is not None and credit >= expected >= 0)
+        result["payout_verified"] = verified
+        result.update({field: amount if verified and amount is not None and amount >= 0 else None
+                       for field, amount in amounts.items()})
+    for field in ("filled_shares", "reserved_usd", "reserved_shares", "sign_latency_ms", "ack_latency_ms",
+                  "cancel_requested_at", "cancel_ack_at", "cancel_ack_latency_ms", "updated_at"):
         result[field] = _number(record.get(field))
     price, shares = result["price"], result["shares"]
     result["amount"] = _number(price * shares) if price is not None and shares is not None and price >= 0 and shares >= 0 else None

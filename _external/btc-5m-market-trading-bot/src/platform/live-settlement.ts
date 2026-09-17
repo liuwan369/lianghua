@@ -110,10 +110,20 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
     renameSync(tmp, stateFile);
   };
-  const result = (request: SettlementRequest, status: SettlementResult["state"], reason: string, record?: LiveSettlementRecord): SettlementResult => ({
-    marketId: request.marketId, state: status, reason,
-    transactionId: record?.transactionHash ?? record?.relayerId,
-  });
+  const result = (request: SettlementRequest, status: SettlementResult["state"], reason: string, record?: LiveSettlementRecord): SettlementResult => {
+    const usd = (raw: string | undefined): number | undefined => {
+      if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
+      const units = Number(raw);
+      return Number.isSafeInteger(units) ? units / 1_000_000 : undefined;
+    };
+    const verified = status === "confirmed" && record?.status === "confirmed" && record.operation === "redeem"
+      && hashPattern.test(record.transactionHash ?? "") && usd(record.creditedPusd) !== undefined;
+    return { marketId: request.marketId, state: status, reason,
+      transactionId: record?.transactionHash ?? record?.relayerId,
+      payoutVerified: verified,
+      ...(verified ? { creditedUsd: usd(record!.creditedPusd), expectedPayoutUsd: usd(record!.expectedPayout),
+        cashBeforeUsd: usd(record!.cashBefore), cashAfterUsd: usd(record!.cashAfter) } : {}) };
+  };
   async function submitRecord(record: LiveSettlementRecord, recovering: boolean): Promise<void> {
     record.lastSubmittedAt = Date.now();
     await save();

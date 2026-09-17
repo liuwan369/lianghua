@@ -1,4 +1,4 @@
-# 当前反转策略接口（2026-09-17）
+# 当前反转策略接口（2026-09-18）
 
 以下是现行接口，后文旧配置仅作兼容说明。配置保存与启动分开，未知值不显示为0。
 
@@ -14,11 +14,33 @@ config价格用0..1，stageShares数组，maxStages整数，roundBudgetUsd/total
 
 订单状态过滤 active=SUBMITTING/OPEN/PARTIAL/UNKNOWN，failed=REJECTED，也支持精确状态。首次分页返回asOf与snapshotEventId，后页同时传as_of及snapshot_event_id冻结当时快照；新单和迟到采集的旧事件不会改变历史页。服务端按client_order_id汇总一次生命周期，订单有ACK后包含order_id。amount是实际成交额（缺证据为null），order_notional是委托额，fills展开各笔成交。
 
+订单投影新增以下可空字段；旧账本没有这些字段时保持 `null`：
+
+| 字段 | 语义 |
+| --- | --- |
+| `cancel_requested_at` | 执行核心开始向交易所发送撤单请求的墙钟秒时间 |
+| `cancel_ack_at` | 交易所确认撤单的墙钟秒时间；撤单失败或结果未知时不能填写 |
+| `cancel_ack_latency_ms` | 从开始撤单请求到收到交易所确认的单调时钟耗时；不包含撤单前的持久化、页面刷新或后续成交对账 |
+
+撤单 ACK 可能与已经在途的成交竞态，`CANCELLED` 不能单独证明没有迟到成交。撤单失败只记录请求时间及未知/失败状态，不伪造 `cancel_ack_at` 或 `cancel_ack_latency_ms`。
+
+结算事件 `platform_settlement` 新增以下可空字段：
+
+| 字段 | 语义 |
+| --- | --- |
+| `payout_verified` | 只有真实赎回操作已有成功回执，且回执能给出到账金额时为 `true` |
+| `credited_usd` | 回执确认的本次赎回到账金额；确认的零到账为 `0`，未知保持 `null` |
+| `expected_payout_usd` | 根据待赎回赢家份额计算的预计返还，用于与到账核对，不等同已到账 |
+| `cash_before_usd` | 提交赎回前读取的现金余额；可能受同时发生的其他钱包活动影响 |
+| `cash_after_usd` | 赎回确认后读取的现金余额；不能单独以余额差替代回执到账金额 |
+
+前端只有在结算 `state=confirmed` 且 `payout_verified=true` 时显示 `credited_usd` 为真实到账。没有剩余持仓可以结束结算流程，但该结果的 `payout_verified=false`，不能显示成已到账。上述字段已完成本地测试，尚待本批发布和真实赎回证据。
+
 控制和保存使用既有 `X-PM-Control-Token`（部署配置时要求）。暂停响应control_pending不等于引擎已暂停，最终以运行投影paused为准。成交trade_status按trade_id+order_id更新，FAILED冲正，CONFIRMED/FAILED终态不能被旧消息倒退。fee_source=estimate/rate-derived时只显示估算，不归入已核实手续费。
 
 # 控制台 API
 
-更新时间：2026-09-17。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。本文只描述当前已实现的平台和控制台 API；已授权的 BTC 五分钟反转开发以 [新规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md) 为准，新策略配置、真实启停、场次状态和分页已实现；部署事实见CURRENT-STATUS.md。
+更新时间：2026-09-18。实现：`scripts/system-dashboard-server.py`。正式来源为 `https://34-242-206-196.sslip.io`；API 返回 JSON，并禁用响应缓存。`control_source` 用于标识实际数据/控制来源。本文描述当前已实现或本批已完成本地测试的平台和控制台 API；是否已经部署以 [当前状态](CURRENT-STATUS.md) 为准。
 
 ## 读取
 

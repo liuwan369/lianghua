@@ -68,6 +68,27 @@ def test_observation_has_zero_orders_unknown_profit_and_survives_restart(tmp_pat
     assert second["summary"]["event_count"] == 1
 
 
+@pytest.mark.parametrize("state,verified,credit,visible", [
+    ("confirmed", True, 5, 5), ("confirmed", True, 0, 0),
+    ("pending", True, 5, None), ("confirmed", False, 5, None),
+    ("confirmed", True, -1, None),
+])
+def test_settlement_preserves_receipt_amounts_without_inventing_profit(tmp_path, state, verified, credit, visible):
+    worker, journal = selected(tmp_path)
+    append(journal, {"event": "platform_settlement", "event_id": "settlement:one",
+                    "recv_ts": time.time(), "market_id": "condition", "market_slug": "btc-round",
+                    "state": state, "transaction_id": "0x" + "a" * 64,
+                    "payout_verified": verified, "credited_usd": credit, "expected_payout_usd": max(0, credit),
+                    "cash_before_usd": 10, "cash_after_usd": 25})
+    worker.step()
+    event = worker.ledger.events("one")["events"][0]
+    assert event["credited_usd"] == visible
+    assert event["payout_verified"] is (visible is not None)
+    assert event["cash_after_usd"] == (25 if visible is not None else None)
+    assert event["pnl"] is None
+    assert worker.ledger.summary("one")["settled_pnl"] is None
+
+
 def test_platform_heartbeat_cannot_keep_stalled_runtime_fresh(tmp_path, monkeypatch):
     worker, journal = selected(tmp_path)
     now = time.time()
@@ -87,7 +108,10 @@ def test_platform_heartbeat_cannot_keep_stalled_runtime_fresh(tmp_path, monkeypa
 def test_lifecycle_updates_keep_ownership_and_count_accept_cancel_once(tmp_path):
     worker, journal = selected(tmp_path)
     events = [order("SUBMITTING", 1, order_id=None), order("OPEN", 2), order("PARTIAL", 3, filled_shares=2),
-              order("CANCELLED", 4, filled_shares=2), order("CANCELLED", 5, filled_shares=2)]
+              order("CANCELLED", 4, filled_shares=2, cancel_requested_at=3.75,
+                    cancel_ack_at=4, cancel_ack_latency_ms=250),
+              order("CANCELLED", 5, filled_shares=2, cancel_requested_at=3.75,
+                    cancel_ack_at=4, cancel_ack_latency_ms=250)]
     append(journal, *events, events[-1])
     worker.step()
     stats = worker.ledger.legacy_stats("one")
@@ -96,6 +120,9 @@ def test_lifecycle_updates_keep_ownership_and_count_accept_cancel_once(tmp_path)
     assert stats["orders"][0]["status"] == "CANCELLED"
     assert stats["orders"][0]["strategy_id"] == "plugin"
     assert stats["orders"][0]["direction"] == "BUY"
+    assert stats["orders"][0]["cancel_requested_at"] == 3.75
+    assert stats["orders"][0]["cancel_ack_at"] == 4
+    assert stats["orders"][0]["cancel_ack_latency_ms"] == 250
     assert worker.ledger.summary("one")["order_lifecycle_available"] is True
     assert worker.ledger.summary("one")["duplicate_records"] == 1
     append(journal, order("OPEN", 2.5))

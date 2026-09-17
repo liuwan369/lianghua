@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AccountSnapshot, Instrument, OrderGateway, OrderRequest } from "./contracts.js";
 import { TradingCore } from "./core.js";
 import { PaperGateway } from "./paper.js";
@@ -188,6 +188,142 @@ describe("strategy-independent account core", () => {
     expect(core.order(buy.orderId!)?.reservedUsd).toBe(0);
     expect(() => core.applyFill({ tradeId: "too-late", orderId: buy.orderId!, tokenId: "up", direction: "BUY",
       price: 0.5, shares: 1, feeUsd: 0.01, ts: 103, isMaker: true })).toThrow("invalid or unowned fill");
+  });
+
+  it("records the cancel request and measures the confirmed ACK with a monotonic clock", async () => {
+    let now = 100;
+    const monotonic = vi.spyOn(performance, "now").mockReturnValueOnce(10).mockReturnValueOnce(135);
+    const gateway: OrderGateway = {
+      mode: "live",
+      async submit() { return { status: "accepted", orderId: "venue-1" }; },
+      async cancel() {
+        now = 101.125;
+        return true;
+      },
+    };
+    const core = new TradingCore({ account: { ...account, accountId: "live" }, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, now: () => now, adapters: { gateway } });
+    const submitted = await core.submit(request());
+    now = 101;
+    const cancelled = await core.cancel(submitted.orderId!);
+    expect(cancelled).toMatchObject({ status: "CANCELLED", cancelRequestedAt: 101,
+      cancelAckAt: 101.125, cancelAckLatencyMs: 125 });
+    monotonic.mockRestore();
+  });
+
+  it("keeps the request timestamp but does not invent a cancel ACK on failure", async () => {
+    let now = 100;
+    const gateway: OrderGateway = {
+      mode: "live",
+      async submit() { return { status: "accepted", orderId: "venue-1" }; },
+      async cancel() { now = 101.5; throw new Error("cancel timeout"); },
+    };
+    const core = new TradingCore({ account: { ...account, accountId: "live" }, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, now: () => now, adapters: { gateway } });
+    const submitted = await core.submit(request());
+    now = 101;
+    const cancelled = await core.cancel(submitted.orderId!);
+    expect(cancelled).toMatchObject({ status: "UNKNOWN", cancelRequestedAt: 101, error: "cancel timeout" });
+    expect(cancelled.cancelAckAt).toBeUndefined();
+    expect(cancelled.cancelAckLatencyMs).toBeUndefined();
+  });
+
+  it("keeps cancel telemetry valid when the wall clock moves backwards", async () => {
+    let now = 101;
+    const monotonic = vi.spyOn(performance, "now").mockReturnValueOnce(20).mockReturnValueOnce(70);
+    const gateway: OrderGateway = {
+      mode: "live",
+      async submit() { return { status: "accepted", orderId: "venue-1" }; },
+      async cancel() { now = 100; return true; },
+    };
+    const core = new TradingCore({ account: { ...account, accountId: "live" }, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, now: () => now, adapters: { gateway } });
+    const submitted = await core.submit(request());
+    const cancelled = await core.cancel(submitted.orderId!);
+    expect(cancelled).toMatchObject({ cancelRequestedAt: 101, cancelAckAt: 100, cancelAckLatencyMs: 50,
+      updatedAt: 101 });
+    expect(() => new TradingCore({ account: { ...account, accountId: "live" }, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, adapters: { gateway }, restored: core.snapshot() })).not.toThrow();
+    monotonic.mockRestore();
+  });
+
+  it("deduplicates concurrent client and venue ID cancellation into one ACK result", async () => {
+    let now = 100;
+    const monotonic = vi.spyOn(performance, "now").mockReturnValueOnce(10).mockReturnValueOnce(80);
+    let cancelCalls = 0;
+    let resolveCancel!: (value: boolean) => void;
+    const gateway: OrderGateway = {
+      mode: "live",
+      async submit() { return { status: "accepted", orderId: "venue-1" }; },
+      cancel: async () => {
+        cancelCalls += 1;
+        if (cancelCalls > 1) throw new Error("duplicate cancellation raced the first request");
+        return new Promise<boolean>(resolve => { resolveCancel = resolve; });
+      },
+    };
+    const core = new TradingCore({ account: { ...account, accountId: "live" }, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, now: () => now, adapters: { gateway } });
+    const submitted = await core.submit(request());
+    now = 101;
+    const byClientId = core.cancel(submitted.clientOrderId);
+    const byVenueId = core.cancel(submitted.orderId!);
+    expect(byClientId).toBe(byVenueId);
+    expect(cancelCalls).toBe(1);
+    now = 102;
+    resolveCancel(true);
+    const [first, second] = await Promise.all([byClientId, byVenueId]);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ status: "CANCELLED", cancelRequestedAt: 101,
+      cancelAckAt: 102, cancelAckLatencyMs: 70 });
+    expect(core.risk().halted).toBe(false);
+    expect(cancelCalls).toBe(1);
+    monotonic.mockRestore();
+  });
+
+  it("cannot race a failed first cancellation with a successful duplicate", async () => {
+    let cancelCalls = 0;
+    let resolveCancel!: (value: boolean) => void;
+    const gateway: OrderGateway = {
+      mode: "live",
+      async submit() { return { status: "accepted", orderId: "venue-1" }; },
+      cancel: async () => {
+        cancelCalls += 1;
+        if (cancelCalls > 1) return true;
+        return new Promise<boolean>(resolve => { resolveCancel = resolve; });
+      },
+    };
+    const core = new TradingCore({ account: { ...account, accountId: "live" }, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, now: () => 101, adapters: { gateway } });
+    const submitted = await core.submit(request());
+    const byClientId = core.cancel(submitted.clientOrderId);
+    const byVenueId = core.cancel(submitted.orderId!);
+    expect(byClientId).toBe(byVenueId);
+    resolveCancel(false);
+    const [first, second] = await Promise.all([byClientId, byVenueId]);
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({ status: "UNKNOWN", cancelRequestedAt: 101,
+      error: "cancellation not confirmed" });
+    expect(first.cancelAckAt).toBeUndefined();
+    expect(first.cancelAckLatencyMs).toBeUndefined();
+    expect(core.risk()).toMatchObject({ halted: true, reason: "unknown order requires reconciliation" });
+    expect(cancelCalls).toBe(1);
+  });
+
+  it("restores legacy orders without cancel telemetry fields", async () => {
+    const legacy = setup();
+    await legacy.submit(request());
+    const original = legacy.snapshot();
+    expect(original.orders[0].cancelRequestedAt).toBeUndefined();
+    expect(() => new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: 30, maxOrderUsd: 10, maxOpenOrders: 10,
+    }, adapters: { gateway: { mode: "paper", submit: async () => ({ status: "rejected" }), cancel: async () => true } },
+    restored: original })).not.toThrow();
   });
 
   it("does not apply an account filled-size delta as an unpriced fill", async () => {

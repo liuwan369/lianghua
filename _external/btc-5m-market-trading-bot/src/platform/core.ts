@@ -15,6 +15,7 @@ export class TradingCore {
   private books = new Map<string, Book>();
   private jobs = new Set<Promise<unknown>>();
   private submissions = new Map<string, Promise<OrderRecord>>();
+  private cancellations = new Map<string, Promise<OrderRecord>>();
   private seenFills = new Set<string>();
   private clock: () => number;
   private stopped = false;
@@ -120,6 +121,11 @@ export class TradingCore {
         || o.shares <= 0 || o.price <= 0 || o.price >= 1 || o.filledShares < 0
         || o.filledShares > o.shares + EPS || o.reservedUsd < 0 || o.reservedShares < 0
         || (o.reconciliationPending !== undefined && typeof o.reconciliationPending !== "boolean")
+        || (o.cancelRequestedAt !== undefined && (!finite(o.cancelRequestedAt) || o.cancelRequestedAt < 0))
+        || (o.cancelAckAt !== undefined && (!finite(o.cancelAckAt) || o.cancelAckAt < 0))
+        || (o.cancelAckLatencyMs !== undefined && (!finite(o.cancelAckLatencyMs) || o.cancelAckLatencyMs < 0))
+        || (o.cancelAckAt !== undefined && o.cancelRequestedAt === undefined)
+        || (o.cancelAckLatencyMs !== undefined && o.cancelAckAt === undefined)
         || (reservationPending(o) && o.direction === "BUY" && o.reservedUsd + EPS < (o.shares - o.filledShares) * o.price)
         || (reservationPending(o) && o.direction === "SELL" && Math.abs(o.reservedShares - (o.shares - o.filledShares)) > EPS)
         || (!reservationPending(o) && (o.reservedUsd > EPS || o.reservedShares > EPS))) {
@@ -367,7 +373,7 @@ export class TradingCore {
     this.options.onEvent?.(copy(event));
   }
   private notify(order: OrderRecord, critical = false): OrderRecord {
-    order.updatedAt = this.clock();
+    order.updatedAt = Math.max(order.updatedAt, this.clock());
     this.persist(critical); this.emit({ kind: "order", order: copy(order) });
     return copy(order);
   }
@@ -490,7 +496,17 @@ export class TradingCore {
     return this.notify(order, true);
   }
 
-  cancel(id: string): Promise<OrderRecord> { return this.track(this.cancelOrder(id)); }
+  cancel(id: string): Promise<OrderRecord> {
+    const order = this.find(id);
+    const key = order?.clientOrderId ?? id;
+    const pending = this.cancellations.get(key);
+    if (pending) return pending;
+    const job = this.cancelOrder(id);
+    this.cancellations.set(key, job);
+    const clear = () => { if (this.cancellations.get(key) === job) this.cancellations.delete(key); };
+    void job.then(clear, clear);
+    return this.track(job);
+  }
   private async cancelOrder(id: string): Promise<OrderRecord> {
     const order = this.find(id);
     if (!order) throw new Error("order not found");
@@ -502,8 +518,13 @@ export class TradingCore {
       return this.cancelOrder(id);
     }
     if (!order.orderId) throw new Error("unidentified order requires reconciliation");
+    const cancelRequestedAt = this.clock();
+    const cancelStarted = performance.now();
     try {
       if (!(await this.options.adapters.gateway.cancel(order.orderId))) throw new Error("cancellation not confirmed");
+      order.cancelRequestedAt = cancelRequestedAt;
+      order.cancelAckAt = this.clock();
+      order.cancelAckLatencyMs = Math.max(0, performance.now() - cancelStarted);
       if (order.status !== "FILLED") {
         order.status = "CANCELLED";
         // Keep the reservation until the user stream or an account read proves
@@ -512,6 +533,9 @@ export class TradingCore {
       }
     } catch (error) {
       if (!active(order)) return copy(order);
+      order.cancelRequestedAt = cancelRequestedAt;
+      delete order.cancelAckAt;
+      delete order.cancelAckLatencyMs;
       order.status = "UNKNOWN"; order.error = error instanceof Error ? error.message : "cancellation failed";
       this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
     }

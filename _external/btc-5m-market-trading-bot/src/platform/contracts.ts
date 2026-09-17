@@ -65,6 +65,11 @@ export interface OrderRecord extends OrderRequest {
   tradeIds?: string[];
   signLatencyMs?: number;
   ackLatencyMs?: number;
+  /** Wall-clock seconds when the core started the venue cancel request. */
+  cancelRequestedAt?: number;
+  /** Wall-clock seconds when the venue confirmed the cancellation. */
+  cancelAckAt?: number;
+  cancelAckLatencyMs?: number;
   /** A venue cancel ACK can race with a fill already in flight. */
   reconciliationPending?: boolean;
   /** Signed order identity persisted before HTTP; never exposed in UI journals. */
@@ -206,6 +211,13 @@ export interface SettlementResult {
   state: "confirmed" | "pending" | "unsupported";
   transactionId?: string;
   reason?: string;
+  /** False for no-holdings completion and pending or failed transactions. */
+  payoutVerified?: boolean;
+  creditedUsd?: number;
+  expectedPayoutUsd?: number;
+  /** Balance observations can include unrelated wallet activity; not round PnL. */
+  cashBeforeUsd?: number;
+  cashAfterUsd?: number;
 }
 export interface PlatformAdapters {
   gateway: OrderGateway;

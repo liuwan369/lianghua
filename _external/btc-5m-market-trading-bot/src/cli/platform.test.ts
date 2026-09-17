@@ -228,7 +228,7 @@ describe("generic platform CLI lifecycle", () => {
     connection.platform.market.books = () => [{ tokenId: "yes", ts: 123, bids: levels, asks: levels }];
     const order = { clientOrderId: "client", orderId: "venue", strategyId: "manual", tokenId: "yes",
       status: "OPEN", direction: "BUY", price: 0.4, shares: 5, filledShares: 0, reservedUsd: 2,
-      reservedShares: 0, updatedAt: 123 };
+      reservedShares: 0, cancelRequestedAt: 122.75, cancelAckAt: 123, cancelAckLatencyMs: 250, updatedAt: 123 };
     mocks.start.mockImplementation(() => {
       const record = mocks.subscribe.mock.calls.at(-1)![0];
       const adapterRecord = mocks.connect.mock.calls.at(-1)![0].record;
@@ -241,7 +241,8 @@ describe("generic platform CLI lifecycle", () => {
       record({ kind: "book", book: { tokenId: "yes", ts: 124 } });
       record({ kind: "timer", ts: 124 });
       record({ kind: "error", message: "secret-provider-token" });
-      record({ kind: "settlement", result: { marketId: "condition", state: "unsupported", reason: "secret" } });
+      record({ kind: "settlement", result: { marketId: "condition", state: "confirmed", transactionId: "tx",
+        payoutVerified: true, creditedUsd: 5, expectedPayoutUsd: 5, cashBeforeUsd: 10, cashAfterUsd: 15 } });
     });
     const running = runPlatformCli(["--duration-sec", "0", "--journal-file", journalFile]);
     await vi.waitFor(() => expect(output).toHaveBeenCalledWith(expect.stringContaining('"status":"running"')));
@@ -259,9 +260,13 @@ describe("generic platform CLI lifecycle", () => {
     expect(rows.at(-1).runtime.books[0].stale).toBe(true);
     expect(rows.at(-1).runtime.books[0].received_age_ms).toBeGreaterThan(10_000);
     expect(rows[1]).toMatchObject({ event: "order", order_id: "venue", strategy_id: "manual",
-      direction: "BUY", side: "YES", market_slug: "Binary market", sign_latency_ms: null, ack_latency_ms: null });
+      direction: "BUY", side: "YES", market_slug: "Binary market", sign_latency_ms: null, ack_latency_ms: null,
+      cancel_requested_at: 122.75, cancel_ack_at: 123, cancel_ack_latency_ms: 250 });
     expect(rows[2]).toMatchObject({ event_id: 'fill:["trade","venue"]', strategy_id: "manual",
       fee: 0, is_maker: true, engine_ts: 124 });
+    expect(rows[5]).toMatchObject({ event: "platform_settlement", market_id: "condition", state: "confirmed",
+      transaction_id: "tx", payout_verified: true, credited_usd: 5, expected_payout_usd: 5,
+      cash_before_usd: 10, cash_after_usd: 15 });
     expect(rows.every(row => Number.isFinite(row.recv_ts) && typeof row.event_id === "string")).toBe(true);
     expect(new Set(rows.map(row => row.event_id)).size).toBe(rows.length);
     expect(readFileSync(journalFile, "utf8")).not.toMatch(/secret-provider-token|diagnostic stdout/);

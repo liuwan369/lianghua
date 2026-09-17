@@ -32,11 +32,33 @@ describe("live settlement adapter", () => {
       return { transactionHash: hash };
     });
     const settle = await createLiveSettlementAdapter(f.options);
-    expect((await settle(request)).state).toBe("pending");
-    expect((await settle(request)).state).toBe("confirmed");
+    expect(await settle(request)).toMatchObject({ state: "pending", payoutVerified: false });
+    expect(await settle(request)).toMatchObject({ state: "confirmed", payoutVerified: true,
+      creditedUsd: 5, expectedPayoutUsd: 5, cashBeforeUsd: 10, cashAfterUsd: 15 });
     expect((await settle(request)).state).toBe("confirmed");
     expect(f.backend.submit).toHaveBeenCalledTimes(1);
     expect(f.state().records[marketId]).toMatchObject({ creditedPusd: "5000000", cashBefore: "10000000", cashAfter: "15000000", status: "confirmed" });
+  });
+  it("never invents a payout when a market has no remaining holdings", async () => {
+    const f = fixture();
+    vi.mocked(f.backend.balances).mockResolvedValue({ balances: [0n, 0n], cash: 10_000_000n, block: 100n });
+    const settle = await createLiveSettlementAdapter(f.options);
+    const result = await settle(request);
+    expect(result).toMatchObject({ state: "confirmed", payoutVerified: false });
+    expect(result.creditedUsd).toBeUndefined();
+    expect(f.backend.submit).not.toHaveBeenCalled();
+  });
+  it("keeps verified receipt credit distinct from concurrent wallet balance changes after restart", async () => {
+    const f = fixture();
+    vi.mocked(f.backend.balances).mockImplementation(async (_ids, block) => block === undefined
+      ? { balances: [5_000_000n, 3_000_000n], cash: 10_000_000n, block: 100n }
+      : { balances: [0n, 0n], cash: 25_000_000n, block });
+    const settle = await createLiveSettlementAdapter(f.options);
+    await settle(request);
+    await settle(request);
+    const restored = await createLiveSettlementAdapter({ ...f.options, restore: f.state() });
+    expect(await restored(request)).toMatchObject({ state: "confirmed", payoutVerified: true,
+      creditedUsd: 5, cashBeforeUsd: 10, cashAfterUsd: 25 });
   });
   it("polls an unmined transaction repeatedly without resubmission, including after restart", async () => {
     const f = fixture();
@@ -146,7 +168,7 @@ describe("live settlement adapter", () => {
     vi.mocked(f.backend.receipt).mockResolvedValue({ transactionHash: hash, status: "success", block: 101n, creditedPusd: 0n });
     const settle = await createLiveSettlementAdapter(f.options);
     await settle(request);
-    expect((await settle(request)).state).toBe("confirmed");
+    expect(await settle(request)).toMatchObject({ state: "confirmed", payoutVerified: true, creditedUsd: 0 });
     expect(f.state().records[marketId]?.creditedPusd).toBe("0");
   });
   it("confirms approval before preparing the redemption", async () => {
