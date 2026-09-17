@@ -1,0 +1,45 @@
+{
+  "checked_at": "2026-09-17T12:59:54.886Z",
+  "read_only": true,
+  "signer_loaded": false,
+  "activity_http_status": 200,
+  "activity_items": 10,
+  "sample_existing_transaction": "0x84126c70b44524165cba61d36062e66d7942e20f698db39bf1e64bee61adf28a",
+  "cashFlowCoverage": {
+    "fromBlock": 93861614,
+    "toBlock": 93861616,
+    "fromAt": 1789497454,
+    "toAt": 1789497457,
+    "complete": true,
+    "reason": "classified_through_confirmed_block"
+  },
+  "external_flow_count": 0,
+  "net_external_usd": 0,
+  "classified_count": 1,
+  "classified_kinds": [
+    "trade"
+  ],
+  "unknown": [],
+  "activity_window": null,
+  "isolated_validation_path": "/root/.pm-validation/reversal-funding-20260917T125940Z",
+  "rpc": "configured primary https://polygon.drpc.org",
+  "limitations": [
+    "Existing trade sample only; no new deposit, withdrawal or order was created.",
+    "Only the recorded three-block interval was verified, not whole-account historical coverage."
+  ],
+  "data_api_filter_checks": {
+    "DEPOSIT": {
+      "status": 200,
+      "items": 0
+    },
+    "WITHDRAWAL": {
+      "status": 200,
+      "items": 0
+    }
+  },
+  "fallback_probe": {
+    "provider": "https://polygon-bor-rpc.publicnode.com",
+    "rpc_error_code": -32701,
+    "reason": "Historical logs pruned for this block; primary RPC succeeded."
+  }
+}

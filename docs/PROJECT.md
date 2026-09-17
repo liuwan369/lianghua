@@ -2,7 +2,7 @@
 
 更新：2026-09-17。当前项目是 **Polymarket BTC 五分钟反转交易系统**，做市方向已停止。只有一个策略，70/75 是可编辑参数参考，不是两套策略。
 
-版本 `5166c3d` 已部署到服务器，主要代码 hash 已匹配。本次线上检查为 `running=false`、`live_unlocked=false`、策略配置 `savedRevision=0`：程序已发布，策略尚未保存启动，本轮尚未执行真实订单。
+版本 `df9fd0d` 已部署到服务器，主要代码 hash 已匹配。本次线上检查为 `running=false`、`live_unlocked=false`、策略配置 `savedRevision=0`：程序已发布，策略尚未保存启动，本轮尚未执行真实订单。
 
 ## 系统分工
 

@@ -39,6 +39,8 @@ config价格用0..1，stageShares数组，maxStages整数，roundBudgetUsd/total
 
 状态新增 `execution_target`、`engine`、`execution`、`strategy_id`，区分当前平台和旧引擎记录。`stats.runtime` 包含当前运行的真实或模拟现金、订单/持仓数量、风险、市场及最多十档快照，并带 `source_at/expires_at/age_seconds/stale`；10 秒失效，API 刷新不续鲜。`stats.orders` 最多返回最新 50 单，同时提供总数和截断标记；未知值为 null。反转页面已展示5/10档深度和分段延迟；无有效来源时显示未知。
 
+`stats.runtime.risk` 还包含 `dailyPnlUsd`、`dailyLossStatus`、`cashFlowComplete`、`cashFlowCoverageFrom/Until`、`netExternalFlowUsd` 和 `pnlVerified`。`pnlVerified=false` 表示较新的充值提现或现金观察尚未落入完整确认覆盖，页面显示“暂估”；它不会单独阻止交易。用户未配置日内停止线时 `dailyLossStatus=disabled`。
+
 ## 写入与检查
 
 | 方法与路径 | 请求/行为 |

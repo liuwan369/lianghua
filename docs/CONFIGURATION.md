@@ -1,6 +1,6 @@
 # 当前配置说明
 
-更新：2026-09-17。版本 `5166c3d` 已部署，检查时策略配置 `savedRevision=0`，尚未保存运行参数；交易未运行、实盘锁未开启。
+更新：2026-09-17。版本 `df9fd0d` 已部署，检查时策略配置 `savedRevision=0`，尚未保存运行参数；交易未运行、实盘锁未开启。
 
 ## 策略页
 
@@ -46,3 +46,5 @@
 | `PM_REMOTE_HOST` / `PM_REMOTE_SSH_KEY` / `PM_REMOTE_SNAPSHOT_PATH` | 开发预览读取服务器行情投影 |
 
 部署服务见 `config/pm-system-dashboard-dublin.service`。快照刷新不会更改原始来源时间；过期数据显示不可用。策略预算由用户填写，不存在固定 `$50/$30` 或历史模板资金门槛。
+
+资金流扫描沿用 `POLYGON_RPC`、`PM_ACCOUNT_RPC_URL`、`PM_ACCOUNT_RPC_FALLBACK_URL` 的顺序，并有公开只读备用。节点裁剪历史日志或活动分页不完整时只把日内结果标为暂估，不伪造完整覆盖，也不新增实盘锁。

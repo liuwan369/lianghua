@@ -1,6 +1,6 @@
 # 技术实现与执行语义
 
-更新：2026-09-17。版本 `5166c3d` 已部署，主要代码 hash 已匹配；本轮真实订单尚未执行。主实现位于 `_external/btc-5m-market-trading-bot/src/platform/`、`src/strategies/btc-reversal.ts`、`src/cli/platform.ts`，控制台使用 `scripts/dashboard/strategy_config.py` 和 `web/src/pages/`。
+更新：2026-09-17。版本 `df9fd0d` 已部署，主要代码 hash 已匹配；本轮真实订单尚未执行。主实现位于 `_external/btc-5m-market-trading-bot/src/platform/`、`src/strategies/btc-reversal.ts`、`src/cli/platform.ts`，控制台使用 `scripts/dashboard/strategy_config.py` 和 `web/src/pages/`。
 
 ## 模块与启动
 
@@ -27,6 +27,10 @@
 成交按 `tradeId + orderId` 去重，同时处理 MATCHED、MINED、CONFIRMED、FAILED 等状态变化。失败可冲正对应暂记变化；重复或迟到旧事件不能重复扣款或推翻终态。费用区分交易所报告、费率推算和估算，预留费用不冒充实际费用。
 
 撤单确认可能与迟到成交竞态，`reconciliationPending` 保留需要核对的余量。恢复时先补真实订单和成交，再接纳账户快照；账户核对通过后才更新账本。策略预算与实际可用余额共同限制新增，不使用固定历史资金额度。
+
+日内结果以 pUSD 交易现金为账本边界。后台每30秒增量扫描 Polygon 已确认的 pUSD/USDC.e Transfer 日志，并用成功回执、协议对手方或账户活动类型归因；pUSD onramp 流入记充值、offramp 流出记提现，USDC.e 转换腿只作证据，不重复计入。游标、已应用资金流和日内基线与账户账本同一持久提交，重启不重复调整。扫描与订单恢复并行隔离，不进入下单、ACK或撤单路径。
+
+链上确认覆盖可能落后于最新现金读取。此时 `cashFlowComplete` 表示已扫描窗口是否完整，`pnlVerified` 表示该覆盖是否追上现金观察时间；页面把日内结果标为暂估。覆盖不全本身不设交易门槛，用户配置的日内停止线仍按当前暂估结果执行，后续确认的充值提现会修正基线。
 
 ## 行情与延迟
 
