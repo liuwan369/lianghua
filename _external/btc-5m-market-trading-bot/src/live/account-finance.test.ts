@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AccountFinanceReader, accountRiskContract, balanceOccupancy, receiptEvidence, scanConfirmedTransfers } from './account-finance.js';
+import { AccountFinanceReader, balanceOccupancy, receiptEvidence, scanConfirmedTransfers } from './account-finance.js';
 import { PUSD } from './contracts.js';
 import type { Section } from './account-data.js';
 
@@ -21,13 +21,8 @@ describe('account cash evidence', () => {
     expect(result.balance_after_open_buy_notional).toBe(7);
     expect(result).toMatchObject({ complete: false, spendable_balance: null });
     expect(result.observed).toMatchObject({ position_cost_usd: 1, capital_occupied_estimate_usd: 4,
-      capital_headroom_estimate_usd: 46, open_buy_count: 1, position_count: 1, estimate_inputs_complete: true });
+      capital_headroom_estimate_usd: null, open_buy_count: 1, position_count: 1, estimate_inputs_complete: true });
     expect(balanceOccupancy({ ...section(), value: 10 }, section([{side:'BUY'}]), section([{ size: 'unknown' }])).available).toBe(false);
-  });
-  it('publishes the bounded 50/30 requirements without claiming an execution gate', () => {
-    expect(accountRiskContract()).toMatchObject({ capital_limit_usd: 50, daily_loss_limit_usd: 30,
-      risk_timezone: 'Asia/Shanghai', read_only: true, execution_ready: false });
-    expect(accountRiskContract().required_before_execution).toContain('atomic_pre_submission_gate');
   });
   it('keeps unknown cash and missing or partial positions distinct from zero', () => {
     const missingCash = balanceOccupancy(section(), section(), section());
@@ -51,7 +46,7 @@ describe('account cash evidence', () => {
       { asset: 'zero', conditionId: 'second', size: 0 },
     ]));
     expect(result.observed).toMatchObject({ position_cost_usd: 50, position_count: 2,
-      capital_occupied_estimate_usd: 54, capital_headroom_estimate_usd: -4, cash_shortfall_estimate_usd: 2 });
+      capital_occupied_estimate_usd: 54, capital_headroom_estimate_usd: null, cash_shortfall_estimate_usd: 2 });
     expect(result.spendable_balance).toBeNull();
     expect(result.unaccounted).toContain('matched_trades_pending_chain_confirmation');
   });

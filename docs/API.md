@@ -41,6 +41,8 @@ config价格用0..1，stageShares数组，maxStages整数，roundBudgetUsd/total
 
 `stats.runtime.risk` 还包含 `dailyPnlUsd`、`dailyLossStatus`、`cashFlowComplete`、`cashFlowCoverageFrom/Until`、`netExternalFlowUsd` 和 `pnlVerified`。`pnlVerified=false` 表示较新的充值提现或现金观察尚未落入完整确认覆盖，页面显示“暂估”；它不会单独阻止交易。用户未配置日内停止线时 `dailyLossStatus=disabled`。
 
+通用 `/api/v1/account-data` 不再返回旧 `risk_contract`（固定50/30及原子快照门槛）。`occupancy.observed.capital_headroom_estimate_usd` 为null：账户读取器不知道当前策略预算，不能用历史常量推算。当前预算读取策略配置或运行时limits，账户观测估算不代表实际可下单额度。
+
 ## 写入与检查
 
 | 方法与路径 | 请求/行为 |

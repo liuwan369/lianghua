@@ -83,26 +83,6 @@ export async function scanConfirmedTransfers(rpc: Rpc, wallet: string, options: 
   }
 }
 
-/** Hard account contract supplied by the owner for the first bounded validation. */
-export const ACCOUNT_RISK_LIMITS = Object.freeze({ capitalUsd: 50, dailyLossUsd: 30 });
-
-export interface AccountRiskContract {
-  capital_limit_usd: number;
-  daily_loss_limit_usd: number;
-  risk_timezone: 'Asia/Shanghai';
-  source: 'owner-bounded-validation';
-  read_only: true;
-  execution_ready: false;
-  required_before_execution: string[];
-}
-
-export function accountRiskContract(): AccountRiskContract {
-  return { capital_limit_usd: ACCOUNT_RISK_LIMITS.capitalUsd, daily_loss_limit_usd: ACCOUNT_RISK_LIMITS.dailyLossUsd,
-    risk_timezone: 'Asia/Shanghai', source: 'owner-bounded-validation', read_only: true, execution_ready: false,
-    required_before_execution: ['reconciled_account_snapshot', 'pending_submission_and_settlement_reservations',
-      'fee_and_allowance_validation', 'account_equity_daily_baseline_and_external_cash_flows', 'atomic_pre_submission_gate'] };
-}
-
 export function receiptEvidence(receipt: unknown, wallet: string, tx: string, confirmedHead: number): Row {
   const r = receipt as Row;
   if (!r || String(r.transactionHash).toLowerCase() !== tx.toLowerCase() || r.status !== '0x1'
@@ -196,7 +176,9 @@ export function balanceOccupancy(collateral: Section, orders: Section, positions
       position_cost_usd: positionsValid ? openPositionNotional : null,
       position_count: positionsValid ? positionCount : null,
       capital_occupied_estimate_usd: capitalOccupied,
-      capital_headroom_estimate_usd: capitalOccupied === null ? null : ACCOUNT_RISK_LIMITS.capitalUsd - capitalOccupied,
+      // Strategy limits live in the selected strategy revision. A general
+      // account snapshot cannot infer remaining strategy budget.
+      capital_headroom_estimate_usd: null,
       cash_shortfall_estimate_usd: cashOrdersValid ? Math.max(0, reserved - balance!) : null,
       source_checks: { collateral: collateral.checked_at, open_orders: orders.checked_at, positions: positions?.checked_at ?? null },
       source_skew_ms: timesValid ? Math.max(...times) - Math.min(...times) : null,

@@ -26,8 +26,7 @@ describe("authenticated account reader", () => {
     expect(result.positions.complete).toBe(true);
     expect(result.occupancy).toMatchObject({ complete: false, spendable_balance: null,
       observed: { position_cost_usd: 0, capital_occupied_estimate_usd: 0 } });
-    expect(result.risk_contract).toMatchObject({ capital_limit_usd: 50, daily_loss_limit_usd: 30,
-      read_only: true, execution_ready: false });
+    expect(result).not.toHaveProperty('risk_contract');
     expect(result.fees.available).toBe(false);
     expect(result.rewards.available).toBe(false);
     expect(JSON.stringify(result)).not.toMatch(/secret|passphrase|allowances/);
