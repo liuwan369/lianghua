@@ -1,6 +1,6 @@
 # 交付状态
 
-更新：2026-09-17。版本 **`df9fd0d` 已部署**，主要代码 hash 已匹配。本次服务器检查：`running=false`、`live_unlocked=false`、`savedRevision=0`。当前已发布代码和页面，尚未保存启动反转策略，本轮没有真实订单证据。
+更新：2026-09-17。版本 **`a9d37cd` 已部署**，主要代码 hash 已匹配。本次服务器检查：`running=false`、`live_unlocked=false`、`savedRevision=0`。当前已发布代码和页面，尚未保存启动反转策略，本轮没有真实订单证据。
 
 ## 已完成的代码与发布
 

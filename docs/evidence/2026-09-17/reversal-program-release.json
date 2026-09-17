@@ -1,8 +1,8 @@
 {
-  "revision": "df9fd0decac7993bb67498838dfda40f5e557bd1",
-  "release": "/root/.pm-releases/reversal-df9fd0d-20260917T114402Z",
-  "files_verified": 615,
-  "files_changed": 98,
+  "revision": "a9d37cdb35798803d86c6143407360563034ebe0",
+  "release": "/root/.pm-releases/reversal-a9d37cd-20260917T132635Z",
+  "files_verified": 633,
+  "files_changed": 54,
   "dashboard_restarted": true,
   "status": {
     "running": false,
@@ -11,17 +11,19 @@
     "strategy_id": null,
     "live_unlocked": false
   },
-  "archive_sha256": "1d905a9e318c1940fd0dd9aecbf8edd198b8f0cd4c259b46ed2ef3ee2a58977e",
-  "checkedAt": "2026-09-17T11:49:24.062756+00:00",
+  "archive_sha256": "42e2241119da4d36c3288c4001644940135600b060bb26af7cbf0a0d584ee58c",
+  "checkedAt": "2026-09-17T13:29:04+00:00",
   "buildSource": "fixed Git revision exported to an isolated directory",
   "selectedHashes": {
-    "_external/btc-5m-market-trading-bot/dist/cli/platform.js": "d9950c2b27c5ec81eeffc4be2ecf496d027039fe386381230fdabc9c77bb1937",
-    "_external/btc-5m-market-trading-bot/dist/platform/polymarket.js": "128125085cd76b1ea8ef0ad340804611f73dc164e691c44a61a6da3ee2580a4f",
+    "_external/btc-5m-market-trading-bot/dist/cli/platform.js": "b48986e16c33ca54041f20abc578802da3d5d2e77f3d5737d91b650ef25220cb",
+    "_external/btc-5m-market-trading-bot/dist/platform/cash-flows.js": "998c1dbe2acc55d1979bc6bc93d358a8ba63e2517172b63dabc047b3d4aa8fe3",
+    "_external/btc-5m-market-trading-bot/dist/platform/core.js": "24a239ec8b1815ad6fe00b4c80cbc7df0c502d08556a34c827d6839f4de3e520",
+    "_external/btc-5m-market-trading-bot/dist/platform/polymarket.js": "9899bdc546ff70e565edd8862ff57b82a2b81d323a04147895588457b802fe79",
     "_external/btc-5m-market-trading-bot/dist/strategies/btc-reversal.js": "d5095a599934e658ba6be19fdd5e362e8f1243368d39830c00ea567f96d94960",
     "scripts/system-dashboard-server.py": "e6f90f8fe1eb72d3d3fdb8a27be4747080eca70eae6b153bea296a62b9a88c5e",
-    "scripts/dashboard/ledger.py": "3e82a20e691eac8a2fb3cfadb97f5db57c83ad1ac28861c0b72907f43e1379a7",
-    "docs/console/index.html": "158ddb35a0b71026eb4356bd5911f1ce279abbb9e434e59514890b5819088eb9",
-    "docs/console/assets/index-DmXeN8ug.js": "a8daf710af637d174bd9ffad090c3773b4dbcbc7d3c0019927f8f411ec39cf80"
+    "scripts/dashboard/ledger.py": "f02fdc1f1755bdad87886c77978ff326111b79efb84f1b368d4763569ba9c69a",
+    "docs/console/index.html": "38f5eb659180ae79e718325fc56cc55fc44ea4a8ba9608a7fbd27fa1e00c11fc",
+    "docs/console/assets/index-CrGvhCzk.js": "80f967931dcdc4f917db76ce1edd3bb4b6671e9d34a74e83038e5f5daaba577a"
   },
   "realOrdersCreated": 0
 }

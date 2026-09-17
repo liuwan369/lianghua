@@ -1,6 +1,6 @@
 # 技术实现与执行语义
 
-更新：2026-09-17。版本 `df9fd0d` 已部署，主要代码 hash 已匹配；本轮真实订单尚未执行。主实现位于 `_external/btc-5m-market-trading-bot/src/platform/`、`src/strategies/btc-reversal.ts`、`src/cli/platform.ts`，控制台使用 `scripts/dashboard/strategy_config.py` 和 `web/src/pages/`。
+更新：2026-09-17。版本 `a9d37cd` 已部署，主要代码 hash 已匹配；本轮真实订单尚未执行。主实现位于 `_external/btc-5m-market-trading-bot/src/platform/`、`src/strategies/btc-reversal.ts`、`src/cli/platform.ts`，控制台使用 `scripts/dashboard/strategy_config.py` 和 `web/src/pages/`。
 
 ## 模块与启动
 
