@@ -87,7 +87,7 @@ class MarketSnapshot:
 
     def _latest_database(self) -> Path | None:
         required = {"events", "event_chunks", "health"}
-        candidates: list[tuple[float, int, int, str, Path]] = []
+        groups: dict[int, list[tuple[int, str, Path]]] = {}
         for path in self.data_dir.glob(self.evidence_glob):
             try:
                 stat = path.stat()
@@ -100,22 +100,29 @@ class MarketSnapshot:
                 day = datetime.strptime("".join(match.groups()), "%Y%m%d").date().toordinal() if match else -1
             except ValueError:
                 day = -1
-            try:
-                with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=3)) as conn:
-                    tables = {row[0] for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events','event_chunks','health')"
-                    )}
-                    if tables != required:
-                        continue
-                    row = conn.execute("SELECT recorded_at FROM health ORDER BY id DESC LIMIT 1").fetchone()
+            groups.setdefault(day, []).append((stat.st_mtime_ns, path.name, path))
+        for day in sorted(groups, reverse=True):
+            valid: list[tuple[int, float, int, str, Path]] = []
+            for mtime, name, path in groups[day]:
                 try:
-                    health_at = datetime.fromisoformat(str(row[0])).timestamp() if row else float("-inf")
-                except (TypeError, ValueError):
-                    health_at = float("-inf")
-                candidates.append((health_at, day, stat.st_mtime_ns, path.name, path))
-            except sqlite3.Error:
-                continue
-        return max(candidates)[-1] if candidates else None
+                    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=3)) as conn:
+                        tables = {row[0] for row in conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('events','event_chunks','health')"
+                        )}
+                        if tables != required:
+                            continue
+                        row = conn.execute("SELECT recorded_at FROM health ORDER BY id DESC LIMIT 1").fetchone()
+                    try:
+                        health_at = datetime.fromisoformat(str(row[0])).timestamp() if row else float("-inf")
+                    except (TypeError, ValueError):
+                        health_at = float("-inf")
+                    standard_name = int(bool(re.search(r"\d{4}-\d{2}-\d{2}$", path.stem)))
+                    valid.append((standard_name, health_at, mtime, name, path))
+                except sqlite3.Error:
+                    continue
+            if valid:
+                return max(valid)[-1]
+        return None
 
     def _apply(self, row: list) -> None:
         event_type, received_ns, source_ms, _slug, token, payload = row

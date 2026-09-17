@@ -23,7 +23,7 @@ def projection(tmp_path, monkeypatch):
     return MarketSnapshot(tmp_path, "dublin-evidence-*.sqlite3", "test.service", "都柏林节点"), path
 
 
-def create_db(path):
+def create_db(path, health_at=NOW):
     with closing(sqlite3.connect(path)) as db, db:
         db.executescript("""
         CREATE TABLE events(id INTEGER PRIMARY KEY,source TEXT,event_type TEXT,received_at_ns INTEGER,payload_json TEXT);
@@ -31,7 +31,8 @@ def create_db(path):
         CREATE INDEX idx_chunks_source_second ON event_chunks(source,received_second);
         CREATE TABLE health(id INTEGER PRIMARY KEY,recorded_at TEXT,queue_depth INTEGER,counters_json TEXT,source_status_json TEXT);
         """)
-        db.execute("INSERT INTO health VALUES(1,?,0,'{}','{}')", (iso(NOW),))
+        if health_at is not None:
+            db.execute("INSERT INTO health VALUES(1,?,0,'{}','{}')", (iso(health_at),))
         metadata = {"slug": "btc-test", "up_token": "up", "down_token": "down", "start_at": NOW-100, "end_at": NOW+200}
         db.execute("INSERT INTO events VALUES(1,'gamma','market_metadata',?,?)", (int(NOW*1e9), json.dumps(metadata)))
 
@@ -135,6 +136,26 @@ def test_same_day_archive_mtime_does_not_override_newer_internal_health(projecti
         db.execute("UPDATE health SET recorded_at=?", (iso(NOW-60),))
     assert market(reader)["up_ask"] == .5
     assert reader.identity[0] == str(path.resolve())
+
+
+def test_same_day_compact_archive_with_equal_health_does_not_override_standard_name(projection):
+    reader, path = projection
+    chunk(path, NOW-2, [book(), book("down")])
+    compact = path.with_name("dublin-evidence-20270115.sqlite3")
+    create_db(compact)
+    chunk(compact, NOW-1, [book(ask=.9), book("down")])
+    assert market(reader)["up_ask"] == .5
+    assert reader.identity[0] == str(path.resolve())
+
+
+def test_new_day_without_health_replaces_previous_day(projection):
+    reader, path = projection
+    chunk(path, NOW-2, [book(), book("down")])
+    new = path.with_name("dublin-evidence-2027-01-16.sqlite3")
+    create_db(new, health_at=None)
+    chunk(new, NOW-1, [book(ask=.8), book("down")])
+    assert market(reader)["up_ask"] == .8
+    assert reader.identity[0] == str(new.resolve())
 
 
 def test_empty_book_and_bbo_clear_side_and_old_bbo_does_not_override_depth(projection):
