@@ -99,11 +99,42 @@ export interface Position {
 export interface AccountSnapshot {
   accountId: string;
   at: number;
+  /** Cash section observation time; other account queries may finish later. */
+  cashAt?: number;
   cashUsd: number;
   positions: Position[];
   openOrders: OrderRecord[];
   /** Queries are ordinary venue reads; no atomic provider is required. */
   complete: boolean;
+  cashFlowCoverage?: CashFlowCoverage;
+  externalFlows?: ExternalCashFlow[];
+}
+export interface CashFlowCoverage {
+  fromBlock: number;
+  toBlock: number;
+  /** Unix seconds for the actual scanned block boundaries. */
+  fromAt: number;
+  toAt: number;
+  /** Complete classification of this block window, not a claim of real-time finality. */
+  complete: boolean;
+  reason?: string;
+}
+export interface ExternalCashFlow {
+  id: string;
+  kind: "deposit" | "withdrawal";
+  amountUsd: number;
+  block: number;
+  at: number;
+  transactionHash: string;
+}
+export interface CashFlowTracking {
+  baselineAt: number;
+  baselineBlock?: number;
+  cursorBlock?: number;
+  coveredThroughAt?: number;
+  complete: boolean;
+  reason?: string;
+  appliedFlows: ExternalCashFlow[];
 }
 export interface HardLimits {
   capitalUsd: number;
@@ -117,17 +148,28 @@ export interface RiskView {
   reason?: string;
   day: string;
   baselineAt: number;
+  /** Account observation included in a day boundary baseline, for late flow corrections. */
+  baselineAccountAt?: number;
   baselineEquityUsd: number;
   equityUsd: number;
   dailyPnlUsd: number;
   occupiedUsd: number;
   availableUsd: number;
+  cashFlowComplete?: boolean;
+  cashFlowReason?: string;
+  cashFlowCoverageFrom?: number;
+  cashFlowCoverageUntil?: number;
+  netExternalFlowUsd?: number;
+  pnlVerified?: boolean;
+  dailyLossStatus?: "disabled" | "active" | "estimated";
 }
 export interface CoreState {
   schemaVersion: 1;
   accountId: string;
   /** Last ordinary account snapshot accepted by reconcile(). */
   accountAt?: number;
+  /** Observation time of the cash section accepted by reconcile(). */
+  cashAt?: number;
   mode: TradingMode;
   cashUsd: number;
   positions: Position[];
@@ -137,6 +179,7 @@ export interface CoreState {
   /** Opaque plugin state is persisted in the same commit as the account ledger. */
   strategyStates?: Record<string, unknown>;
   markets?: MarketInfo[];
+  cashFlowTracking?: CashFlowTracking;
 }
 export interface GatewayAck {
   status: "accepted" | "rejected" | "unknown";

@@ -306,6 +306,12 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       orders_count: state?.orders.length ?? null,
       active_orders: state?.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)).length ?? null,
       fills_count: state?.fills.length ?? null, risk: state?.risk ?? null, limits: options.limits,
+      cash_flow_coverage: state?.cashFlowTracking ? {
+        from: state.cashFlowTracking.baselineAt, until: state.cashFlowTracking.coveredThroughAt ?? null,
+        from_block: state.cashFlowTracking.baselineBlock ?? null, cursor_block: state.cashFlowTracking.cursorBlock ?? null,
+        complete: state.cashFlowTracking.complete, reason: state.cashFlowTracking.reason ?? null,
+        applied_count: state.cashFlowTracking.appliedFlows.length,
+      } : null,
       strategy_runtime: strategyRuntime,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: platform?.market.list() ?? selectedMarkets,

@@ -31,6 +31,7 @@ it('renders simulated platform values separately and removes current values when
   vi.useFakeTimers();
   document.body.innerHTML='<div id="app"></div>';mountLayout(document.getElementById('app')!);
   const status=fixture();
+  status.stats.runtime={...status.stats.runtime!,risk:{halted:false,dailyPnlUsd:-1.5,dailyLossStatus:'estimated',pnlVerified:false,cashFlowComplete:true,cashFlowCoverageUntil:status.asOf-30}};
   const fixtures:Record<string,unknown>={
     '/api/v1/status':status,
     '/api/v1/config':{schemaVersion:1,revision:1,savedAt:null,params:{mode:'paper',duration_min:0},capabilities:{executionTarget:'platform',executionMode:'observation',runtimeAppliedFields:['mode','duration_min'],preservedLegacyFields:[]}},
@@ -44,11 +45,14 @@ it('renders simulated platform values separately and removes current values when
   expect(document.querySelector('[data-runtime-counts]')!.textContent).toBe('0 / 0');
   expect(document.querySelector('#homeOrders')!.textContent).toBe('--');
   expect(document.querySelector('[data-start]')!.textContent).toBe('启动 BTC 反转');
+  expect(document.querySelector('[data-runtime-daily-loss]')!.textContent).toContain('暂估');
+  expect(document.querySelector('[data-runtime-flow-coverage]')!.textContent).toContain('覆盖至');
   status.asOf+=11;
   await vi.advanceTimersByTimeAsync(5100);
   expect(document.querySelector('[data-runtime-cash]')!.textContent).not.toContain('$1,000');
   expect(document.querySelector('[data-runtime-source]')!.textContent).toContain('已过期');
   expect(document.querySelector('#homeVolume')!.textContent).toBe('-- / --');
+  expect(document.querySelector('[data-runtime-daily-loss]')!.textContent).toBe('--');
   status.running=false;
   await vi.advanceTimersByTimeAsync(5100);
   expect(document.querySelector('[data-runtime-source]')!.textContent).toContain('历史最终快照');

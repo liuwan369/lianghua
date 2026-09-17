@@ -190,6 +190,21 @@ def test_runtime_preserves_confirmed_economics_without_inventing_unknown_results
     assert result["feesVerified"] and result["netIfUpUsd"] == 1.45 and result["netIfDownUsd"] == -3.55
 
 
+def test_runtime_keeps_cash_flow_verification_distinct_from_daily_loss_estimates():
+    runtime = {"schemaVersion": 1, "engine": "platform", "execution": "strategy",
+               "strategy_id": "btc-reversal", "status": "running", "mode": "live",
+               "risk": {"dailyPnlUsd": -2.5, "cashFlowComplete": True, "pnlVerified": False,
+                        "cashFlowCoverageFrom": 100, "cashFlowCoverageUntil": 120,
+                        "netExternalFlowUsd": -10, "dailyLossStatus": "estimated",
+                        "cashFlowReason": "classified_through_confirmed_block"}}
+    risk = _runtime_projection(runtime, "live")["risk"]
+    assert all(risk[key] == value for key, value in runtime["risk"].items())
+    runtime["risk"].update(cashFlowComplete="true", pnlVerified="false", dailyLossStatus="bad")
+    risk = _runtime_projection(runtime, "live")["risk"]
+    assert risk["cashFlowComplete"] is None and risk["pnlVerified"] is None
+    assert risk["dailyLossStatus"] is None
+
+
 def test_final_trade_can_receive_actual_fee_once_without_changing_fill(tmp_path):
     journal = tmp_path / "fees.jsonl"
     rows = [{"event": "order", "client_order_id": "c", "order_id": "o", "status": "FILLED",

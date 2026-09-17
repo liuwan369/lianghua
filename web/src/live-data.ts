@@ -35,7 +35,7 @@ export function connect() {
   const strategyOrders=connectStrategyOrders();
   const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>();
   const runtimeRows=document.createElement('div');runtimeRows.dataset.platformRuntime='';runtimeRows.hidden=true;
-  runtimeRows.innerHTML='<div class="row"><span>平台模拟现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><p class="muted" data-runtime-source role="status"></p>';
+  runtimeRows.innerHTML='<div class="row"><span>平台模拟现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><div class="row"><span>日内结果 / 停止线</span><b data-runtime-daily-loss>--</b></div><p class="muted" data-runtime-flow-coverage></p><p class="muted" data-runtime-source role="status"></p>';
   document.getElementById('homeStrategy')!.closest('.panel')!.append(runtimeRows);
   document.querySelector('[data-depth-count]')?.addEventListener('change',renderStatus);
   let closed=false, refreshing=false, runLoading=false, runsLoading=false, historyGeneration=0;
@@ -95,6 +95,10 @@ export function connect() {
     set('[data-runtime-cash]',runtime.current&&snapshot?.mode==='paper'?`${money(snapshot.cash_usd)} · 模拟资金`:'-- · 无当前模拟资金快照');
     set('[data-runtime-counts]',runtime.current?`${number(snapshot?.positions_count)} / ${number(snapshot?.active_orders)}`:'-- / --');
     set('[data-runtime-risk]',runtime.current&&typeof snapshot?.risk?.halted==='boolean'?snapshot.risk.halted?`已暂停 · ${String(snapshot.risk.reason||'原因未提供')}`:'未触发暂停':'-- · 无当前风险快照');
+    const risk=runtime.current?snapshot?.risk:null;
+    const lossStatus=risk?.dailyLossStatus==='disabled'?'未设置停止线':risk?.dailyLossStatus==='active'?'停止线已启用':risk?.dailyLossStatus==='estimated'?'停止线按暂估值判断':'停止线状态未知';
+    set('[data-runtime-daily-loss]',risk?`${money(risk.dailyPnlUsd)}${risk.pnlVerified===true?'':'（暂估）'} · ${lossStatus}`:'--');
+    set('[data-runtime-flow-coverage]',risk?`资金变化${risk.cashFlowComplete===true?'已核对':'核对中'}${typeof risk.cashFlowCoverageUntil==='number'?`，覆盖至 ${date(risk.cashFlowCoverageUntil)}`:''}。${risk.pnlVerified===true?'已剔除确认的充值提现。':'较新资金变化仍待确认，暂估结果可能修正。'}`:'');
     set('[data-runtime-source]',`${s?.control_source?.label||'来源未标注'} · 平台运行 ${s?.run_id||'--'} · ${snapshot?`采集 ${date(snapshot.source_at)} · ${number(Math.max(0,clock-snapshot.source_at),1)} 秒前 · ${!s?.running?'历史最终快照':runtime.current?'当前快照':'已过期或等待当前快照'}`:'等待平台快照'}`);
     if(platform){
       row('#view-trade','策略判断',strategy);

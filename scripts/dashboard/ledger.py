@@ -172,9 +172,14 @@ def _runtime_projection(value, mode):
     result["risk"] = None
     if isinstance(risk, dict):
         result["risk"] = {key: _number(risk.get(key)) for key in (
-            "baselineAt", "baselineEquityUsd", "equityUsd", "dailyPnlUsd", "occupiedUsd", "availableUsd")}
+            "baselineAt", "baselineEquityUsd", "equityUsd", "dailyPnlUsd", "occupiedUsd", "availableUsd",
+            "cashFlowCoverageFrom", "cashFlowCoverageUntil", "netExternalFlowUsd")}
         result["risk"].update(halted=risk.get("halted") if isinstance(risk.get("halted"), bool) else None,
-                              reason=_text(risk.get("reason")), day=_text(risk.get("day")))
+                              reason=_text(risk.get("reason")), day=_text(risk.get("day")),
+                              cashFlowComplete=risk.get("cashFlowComplete") if isinstance(risk.get("cashFlowComplete"), bool) else None,
+                              pnlVerified=risk.get("pnlVerified") if isinstance(risk.get("pnlVerified"), bool) else None,
+                              cashFlowReason=_text(risk.get("cashFlowReason")),
+                              dailyLossStatus=risk.get("dailyLossStatus") if risk.get("dailyLossStatus") in ("disabled", "active", "estimated") else None)
     limits = value.get("limits")
     result["limits"] = {key: _number(limits.get(key)) for key in (
         "capitalUsd", "dailyLossUsd", "maxOrderUsd", "maxOpenOrders")} if isinstance(limits, dict) else None

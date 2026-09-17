@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeedSink } from "../live/feeds/index.js";
 import type { MarketInfo, OrderRequest } from "./contracts.js";
 
 const mocks = vi.hoisted(() => ({ reader: vi.fn(), warm: vi.fn(), submit: vi.fn(), books: vi.fn(), users: vi.fn(),
-  cancel: vi.fn(), trades: vi.fn(), open: vi.fn(), getOrder: vi.fn(), replay: vi.fn(), stopHeartbeat: vi.fn() }));
+  cancel: vi.fn(), trades: vi.fn(), open: vi.fn(), getOrder: vi.fn(), replay: vi.fn(), cashFlows: vi.fn(), stopHeartbeat: vi.fn() }));
+vi.mock("./cash-flows.js", () => ({ readCashFlowEvidence: mocks.cashFlows }));
 vi.mock("../live/clob/client.js", () => ({ geocheck: async () => {}, ClobWrapper: { connect: async () => ({
   warmMarket: mocks.warm, submitOrder: mocks.submit, cancel: mocks.cancel, getRecentTrades: mocks.trades,
   getOpenOrders: mocks.open, getOrder: mocks.getOrder, resubmitPrepared: mocks.replay,
@@ -17,7 +18,7 @@ vi.mock("../live/feeds/polymarket.js", () => ({ runPolymarketFeed: mocks.books }
 vi.mock("../live/feeds/user.js", async original => ({
   ...await original<typeof import("../live/feeds/user.js")>(), runUserFeed: mocks.users,
 }));
-import { connectPolymarketPlatform } from "./polymarket.js";
+import { accountSnapshot, connectPolymarketPlatform } from "./polymarket.js";
 
 function market(id: string, start: number, end: number): MarketInfo {
   return { id, name: id, startsAt: start, endsAt: end, instruments: ["UP", "DOWN"].map(outcome => ({
@@ -26,6 +27,8 @@ function market(id: string, start: number, end: number): MarketInfo {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.cashFlows.mockImplementation(async ({ fromAt }) => ({ cashFlowCoverage: { fromBlock: 100, toBlock: 100,
+    fromAt, toAt: fromAt, complete: true }, externalFlows: [] }));
   mocks.reader.mockImplementation(async () => ({ wallet: "wallet", checked_at: new Date().toISOString(),
     collateral: { available: true, complete: true, value: 200 },
     positions: { available: true, complete: true, items: [] },
@@ -42,7 +45,51 @@ beforeEach(() => {
       isHealthy: () => true, isContinuous: () => true };
   });
 });
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe("continuous market platform adapter", () => {
+  it("uses the configured account RPC before the public fallback", async () => {
+    vi.stubEnv("POLYGON_RPC", ""); vi.stubEnv("PM_ACCOUNT_RPC_URL", "https://primary.example/rpc");
+    vi.stubEnv("PM_ACCOUNT_RPC_FALLBACK_URL", "https://fallback.example/rpc");
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ result: "0x123" }) });
+    vi.stubGlobal("fetch", fetch);
+    mocks.cashFlows.mockImplementation(async ({ rpc, fromAt }) => {
+      await rpc("eth_blockNumber", []);
+      return { cashFlowCoverage: { fromBlock: 100, toBlock: 100, fromAt, toAt: fromAt, complete: true }, externalFlows: [] };
+    });
+    const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
+    const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],
+      limits: { capitalUsd: 148, dailyLossUsd: null, maxOrderUsd: 148, maxOpenOrders: 10 }, persist: () => {} });
+    await connection.start();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(fetch.mock.calls[0][0]).toBe("https://primary.example/rpc");
+    await connection.stop();
+  });
+
+  it("preserves the collateral observation time separately from aggregate completion", () => {
+    const result = accountSnapshot({ wallet: "wallet", checked_at: "2026-09-17T12:00:03.000Z",
+      collateral: { available: true, complete: true, value: 200, checked_at: "2026-09-17T12:00:01.000Z" },
+      positions: { available: true, complete: true, items: [] }, open_orders: { available: true, complete: true, items: [] } });
+    expect(result.cashAt).toBe(Date.parse("2026-09-17T12:00:01.000Z") / 1000);
+    expect(result.at).toBe(Date.parse("2026-09-17T12:00:03.000Z") / 1000);
+  });
+
+  it("does not wait for a background funding scan before cancelling on stop", async () => {
+    const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
+    let finishScan!: () => void;
+    mocks.cashFlows.mockImplementation(() => new Promise(resolve => { finishScan = () => resolve({ cashFlowCoverage: {
+      fromBlock: 100, toBlock: 100, fromAt: now, toAt: now, complete: true }, externalFlows: [] }); }));
+    const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],
+      limits: { capitalUsd: 148, dailyLossUsd: null, maxOrderUsd: 148, maxOpenOrders: 10 }, persist: () => {} });
+    await connection.start();
+    const order = await connection.platform.orders.submit({ clientOrderId: "stop-stage", strategyId: "btc-reversal",
+      tokenId: "current-UP", direction: "BUY", price: 0.7, shares: 5, postOnly: false, timeInForce: "GTC" });
+    const stopped = connection.stop();
+    await vi.waitFor(() => expect(mocks.cancel).toHaveBeenCalledWith(order.orderId));
+    connection.platform.core.confirmCancelled(order.orderId!, true);
+    await stopped;
+    finishScan();
+  });
+
   it("replays the original signature when the SDK returns a nonthrowing 404", async () => {
     const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
     const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],

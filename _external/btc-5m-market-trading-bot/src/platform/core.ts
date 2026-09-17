@@ -1,4 +1,4 @@
-import type { AccountSnapshot, Book, CoreOptions, CoreState, GatewayAck, Instrument, MarketInfo, OrderRecord,
+import type { AccountSnapshot, Book, CashFlowTracking, CoreOptions, CoreState, GatewayAck, Instrument, MarketInfo, OrderRecord,
   OrderRequest, Position, RiskView, TradeFill, TradingEvent } from "./contracts.js";
 
 const EPS = 1e-8;
@@ -32,9 +32,10 @@ export class TradingCore {
     const initial = options.account;
     const equity = initial.cashUsd + initial.positions.reduce((n, p) => n + p.costUsd, 0);
     this.state = options.restored ? copy(options.restored) : {
-      schemaVersion: 1, accountId: initial.accountId, accountAt: initial.at, mode: options.adapters.gateway.mode,
+      schemaVersion: 1, accountId: initial.accountId, accountAt: initial.at, cashAt: initial.cashAt ?? initial.at, mode: options.adapters.gateway.mode,
       cashUsd: initial.cashUsd, positions: copy(initial.positions), orders: copy(initial.openOrders), fills: [],
       risk: { halted: false, day: dayOf(this.clock()), baselineAt: initial.at,
+        baselineAccountAt: initial.cashAt ?? initial.at,
         baselineEquityUsd: equity, equityUsd: equity, dailyPnlUsd: 0, occupiedUsd: 0, availableUsd: 0 },
     };
     if (this.state.schemaVersion !== 1 || this.state.accountId !== initial.accountId
@@ -43,6 +44,10 @@ export class TradingCore {
       throw new Error("invalid persisted account snapshot time");
     }
     this.state.accountAt ??= initial.at;
+    this.state.cashAt ??= this.state.accountAt;
+    if (!finite(this.state.cashAt) || this.state.cashAt < 0 || this.state.cashAt > this.state.accountAt + EPS) {
+      throw new Error("invalid persisted cash observation time");
+    }
     this.validateAccount({ ...initial, cashUsd: this.state.cashUsd, positions: this.state.positions,
       openOrders: this.state.orders });
     if (!Array.isArray(this.state.fills) || !this.state.risk || typeof this.state.risk.halted !== "boolean"
@@ -50,9 +55,15 @@ export class TradingCore {
       || ![this.state.risk.baselineAt, this.state.risk.baselineEquityUsd].every(finite)) {
       throw new Error("invalid persisted platform state");
     }
+    this.state.risk.baselineAccountAt ??= this.state.risk.baselineAt;
+    if (!finite(this.state.risk.baselineAccountAt) || this.state.risk.baselineAccountAt < 0) throw new Error("invalid persisted cash baseline time");
+    this.state.cashFlowTracking ??= { baselineAt: options.restored ? this.state.risk.baselineAt : initial.cashAt ?? initial.at, complete: false,
+      reason: "external_cash_flow_coverage_unavailable", appliedFlows: [] };
     if (this.state.risk.reason === "platform stopped") {
       this.state.risk.halted = false; delete this.state.risk.reason;
     }
+    this.validateCashFlowTracking(this.state.cashFlowTracking);
+    if (!options.restored) this.applyCashFlowEvidence(this.state, initial);
     for (const fill of this.state.fills) this.seenFills.add(this.fillKey(fill));
     for (const order of this.state.orders) {
       if (["SUBMITTING", "UNKNOWN"].includes(order.status) && order.identityProtocol === "signed-before-post" && !order.prepared) {
@@ -71,8 +82,26 @@ export class TradingCore {
 
   private validateAccount(account: AccountSnapshot): void {
     if (!account.complete || !account.accountId || !finite(account.at) || !finite(account.cashUsd)
+      || account.at < 0 || (account.cashAt !== undefined && (!finite(account.cashAt) || account.cashAt < 0 || account.cashAt > account.at + EPS))
       || account.cashUsd < 0 || !Array.isArray(account.positions) || !Array.isArray(account.openOrders)) {
       throw new Error("complete ordinary account balance, positions and orders are required");
+    }
+    const coverage = account.cashFlowCoverage;
+    if (coverage && (!Number.isSafeInteger(coverage.fromBlock) || coverage.fromBlock < 0
+      || !Number.isSafeInteger(coverage.toBlock) || coverage.toBlock < coverage.fromBlock
+      || !finite(coverage.fromAt) || !finite(coverage.toAt) || coverage.fromAt < 0 || coverage.toAt < coverage.fromAt
+      || typeof coverage.complete !== "boolean")) throw new Error("invalid cash flow coverage");
+    if (account.externalFlows !== undefined && (!Array.isArray(account.externalFlows) || !coverage)) {
+      throw new Error("external flows require a coverage interval");
+    }
+    const flowIds = new Set<string>();
+    for (const flow of account.externalFlows ?? []) {
+      if (!flow.id || flowIds.has(flow.id) || !["deposit", "withdrawal"].includes(flow.kind)
+        || !finite(flow.amountUsd) || flow.amountUsd <= 0 || !Number.isSafeInteger(flow.block)
+        || flow.block < coverage!.fromBlock || flow.block > coverage!.toBlock
+        || !finite(flow.at) || flow.at < coverage!.fromAt || flow.at > coverage!.toAt || flow.at > (account.cashAt ?? account.at) + EPS
+        || !/^0x[0-9a-f]{64}$/i.test(flow.transactionHash)) throw new Error("invalid external cash flow evidence");
+      flowIds.add(flow.id);
     }
     const tokens = new Set<string>();
     for (const p of account.positions) {
@@ -97,6 +126,66 @@ export class TradingCore {
         throw new Error("invalid account order");
       }
       clientIds.add(o.clientOrderId); if (o.orderId) orderIds.add(o.orderId);
+    }
+  }
+
+  private validateCashFlowTracking(tracking: CashFlowTracking): void {
+    if (!finite(tracking.baselineAt) || tracking.baselineAt < 0 || typeof tracking.complete !== "boolean"
+      || !Array.isArray(tracking.appliedFlows) || new Set(tracking.appliedFlows.map(flow => flow.id)).size !== tracking.appliedFlows.length
+      || (tracking.cursorBlock != null && (!Number.isSafeInteger(tracking.cursorBlock) || tracking.cursorBlock < 0))
+      || (tracking.baselineBlock != null && (!Number.isSafeInteger(tracking.baselineBlock) || tracking.baselineBlock < 0))
+      || (tracking.coveredThroughAt != null && (!finite(tracking.coveredThroughAt) || tracking.coveredThroughAt < 0))) {
+      throw new Error("invalid persisted cash flow tracking");
+    }
+    for (const flow of tracking.appliedFlows) {
+      if (!flow.id || !["deposit", "withdrawal"].includes(flow.kind) || !finite(flow.amountUsd) || flow.amountUsd <= 0
+        || !Number.isSafeInteger(flow.block) || flow.block < 0 || !finite(flow.at) || flow.at < 0
+        || !/^0x[0-9a-f]{64}$/i.test(flow.transactionHash)) throw new Error("invalid persisted external cash flow");
+    }
+  }
+
+  private applyCashFlowEvidence(next: CoreState, account: AccountSnapshot): void {
+    const tracking = next.cashFlowTracking!;
+    const coverage = account.cashFlowCoverage;
+    if (!coverage) {
+      tracking.complete = next.mode === "paper";
+      tracking.reason = next.mode === "paper" ? undefined : "external_cash_flow_coverage_unavailable";
+      return;
+    }
+    if (coverage.reason === "confirmation_window_empty" && tracking.cursorBlock !== undefined
+      && coverage.toBlock <= tracking.cursorBlock && !(account.externalFlows?.length)) return;
+    for (const flow of account.externalFlows ?? []) {
+      const previous = tracking.appliedFlows.find(item => item.id === flow.id);
+      if (previous) {
+        if (["kind", "amountUsd", "block", "at", "transactionHash"].some(key =>
+          previous[key as keyof typeof previous] !== flow[key as keyof typeof flow])) throw new Error("external cash flow identity changed");
+        continue;
+      }
+      if (flow.at <= tracking.baselineAt) continue;
+      tracking.appliedFlows.push(copy(flow));
+      // A day-boundary baseline already includes account reads at/before this
+      // observation. Late confirmations must not shift the new day twice.
+      if (flow.at > (next.risk.baselineAccountAt ?? next.risk.baselineAt)) {
+        next.risk.baselineEquityUsd += flow.kind === "deposit" ? flow.amountUsd : -flow.amountUsd;
+      }
+    }
+    const contiguous = tracking.cursorBlock === undefined
+      ? coverage.fromAt <= tracking.baselineAt + EPS
+      : coverage.fromBlock <= tracking.cursorBlock + 1;
+    if (tracking.baselineBlock === undefined && coverage.fromAt > 0 && coverage.fromAt <= tracking.baselineAt + EPS) {
+      // Retain a located start block even if later transfer classification is
+      // incomplete; repeated reads need not binary-search the chain again.
+      tracking.baselineBlock = coverage.fromBlock;
+    }
+    if (coverage.complete && contiguous) {
+      tracking.baselineBlock ??= coverage.fromBlock;
+      if (tracking.cursorBlock === undefined || coverage.toBlock >= tracking.cursorBlock) {
+        tracking.cursorBlock = coverage.toBlock; tracking.coveredThroughAt = coverage.toAt;
+      }
+      tracking.complete = true; tracking.reason = coverage.reason;
+    } else {
+      tracking.complete = false;
+      tracking.reason = !contiguous ? "external_cash_flow_scan_gap" : coverage.reason ?? "external_cash_flow_classification_incomplete";
     }
   }
 
@@ -150,6 +239,24 @@ export class TradingCore {
   requireReconciliation(reason: string): void {
     this.state.risk.halted = true; this.state.risk.reason = `${reason}: reconciliation required`;
     this.persist(true);
+  }
+  /** Background funding scans do not replace the live cash/position ledger.
+   * A newly classified deposit/withdrawal requests an ordinary reconciliation. */
+  observeCashFlowCoverage(account: AccountSnapshot): boolean {
+    this.validateAccount(account);
+    if (account.accountId !== this.state.accountId) throw new Error("cash flow account identity mismatch");
+    if (account.at < (this.state.accountAt ?? -Infinity) || (account.cashAt ?? account.at) < (this.state.cashAt ?? -Infinity)) return true;
+    const tracking = this.state.cashFlowTracking!;
+    if (account.cashFlowCoverage && tracking.cursorBlock !== undefined && account.cashFlowCoverage.toBlock < tracking.cursorBlock) return true;
+    if ((account.externalFlows ?? []).some(flow => flow.at > tracking.baselineAt
+      && !tracking.appliedFlows.some(previous => previous.id === flow.id))) return false;
+    const next = copy(this.state);
+    this.applyCashFlowEvidence(next, account);
+    // This path never applies a new flow. Commit only its independently
+    // staged cursor so an in-flight submit/cancel keeps its live order object.
+    this.state.cashFlowTracking = next.cashFlowTracking;
+    this.updateRisk(); this.persist(true);
+    return true;
   }
   setStrategyState(strategyId: string, state: unknown): void {
     this.state.strategyStates ??= {};
@@ -214,10 +321,21 @@ export class TradingCore {
     const day = dayOf(this.clock());
     if (risk.day !== day) {
       risk.day = day; risk.baselineAt = this.clock(); risk.baselineEquityUsd = equity;
+      risk.baselineAccountAt = this.state.cashAt ?? this.state.accountAt ?? risk.baselineAt;
       if (risk.reason === "daily loss limit") { risk.halted = false; delete risk.reason; }
     }
     risk.equityUsd = equity;
     risk.dailyPnlUsd = equity - risk.baselineEquityUsd;
+    const flowTracking = this.state.cashFlowTracking;
+    risk.cashFlowComplete = this.state.mode === "paper" || flowTracking?.complete === true;
+    risk.cashFlowReason = flowTracking?.reason;
+    risk.cashFlowCoverageFrom = flowTracking?.baselineAt;
+    risk.cashFlowCoverageUntil = flowTracking?.coveredThroughAt;
+    risk.netExternalFlowUsd = (flowTracking?.appliedFlows ?? []).filter(flow => flow.at > (risk.baselineAccountAt ?? risk.baselineAt))
+      .reduce((total, flow) => total + (flow.kind === "deposit" ? flow.amountUsd : -flow.amountUsd), 0);
+    risk.pnlVerified = this.state.mode === "paper" || risk.cashFlowComplete
+      && (flowTracking?.coveredThroughAt ?? -Infinity) + EPS >= (this.state.cashAt ?? this.state.accountAt ?? this.clock());
+    risk.dailyLossStatus = this.options.limits.dailyLossUsd == null ? "disabled" : risk.pnlVerified ? "active" : "estimated";
     risk.occupiedUsd = held + reserved;
     risk.availableUsd = Math.max(0, Math.min(this.state.cashUsd - reserved,
       this.options.limits.capitalUsd - risk.occupiedUsd));
@@ -551,6 +669,7 @@ export class TradingCore {
     if (account.accountId !== this.state.accountId || this.jobs.size) throw new Error("reconciliation requires the same account and no requests in flight");
     const lastAccountAt = this.state.accountAt ?? -Infinity;
     if (account.at + EPS < lastAccountAt) throw new Error("account snapshot is older than the last accepted snapshot");
+    if ((account.cashAt ?? account.at) + EPS < (this.state.cashAt ?? -Infinity)) throw new Error("cash observation is older than the last accepted snapshot");
     if (this.state.orders.some(o => o.status === "UNKNOWN" && !o.orderId)) {
       throw new Error("unidentified submission must be resolved before replacing account state");
     }
@@ -584,7 +703,7 @@ export class TradingCore {
         order.reservedShares = 0;
       }
     }
-    next.cashUsd = account.cashUsd; next.positions = copy(account.positions); next.accountAt = account.at;
+    next.cashUsd = account.cashUsd; next.positions = copy(account.positions); next.accountAt = account.at; next.cashAt = account.cashAt ?? account.at;
     for (const incoming of account.openOrders) {
       const current = incoming.orderId && next.orders.find(o => o.orderId === incoming.orderId || o.clientOrderId === incoming.orderId);
       if (current) {
@@ -608,7 +727,19 @@ export class TradingCore {
     if (next.risk.reason?.includes("reconciliation")) {
       next.risk.halted = false; delete next.risk.reason;
     }
+    if (netCashFlowUsd !== 0 && (account.cashFlowCoverage || account.externalFlows)) {
+      throw new Error("external cash flow adjustment must use either classified evidence or the legacy explicit amount");
+    }
+    this.applyCashFlowEvidence(next, account);
+    const priorBaseline = this.state.risk.baselineEquityUsd;
     next.risk.baselineEquityUsd += netCashFlowUsd;
+    if (next.risk.reason === "daily loss limit" && next.risk.baselineEquityUsd !== priorBaseline) {
+      const equity = next.cashUsd + next.positions.reduce((sum, position) =>
+        sum + (this.books.get(position.tokenId)?.bid == null ? position.costUsd : position.shares * this.books.get(position.tokenId)!.bid!), 0);
+      if (this.options.limits.dailyLossUsd != null && equity - next.risk.baselineEquityUsd > -this.options.limits.dailyLossUsd + EPS) {
+        next.risk.halted = false; delete next.risk.reason;
+      }
+    }
     this.state = next;
     this.persist(true); this.emit({ kind: "account", snapshot: copy(account) });
   }
