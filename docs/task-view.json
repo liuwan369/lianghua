@@ -394,7 +394,7 @@
         {
           "id": "R2-INCOME",
           "title": "资金、到账、延迟和进度",
-          "status": "PARTIAL",
+          "status": "RUNNING",
           "owner": "前端 Agent",
           "detail": "资金、场次预计结果、延迟和日内结果覆盖提示已完成；真实到账仍待数据核对。",
           "next": "核对真实费用与到账，保留未知数据标记。"
