@@ -363,7 +363,7 @@
     {
       "id": "R2",
       "title": "前端与策略 API",
-      "status": "PARTIAL",
+      "status": "RUNNING",
       "owner": "前端 Agent / 主 Agent",
       "detail": "配置、控制、反转运行视图及订单分页已部署；完整收益保留后续真实数据接入。",
       "tasks": [
@@ -404,7 +404,7 @@
     {
       "id": "R3",
       "title": "快速测试与小额真实验证",
-      "status": "PARTIAL",
+      "status": "RUNNING",
       "owner": "复核 Agent / 执行 Agent",
       "detail": "开发完成立即测试修复，用必要真实小额订单验证，不设置回测或多日模拟门槛。",
       "tasks": [
@@ -437,7 +437,7 @@
     {
       "id": "R4",
       "title": "正式方案真实运行",
-      "status": "PARTIAL",
+      "status": "TODO",
       "owner": "主 Agent",
       "detail": "本地、Git、服务器程序已同步，保留回退；正式交易尚未启动。",
       "tasks": [
