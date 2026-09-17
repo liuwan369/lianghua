@@ -1,6 +1,6 @@
 # 当前配置说明
 
-更新：2026-09-18 01:44（北京时间）。软件基线 `70d2b55` 已部署；当前服务器策略配置 `savedRevision=3`：价格 `0.67/0.70/0.70`、阶段份额 `[5,18,54,130]`、单场预算 `14.5` 美元，总预算和日损为 `null`。交易未运行、`strategy_id=null`、实盘锁未开启。最新发布与验收状态以 [当前状态](CURRENT-STATUS.md) 为准。
+更新：2026-09-18 02:02（北京时间）。软件基线 `70d2b55` 已部署；当前服务器策略配置 `savedRevision=3`：价格 `0.67/0.70/0.70`、阶段份额 `[5,18,54,130]`、单场预算 `14.5` 美元，总预算和日损为 `null`。交易控制密码已配置；交易未运行、`strategy_id=null`、实盘锁未开启。最新发布与验收状态以 [当前状态](CURRENT-STATUS.md) 为准。
 
 ## 策略页
 
@@ -41,7 +41,7 @@
 | `POLY_BUILDER_API_KEY` / `POLY_BUILDER_SECRET` / `POLY_BUILDER_PASSPHRASE` | Builder Relayer 认证 |
 | `RELAYER_API_KEY` / `RELAYER_API_KEY_ADDRESS` | 可替代 Builder 的 Relayer 认证 |
 | `PM_TRADING_LIVE_UNLOCK` | 服务器实盘开关；本次检查关闭 |
-| `PM_DASHBOARD_CONTROL_TOKEN` | 交易控制认证 |
+| `PM_DASHBOARD_CONTROL_TOKEN` | 交易控制认证；当前服务器已配置，值只保存在私有环境文件 |
 | `PM_TRUST_ACCOUNT_PROXY` / `PM_ACCOUNT_PUBLIC_ORIGIN` | 可信 HTTPS 代理及账户操作来源 |
 | `PM_LIVE_LOCAL` / `PM_LIVE_DATA_DIR` / `PM_EVIDENCE_GLOB` | 本机控制台行情数据源 |
 | `PM_MARKET_SNAPSHOT_PATH` | 增量行情投影文件 |

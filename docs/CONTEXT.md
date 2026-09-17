@@ -1,12 +1,12 @@
 # 当前接手上下文
 
-更新时间：2026-09-18 01:44。当前软件发布基线为 `70d2b55`。入口是 [当前状态](CURRENT-STATUS.md)、[BTC反转开发规划 v1.7](REVERSAL-DELIVERY-PLAN-2026-09-17.md)、[技术评估](REVERSAL-TECHNICAL-ASSESSMENT-2026-09-17.md) 和 [Agent协作约定](AGENT-WORKFLOW.md)。
+更新时间：2026-09-18 02:02。当前软件发布基线为 `70d2b55`。入口是 [当前状态](CURRENT-STATUS.md)、[BTC反转开发规划 v1.7](REVERSAL-DELIVERY-PLAN-2026-09-17.md)、[技术评估](REVERSAL-TECHNICAL-ASSESSMENT-2026-09-17.md) 和 [Agent协作约定](AGENT-WORKFLOW.md)。
 
 ## 当前主线
 
 用户已终止做市。一个可配置的 BTC 五分钟反转策略已经接入 `TradingPlatform` 和 `StrategyPlugin`，策略、执行底座、配置 API、订单分页和前端已实现。当前推进三个真实闭环：真实费用/收益/到账核对，最小真实 ACK/成交/撤单/重启恢复，正式参数运行/自动换场/结算到账。取消新回测、多日 paper、第三日期与午夜等待前置。
 
-服务器控制台为 `https://34-242-206-196.sslip.io/console/`。2026-09-18 01:44 检查时公网行情在线，现金 `106.313425` 美元、开放订单 `0`，`running=false`、`strategy_id=null`、`live_unlocked=false`。策略 `savedRevision=3`，单场预算 `14.5` 美元只能覆盖 `[5,18,54,130]` 的较低阶段。不要从页面、历史 run 或旧证据推断当前正在交易。
+服务器控制台为 `https://34-242-206-196.sslip.io/console/`。2026-09-18 02:02 检查时公网行情在线，现金 `106.313425` 美元、开放订单 `0`，`running=false`、`strategy_id=null`、`live_unlocked=false`。交易控制密码已配置并验证，但没有解锁实盘。策略 `savedRevision=3`，单场预算 `14.5` 美元只能覆盖 `[5,18,54,130]` 的较低阶段。不要从页面、历史 run 或旧证据推断当前正在交易。
 
 ## 当前代码边界
 
