@@ -53,6 +53,8 @@ REST 不参与逐次触发。它只用于市场发现、tick/元数据、启动�
 - `order_sign`：订单签名。
 - `trigger_to_http_post` / `decision_to_http_post`：行情或决策到 HTTP 发出。
 - `order_submit_roundtrip` / `order_http_ack`：CLOB 提交往返和 ACK。
+
+2026-09-19 公共 CLOB WebSocket 只读测量：交易所事件时间到服务器接收中位 `9 ms`、P95 `84 ms`；本地解析中位 `0.0247 ms`。该测量不包含签名、HTTP 下单或成交等待，且接收年龄包含上游时间戳与服务器时钟差。页面公共快照年龄不等同交易引擎的 `ws_receive_to_decision`。
 - `authenticated_trade_report`：认证用户频道的成交回报。
 - `cancel_http_ack`：撤单请求到交易所确认。
 - `reaction`：完整反应链路的聚合视图。

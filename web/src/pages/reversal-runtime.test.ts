@@ -14,3 +14,25 @@ it('clears stale or cross-run depth, holdings and decision state instead of show
   mount();const status=fixture();renderReversal(status,100);renderReversal(status,111);expect(document.querySelector('[data-reversal-up]')!.textContent).toBe('--');expect(document.querySelector('[data-reversal-next]')!.textContent).toBe('--');expect(document.querySelector('[data-reversal-depth]')!.textContent).not.toContain('0.6900');
   status.projection!.run_id='old';expect(renderReversal(status,100)).toBeNull();
 });
+it('labels runtime quote age as the displayed snapshot age and requires both outcomes',()=>{
+  mount();const status=fixture();renderReversal(status,100);
+  expect(document.querySelector('[data-book-source]')!.textContent).toContain('当前策略 WS 快照');
+  expect(document.querySelector('[data-book-source]')!.textContent).toContain('不是下单延迟');
+  const runtime=status.stats.runtime as {books:unknown[]};runtime.books=runtime.books.slice(0,1);
+  renderReversal(status,100);
+  expect(document.querySelector('[data-book-age]')!.textContent).toBe('--');
+});
+it('does not turn future quote timestamps into a misleading zero latency',()=>{
+  mount();const status=fixture();
+  const runtime=status.stats.runtime as {books:Array<{ts:number}>};runtime.books[0].ts=101;
+  renderReversal(status,100);
+  expect(document.querySelector('[data-book-age]')!.textContent).toBe('时间待校准');
+});
+it('keeps stopped public quotes separate from the final strategy snapshot',()=>{
+  mount();const status=fixture();status.running=false;
+  document.querySelector('[data-book-age]')!.textContent='约 150 ms';
+  renderReversal(status,100);
+  expect(document.querySelector('[data-book-age]')!.textContent).toBe('约 150 ms');
+  expect(document.querySelector('[data-book-source]')!.textContent).toContain('公开行情 · 策略未运行');
+  expect(document.querySelector('[data-reversal-depth]')!.textContent).not.toContain('0.6900');
+});

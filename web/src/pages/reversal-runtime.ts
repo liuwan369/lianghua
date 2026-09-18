@@ -42,8 +42,13 @@ export function renderReversal(status:Status|null,now=Date.now()/1000) {
       const book=relevant.find(b=>b.tokenId===token);
       set(`#view-trade .quote:nth-child(${i+1}) b`,book?`${price(book.bid)} / ${price(book.ask)}`:'-- / --');
     }
-    const ages=relevant.map(book=>{const at=seconds(book.exchangeTs)??seconds(book.ts);return at!==null?Math.max(0,(now-at)*1000):null;});
-    set('[data-book-age]',ages.length&&ages.every(age=>age!==null)?`${number(Math.max(...ages as number[]),0)} ms · 按消息时间估算`:'--');
+    const pair=[current?.upTokenId,current?.downTokenId].map(token=>relevant.find(book=>book.tokenId===token));
+    const ages=pair.map(book=>{const at=seconds(book?.exchangeTs)??seconds(book?.ts);return at!==null?(now-at)*1000:null;});
+    const ageLabel=ages.some(age=>age===null)?'--':ages.some(age=>age!==null&&age<0)?'时间待校准':`约 ${number(Math.max(...ages as number[]),0)} ms`;
+    set('[data-book-age]',ageLabel);
+    set('[data-book-source]',current?'当前策略 WS 快照 · 距今时间包含状态汇总与页面刷新等待，不是下单延迟。':'等待当前策略盘口快照。');
+  } else {
+    set('[data-book-source]',status?'公开行情 · 策略未运行。页面每秒更新，距今时间包含页面刷新等待。':'公开行情 · 策略状态读取中。');
   }
   const depth=document.querySelector('[data-reversal-depth]');
   if(depth)depth.innerHTML=relevant.length?relevant.map(book=>{const label=book.tokenId===current?.upTokenId?'UP':book.tokenId===current?.downTokenId?'DOWN':book.outcome||'盘口';return `<div class="table-wrap"><h3>${esc(label)}</h3><table class="table"><thead><tr><th>买价</th><th>份数</th><th>卖价</th><th>份数</th></tr></thead><tbody>${Array.from({length:Math.min(count,Math.max(Array.isArray(book.bids)?book.bids.length:0,Array.isArray(book.asks)?book.asks.length:0))},(_,i)=>{const bid=level((book.bids as unknown[])?.[i]),ask=level((book.asks as unknown[])?.[i]);return `<tr><td>${price(bid?.price)}</td><td>${number(bid?.size??bid?.shares,2)}</td><td>${price(ask?.price)}</td><td>${number(ask?.size??ask?.shares,2)}</td></tr>`;}).join('')}</tbody></table></div>`;}).join(''):'<p>等待当前场次真实深度</p>';

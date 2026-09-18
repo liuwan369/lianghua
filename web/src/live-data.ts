@@ -8,7 +8,7 @@ import { connectStrategyOrders } from './pages/strategy-orders';
 import { pageTelemetry } from './page-telemetry';
 import { renderSystemMetrics } from './system-metrics';
 import type { Account, Config, Events, Markets, Resource, Status, SystemMetrics } from './api/types';
-import { activeMarkets, date, esc, executionName, fresh, money, modeName, number, platformRuntime, price, quotePair, usableMarket, marketMessage } from './ui';
+import { activeMarkets, date, esc, executionName, fresh, money, modeName, number, platformRuntime, price, quotePair, usableMarket, marketMessage, serverNow } from './ui';
 
 const set = (selector: string, value: unknown) => { const node = document.querySelector(selector); if (node) node.textContent = String(value ?? '--'); };
 function row(section: string, label: string, value: unknown) {
@@ -74,7 +74,9 @@ export function connect() {
     const data=fresh(markets), list=activeMarkets(markets), market=list[0], usable=market ? usableMarket(market,markets):false;
     set('#view-trade .quote:nth-child(1) b',market?quotePair(market,'up',usable):'-- / --');
     set('#view-trade .quote:nth-child(2) b',market?quotePair(market,'down',usable):'-- / --');
-    set('[data-book-age]',usable&&market.quote_at?`${number(Math.max(0,Date.now()-Date.parse(market.quote_at)),0)} ms`:'--');
+    const quoteAge=usable&&market.quote_at?serverNow(markets)*1000-Date.parse(market.quote_at):null;
+    set('[data-book-age]',quoteAge!==null?quoteAge<0?'时间待校准':`约 ${number(quoteAge,0)} ms`:'--');
+    set('[data-book-source]',!fresh(status)?.running?'公开行情 · 策略未运行。页面每秒更新，距今时间包含页面刷新等待。':'公开行情快照 · 正在读取当前策略盘口。');
     row('#view-trade','策略判断',fresh(status)?.engine==='platform'&&fresh(status)?.strategy_id===null?'平台观察 · 未加载策略':usable?'盘口已获取 · 策略判断待接入':'行情不可用或已过期');
     row('#view-home','数据连接',data?.collector_online && usable ? `行情已更新 · ${data.node_label}`:marketMessage(markets));
     row('#settings-system','数据节点',data?.node_label || '--');
@@ -198,10 +200,17 @@ export function connect() {
     if(systemLoading||closed)return;systemLoading=true;
     try{await load(system,api.systemMetrics);}finally{systemLoading=false;}
   }
+  async function loadRealtime<T>(r:Resource<T>, request:()=>Promise<T>) {
+    if(r.loading||closed)return;r.loading=true;
+    try{await load(r,request);}finally{r.loading=false;}
+  }
+  function refreshRealtime() {
+    return Promise.allSettled([loadRealtime(status,api.status),loadRealtime(markets,api.markets)]);
+  }
   async function refresh() {
     if(refreshing||closed)return;refreshing=true;
     const started=performance.now();
-    try{await Promise.allSettled([load(status,api.status),load(markets,api.markets),load(config,api.config),load(account,api.account),loadSystemMetrics(),strategyConfig.refresh()]);
+    try{await Promise.allSettled([refreshRealtime(),load(config,api.config),load(account,api.account),loadSystemMetrics(),strategyConfig.refresh()]);
       await Promise.allSettled([accountData.refresh(),strategyOrders.refresh()]);
       await loadRuns(undefined,true);
       if(selectedRun&&!runLoading)await loadEvents(selectedRun,historyCursor);
@@ -216,6 +225,9 @@ export function connect() {
   document.querySelectorAll('[data-refresh]:not(#view-tasks [data-refresh])').forEach(b=>b.addEventListener('click',()=>{void refresh();}));
   renderMarkets();renderStatus();renderConfig();renderEvents();void refresh();
   const poll=window.setInterval(()=>void refresh(),5000);
-  const tick=window.setInterval(()=>{renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();renderSystemMetrics(system.data,system.error);void loadSystemMetrics();},1000);
+  // Public quotes and runtime status are independent from slower account/history
+  // reads. Each endpoint has one in-flight read, so a slow endpoint cannot queue
+  // stale snapshots or stall the other endpoint's next refresh.
+  const tick=window.setInterval(()=>{void refreshRealtime();renderMarkets();renderStatus();renderEvents();accountData.render();telemetry.render();renderSystemMetrics(system.data,system.error);void loadSystemMetrics();},1000);
   return ()=>{closed=true;strategyConfig.close();strategyOrders.close();forms.close();accountData.close();trading.close();historyGeneration++;window.clearInterval(poll);window.clearInterval(tick);};
 }
