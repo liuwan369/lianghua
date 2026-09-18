@@ -37,7 +37,7 @@ export function connectTradingControls(refresh:()=>Promise<void>) {
     const payload=action==='start'?(pending ||= {revision:strategy!.savedRevision,request_id:crypto.randomUUID(),action,strategy_id:'btc-reversal',mode:'live'}):{action,strategy_id:'btc-reversal',request_id:crypto.randomUUID()};
     busy=true;hasControlMessage=true;render();syncNotice(action==='start'?'正在启动已保存的 BTC 反转策略…':action==='stop'?'正在停止新增并撤销剩余挂单…':'正在更新运行状态…');
     try{const response=await post('/api/trading/control',payload);if(closed)return;if(action==='start')pending=null;syncNotice(response.control_pending?'指令已发送，等待策略服务器确认。':'操作已接受，正在核对实际运行状态。');}
-    catch(e){const message=e instanceof Error?e.message:'操作结果未确认';if(/HTTP (400|401|403|409)/.test(message))pending=null;syncNotice(`${message}。${pending?'再次核对将使用同一请求编号。':'请查看服务器状态和原因。'}`);}
+    catch(e){if(closed)return;const message=e instanceof Error?e.message:'操作结果未确认';if(/HTTP (400|401|403|409)/.test(message))pending=null;syncNotice(`${message}。${pending?'再次核对将使用同一请求编号。':'请查看服务器状态和原因。'}`);}
     finally{busy=false;if(!closed){await refresh();render();}}
   }
   const onStart=()=>void control('start'),onStop=()=>void control('stop'),onPause=()=>void control(runtime()?.paused?'resume':'pause');

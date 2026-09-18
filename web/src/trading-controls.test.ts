@@ -41,3 +41,13 @@ it.each([401,400,403,409])('shows an HTTP %s start rejection on both overview an
   }
   control.close();
 });
+it('ignores a late rejection from a closed controller after reconnect',async()=>{
+  let reject!: (reason?: unknown)=>void;
+  const fetch=vi.fn().mockImplementation(()=>new Promise((_resolve,fail)=>{reject=fail;}));vi.stubGlobal('fetch',fetch);
+  const control=setup();control.receive({...config,params:{mode:'live'}},{...({running:false,mode:'paper'} as Status),live_unlocked:true});control.receiveStrategy(strategy);
+  document.querySelector<HTMLButtonElement>('[data-start]')!.click();await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1));control.close();
+  const reconnected=connectTradingControls(async()=>{});reconnected.receive({...config,params:{mode:'live'}},{...({running:true,mode:'live'} as Status),live_unlocked:true});reconnected.receiveStrategy(strategy);
+  expect(document.querySelector<HTMLElement>('[data-trading-message]')?.textContent).toContain('服务器正在运行');
+  reject(new Error('旧请求失败'));await new Promise(resolve=>setTimeout(resolve,0));
+  expect(document.querySelector<HTMLElement>('[data-trading-message]')?.textContent).toContain('服务器正在运行');reconnected.close();
+});
