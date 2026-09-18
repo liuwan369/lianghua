@@ -1,6 +1,6 @@
 [Unit]
 Description=Polymarket BTC 5m simple trading dashboard (Dublin, local only)
-After=network-online.target pm-r25-dublin-collector.service
+After=network-online.target pm-clob-market-snapshot.service
 Wants=network-online.target
 
 [Service]
@@ -14,7 +14,8 @@ Environment=PM_ACCOUNT_PROFILE=/root/.config/pm-system/account.json
 Environment=PM_LIVE_LOCAL=1
 Environment=PM_LIVE_DATA_DIR=/root/pm-system/data/pm-r25-live/days
 Environment=PM_EVIDENCE_GLOB=dublin-evidence-*.sqlite3
-Environment=PM_COLLECTOR_SERVICE=pm-r25-dublin-collector.service
+Environment=PM_COLLECTOR_SERVICE=pm-clob-market-snapshot.service
+Environment=PM_MARKET_SNAPSHOT_PATH=/root/pm-system/data/dashboard/market-snapshot.json
 Environment=PM_LIVE_URL=http://127.0.0.1:18766/api/live
 Environment=POLYMARKET_WALLET_ADDRESS=0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd
 EnvironmentFile=-/root/pm-system/config/dashboard-secret.env

@@ -45,6 +45,24 @@ def validate_snapshot(value: dict, now: float | None = None) -> dict:
         fresh = False
     if not fresh:
         value.update(collector_online=False, current_markets=[], stale_reason="行情投影超过 15 秒未更新")
+    elif value.get("source") == "polymarket-ws":
+        # The file heartbeat is not a quote clock; recheck quotes on every read.
+        limit = number(value.get("stale_after_ms"))
+        rows = value.get("current_markets")
+        try:
+            quotes_fresh = (limit is not None and 0 < limit <= 15_000
+                            and isinstance(rows, list) and bool(rows)
+                            and all(isinstance(row, dict)
+                                    and number(row.get("start")) is not None
+                                    and number(row.get("end")) is not None
+                                    and row["start"] <= now < row["end"]
+                                    and 0 <= (now - datetime.fromisoformat(row["quote_at"]).timestamp()) * 1000 <= limit
+                                    for row in rows))
+        except (KeyError, TypeError, ValueError, OverflowError):
+            quotes_fresh = False
+        if not quotes_fresh or value.get("collector_online") is not True:
+            value.update(collector_online=False, current_markets=[])
+            value.setdefault("stale_reason", "CLOB 行情过期或场次已结束")
     return value
 
 

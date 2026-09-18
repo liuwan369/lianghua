@@ -47,7 +47,7 @@ def test_default_configuration_uses_current_dublin_deployment(monkeypatch) -> No
     config = MODULE._live_config()
     assert config["node_label"] == "都柏林节点"
     assert config["evidence_glob"] == "dublin-evidence-*.sqlite3"
-    assert config["collector_service"] == "pm-r25-dublin-collector.service"
+    assert config["collector_service"] == "pm-clob-market-snapshot.service"
     assert config["remote_host"] == "root@34.242.206.196"
     assert config["ssh_key"].name == "id_ed25519_dublin_pm"
 
@@ -68,38 +68,32 @@ def test_missing_key_returns_typed_empty_markets_without_leaking_paths(monkeypat
     assert MODULE.control_source()["scope"] == "local_preview"
 
 
-def test_snapshot_replay_uses_latest_metadata_and_oldest_side_clock(monkeypatch, tmp_path):
-    import sqlite3
+def test_local_snapshot_read_preserves_source_clock_and_does_not_rewrite(monkeypatch, tmp_path):
     import time
-    import zlib
+    from datetime import datetime, timezone
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
     monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(tmp_path / "snapshot.json"))
+    target = tmp_path / "snapshot.json"
+    monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(target))
     monkeypatch.setattr(MODULE, "_live_cache_at", 0.0)
     monkeypatch.setattr(MODULE, "_live_cache", {})
     now = time.time()
-    with sqlite3.connect(tmp_path / 'dublin-evidence-test.sqlite3') as db:
-        db.executescript('''CREATE TABLE events(id INTEGER PRIMARY KEY,source TEXT,event_type TEXT,received_at_ns INTEGER,payload_json TEXT);
-            CREATE TABLE event_chunks(source TEXT,received_second INTEGER,event_count INTEGER,codec TEXT,payload_blob BLOB);
-            CREATE INDEX idx_chunks_source_second ON event_chunks(source,received_second);
-            CREATE TABLE health(id INTEGER PRIMARY KEY,recorded_at TEXT,queue_depth INTEGER,counters_json TEXT,source_status_json TEXT);''')
-        for timestamp, up_token in [(now-20,'obsolete'),(now-5,'up')]:
-            metadata={"slug":"btc-test","up_token":up_token,"down_token":"down","start_at":now-100,"end_at":now+150}
-            db.execute("INSERT INTO events(source,event_type,received_at_ns,payload_json) VALUES('gamma','market_metadata',?,?)",(int(timestamp*1e9),json.dumps(metadata)))
-        rows=[]
-        for token, seconds in [('up',25),('down',1)]:
-            rows.append(['book',int((now-seconds)*1e9),None,'btc-test',token,[None,[[.4,5]],[[.5,5]]]])
-        db.execute("INSERT INTO event_chunks VALUES('clob',?,2,'zlib-json-v2',?)",(int(now),zlib.compress(json.dumps(rows).encode())))
+    timestamp = datetime.fromtimestamp(now - .2, timezone.utc).isoformat()
+    value = {"checked_at": timestamp, "source": "polymarket-ws", "collector_online": True,
+             "stale_after_ms": 2000, "current_markets": [{"slug": "btc-test", "up_token": "up",
+                 "start": now - 100, "end": now + 150, "up_ask": .5, "quote_at": timestamp}]}
+    target.write_text(json.dumps(value), encoding="utf-8")
+    before = target.read_bytes(), target.stat().st_mtime_ns
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no subprocess needed")))
     result=MODULE._live_status_fetch()
     assert not result.get('error'), result
     market=result['current_markets'][0]
     assert market['up_token']=='up'
     assert market['up_ask']==.5
-    from datetime import datetime
-    assert abs(datetime.fromisoformat(market['quote_at']).timestamp()-(now-25))<.01
-    assert result['events_1m']==4
-    assert result['events_1m_complete'] is True
+    assert market['quote_at'] == timestamp
+    assert result['checked_at'] == timestamp
+    assert (target.read_bytes(), target.stat().st_mtime_ns) == before
 
 
 def test_generic_environment_configures_collector(monkeypatch, tmp_path: Path) -> None:
@@ -113,7 +107,7 @@ def test_generic_environment_configures_collector(monkeypatch, tmp_path: Path) -
     assert config["ssh_key"] == tmp_path / "new-key"
 
 
-def test_dublin_local_status_projects_in_process_without_python_child(monkeypatch, tmp_path: Path) -> None:
+def test_missing_local_snapshot_is_offline_without_child_or_file_write(monkeypatch, tmp_path: Path) -> None:
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
     monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
@@ -125,15 +119,15 @@ def test_dublin_local_status_projects_in_process_without_python_child(monkeypatc
         return SimpleNamespace(returncode=0, stdout="active", stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(MODULE, "_market_projection", None)
     MODULE._live_cache_at = 0.0
     value = MODULE._live_status_fetch()
     assert value["node_label"] == "都柏林节点"
-    assert calls == [["systemctl", "is-active", "pm-r25-dublin-collector.service"]]
+    assert calls == []
     MODULE._live_cache_at = 0.0
     MODULE._live_status_fetch()
-    assert len(calls) == 1
-    assert json.loads((tmp_path / "snapshot.json").read_text(encoding="utf-8"))["collector_online"] is False
+    assert calls == []
+    assert value["collector_online"] is False
+    assert not (tmp_path / "snapshot.json").exists()
 
 
 def test_busy_live_status_still_returns_configured_node(monkeypatch) -> None:
@@ -149,25 +143,17 @@ def test_busy_live_status_still_returns_configured_node(monkeypatch) -> None:
     assert value["refreshing"] is True
 
 
-def test_failed_local_projection_publishes_offline_for_remote_readers(monkeypatch, tmp_path):
+def test_invalid_local_snapshot_returns_offline_without_overwriting_producer(monkeypatch, tmp_path):
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
     monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
     target = tmp_path / "snapshot.json"
     monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(target))
-    target.write_text('{"collector_online":true}', encoding="utf-8")
-    class BrokenProjection:
-        def __init__(self, *args):
-            pass
-        def snapshot(self):
-            raise ValueError("corrupt collector chunk")
-    monkeypatch.setattr(MODULE, "MarketSnapshot", BrokenProjection)
-    monkeypatch.setattr(MODULE, "_market_projection", None)
+    target.write_text('{"collector_online":', encoding="utf-8")
+    before = target.read_bytes()
     monkeypatch.setattr(MODULE, "_live_cache_at", 0.)
     assert MODULE._live_status_fetch()["collector_online"] is False
-    saved = json.loads(target.read_text(encoding="utf-8"))
-    assert saved["collector_online"] is False
-    assert saved["current_markets"] == []
+    assert target.read_bytes() == before
 
 
 def test_remote_status_reads_lightweight_snapshot_with_configured_host_key_port(monkeypatch, tmp_path: Path) -> None:
@@ -282,7 +268,8 @@ def test_dublin_service_bundle_is_consistent() -> None:
     nginx = (ROOT / "config" / "paper-grid-dublin.server.conf").read_text(encoding="utf-8")
     assert collector["sqlite_path"].endswith("dublin-evidence-{date}.sqlite3")
     assert collector["trade_authorization"] is False
-    assert "pm-r25-dublin-collector.service" in dashboard
+    assert "pm-clob-market-snapshot.service" in dashboard
+    assert "pm-r25-dublin-collector.service" not in dashboard
     assert "PM_NODE_LABEL=都柏林节点" in dashboard
     assert "EnvironmentFile=-/root/pm-system/config/dashboard-secret.env" in dashboard
     assert "dublin-evidence.sqlite3" in analyzer

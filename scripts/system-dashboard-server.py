@@ -27,7 +27,7 @@ from dashboard.config import ConfigStore, ConfigConflictError
 from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
-from dashboard.market_snapshot import MarketSnapshot, publish_snapshot, validate_snapshot
+from dashboard.market_snapshot import validate_snapshot
 from dashboard.account_data import AccountData
 from dashboard.system_metrics import SystemMetrics
 
@@ -50,8 +50,6 @@ _live_lock = threading.RLock()
 _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
-_market_projection: MarketSnapshot | None = None
-_market_projection_config: tuple | None = None
 _account_report: dict | None = None
 _account_data: AccountData | None = None
 _account_data_lock = threading.Lock()
@@ -93,7 +91,8 @@ def _live_config() -> dict:
         )
     )
     local_setting = os.environ.get("PM_LIVE_LOCAL", "")
-    collector_is_local = local_setting == "1" if local_setting else local_data_dir.is_dir()
+    snapshot_path = Path(os.environ.get("PM_MARKET_SNAPSHOT_PATH", str(project_root / "data" / "dashboard" / "market-snapshot.json")))
+    collector_is_local = local_setting == "1" if local_setting else snapshot_path.is_file()
     return {
         "node_label": os.environ.get("PM_NODE_LABEL", "都柏林节点"),
         "local_data_dir": local_data_dir,
@@ -103,7 +102,7 @@ def _live_config() -> dict:
         ),
         "evidence_glob": os.environ.get("PM_EVIDENCE_GLOB", "dublin-evidence-*.sqlite3"),
         "collector_service": os.environ.get(
-            "PM_COLLECTOR_SERVICE", "pm-r25-dublin-collector.service"
+            "PM_COLLECTOR_SERVICE", "pm-clob-market-snapshot.service"
         ),
         "ssh_key": Path(
             os.environ.get(
@@ -115,7 +114,7 @@ def _live_config() -> dict:
         "remote_port": os.environ.get("PM_REMOTE_PORT", "22"),
         "connect_timeout": os.environ.get("PM_REMOTE_CONNECT_TIMEOUT", "5"),
         "remote_python": os.environ.get("PM_REMOTE_PYTHON", "python3"),
-        "snapshot_path": Path(os.environ.get("PM_MARKET_SNAPSHOT_PATH", str(project_root / "data" / "dashboard" / "market-snapshot.json"))),
+        "snapshot_path": snapshot_path,
         "remote_snapshot_path": os.environ.get("PM_REMOTE_SNAPSHOT_PATH", "/root/pm-system/data/dashboard/market-snapshot.json"),
         "evidence_download_token": os.environ.get("PM_EVIDENCE_DOWNLOAD_TOKEN", "").strip(),
     }
@@ -513,20 +512,15 @@ def supervise_projection(stop: threading.Event) -> None:
 
 
 def _live_status_fetch() -> dict:
-    """Background-only incremental local projection or remote snapshot read."""
-    global _live_cache, _live_cache_at, _market_projection, _market_projection_config
+    """Read a public collector snapshot without rewriting its source clock."""
+    global _live_cache, _live_cache_at
     config = _live_config()
     with _live_lock:
         if time.monotonic() - _live_cache_at < 1:
             return {**validate_snapshot(_live_cache), "node_label": config["node_label"]}
     try:
         if config["collector_is_local"]:
-            identity = (str(config["local_data_dir"]), config["evidence_glob"], config["collector_service"], config["node_label"])
-            if _market_projection is None or _market_projection_config != identity:
-                _market_projection = MarketSnapshot(config["local_data_dir"], config["evidence_glob"], config["collector_service"], config["node_label"])
-                _market_projection_config = identity
-            value = _market_projection.snapshot()
-            publish_snapshot(config["snapshot_path"], value)
+            value = validate_snapshot(json.loads(config["snapshot_path"].read_text(encoding="utf-8")))
         else:
             if not config["ssh_key"].is_file():
                 raise FileNotFoundError("remote SSH key missing")
@@ -543,11 +537,6 @@ def _live_status_fetch() -> dict:
         value = {"collector_online": False, "checked_at": datetime.now(timezone.utc).isoformat(),
                  "node_label": config["node_label"], "current_markets": [], "error_code": "collector_connection_failed",
                  "error": f"无法读取{config['node_label']}行情投影，请检查采集服务、快照和连接。"}
-        if config["collector_is_local"]:
-            try:
-                publish_snapshot(config["snapshot_path"], value)
-            except OSError:
-                pass  # Readers will reject the previous file by its source clock.
     with _live_lock:
         _live_cache, _live_cache_at = value, time.monotonic()
         return dict(value)

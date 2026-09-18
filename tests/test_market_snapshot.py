@@ -247,3 +247,13 @@ def test_published_snapshot_preserves_source_quote_clock_and_is_atomic(tmp_path)
     publish_snapshot(path, value)
     assert validate_snapshot(json.loads(path.read_text(encoding="utf-8")), NOW) == value
     assert not path.with_name(path.name + ".tmp").exists()
+
+
+@pytest.mark.parametrize("quote_age,end,online", [(3, NOW+60, True), (.1, NOW, True), (.1, NOW+60, False), (-1, NOW+60, True)])
+def test_clob_heartbeat_cannot_refresh_old_expired_or_disconnected_quotes(quote_age, end, online):
+    value = {"checked_at": iso(NOW), "source": "polymarket-ws", "stale_after_ms": 2000,
+             "collector_online": online, "current_markets": [{"start": NOW-60, "end": end, "quote_at": iso(NOW-quote_age)}]}
+    result = validate_snapshot(value, NOW)
+    assert result["collector_online"] is False
+    assert result["current_markets"] == []
+    assert value["current_markets"]
