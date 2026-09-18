@@ -1,10 +1,10 @@
 # 反转系统部署与回退
 
-更新：2026-09-18。当前程序基线为 `eed88b2143ffe351dc458bfd51c8280cd8bd737a`，主线为 [反转交付规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md) v2.6。实时交付状态见 [CURRENT-STATUS](CURRENT-STATUS.md)，历史发布记录不代表当前版本。
+更新：2026-09-19。当前程序基线为 `53d7360c71f7c0f7816c9d0f88b1182ad0fbb942`，主线为 [反转交付规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md) v2.6。实时交付状态见 [CURRENT-STATUS](CURRENT-STATUS.md)，历史发布记录不代表当前版本。
 
 入口 https://34-242-206-196.sslip.io/console/ 。服务器项目 `/root/pm-system`，后端 `127.0.0.1:18766`，控制台服务 `pm-system-dashboard-dublin.service`，公共行情服务 `pm-clob-market-snapshot.service`。旧 pm-r25 采集、分析、重启服务及 timer 已从生产主机删除，状态为 `not-found/inactive`；历史数据和程序回退包保留。
 
-当前发布目录为 `/root/.pm-releases/reversal-eed88b2-20260918T154705Z`，归档 SHA-256 为 `b93c976f9b744a0a757fb984b5eae2a357f733363a88738164d00a968e77f980`。manifest 校验 `497` 个文件，本批实际更新 `3` 个、删除 `0` 个。当前自动交易保持 `running=false`、`mode=null`、`strategy_id=null`、`live_unlocked=true`，开放订单和当前有效持仓均为 `0`；解锁只为用户发起的最小真实验证准备，真实生命周期、实际费用、结算到账和正式运行仍未完成。
+当前发布目录为 `/root/.pm-releases/reversal-53d7360-20260918T173821Z`，归档 SHA-256 为 `13cb3604fbecbb19c73ac58ec271debf45cddbb88640186a49008c11e8b293c2`。manifest 校验 `499` 个文件，本批实际更新 `11` 个、删除 `1` 个。当前自动交易保持 `running=false`、`mode=null`、`strategy_id=null`、`live_unlocked=true`，开放订单和当前有效持仓均为 `0`；解锁只为用户发起的最小真实验证准备，真实生命周期、实际费用、结算到账和正式运行仍未完成。
 
 服务器当前保存策略配置 revision 5：阶段份额 `[5,5,5,5]`、单场预算 `14.5` 美元、运行时长 `20` 分钟。配置备份位于 `/root/.pm-releases/validation-config-20260919T000000Z/`；保存配置没有启动交易。
 
