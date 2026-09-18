@@ -51,9 +51,7 @@
 | `PM_TRADING_LIVE_UNLOCK` | 服务器实盘开关 |
 | `PM_DASHBOARD_CONTROL_TOKEN` | 页面写操作控制令牌 |
 | `PM_TRUST_ACCOUNT_PROXY` / `PM_ACCOUNT_PUBLIC_ORIGIN` | 账户操作的可信代理和来源 |
-| `PM_LIVE_DATA_DIR` | 兼容旧采集器的历史目录，不是当前公共行情源 |
 | `PM_MARKET_SNAPSHOT_PATH` | CLOB WebSocket 服务原子写入、后台只读的市场快照文件 |
-| `PM_EVIDENCE_DOWNLOAD_TOKEN` | 受限证据下载令牌 |
 
 正式服务模板为 `config/pm-system-dashboard-dublin.service`，工作目录 `/root/pm-system`，后端监听 `127.0.0.1:18766`。私有值放在服务器环境文件，不写进 service 模板、文档、日志或证据。
 
