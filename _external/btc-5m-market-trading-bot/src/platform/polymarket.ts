@@ -9,7 +9,6 @@ import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
 import type { AccountSnapshot, Book, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
-import { PaperGateway } from "./paper.js";
 import { TradingPlatform } from "./platform.js";
 import { readCashFlowEvidence } from "./cash-flows.js";
 
@@ -93,9 +92,6 @@ export interface ConnectOptions {
   mode: TradingMode;
   markets: MarketInfo[];
   limits: HardLimits;
-  paperCashUsd?: number;
-  /** Caller-supplied portfolio enables replay of an existing position without a strategy. */
-  paperAccount?: AccountSnapshot;
   restored?: CoreState;
   persist?: PlatformAdapters["persist"];
   deferPersistence?: PlatformAdapters["deferPersistence"];
@@ -103,11 +99,10 @@ export interface ConnectOptions {
   settle?: PlatformAdapters["settle"];
   durationSec?: number;
   referenceFeed?: boolean;
-  /** Observation runs consume books but do not drive the paper matching model. */
-  observationOnly?: boolean;
 }
 
 export async function connectPolymarketPlatform(options: ConnectOptions) {
+  if (options.mode !== "live") throw new Error("the platform connector only supports live execution");
   if (!options.markets.length || options.markets.some(m => m.instruments.length !== 2)) {
     throw new Error("the current Polymarket feed adapter requires explicit binary markets");
   }
@@ -115,7 +110,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   let client: ClobWrapper | undefined;
   let readAccount: PlatformAdapters["readAccount"];
   let scanCashFlows: (() => Promise<AccountSnapshot>) | undefined;
-  let paper: PaperGateway | undefined;
   const controls = new Set<{ stop: () => void }>();
   const bookFeeds = new Map<string, { stop: () => void }>();
   let cleanupTimer: ReturnType<typeof setInterval> | undefined;
@@ -134,82 +128,70 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   let acceptUserEvents = true;
   let stopHeartbeat: (() => void) | undefined;
   let recoveryJob: Promise<void> | undefined;
-  let recovering = options.mode === "live" && !!options.restored;
+  let recovering = !!options.restored;
   const fee = (order: OrderRequest, shares = order.shares) => {
     if (order.postOnly) return 0;
     const rule = client?.feeRule(order.tokenId);
-    // All successful live warmups supply current venue fee rules. The paper
-    // reference rate is an estimate and is never labelled a reported fee.
+    // Warmed live markets supply current venue fee rules before an order is submitted.
     return Math.ceil(polymarketFillFee(shares, 0.5, false, rule?.rate ?? 0.07, 0, rule?.exponent ?? 1) * 100_000) / 100_000;
   };
   let account: AccountSnapshot;
   let gateway: OrderGateway;
-  if (options.mode === "live") {
-    if (!options.persist) throw new Error("live platform requires durable account-scoped state persistence");
-    await geocheck();
-    const key = ownerSignerPrivateKey();
-    if (!key) throw new Error("wallet signing key unavailable");
-    const reader = await connectAccountReader();
-    const rpcUrls = [...new Set([process.env.POLYGON_RPC, process.env.PM_ACCOUNT_RPC_URL, process.env.PM_ACCOUNT_RPC_FALLBACK_URL,
-      "https://polygon.drpc.org", "https://polygon-bor-rpc.publicnode.com"].map(value => value?.trim()).filter((value): value is string => !!value))];
-    const rpc = async (method: string, params: unknown[]): Promise<unknown> => {
-      for (const url of rpcUrls) {
-        cashFlowAbort.signal.throwIfAborted();
-        try {
-          const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-            signal: AbortSignal.any([AbortSignal.timeout(8000), cashFlowAbort.signal]) });
-          if (!response.ok) continue;
-          const body = row(await response.json());
-          if (!body.error && body.result != null) return body.result;
-        } catch { cashFlowAbort.signal.throwIfAborted(); /* Retry a configured read-only RPC endpoint. */ }
-      }
-      throw new Error("cash_flow_rpc_unavailable");
-    };
-    let latestCashFlowEvidence: Awaited<ReturnType<typeof readCashFlowEvidence>> | undefined;
-    readAccount = async () => {
-      const ordinary = accountSnapshot(await reader());
-      // Order recovery reads only the venue account. The latest completed
-      // funding scan may be attached, but a slow RPC never delays its ACK path.
-      const evidence = latestCashFlowEvidence;
-      if (!evidence || evidence.externalFlows.some(flow => flow.at > (ordinary.cashAt ?? ordinary.at))) return ordinary;
-      return { ...ordinary, cashFlowCoverage: evidence.cashFlowCoverage, externalFlows: evidence.externalFlows };
-    };
-    scanCashFlows = async () => {
-      const raw = await reader();
+  if (!options.persist) throw new Error("live platform requires durable account-scoped state persistence");
+  await geocheck();
+  const key = ownerSignerPrivateKey();
+  if (!key) throw new Error("wallet signing key unavailable");
+  const reader = await connectAccountReader();
+  const rpcUrls = [...new Set([process.env.POLYGON_RPC, process.env.PM_ACCOUNT_RPC_URL, process.env.PM_ACCOUNT_RPC_FALLBACK_URL,
+    "https://polygon.drpc.org", "https://polygon-bor-rpc.publicnode.com"].map(value => value?.trim()).filter((value): value is string => !!value))];
+  const rpc = async (method: string, params: unknown[]): Promise<unknown> => {
+    for (const url of rpcUrls) {
       cashFlowAbort.signal.throwIfAborted();
-      const ordinary = accountSnapshot(raw);
-      const tracking = platform?.account.current().cashFlowTracking ?? options.restored?.cashFlowTracking;
-      const fromAt = tracking?.baselineAt ?? options.restored?.risk.baselineAt ?? ordinary.cashAt ?? ordinary.at;
-      const evidence = await readCashFlowEvidence({ wallet: String(raw.wallet),
-        fromAt, fromBlock: tracking?.cursorBlock == null ? tracking?.baselineBlock : tracking.cursorBlock + 1, rpc, raw,
-        getActivity: async params => {
-          cashFlowAbort.signal.throwIfAborted();
-          const url = new URL("https://data-api.polymarket.com/activity");
-          for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-          const response = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(8000), cashFlowAbort.signal]) });
-          if (!response.ok) throw new Error(`http_${response.status}`);
-          return response.json();
-        } });
-      if (!stopped && !recoveryJob) latestCashFlowEvidence = evidence;
-      return { ...ordinary, cashFlowCoverage: evidence.cashFlowCoverage, externalFlows: evidence.externalFlows };
-    };
-    account = await readAccount();
-    client = await ClobWrapper.connect({ key });
-    gateway = new PolymarketGateway(client, instrument => {
-      const user = usersByMarket.get(instrument.marketId);
-      return !stopped && !recovering && !!booksHealthy.get(instrument.marketId) && !!bookHealth.get(instrument.marketId)?.()
-        && !!userHealthy.get(instrument.marketId) && !!user?.isHealthy() && (user.isContinuous?.() ?? true);
-    });
-  } else {
-    account = options.paperAccount ?? { accountId: "paper", at: Date.now() / 1000,
-      cashUsd: options.paperCashUsd ?? 1000, positions: [], openOrders: [], complete: true };
-    if (account.openOrders.length) throw new Error("paper imported orders require explicit broker restoration");
-    paper = new PaperGateway(fill => platform.ingest({ kind: "fill", fill }),
-      (_order, shares, execution) => polymarketFillFee(shares, execution.price, execution.isMaker, 0.07, 0, 1),
-      orderId => platform.core.confirmCancelled(orderId, true));
-    gateway = paper;
-  }
+      try {
+        const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          signal: AbortSignal.any([AbortSignal.timeout(8000), cashFlowAbort.signal]) });
+        if (!response.ok) continue;
+        const body = row(await response.json());
+        if (!body.error && body.result != null) return body.result;
+      } catch { cashFlowAbort.signal.throwIfAborted(); /* Retry a configured read-only RPC endpoint. */ }
+    }
+    throw new Error("cash_flow_rpc_unavailable");
+  };
+  let latestCashFlowEvidence: Awaited<ReturnType<typeof readCashFlowEvidence>> | undefined;
+  readAccount = async () => {
+    const ordinary = accountSnapshot(await reader());
+    // Order recovery reads only the venue account. A slow funding scan never delays an ACK.
+    const evidence = latestCashFlowEvidence;
+    if (!evidence || evidence.externalFlows.some(flow => flow.at > (ordinary.cashAt ?? ordinary.at))) return ordinary;
+    return { ...ordinary, cashFlowCoverage: evidence.cashFlowCoverage, externalFlows: evidence.externalFlows };
+  };
+  scanCashFlows = async () => {
+    const raw = await reader();
+    cashFlowAbort.signal.throwIfAborted();
+    const ordinary = accountSnapshot(raw);
+    const tracking = platform?.account.current().cashFlowTracking ?? options.restored?.cashFlowTracking;
+    const fromAt = tracking?.baselineAt ?? options.restored?.risk.baselineAt ?? ordinary.cashAt ?? ordinary.at;
+    const evidence = await readCashFlowEvidence({ wallet: String(raw.wallet),
+      fromAt, fromBlock: tracking?.cursorBlock == null ? tracking?.baselineBlock : tracking.cursorBlock + 1, rpc, raw,
+      getActivity: async params => {
+        cashFlowAbort.signal.throwIfAborted();
+        const url = new URL("https://data-api.polymarket.com/activity");
+        for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+        const response = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(8000), cashFlowAbort.signal]) });
+        if (!response.ok) throw new Error(`http_${response.status}`);
+        return response.json();
+      } });
+    if (!stopped && !recoveryJob) latestCashFlowEvidence = evidence;
+    return { ...ordinary, cashFlowCoverage: evidence.cashFlowCoverage, externalFlows: evidence.externalFlows };
+  };
+  account = await readAccount();
+  client = await ClobWrapper.connect({ key });
+  gateway = new PolymarketGateway(client, instrument => {
+    const user = usersByMarket.get(instrument.marketId);
+    return !stopped && !recovering && !!booksHealthy.get(instrument.marketId) && !!bookHealth.get(instrument.marketId)?.()
+      && !!userHealthy.get(instrument.marketId) && !!user?.isHealthy() && (user.isContinuous?.() ?? true);
+  });
   platform = new TradingPlatform({ account, instruments: options.markets.flatMap(m => m.instruments),
     limits: options.limits, restored: options.restored,
     adapters: { gateway, readAccount, discoverMarkets: discoverBtcMarket, estimateFee: fee,
@@ -260,7 +242,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
             sourceAgeMs: b.downMarketAgeMs ?? b.marketAgeMs, source: b.source, bid: b.downBid, ask: b.downAsk, bidSize: b.downBidSz, askSize: b.downAskSz,
             bids: b.downBidLevels, asks: b.downAskLevels },
         ];
-        for (const book of values) if (!options.observationOnly) paper?.book(book);
         platform.ingestBooks(values);
       } else if (event.kind === "tickSize") {
         const instrument = platform.core.instrument(event.token);
@@ -269,10 +250,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           platform.ingest({ kind: "market", market }); client?.updateTickSize(event.token, event.tickSize);
         }
       } else if (event.kind === "marketTrade") {
-        const direction = event.takerSide.toUpperCase();
-        if (!options.observationOnly && (direction === "BUY" || direction === "SELL")) {
-          paper?.trade(event.token, direction, event.price, event.shares, event.tsUnix);
-        }
+        // Public market trades are telemetry only. Live fills arrive from the
+        // authenticated user stream and are applied after ownership checks.
       } else if (event.kind === "btc" || event.kind === "oracle") {
         platform.ingest({ kind: "reference", symbol: event.kind === "btc" ? "BTC" : "BTC_ORACLE", price: event.price, ts: event.tsUnix });
       } else if (event.kind === "user") {
@@ -456,7 +435,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         });
         if (options.referenceFeed) controls.add(runBtcFeed(sink(options.markets[0])));
         cleanupExpiredFeeds(); cleanupTimer = setInterval(cleanupExpiredFeeds, 5000);
-        if (scanCashFlows) { refreshCashFlows(); cashFlowTimer = setInterval(refreshCashFlows, 30_000); }
+        refreshCashFlows(); cashFlowTimer = setInterval(refreshCashFlows, 30_000);
       } catch (error) {
         for (const control of controls) control.stop();
         stopHeartbeat?.(); stopped = true; cashFlowAbort.abort(); throw error;

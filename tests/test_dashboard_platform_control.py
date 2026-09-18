@@ -28,15 +28,17 @@ def control(monkeypatch, tmp_path):
     monkeypatch.setattr(SERVER, "_trading_state_loaded", True)
     monkeypatch.setattr(SERVER, "_projection_pending", deque())
     monkeypatch.setattr(SERVER, "_trading_environment", lambda: {"LIVE": "true"})
+    monkeypatch.setenv("PM_TRADING_LIVE_UNLOCK", "1")
     monkeypatch.setattr(SERVER, "account_config_status", lambda: {
         "execution_credentials_ready": True, "wallet": "real-wallet-not-paper",
     })
+    monkeypatch.setattr(SERVER, "account_action", lambda *_args, **_kwargs: {"account_ready": True})
     monkeypatch.setattr(SERVER, "_process_command", lambda _: "")
     return tmp_path
 
 
 @pytest.mark.parametrize("duration", [0, 0.5])
-def test_start_uses_only_platform_observation_and_a_run_scoped_journal(control, monkeypatch, duration):
+def test_start_uses_only_live_platform_and_a_run_scoped_journal(control, monkeypatch, duration):
     calls = []
 
     class Child:
@@ -50,40 +52,43 @@ def test_start_uses_only_platform_observation_and_a_run_scoped_journal(control, 
         return Child()
 
     monkeypatch.setattr(SERVER.subprocess, "Popen", popen)
-    status = SERVER.start_trading({"mode": "paper", "duration_min": duration,
+    status = SERVER.start_trading({"mode": "live", "confirm_live": True, "duration_min": duration,
                                    "pair_cost_max": 0.99, "maker_life_sec": 12}, config_revision=7, request_id="start-once")
     args, kwargs = calls[0]
-    assert args[:3] == ["node", "dist/cli/platform.js", "--paper"]
+    assert args[:3] == ["node", "dist/cli/platform.js", "--live"]
     assert "--strategy-module" not in args and "--pair-cost-max" not in args
     assert "--order-usd" not in args and "--max-orders" not in args and "--maker-life-sec" not in args
     assert float(args[args.index("--duration-sec") + 1]) == duration * 60
-    assert kwargs["env"]["LIVE"] == "false"
+    assert kwargs["env"]["LIVE"] == "true"
     journal = Path(args[args.index("--journal-file") + 1])
     state = Path(args[args.index("--state-file") + 1])
     assert Path(args[args.index("--stop-file") + 1]) == journal.with_suffix(".stop")
     assert journal.is_file() and journal.parent == state.parent
     assert status["run_id"] in journal.name and status["run_id"] in state.name
     assert status["engine"] == "platform" and status["execution"] == "observation"
-    assert status["strategy_id"] is None and status["account_id"] is None
+    assert status["strategy_id"] is None and status["account_id"] == "real-wallet-not-paper"
     assert status["config_revision"] == 7 and status["running"] is True
     persisted = json.loads(SERVER._state_path().read_text(encoding="utf-8"))
     assert persisted["engine"] == "platform" and persisted["log"] == str(journal)
     with pytest.raises(RuntimeError, match="已有交易进程"):
-        SERVER.start_trading({"mode": "paper"})
+        SERVER.start_trading({"mode": "live", "confirm_live": True})
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("entry,flag", [("platform", "--journal-file"), ("live", "--log-file")])
-def test_process_recovery_matches_exact_run_and_supports_legacy(monkeypatch, tmp_path, entry, flag):
+def test_process_recovery_matches_exact_platform_run(monkeypatch, tmp_path):
     journal = tmp_path / "folder with spaces" / "run.jsonl"
-    args = ["node", f"dist/cli/{entry}.js", flag, str(journal)]
+    args = ["node", "dist/cli/platform.js", "--journal-file", str(journal)]
     monkeypatch.setattr(SERVER, "_process_command", lambda _: shlex.join(args))
     assert SERVER._process_matches(123, journal)
     assert not SERVER._process_matches(123, None)
     assert not SERVER._process_matches(123, journal.with_name("other.jsonl"))
     args[-1] = str(journal) + ".bak"
     assert not SERVER._process_matches(123, journal)
-    args[:] = ["python", "other.py", "--note", f"dist/cli/{entry}.js {flag} {journal}"]
+    args[:] = ["python", "other.py", "--note", f"dist/cli/platform.js --journal-file {journal}"]
+    assert not SERVER._process_matches(123, journal)
+    args[:] = ["node", "dist/cli/live.js", "--log-file", str(journal)]
+    assert SERVER._process_matches(123, journal)
+    args[-1] = str(journal.with_name("other.jsonl"))
     assert not SERVER._process_matches(123, journal)
 
 

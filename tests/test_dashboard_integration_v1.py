@@ -90,7 +90,7 @@ def test_slow_statistics_does_not_hold_trading_control_lock(monkeypatch):
 
 def test_revision_bound_start_is_idempotent_and_does_not_switch_mode(monkeypatch, tmp_path):
     store = ConfigStore(tmp_path / "config.json")
-    saved = store.save({"mode": "paper", "order_usd": 3}, 0)
+    saved = store.save({"mode": "live", "order_usd": 3}, 0)
     monkeypatch.setattr(SERVER, "_config_store", store)
     monkeypatch.setattr(SERVER, "_restore_trading_state", lambda: None)
     monkeypatch.setattr(SERVER, "_trading_request_id", None)
@@ -104,12 +104,18 @@ def test_revision_bound_start_is_idempotent_and_does_not_switch_mode(monkeypatch
         return {"config_revision": config_revision}
     monkeypatch.setattr(SERVER, "start_trading", start)
     request = {"revision": saved["revision"], "request_id": str(uuid.uuid4())}
-    SERVER.start_configured_paper(request)
-    SERVER.start_configured_paper(request)
-    assert len(calls) == 1 and calls[0]["order_usd"] == 3
-    store.save({"mode": "live"}, 1)
+    SERVER.start_configured_live(request)
+    SERVER.start_configured_live(request)
+    assert len(calls) == 1
+    assert calls[0]["mode"] == "live" and calls[0]["confirm_live"] is True
+    assert calls[0]["order_usd"] == 3
+    class LegacyPaperStore:
+        @staticmethod
+        def get():
+            return {"revision": 2, "params": {"mode": "paper"}}
+    monkeypatch.setattr(SERVER, "_config_store", LegacyPaperStore())
     with pytest.raises(PermissionError):
-        SERVER.start_configured_paper({"revision": 2, "request_id": str(uuid.uuid4())})
+        SERVER.start_configured_live({"revision": 2, "request_id": str(uuid.uuid4())})
     assert len(calls) == 1
 
 
@@ -121,8 +127,10 @@ def test_legacy_start_rejects_invalid_numbers_before_process_creation(monkeypatc
     cli.touch()
     monkeypatch.setattr(SERVER, "TRADING_ROOT", tmp_path)
     monkeypatch.setattr(SERVER, "_trading_environment", lambda: pytest.fail("invalid request reached execution"))
+    monkeypatch.setenv("PM_TRADING_LIVE_UNLOCK", "1")
+    monkeypatch.setattr(SERVER, "private_key_configured", lambda: True)
     with pytest.raises(ValueError, match="finite JSON number"):
-        SERVER.start_trading({"mode": "paper", field: value})
+        SERVER.start_trading({"mode": "live", "confirm_live": True, field: value})
 
 
 def test_ledger_compatibility_deduplicates_and_preserves_unknown_fee(tmp_path):

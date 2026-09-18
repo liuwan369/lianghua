@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import http.client
 import json
 import os
 import subprocess
 import sys
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -195,16 +198,33 @@ def test_remote_status_reads_lightweight_snapshot_with_configured_host_key_port(
     assert value["collector_online"] is False  # Missing source generation clock fails closed.
 
 
-def test_dashboard_uses_node_label_from_api() -> None:
-    html = (ROOT / "docs" / "system-dashboard.html").read_text(encoding="utf-8")
-    javascript = (ROOT / "docs" / "system-dashboard.js").read_text(encoding="utf-8")
-    assert 'id="nodeLabel"' in html
-    assert "data.node_label" in javascript
+def test_removed_dashboard_routes_redirect_to_console() -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MODULE.make_handler(ROOT))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for path in ("/", "/system-dashboard.html", "/system-dashboard-advanced.html", "/demo-trading-console.html"):
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            connection.request("GET", path)
+            response = connection.getresponse()
+            response.read()
+            assert response.status == 302 and response.getheader("Location") == "/console/"
+            connection.close()
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        connection.request("GET", "/console/")
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 200
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_static_javascript_uses_executable_mime_type() -> None:
-    assert MODULE._static_content_type(Path("system-dashboard.js")) == "application/javascript; charset=utf-8"
-    assert MODULE._static_content_type(Path("system-dashboard.html")) == "text/html; charset=utf-8"
+    assert MODULE._static_content_type(Path("console.js")) == "application/javascript; charset=utf-8"
+    assert MODULE._static_content_type(Path("console.html")) == "text/html; charset=utf-8"
     assert MODULE._static_content_type(Path("unknown.bin")) == "application/octet-stream"
 
 

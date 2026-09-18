@@ -1,23 +1,25 @@
-# 文档索引
+# 当前文档索引
 
-更新时间：2026-09-18 01:44。当前主线为 BTC 五分钟反转真实交易系统；做市已终止，策略、底座、前端、预算提示、撤单 ACK 遥测和到账证明已随 `70d2b55` 发布并完成软件验收。真实 ACK、成交、撤单、重启、换场和到账仍待实际证据。服务器交易停止，最新事实只看 [当前系统状态](CURRENT-STATUS.md)，历史研究和证据不能当作当前运行状态。
+这里只列当前 BTC 五分钟反转系统的有效文档。运行状态和版本号只在 `CURRENT-STATUS.md` 维护；日期目录下的证据和研究材料用于追溯，不能代替当前状态。
 
-| 文档 | 用途 |
-|---|---|
-| [当前系统状态](CURRENT-STATUS.md) | 当前已完成、未完成、门禁和验证基线 |
-| [BTC反转开发规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md) | 一日目标、并行开发、快速测试及小额真实验证 |
-| [反转技术评估](REVERSAL-TECHNICAL-ASSESSMENT-2026-09-17.md) | 规则、官方接口、代码缺口、费用和资金风险 |
-| [系统备份记录](evidence/2026-09-17/pre-reversal-backup.md) | 本地/服务器备份范围、哈希与恢复方式 |
-| [Agent 协作约定](AGENT-WORKFLOW.md) | Agent 责任、平台/策略边界、验证和三段同步 |
-| [策略接口](STRATEGY-INTERFACE.md) | `StrategyPlugin` 契约和公共平台能力 |
-| [系统架构](ARCHITECTURE.md) | 行情、平台、网关、账户和控制台数据流 |
-| [交付状态](DELIVERY.md) | 当前验收结果和实际缺口 |
-| [项目范围](PROJECT.md) | 分层实现和完成判定 |
-| [当前进展](PROGRESS.md) | 最近修复、测试和下一步 |
-| [控制台 API](API.md) | HTTP 接口和真实数据边界 |
-| [技术实现](TECHNICAL.md) | 参数、接口和执行语义 |
-| [配置说明](CONFIGURATION.md) | 当前页面配置和校验范围 |
-| [开发与构建](DEVELOPMENT.md) | 本地测试、构建和目录 |
-| [部署](DEPLOYMENT.md) | 三段发布、服务器状态和回退 |
+| 文档 | 唯一职责 |
+| --- | --- |
+| [CURRENT-STATUS](CURRENT-STATUS.md) | 服务器状态、本地候选版、验证结果和下一步 |
+| [反转交付规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md) | 当前交付范围、顺序和完成判定 |
+| [反转技术评估](REVERSAL-TECHNICAL-ASSESSMENT-2026-09-17.md) | 用户方案、官方接口和技术风险来源 |
+| [Agent 协作规则](AGENT-WORKFLOW.md) | 文件所有权、并行协作、复核和三段同步 |
+| [系统架构](ARCHITECTURE.md) | 生产模块、数据流、边界和状态文件 |
+| [技术实现](TECHNICAL.md) | 行情、策略、订单、恢复、结算和延迟语义 |
+| [API](API.md) | 当前控制台 HTTP 接口和返回口径 |
+| [配置](CONFIGURATION.md) | 策略、账户和服务器变量 |
+| [开发](DEVELOPMENT.md) | 代码目录、依赖、开发规则和构建 |
+| [测试与验收](TESTING.md) | 自动测试与真实闭环的不同完成条件 |
+| [部署与回退](DEPLOYMENT.md) | `/root/pm-system` 发布、校验和回退 |
 
-策略模型、奖励规则、CPU 诊断和 `evidence/YYYY-MM-DD/` 下的文件属于研究/历史证据；使用前先核对日期和本文当前状态。
+附属材料：
+
+- `evidence/YYYY-MM-DD/`：带时间点的发布、运行和真实交易证据。
+- `research/`：官方资料、外部仓库和历史研究原文。
+- `task-view.json`：控制台任务树的数据源，由当前交付规划同步生成。
+
+旧做市、paper、回测、奖励页面、旧前端设计和过期状态文档已经从顶层索引移除。Git 历史仍可恢复旧说明。

@@ -1,90 +1,45 @@
-# BTC 5 分钟 TypeScript 交易引擎
+# BTC 五分钟反转交易底座
 
-本目录提供 Polymarket BTC Up/Down 5 分钟市场的公共交易底座、行情适配、paper 模拟和 V2 CLOB 执行适配。策略通过 `src/platform/contracts.ts` 的 `StrategyPlugin` 插件接口接入；当前策略接入暂停。正式页面和服务位于仓库其他目录；公网控制台是 **https://34-242-206-196.sslip.io/console/**，在线节点为都柏林。
+本目录是 Polymarket BTC Up/Down 五分钟反转策略的实时交易底座。生产入口只有 `dist/cli/platform.js`，策略通过 `StrategyPlugin` 接口接入，行情使用 Polymarket CLOB Market WebSocket，账户订单和成交使用认证 User WebSocket；REST 只用于市场发现、规则预热、异常恢复、账户对账和结算。
 
-当前状态为 **NOT_READY_FOR_LIVE_TRADING**：实际 V2 账户授权与私有只读请求通过，但真实订单全生命周期、完整资金对账和全部前端功能仍需验收。代码和模拟测试通过不代表真实成交、成功对冲或盈利。
+当前生产状态由仓库根目录的 `docs/CURRENT-STATUS.md` 和 `docs/REVERSAL-DELIVERY-PLAN-2026-09-17.md` 维护。公网控制台为 https://34-242-206-196.sslip.io/console/。真实交易进程必须由用户在控制台明确启动，源码和自动化测试不会代替真实订单证据。
 
-## 安装与验证
+## 本地开发
 
 需要 Node.js 24+。在本目录运行：
 
 ```powershell
 npm ci
 npm test
+npm run typecheck
 npm run build
 ```
 
-当前基线为 44 个测试文件、437 项 TypeScript 测试通过，`npm run typecheck` 和 `npm run build` 通过。依赖使用 `package-lock.json` 固定安装；执行适配为 `@polymarket/clob-client-v2` 1.1.0，账户检查使用 `@polymarket/client` 0.9.0 并限定实际 V2 授权范围。
-
-## 平台观察运行
-
-当前无策略入口使用独立 CLI，未传 `--strategy-module` 时不产生策略订单：
+平台命令要求显式 `--live`，没有模拟执行入口：
 
 ```powershell
-node dist/cli/platform.js --paper --duration-sec 60 --status-sec 5 --state-file results/platform/observation-state.json
+node dist/cli/platform.js --live --strategy btc-reversal --strategy-config results/dashboard/btc-reversal-config.json --duration-sec 0
 ```
 
-控制台启停/恢复已接入本 CLI，使用每轮独立 `--journal-file`、`--state-file`、`--stop-file`。`--duration-sec 0` 不设时长计时器，但选定市场全部到期仍正常结束；自动换场尚未实现。未传策略模块时不会产生订单。
+策略配置由控制台保存。修改参数只影响下一场，当前订单继续按创建时的版本管理。关闭网页不会停止运行，停止和暂停通过控制台发起。
 
-## 旧引擎兼容运行（策略暂停期间不执行）
+## 运行结构
 
-下面命令使用真实公开行情和模拟订单，不需要提交真实订单：
+| 模块 | 职责 |
+| --- | --- |
+| `src/strategies/btc-reversal.ts` | 可配置跨价、确认价、阶段份额和场次状态机，只产生订单意图 |
+| `src/platform/core.ts` | 策略无关的资金预留、订单状态、成交账本和风险状态 |
+| `src/platform/polymarket.ts` | 认证 CLOB 执行、Market/User WebSocket、账户恢复和费用读取 |
+| `src/platform/live-settlement.ts` | 官方结果、赎回回执和到账核对 |
+| `src/live/feeds/polymarket.ts` | CLOB 实时盘口、最佳买卖一和多档深度 |
+| `src/live/feeds/user.ts` | 认证订单、成交和撤单事件；断线后补读未结订单与近期成交 |
+| `src/platform/store.ts` | 原子保存场次、订单、成交、持仓和策略状态 |
+| `src/cli/platform.ts` | 唯一实时进程入口和控制文件 |
 
-```powershell
-node dist/cli/live.js run --paper --duration-min 6 --order-usd 5 --pair-cost-max 0.99 --max-total-usd 150 --max-orders 30 --maker-life-sec 15 --log-file results/paper/acceptance.jsonl
-node dist/cli/live.js analyze results/paper/acceptance.jsonl
-node dist/cli/live.js monitor results/paper/acceptance.jsonl --once
-```
+不同订单可以并行提交；同一经济订单的提交、查回、撤单和重试保持串行。交易决策由 WebSocket 事件直接触发，不使用固定秒级采样、debounce 或 REST 盘口轮询。页面展示消息年龄、本地处理、签名、HTTP ACK、用户回报和撤单 ACK 的分段延迟，缺少真实样本时显示未知。
 
-每轮使用新的日志文件名，保存命令、开始/结束时间和数据来源。显式 `--paper` 优先于 `LIVE=true`，避免环境误选运行模式。不要把纸面结果写为真实订单或账户损益。
+## 真实验证
 
-CLI 的默认值与后台配置默认值不同：单笔 2 USD，配对参数 0.99，订单上限 200，时长 0（不限时）；paper 未传累计金额上限时不能视为自动具有前端默认的 100 USD 上限。因此验收应明确传入时长、累计金额和订单上限。
+用户可在策略页面填入 `[5,5,5,5]` 做最小真实验证。Agent 只读核对 ACK、成交、部分成交、撤单、断线恢复、重启、费用、换场和结算到账，并将证据写入当前文档；没有发生的真实事件保持未完成。代码测试验证状态机和故障分支，不把模拟成交当成账户收益。
 
-`npm run paper` 是便捷六分钟模拟；`npm run live` 是真实资金入口，不属于本节验收命令。CLI 与网页服务解锁是不同边界，直接 CLI 不受网页是否显示禁用按钮保护。账户配置保存不会自动执行任一 CLI。
-
-## 代码入口
-
-| 位置 | 职责 |
-|---|---|
-| `src/cli/live.ts` | 命令参数、显式 paper/live 选择 |
-| `src/cli/platform.ts` | 独立公共平台 CLI；默认 paper，可选加载 `StrategyPlugin` |
-| `src/platform/` | 市场、订单、账户、风险、结算、持久化和策略隔离接口 |
-| `src/live/orchestrator.ts` | 行情、运行周期、订单回报、退出编排 |
-| `src/live/engine.ts` | 在线策略入口与运行状态 |
-| `src/live-maker.ts`、`src/strategy.ts` | maker 候选、库存补仓和风险约束 |
-| `src/live/executor.ts` | 执行、挂单和成交状态 |
-| `src/live/clob/client.ts` | V2 CLOB 适配、真实市场约束 |
-| `src/live/feeds/` | Polymarket、BTC、oracle 与 `collector.ts` 采集器适配 |
-| `src/cli/backtest.ts`、`backtest-snapshots.ts` | 快照回测及 tick/时间戳验证 |
-
-Polymarket 公开盘口/成交、Binance BTC 和 Chainlink RTDS 构成行情来源。paper 可以使用都柏林采集器数据；live 使用经认证的用户 WebSocket 接收账户订单回报。每次运行必须核实来源与新鲜度。
-
-## 旧策略兼容路径（当前暂停）
-
-`src/live/engine.ts`、`PairCostMarketMaker`、`stableLive` 和 `target_clone` 仍保留用于历史回放和兼容验证，但不属于公共平台 CLI 的默认策略，也没有在当前服务器运行。它们的参数、paper PnL 和参考地址行为不能作为生产默认值或盈利证明。恢复策略时必须通过独立插件验收和新的回放、paper、真实校准。
-
-以下行为说明只用于阅读兼容代码，不代表当前运行策略：
-
-`target_clone` 启用 `dynamicHedgeSizing`；`pairAddCostMax=0.98`、`hedgePairCostCeiling=0.99`、目标不平衡 0.02、硬不平衡限制 0.04。CLI 默认 `--pair-cost-max 0.99` 会把 `pairCostMax` 和 `pairAddCostMax` 设为 0.99，不修改所有其他门槛。
-
-两边挂单必须各用真实 token tick 向下量化价格；元数据缺失则拒绝，不猜测 0.01。最终数量受预算、单边数量、最坏结算亏损、费用模型及尚未成交订单负债限制。策略至少 5 份，执行器再校验市场真实最小数量，不能为满足最小量扩大已批准订单。
-
-动态修复不是无限制补齐。候选 maker 门槛随裸露时长从约 0.99 放宽至最多 0.999；裸露达 30 秒或距结束不超过 75 秒的候选 taker 分支以含费成本 1.05 为门槛。然而当前动态补仓最终构建仍受 `hedgePairCostCeiling=0.99` 限制。候选日志的 1.05 或 0.9903 不表示最终执行突破 0.99，也不能保证缺边平仓。
-
-例如 DOWN 库存均价 0.18 加 UP ask 0.95，模型费用 `0.07 × 0.95 × 0.05 = 0.003325`，候选含费成本 1.133325，超过 1.05 因而拒绝。费用是估算，不是交易所账单；返佣和奖励不能预先抵扣成本。预算不足、最小份数残余和昂贵缺边均可能造成未配对库存。
-
-部分成交扣减对应挂单剩余量；撤单请求直到确认才释放负债。迟到订单事件不能清除替换单。live taker 在途冻结新提交，固定份数 FOK 不因更优价格扩量。拒绝原因变化写入 `decision_rejected`。退出会排空提交、撤单、核对订单和稳定成交并记录迟到回报；仅处理本运行所属订单。这些真实资金路径尚待端到端验收。
-
-## 回测与延迟工具
-
-快照回测使用外部数据，实时 paper 不依赖这些文件。每条 UP/DOWN 快照必须含当时该 token 的真实 `tick_size` 或 `tickSize`，数值在 0 与 1 之间；冲突或缺失直接报错。时间戳保留 Z/offset，无时区按 UTC，非法值报错。不要补默认 tick 后报告零成交。格式和限制见 [回测 tick 文档](../../docs/BACKTEST-TICK-DATA.md)。
-
-```powershell
-node dist/cli/backtest.js --help
-npm run latency:probe
-npm run latency:compare -- report-a.json report-b.json
-```
-
-比较命令的两个 JSON 路径应替换为实际采样报告。独立延迟脚本不等于前端八项遥测已经接入。回测的撮合模型不能复原真实排队位置、全部滑点或账户到账。
-
-系统参数/API 见 [TECHNICAL.md](../../docs/TECHNICAL.md)，纸面及实盘验收方法见 [LIVE_FILLRATE_TEST.md](LIVE_FILLRATE_TEST.md)，交付缺口见 [DELIVERY.md](../../docs/DELIVERY.md)。
+账户秘密、真实订单/成交/资金/结算数据不放入发布包。程序发布采用本地源码、Git 提交、服务器发布目录三段校验，并保留可回退版本；回退程序不会覆盖之后产生的交易账本。

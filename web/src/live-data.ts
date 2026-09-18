@@ -44,7 +44,7 @@ export function connect() {
   const strategyOrders=connectStrategyOrders();
   const status=resource<Status>(), markets=resource<Markets>(), config=resource<Config>(), account=resource<Account>(), system=resource<SystemMetrics>();
   const runtimeRows=document.createElement('div');runtimeRows.dataset.platformRuntime='';runtimeRows.hidden=true;
-  runtimeRows.innerHTML='<div class="row"><span>平台模拟现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><div class="row"><span>日内结果 / 停止线</span><b data-runtime-daily-loss>--</b></div><p class="muted" data-runtime-flow-coverage></p><p class="muted" data-runtime-source role="status"></p>';
+  runtimeRows.innerHTML='<div class="row"><span>平台账户现金</span><b data-runtime-cash>--</b></div><div class="row"><span>平台持仓 / 活跃委托</span><b data-runtime-counts>--</b></div><div class="row"><span>平台风险</span><b data-runtime-risk>--</b></div><div class="row"><span>日内结果 / 停止线</span><b data-runtime-daily-loss>--</b></div><p class="muted" data-runtime-flow-coverage></p><p class="muted" data-runtime-source role="status"></p>';
   document.getElementById('homeStrategy')!.closest('.panel')!.append(runtimeRows);
   document.querySelector('[data-depth-count]')?.addEventListener('change',renderStatus);
   let closed=false, refreshing=false, systemLoading=false, runLoading=false, runsLoading=false, historyGeneration=0;
@@ -102,7 +102,7 @@ export function connect() {
     row('#view-home','本次投入上限',strategyConfig.current?.config.totalBudgetUsd==null?'未设置':money(strategyConfig.current.config.totalBudgetUsd));
     runtimeRows.hidden=!platform;
     const snapshot=runtime.runtime;
-    set('[data-runtime-cash]',runtime.current&&snapshot?.mode==='paper'?`${money(snapshot.cash_usd)} · 模拟资金`:'-- · 无当前模拟资金快照');
+    set('[data-runtime-cash]',runtime.current&&snapshot?.mode==='live'?`${money(snapshot.cash_usd)} · 实盘账户`:'-- · 无当前实盘账户快照');
     set('[data-runtime-counts]',runtime.current?`${number(snapshot?.positions_count)} / ${number(snapshot?.active_orders)}`:'-- / --');
     set('[data-runtime-risk]',runtime.current&&typeof snapshot?.risk?.halted==='boolean'?snapshot.risk.halted?`已暂停 · ${String(snapshot.risk.reason||'原因未提供')}`:'未触发暂停':'-- · 无当前风险快照');
     const risk=runtime.current?snapshot?.risk:null;

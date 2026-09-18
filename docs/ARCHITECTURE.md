@@ -1,67 +1,76 @@
-# 系统架构
+# 当前系统架构
 
-更新时间：2026-09-17。当前结构以公共交易平台和可替换策略为两层，策略暂不运行。
+更新时间：2026-09-18。系统由一套可配置反转策略和一套公共真实交易底座组成。生产部署仍位于 `/root/pm-system`，交易引擎源码和构建仍在 `_external/btc-5m-market-trading-bot`，尚未迁移目录。
 
-## 数据流
+## 生产数据流
 
 ```text
-Polymarket WS/REST + BTC 参考行情
-          │
-          ▼
-    Feed / Market adapter
-          │  Book、深度、时间和健康状态
-          ▼
-      TradingPlatform
-       ├─ TradingCore：现金、份额、订单、风险和持久化
-       ├─ Gateway：PaperGateway 或 PolymarketGateway
-       ├─ Account：读取、恢复核对、结算结果
-       ├─ StrategyPlugin：可选，只读事件 -> 订单意图
-       └─ Telemetry / journal -> SQLite 投影 -> 控制台状态/日志
+Polymarket Market WebSocket
+  └─ book / price_change / best_bid_ask / tick_size_change
+       └─ 同一消息内 UP、DOWN 原子更新
+            └─ BtcReversalStrategy（纯决策）
+                 └─ submit / cancel / replace 意图
+                      └─ TradingPlatform
+                           └─ TradingCore
+                                ├─ 预算、现金、份额和工作单预留
+                                ├─ 单订单串行、跨订单并行
+                                └─ 最小耐久提交
+                                     └─ PolymarketGateway
+                                          ├─ 签名与 CLOB HTTP 提交/撤单
+                                          └─ User WebSocket ACK/成交/撤单事件
 
-当前控制台启停路径
-总览/自动交易/策略/收益/设置/任务视图 -> dashboard API -> platform.js -> 无策略 TradingPlatform
-中文任务树 -> task-view.json（独立展示交付状态）
+REST / RPC 慢路径
+  ├─ 市场发现与 tick/元数据
+  ├─ 启动、重连和未知订单恢复
+  ├─ 账户、成交、资金流和结算核对
+  └─ 后台投影 -> SQLite / JSON -> 控制台 API
 ```
 
-## 公共底座
+行情触发不使用固定 1 秒采样、debounce 或 REST 盘口轮询。`--timer-ms` 只产生定时维护事件，不能代替或阻塞 Market WebSocket 事件。
 
-| 模块 | 位置 | 责任 |
-|---|---|---|
-| 契约 | `src/platform/contracts.ts` | 市场、盘口、订单、成交、账户、风险、策略动作类型 |
-| 账本 | `src/platform/core.ts` | BUY/SELL 预留、部分成交、撤单、替换、去重、风险和恢复 |
-| 平台 | `src/platform/platform.ts` | 市场/事件分发、策略隔离、动作权限、结算和遥测 |
-| 纸面网关 | `src/platform/paper.ts` | 独立模拟盘口和公开成交执行，不伪造真实队列 |
-| Polymarket 网关 | `src/platform/polymarket.ts` | CLOB 签名、用户流、真实账户读取和结算适配 |
-| 存储 | `src/platform/store.ts` | 账户/模式锁、临时文件、`fsync`、原子替换和崩溃锁处理 |
-| 行情 | `src/live/feeds/`、`src/live/orderbook.ts` | 完整 L2、真实 tick、交易所时间、本机接收和新鲜度 |
-| 控制台 | `web/`、`scripts/system-dashboard-server.py` | 六个入口展示、配置保存、纸面启停、账户只读和功能树；行情与订单分别嵌入自动交易页 |
+## 模块与职责
 
-## 策略边界
+| 模块 | 位置 | 职责 |
+| --- | --- | --- |
+| 行情连接 | `src/live/feeds/polymarket.ts` | Market WebSocket、完整 L2、最优价、交易所时间和重连 |
+| 用户连接 | `src/live/feeds/user.ts` | 认证订单与成交事件 |
+| 平台编排 | `src/platform/platform.ts` | 市场事件、策略隔离、订单/结算服务和遥测 |
+| 交易核心 | `src/platform/core.ts` | 资金/份额预留、订单状态、成交记账、并发和恢复 |
+| 真实适配器 | `src/platform/polymarket.ts` | CLOB client、账户恢复、User WS、资金流与结算接线 |
+| 持久化 | `src/platform/store.ts` | 账户隔离锁、原子替换、恢复快照和策略状态 |
+| 反转策略 | `src/strategies/btc-reversal.ts` | 每场触发、反转确认、阶段推进和重启状态 |
+| 运行入口 | `src/cli/platform.ts` | 市场发现、连续换场、策略加载、控制文件和进程生命周期 |
+| 控制台后台 | `scripts/system-dashboard-server.py`、`scripts/dashboard/` | 配置、账户、控制、账本投影、系统指标和 HTTP API |
+| 控制台前端 | `web/src/` | 总览、自动交易、策略、收益、设置和任务视图 |
 
-策略通过 `StrategyPlugin` 接收事件和只读上下文，返回 `submit/cancel/replace`。平台补入策略身份，验证价格、tick、最小数量、资金、风险和订单归属。策略不能导入 CLOB client、写账本、释放预留或绕过风险。
+上表中的 `src/` 均相对于 `_external/btc-5m-market-trading-bot/`。
 
-旧 `src/live/engine.ts`、`MakerSession`、`PairCost` 和历史策略入口保留为兼容路径，不是新平台默认实现。新的策略接入需单独登记、回放和验收；当前阶段不接入。
+## 策略与底座边界
 
-## 统一交易底座
+策略接收只读市场事件和平台上下文，只返回交易意图。策略不能直接使用 CLOB client、修改账户余额、释放预留、写订单终态或绕过风险检查。平台不决定反转方向和阶段参数。
 
-控制台新启动和平台 CLI 使用 `TradingPlatform`；旧 CLI 保留显式兼容路径：
+当前生产只注册 `btc-reversal`。底层 `StrategyPlugin` 契约仍允许后续策略复用同一行情、账户、订单、恢复、结算和遥测能力，但新增策略必须有独立配置 schema 和状态迁移，不能把字段塞进当前反转配置。
 
-| 层 | 负责内容 | 不能负责的内容 |
-|---|---|---|
-| `TradingPlatform` | 对外暴露市场、账户、订单、组合、风险、结算和遥测接口；接收策略动作 | 不选择策略价格和方向 |
-| `TradingCore` | BUY/SELL 预留、订单状态、成交记账、去重、风险和恢复 | 不签名、不直接调用 CLOB |
-| `OrderGateway` / `PolymarketGateway` | 交易所签名、提交、撤单、ACK 和用户事件适配 | 不修改本地资金账本 |
-| `PaperGateway` | 独立模拟撮合和回报顺序 | 不代表真实队列和真实成交率 |
-| 行情 / 用户流 / 账户读取 | L2、公开成交、认证订单事件和账户核对 | 不绕过平台核心产生订单 |
+## 并发与一致性
 
-新插件只返回订单意图，前端通过后台调用。控制台已适配启停、运行身份恢复和状态/日志投影。每轮独立状态文件、纯 JSONL 日志和控制台输出；后台按确切可执行文件及日志路径识别存活进程。Windows 隐藏进程通过控制文件正常关闭，Linux 使用 SIGTERM。systemd 重启默认终止同组子进程，不承诺自动保活或重启交易。
+- 一个 WebSocket 消息中的两侧变更先完整应用，再触发一次策略判断，避免读取半更新盘口。
+- `best_bid_ask` 和 L2 保留独立时序；无交易所时间戳的快事件不进入决策。
+- 同一订单使用 in-flight 去重和串行状态变换；不同订单不共享 HTTP ACK 等待锁。
+- 等待签名/持久化短锁后会重新检查余额、预算、开放订单、可卖份额和费用，避免排队期间状态过期。
+- 发单前只把阶段、预留和签名身份做一次关键耐久提交；未知结果保持占用并进入恢复，不能猜测失败后复用资金。
 
-## 热路径与慢路径
+## 运行与状态
 
-成交和用户 WebSocket 事件先进入内存账本并触发事件分发。REST 账户读模型、历史资金流、账本投影和归档在后台合并。下单前的预留需要同步持久化；未知 ACK、未知撤单或持久化失败保持停机状态。
+控制台后台启动 `dist/cli/platform.js --live --strategy btc-reversal --strategy-config ...`。每次运行有独立 journal、console、stop/control 文件；账户对应的 platform state 跨运行复用，保存订单、预留、持仓、策略阶段和恢复信息。
 
-真实网关只有在每个市场的盘口完整且新鲜、认证用户流健康连续时才允许新单。盘口健康不能只看 WebSocket 已连接；超过新鲜度阈值会关闭新单门禁。
+配置保存、账户保存、实盘解锁和交易运行是四个不同状态。控制台的 `running` 来自实际进程身份，策略状态来自当前 `run_id` 的投影，历史钱包数据不得冒充本轮策略订单或当前有效持仓。
 
-## 当前边界
+## 控制台投影
 
-代码和模拟回归覆盖 BUY/SELL、多订单、部分成交、撤单、替换和重复成交。真实适配器的部分成交、撤改竞态、断线中成交、异常恢复、持续资金核对和长期运行仍未完成。当前服务器交易停止且实盘锁关闭。
+后台读取平台 JSONL，增量写入 `results/dashboard/ledger.sqlite3`，并提供固定快照分页。系统资源指标由后台缓存采集，页面读取不会触发高成本系统扫描。延迟只绑定当前 `run_id`，过期或没有样本时显示未知。
+
+当前有效持仓、待到账、待核对、已结算零价值历史残留分别投影。只有明确 `redeemable=true` 且 `currentValue=0` 的项可以排除出活动风险；分类不明的项继续保留。
+
+## 当前未完成边界
+
+本地候选版通过自动测试不等于服务器已发布，也不等于真实订单完成。真实 ACK、成交、撤单、重启恢复、费用、自动换场和结算到账仍按 [CURRENT-STATUS](CURRENT-STATUS.md) 判断。生产瘦身必须先解除运行依赖，再删除旧源码和服务，不能仅凭目录名称判断无用。

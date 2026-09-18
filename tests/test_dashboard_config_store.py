@@ -17,7 +17,7 @@ def test_defaults_restart_and_defensive_copies(tmp_path):
     store = CONFIG.ConfigStore(path)
     initial = store.get()
     assert initial["revision"] == 0 and initial["savedAt"] is None
-    assert initial["params"]["mode"] == "paper"
+    assert initial["params"]["mode"] == "live"
     params = {"order_usd": 3.25, "duration_min": 0}
     saved = store.save(params, 0)
     assert saved["revision"] == 1
@@ -38,7 +38,7 @@ def test_defaults_restart_and_defensive_copies(tmp_path):
 @pytest.mark.parametrize("params", [
     [], None, {"private_key": "DO_NOT_ECHO"}, {"confirm_live": True},
     {"cap": 0.99}, {"target": 0.98}, {"dailyLoss": 10},
-    {"mode": "LIVE"}, {"mode": None}, {"mode": []},
+    {"mode": "LIVE"}, {"mode": "paper"}, {"mode": None}, {"mode": []},
     {"order_usd": "2"}, {"order_usd": True}, {"max_orders": False},
     {"order_usd": None}, {"max_orders": 1.5}, {"pair_cost_max": 1.01},
     {"duration_min": 0.01}, {"duration_min": -1},
@@ -149,5 +149,22 @@ def test_capabilities_make_missing_semantics_explicit():
     assert not caps["pairCostMaxIsUniversalHardCap"]
     assert not caps["separatePairTargetAndHardCap"]
     assert {"target", "cap", "capital", "market", "effective"} <= set(caps["unsupportedDemoFields"])
-    assert caps["versionedStartModes"] == ["paper"]
+    assert caps["versionedStartModes"] == ["live"]
     assert caps["effectivePolicy"] == "next_start"
+
+
+def test_legacy_paper_is_readable_but_requires_explicit_live_save(tmp_path):
+    path = tmp_path / "config.json"
+    store = CONFIG.ConfigStore(path)
+    saved = store.save({}, 0)
+    saved.pop("capabilities")
+    saved["params"]["mode"] = "paper"
+    path.write_text(json.dumps(saved), encoding="utf-8")
+    before = path.read_bytes()
+    restarted = CONFIG.ConfigStore(path)
+    assert restarted.get()["params"]["mode"] == "paper"
+    assert path.read_bytes() == before
+    with pytest.raises(CONFIG.ConfigValidationError):
+        restarted.save({"mode": "paper"}, 1)
+    migrated = restarted.save({**saved["params"], "mode": "live"}, 1)
+    assert migrated["revision"] == 2 and migrated["params"]["mode"] == "live"

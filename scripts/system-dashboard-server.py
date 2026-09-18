@@ -240,13 +240,15 @@ def _process_matches(pid: int | None, log_path: Path | None) -> bool:
         return False
     # Match the exact journal argument as well as the executable; a recycled
     # PID or another run with a similar filename must never receive a signal.
+    # live.js can no longer be started, but recognizing an already-running
+    # legacy process prevents a dashboard restart from reporting it stopped
+    # and launching a second process against the same account.
     for executable, flag in (("dist/cli/platform.js", "--journal-file"), ("dist/cli/live.js", "--log-file")):
-        if not any(arg == executable or arg.endswith("/" + executable) for arg in args):
+        if not any(arg == executable or arg.endswith("/" + executable) for arg in args) or flag not in args:
             continue
-        if flag in args:
-            index = args.index(flag) + 1
-            expected = os.path.normcase(str(log_path).replace("\\", "/"))
-            return index < len(args) and os.path.normcase(args[index]) == expected
+        index = args.index(flag) + 1
+        expected = os.path.normcase(str(log_path).replace("\\", "/"))
+        return index < len(args) and os.path.normcase(args[index]) == expected
     return False
 
 
@@ -755,7 +757,7 @@ def save_config(payload: dict) -> dict:
         return config_store().save(payload["params"], payload["expected_revision"])
 
 
-def start_configured_paper(payload: dict) -> dict:
+def start_configured_live(payload: dict) -> dict:
     global _trading_config_revision, _trading_request_id
     if set(payload) != {"revision", "request_id"} or type(payload["revision"]) is not int:
         raise ValueError("启动需要配置版本与唯一请求编号")
@@ -774,9 +776,10 @@ def start_configured_paper(payload: dict) -> dict:
             raise ConfigConflictError(saved["revision"])
         if saved["revision"] == 0:
             raise ValueError("请先保存配置")
-        if saved["params"]["mode"] != "paper":
-            raise PermissionError("新版配置启动目前仅验收模拟模式")
-        return start_trading(saved["params"], config_revision=saved["revision"], request_id=request_id)
+        if saved["params"].get("mode") != "live":
+            raise PermissionError("新版配置必须使用实盘模式")
+        return start_trading({**saved["params"], "confirm_live": True},
+                             config_revision=saved["revision"], request_id=request_id)
 
 
 def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
@@ -785,9 +788,9 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
     global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
     global _trading_engine
-    mode = str(payload.get("mode") or "paper").lower()
-    if mode not in {"paper", "live"}:
-        raise ValueError("mode must be paper or live")
+    mode = str(payload.get("mode") or "live").lower()
+    if mode != "live":
+        raise ValueError("新版交易入口只支持 live 模式")
     if not TRADING_ROOT.is_dir() or not (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file():
         raise RuntimeError("交易引擎尚未构建")
     if mode == "live":
@@ -816,9 +819,9 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
     if not max_orders_value.is_integer():
         raise ValueError("max_orders 必须是整数")
     max_orders = int(max_orders_value)
-    max_total_usd = positive("max_total_usd", 10 if mode == "live" else 100, 0.01)
+    max_total_usd = positive("max_total_usd", 10, 0.01)
     # 运行时间允许填 0，表示不按时间自动停止，直到用户手动停止。
-    duration_min = positive("duration_min", 15 if mode == "live" else 5, 0)
+    duration_min = positive("duration_min", 15, 0)
     if not math.isfinite(duration_min) or duration_min < 0 or (duration_min != 0 and duration_min < 0.1):
         raise ValueError("duration_min 必须为 0（一直运行）或至少 0.1 分钟")
     maker_life_sec = positive("maker_life_sec", 15, 1)
@@ -838,7 +841,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
             report = account_action({})
             if not report.get("account_ready"):
                 raise PermissionError("账户检查未通过，请在“账户”查看未完成项")
-        log_dir = TRADING_ROOT / "results" / ("live" if mode == "live" else "paper")
+        log_dir = TRADING_ROOT / "results" / "live"
         log_dir.mkdir(parents=True, exist_ok=True)
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
         candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
@@ -846,7 +849,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         candidate_state = log_dir / f"dashboard-{run_id}.platform-state.json"
         account_id = (account_config_status().get("wallet") or None) if mode == "live" else None
         if strategy_config:
-            identity = hashlib.sha256((account_id or "paper").lower().encode()).hexdigest()[:20]
+            identity = hashlib.sha256((account_id or "live").lower().encode()).hexdigest()[:20]
             candidate_state = log_dir / f"btc-reversal-{identity}.platform-state.json"
         # Create the selected journal before returning the start response.
         # The status endpoint must never fall back to a previous run while the
@@ -854,7 +857,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         candidate_log.touch()
         console_handle = candidate_console_log.open("a", encoding="utf-8")
         args = [
-            "node", "dist/cli/platform.js", "--paper" if mode == "paper" else "--live",
+            "node", "dist/cli/platform.js", "--live",
             "--duration-sec", str(duration_min * 60), "--status-sec", "2",
             "--journal-file", str(candidate_log), "--state-file", str(candidate_state),
             "--stop-file", str(candidate_log.with_suffix(".stop")),
@@ -863,7 +866,7 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
             args.extend(["--strategy", STRATEGY_ID, "--strategy-config", str(strategy_config_store().path),
                          "--control-file", str(candidate_log.with_suffix(".control.json"))])
         env = _trading_environment()
-        env["LIVE"] = "false" if mode == "paper" else "true"
+        env["LIVE"] = "true"
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             _trading_process = subprocess.Popen(
@@ -1016,9 +1019,9 @@ def make_handler(root: Path):
             # There is one user-facing trading page. Keep the former advanced
             # dashboard URL as a compatibility redirect so stale bookmarks do
             # not open a second, disconnected control surface.
-            if path == "/system-dashboard-advanced.html":
+            if path in {"/", "/system-dashboard.html", "/system-dashboard-advanced.html", "/demo-trading-console.html"}:
                 self.send_response(302)
-                self.send_header("Location", "/system-dashboard.html")
+                self.send_header("Location", "/console/")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
@@ -1044,9 +1047,7 @@ def make_handler(root: Path):
             if path == "/api/live":
                 self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
                 return
-            relative = "system-dashboard.html" if path in {"/", "/system-dashboard.html"} else (
-                "console/index.html" if path in {"/console", "/console/"} else path.lstrip("/")
-            )
+            relative = "console/index.html" if path in {"/console", "/console/"} else path.lstrip("/")
             candidate = (docs / relative).resolve()
             if docs not in candidate.parents or not candidate.is_file():
                 self.send_error(404)
@@ -1204,7 +1205,7 @@ def make_handler(root: Path):
                     report = account_action(payload, save=path.endswith("/save"))
                     self._send_json(json.dumps({"ok": True, "report": report}, ensure_ascii=False).encode("utf-8"))
                     return
-                mode = trading_status(include_stats=False).get("mode") if path.endswith("/stop") else payload.get("mode", "paper")
+                mode = trading_status(include_stats=False).get("mode") if path.endswith("/stop") else payload.get("mode", "live")
                 if path == "/api/trading/control":
                     mode = (strategy_config_store().get()["config"]["mode"] if payload.get("action") == "start"
                             else trading_status(include_stats=False).get("mode"))
@@ -1225,7 +1226,7 @@ def make_handler(root: Path):
                 elif path == "/api/v1/config":
                     result = save_config(payload)
                 elif path == "/api/v1/trading/start":
-                    result = start_configured_paper(payload)
+                    result = start_configured_live(payload)
                 else:
                     result = stop_trading() if path.endswith("/stop") else start_trading(payload)
                 self._send_json(json.dumps({"ok": True, "status": result}, ensure_ascii=False).encode("utf-8"))

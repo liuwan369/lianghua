@@ -21,7 +21,7 @@ function liveLine(status: Status | null, error: string | null, receivedAt: numbe
   const run = status.run_id ? `运行 ${status.run_id}` : '暂无运行';
   if (status.engine === 'platform') {
     const { runtime, current } = platformRuntime(status, status.asOf + (Date.now() - receivedAt) / 1000);
-    return `${executionName(status)} · ${status.running ? '运行中' : '已停止'} · ${status.strategy_id === null ? '未加载策略' : status.strategy_id || '策略状态未知'} · ${run} · ${current ? `模拟成交 ${number(runtime?.fills_count)}` : '快照待更新或仅有历史记录'} · ${status.control_source?.label || '来源未标注'} · 快照 ${date(runtime?.source_at)}`;
+    return `${executionName(status)} · ${status.running ? '运行中' : '已停止'} · ${status.strategy_id === null ? '未加载策略' : status.strategy_id || '策略状态未知'} · ${run} · ${current ? `成交 ${number(runtime?.fills_count)}` : '快照待更新或仅有历史记录'} · ${status.control_source?.label || '来源未标注'} · 快照 ${date(runtime?.source_at)}`;
   }
   return `${executionName(status)} · ${status.running ? '运行中' : '已停止'} · ${run} · ${status.mode === 'paper' ? '模拟' : ''}成交 ${number(stats.fills)} · 成交额 ${money(stats.fill_notional)}${status.live_unlocked ? ' · 实盘开关已开' : ' · 实盘开关关闭'}`;
 }

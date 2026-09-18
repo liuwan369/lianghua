@@ -23,7 +23,7 @@ def default_config() -> dict:
             "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5}
 
 
-def validate_config(config: dict) -> dict:
+def validate_config(config: dict, *, allow_historical_paper: bool = False) -> dict:
     if not isinstance(config, dict) or set(config) != set(default_config()):
         raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
     result = copy.deepcopy(config)
@@ -62,8 +62,8 @@ def validate_config(config: dict) -> dict:
         raise ConfigValidationError("运行时长过大；持续运行请填0")
     for key in ("maxQuoteAgeSeconds", "maxQuoteSkewSeconds"):
         number(result[key], key)
-    if result["mode"] not in ("live", "paper"):
-        raise ConfigValidationError("运行方式必须为live或paper")
+    if result["mode"] != "live" and not (allow_historical_paper and result["mode"] == "paper"):
+        raise ConfigValidationError("新版策略配置只支持live模式")
     return result
 
 
@@ -92,7 +92,7 @@ class StrategyConfigStore(ConfigStore):
             if not isinstance(data["savedAt"], str) or not data["savedAt"].endswith("Z"):
                 raise ValueError("invalid saved time")
             datetime.fromisoformat(data["savedAt"][:-1] + "+00:00")
-            data["config"] = validate_config(data["config"])
+            data["config"] = validate_config(data["config"], allow_historical_paper=True)
             return data
         except (ValueError, TypeError, OverflowError) as exc:
             raise ConfigStoreError("策略配置损坏，未替换成默认参数") from exc

@@ -44,11 +44,23 @@ def test_editable_config_survives_restart_and_versions_are_exclusive(tmp_path):
 @pytest.mark.parametrize("change", [
     {"maxStages": 5}, {"maxStages": True}, {"triggerPrice": .8}, {"stageShares": [5, float("nan")]},
     {"totalBudgetUsd": 0}, {"dailyLossUsd": True}, {"durationMinutes": float("inf")},
-    {"maxQuoteAgeSeconds": "2"}, {"private_key": "not-allowed"},
+    {"maxQuoteAgeSeconds": "2"}, {"mode": "paper"}, {"private_key": "not-allowed"},
 ])
 def test_bad_configuration_cannot_reach_runner(change):
     with pytest.raises(ValueError):
         validate_config({**default_config(), **change})
+
+
+def test_historical_paper_strategy_config_is_read_only(tmp_path):
+    path = tmp_path / "strategy.json"
+    historical = {"schemaVersion": 1, "strategyId": "btc-reversal", "savedRevision": 1,
+                  "savedAt": "2026-09-17T00:00:00Z",
+                  "config": {**default_config(), "mode": "paper"}}
+    path.write_text(json.dumps(historical), encoding="utf-8")
+    store = StrategyConfigStore(path)
+    assert store.get()["config"]["mode"] == "paper"
+    with pytest.raises(ValueError, match="只支持live"):
+        store.save({**default_config(), "mode": "paper"}, 1)
 
 
 @pytest.fixture

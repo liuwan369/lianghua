@@ -52,13 +52,12 @@ class ConfigStoreError(RuntimeError):
     """Persistence cannot be trusted; never fall back to runnable defaults."""
 
 
-def default_params(mode: str = "paper") -> dict:
-    if mode not in {"paper", "live"}:
-        raise ConfigValidationError("mode must be paper or live")
+def default_params(mode: str = "live") -> dict:
+    if mode != "live":
+        raise ConfigValidationError("mode must be live")
     result = {name: spec[0] for name, spec in _FIELDS.items()}
     result["mode"] = mode
-    if mode == "live":
-        result.update(max_total_usd=10, duration_min=15)
+    result.update(max_total_usd=10, duration_min=15)
     return result
 
 
@@ -72,9 +71,9 @@ def validate_params(params: dict) -> dict:
         raise ConfigValidationError("params must be an object")
     if set(params) - (set(_FIELDS) | {"mode"}):
         raise ConfigValidationError("配置包含未知、敏感或尚未支持的字段")
-    mode = params.get("mode", "paper")
-    if not isinstance(mode, str) or mode not in {"paper", "live"}:
-        raise ConfigValidationError("mode must be paper or live")
+    mode = params.get("mode", "live")
+    if mode != "live":
+        raise ConfigValidationError("mode must be live")
     result = default_params(mode)
     for name, (_, minimum, maximum, _) in _FIELDS.items():
         value = params.get(name, result[name])
@@ -107,7 +106,7 @@ def capabilities() -> dict:
             "defensiveCancel": "defensive_cancel_bps",
         },
         "effectivePolicy": "next_start",
-        "versionedStartModes": ["paper"],
+        "versionedStartModes": ["live"],
         "executionTarget": "platform",
         "executionMode": "observation",
         "runtimeAppliedFields": ["mode", "duration_min"],
@@ -165,7 +164,14 @@ class ConfigStore:
             datetime.fromisoformat(stamp[:-1] + "+00:00")
             if not isinstance(data["params"], dict) or set(data["params"]) != set(default_params()):
                 raise ValueError("incomplete persisted params")
-            data["params"] = validate_params(data["params"])
+            persisted_mode = data["params"].get("mode")
+            if persisted_mode == "paper":
+                # Preserve old snapshots without silently converting them into
+                # runnable live configuration. Only an explicit save migrates.
+                data["params"] = validate_params({**data["params"], "mode": "live"})
+                data["params"]["mode"] = "paper"
+            else:
+                data["params"] = validate_params(data["params"])
             return data
         except (ValueError, TypeError, OverflowError) as exc:
             raise ConfigStoreError("配置文件损坏或版本不受支持，禁止恢复默认运行") from exc

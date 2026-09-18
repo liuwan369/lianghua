@@ -171,3 +171,11 @@ def test_public_account_opt_in_does_not_authorize_live_trading(account_http, mon
     assert status == 403, result
     assert "未开启实盘解锁" in result["error"]
     assert checks == saved == []
+
+
+def test_start_without_mode_uses_live_authentication(account_http):
+    post, checks, saved = account_http
+    status, result = post("/api/trading/start", {})
+    assert status == 503, result
+    assert "交易控制密码" in result["error"]
+    assert checks == saved == []

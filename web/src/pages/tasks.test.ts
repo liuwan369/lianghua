@@ -50,7 +50,7 @@ describe('system architecture task view', () => {
       projection:{run_id:status.run_id,state:'ready',stale:false},stats:{runtime:{engine:'platform',status:'running',source_at:999,expires_at:1009,stale:false,fills_count:0}}});
     await mount();
     expect(document.querySelector('[data-task-live]')?.textContent).toContain('平台观察 · 运行中 · 未加载策略');
-    expect(document.querySelector('[data-task-live]')?.textContent).toContain('模拟成交 0');
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('成交 0');
     await vi.advanceTimersByTimeAsync(9000);
     expect(document.querySelector('[data-task-live]')?.textContent).toContain('快照待更新或仅有历史记录');
   });
@@ -61,7 +61,7 @@ describe('system architecture task view', () => {
       projection:{run_id:status.run_id,state:'ready',stale:false},stats:{runtime:{engine:'platform',status:'running',source_at:1000,expires_at:1009,stale:false,fills_count:7}}});
     await mount();
     await vi.advanceTimersByTimeAsync(8000);finishTasks(fixture());await vi.advanceTimersByTimeAsync(0);
-    expect(document.querySelector('[data-task-live]')?.textContent).toContain('模拟成交 7');
+    expect(document.querySelector('[data-task-live]')?.textContent).toContain('成交 7');
     await vi.advanceTimersByTimeAsync(1000);
     expect(document.querySelector('[data-task-live]')?.textContent).toContain('快照待更新或仅有历史记录');
   });

@@ -37,10 +37,9 @@ const positive = (value: unknown, flag: string): number => {
 export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undefined {
   const command = new Command()
     .name("trading-platform")
-    .description("Shared trading services with an optional StrategyPlugin; defaults to paper observation")
+    .description("Live Polymarket trading services with an optional StrategyPlugin")
     .exitOverride()
-    .option("--live", "Use authenticated REAL trading services; never enabled by environment variables")
-    .option("--paper", "Use simulated execution (default)")
+    .option("--live", "Use authenticated REAL trading services; required and never enabled by environment variables")
     .option("--strategy-module <path>", "Local JS/TS module exporting createStrategy() or a default StrategyPlugin")
     .option("--strategy <name>", "Built-in strategy: btc-reversal")
     .option("--strategy-config <path>", "Persisted strategy configuration JSON")
@@ -63,12 +62,11 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     throw error;
   }
   const raw = command.opts();
-  if (raw.live && raw.paper) throw new CliInputError("choose either --live or --paper");
-  const mode: TradingMode = raw.live === true ? "live" : "paper";
+  const mode: TradingMode = "live";
   if (raw.strategy && raw.strategy !== "btc-reversal") throw new CliInputError("unknown built-in strategy");
   if (raw.strategy && raw.strategyModule) throw new CliInputError("choose built-in strategy or strategy module");
   if (!!raw.strategy !== !!raw.strategyConfig) throw new CliInputError("--strategy requires --strategy-config and vice versa");
-  const capitalUsd = positive(raw.capitalUsd ?? (mode === "live" ? Number.MAX_SAFE_INTEGER : 1000), "--capital-usd");
+  const capitalUsd = positive(raw.capitalUsd ?? Number.MAX_SAFE_INTEGER, "--capital-usd");
   const dailyLossUsd = raw.dailyLossUsd == null ? null : positive(raw.dailyLossUsd, "--daily-loss-usd");
   const maxOrderUsd = positive(raw.orderUsd ?? capitalUsd, "--order-usd");
   const maxOpenOrders = positive(raw.maxOpenOrders, "--max-open-orders");
@@ -102,6 +100,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     .some(path => path !== undefined && pathKey(path) === pathKey(strategyConfigFile))) {
     throw new CliInputError("--strategy-config must be separate from execution state and control files");
   }
+  if (raw.live !== true) throw new CliInputError("--live is required; simulated platform execution has been removed");
   return { mode, limits: { capitalUsd, dailyLossUsd, maxOrderUsd, maxOpenOrders }, durationSec, timerMs,
     statusSec, stateFile, journalFile, stopFile, controlFile, strategy: raw.strategy,
     strategyConfigFile,
@@ -406,10 +405,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         ? await (await import("../platform/live-settlement.js")).createLiveSettlementAdapter({ stateFile: `${options.stateFile}.settlements.json` })
         : undefined;
       connection = await connectPolymarketPlatform({ mode: options.mode, markets, limits: options.limits,
-        paperCashUsd: options.limits.capitalUsd, restored, persist: (state, critical) => store!.save(state, critical),
+        restored, persist: (state, critical) => store!.save(state, critical),
         deferPersistence: () => store!.defer(),
         settle,
-        observationOnly: !strategy,
         // Before connection resolution the adapter records initialization;
         // afterwards the subscription includes publish-only plugin/settlement events.
         record: event => { if (!connection) record(event); },

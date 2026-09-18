@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AccountSnapshot, Instrument, OrderGateway, OrderRequest } from "./contracts.js";
 import { TradingCore } from "./core.js";
-import { PaperGateway } from "./paper.js";
 
 const instrument: Instrument = { tokenId: "up", marketId: "m", outcome: "UP", tickSize: 0.01, minOrderSize: 1 };
 const account: AccountSnapshot = { accountId: "paper", at: 100, cashUsd: 20, positions: [], openOrders: [], complete: true };
@@ -138,22 +137,27 @@ describe("strategy-independent account core", () => {
     expect(core.order(order.orderId!)?.filledShares).toBe(0);
   });
 
-  it("does not turn a committed immediate paper fill into an unknown cancellation", async () => {
+  it("does not turn a committed immediate fill into an unknown cancellation", async () => {
     let core!: TradingCore;
-    const paper = new PaperGateway(fill => core.applyFill(fill), () => 0,
-      orderId => core.confirmCancelled(orderId, true));
+    const gateway: OrderGateway = {
+      mode: "live", durableIdentity: true,
+      async submit(request, _instrument, prepared) {
+        prepared?.({ orderHash: "stub-order", signedPayload: { signature: "stub" }, preparedAt: 100 });
+        core.applyFill({ tradeId: "stub-trade", orderId: "stub-order", tokenId: request.tokenId,
+          direction: request.direction, price: request.price, shares: request.shares, feeUsd: 0,
+          ts: 100, isMaker: false });
+        return { status: "accepted", orderId: "stub-order" };
+      },
+      async cancel() { return true; },
+    };
     const coreAccount = { ...account, accountId: "paper-immediate" };
     core = new TradingCore({ account: coreAccount, instruments: [instrument], limits: {
       capitalUsd: 20, dailyLossUsd: 30, maxOrderUsd: 10, maxOpenOrders: 10,
-    }, adapters: { gateway: paper, estimateFee: () => 0 } });
-    const crossedBook = { tokenId: "up", ts: 100, bid: 0.4, ask: 0.5, bidSize: 5, askSize: 5 };
-    paper.book(crossedBook);
-    expect(core.mark(crossedBook)).toBe(true);
+    }, adapters: { gateway, estimateFee: () => 0 } });
     const submitted = await core.submit(request({ postOnly: false, price: 0.5 }));
     const afterCancel = await core.cancel(submitted.orderId!);
     expect(afterCancel.status).toBe("FILLED");
     expect(core.risk().halted).toBe(false);
-    await paper.close();
   });
 
   it("exposes sorted depth and rejects malformed depth before strategies see it", () => {
