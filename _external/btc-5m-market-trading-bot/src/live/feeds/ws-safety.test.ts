@@ -268,6 +268,29 @@ describe("live websocket safety", () => {
     expect(socket.readyState).toBe(1);
     expect(mocks.sockets).toHaveLength(1);
   });
+
+  it("keeps receiving empty bilateral books without reconnecting and resumes on valid depth", async () => {
+    const events: FeedEvent[] = [];
+    const feed = runPolymarketFeed(event => events.push(event), "up", "down", Date.now()/1000+120);
+    stop = feed.stop;
+    const socket = await openSocket();
+    const book = (asset_id: string, empty = false) => ({ event_type: "book", asset_id, timestamp: Date.now(),
+      bids: empty ? [] : [{ price: "0.4", size: "10" }],
+      asks: empty ? [] : [{ price: "0.41", size: "10" }] });
+    socket.emit("message", JSON.stringify([book("up"), book("down")]));
+    for (let step = 0; step < 4; step += 1) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      socket.emit("message", JSON.stringify([book("up", true), book("down", true)]));
+      expect(feed.isHealthy()).toBe(false);
+      expect(socket.readyState).toBe(1);
+    }
+    expect(mocks.sockets).toHaveLength(1);
+    expect(events.filter(event => event.kind === "book")).toHaveLength(1);
+    socket.emit("message", JSON.stringify([book("up"), book("down")]));
+    expect(feed.isHealthy()).toBe(true);
+    expect(events.filter(event => event.kind === "book")).toHaveLength(2);
+  });
+
   it.each(["INVALID AUTH", JSON.stringify({type:"user",status:"unauthorized"})])(
     "disables authenticated feed on explicit rejection: %s", async (rejection) => {
       const events: FeedEvent[] = [];

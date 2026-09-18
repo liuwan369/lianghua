@@ -325,12 +325,13 @@ export function runPolymarketFeed(
         }, 5000);
         const connectedAtMs = Date.now();
         let lastAnyMessageAtMs = connectedAtMs;
-        let lastBilateralQuoteAtMs = 0;
+        // Empty books still prove subscription activity, but cannot enable trading.
+        let lastBilateralActivityAtMs = 0;
         const watchdog = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
           const nowMs = Date.now();
           const silent = nowMs - lastAnyMessageAtMs >= PM_WS_MESSAGE_TIMEOUT_MS;
-          const quoteStalled = nowMs - (lastBilateralQuoteAtMs || connectedAtMs)
+          const quoteStalled = nowMs - (lastBilateralActivityAtMs || connectedAtMs)
             >= PM_WS_BILATERAL_QUOTE_TIMEOUT_MS;
           if (!silent && !quoteStalled) return;
           const reason = silent ? "message_timeout" : "bilateral_quote_timeout";
@@ -388,6 +389,9 @@ export function runPolymarketFeed(
                 }
               }
               if (!changed.upUpdated && !changed.downUpdated && !fastChanges.length) return;
+              if (lastUpAtMs > 0 && lastDownAtMs > 0) {
+                lastBilateralActivityAtMs = Math.min(lastUpAtMs, lastDownAtMs);
+              }
               const ub = up.bestBid();
               const ua = up.bestAsk();
               const db = dn.bestBid();
@@ -401,9 +405,6 @@ export function runPolymarketFeed(
               if (!hasCompleteBook) sink({ kind: "bookStatus", healthy: true, connected: true,
                 reason: "complete_book", tsUnix: nowUnix() });
               hasCompleteBook = true;
-              if (lastUpAtMs > 0 && lastDownAtMs > 0) {
-                lastBilateralQuoteAtMs = Math.min(lastUpAtMs, lastDownAtMs);
-              }
               const upTop = fastUp;
               const downTop = fastDown;
               const upBid = upTop?.bid ?? ub[0];
