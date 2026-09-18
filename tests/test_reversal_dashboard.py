@@ -69,6 +69,7 @@ def runner(monkeypatch, tmp_path):
     cli.parent.mkdir(parents=True)
     cli.touch()
     monkeypatch.setattr(SERVER, "TRADING_ROOT", tmp_path)
+    monkeypatch.setattr(SERVER, "DEPLOYMENT_LOCK_PATH", tmp_path / "deployment.lock")
     for key in ("_trading_process", "_trading_pid", "_trading_log", "_trading_console_log", "_trading_params",
                 "_trading_run_id", "_trading_mode", "_trading_request_id", "_trading_config_revision", "_strategy_config_store"):
         monkeypatch.setattr(SERVER, key, None)
@@ -134,6 +135,23 @@ def test_start_control_write_failure_never_launches_child(runner, monkeypatch):
 
     monkeypatch.setattr(Path, "write_text", fail_control)
     with pytest.raises(OSError, match="control write failed"):
+        SERVER.strategy_control({"action": "start", "revision": 1, "request_id": str(uuid.uuid4())})
+    assert not runner
+
+
+def test_deployment_lock_rejects_start_before_any_child_is_created(runner, monkeypatch):
+    SERVER.strategy_config_store().save(default_config(), 0)
+
+    class HeldLock:
+        LOCK_EX, LOCK_NB, LOCK_UN = 2, 4, 8
+
+        @staticmethod
+        def flock(_fd, operation):
+            if operation == HeldLock.LOCK_EX | HeldLock.LOCK_NB:
+                raise BlockingIOError("deployment holds lock")
+
+    monkeypatch.setattr(SERVER, "fcntl", HeldLock)
+    with pytest.raises(RuntimeError, match="程序正在更新"):
         SERVER.strategy_control({"action": "start", "revision": 1, "request_id": str(uuid.uuid4())})
     assert not runner
 

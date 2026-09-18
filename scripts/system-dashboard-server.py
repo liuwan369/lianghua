@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from collections import deque
 import hmac
 import hashlib
@@ -20,6 +21,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows development fallback
+    fcntl = None
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_account as account_store
 from dashboard.config import ConfigStore, ConfigConflictError
@@ -32,6 +38,7 @@ from dashboard.system_metrics import SystemMetrics
 
 
 TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
+DEPLOYMENT_LOCK_PATH = TRADING_ROOT.parents[1] / "data" / "dashboard" / "deployment.lock"
 _trading_lock = threading.RLock()
 _account_check_lock = threading.Lock()
 _trading_process: subprocess.Popen[str] | None = None
@@ -65,6 +72,24 @@ _trading_engine: str | None = None
 _projection_pending: deque = deque()
 _system_metrics: SystemMetrics | None = None
 _system_metrics_lock = threading.Lock()
+
+
+@contextmanager
+def deployment_mutex():
+    """Serialize operator starts with the release script's OS-level lock."""
+    DEPLOYMENT_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handle = DEPLOYMENT_LOCK_PATH.open("a+")
+    try:
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("程序正在更新，请更新完成后再启动") from None
+        yield
+    finally:
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -760,7 +785,7 @@ def start_configured_live(payload: dict) -> dict:
                              config_revision=saved["revision"], request_id=request_id)
 
 
-def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
+def _start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
                   strategy_config: dict | None = None) -> dict:
     global _trading_process, _trading_pid, _trading_started_at, _trading_mode, _trading_params
     global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
@@ -886,6 +911,13 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         _persist_trading_state()
         _projection_pending.append((_trading_run_id, _trading_log, _trading_mode, _trading_account_id, _trading_config_revision))
         return trading_status(include_stats=False)
+
+
+def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
+                  strategy_config: dict | None = None) -> dict:
+    with deployment_mutex():
+        return _start_trading(payload, config_revision=config_revision, request_id=request_id,
+                              strategy_config=strategy_config)
 
 
 def _trading_environment() -> dict:

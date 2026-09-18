@@ -309,7 +309,8 @@ try:
             out.write(json.dumps(MANIFEST))
         with sftp.open(directory + "/apply.py", "w") as out:
             out.write(REMOTE_SCRIPT)
-    _, stdout, stderr = client.exec_command("python3 " + directory + "/apply.py " + directory, timeout=120)
+    lock = "/root/pm-system/data/dashboard/deployment.lock"
+    _, stdout, stderr = client.exec_command("mkdir -p /root/pm-system/data/dashboard; flock -n -x " + lock + " python3 " + directory + "/apply.py " + directory, timeout=120)
     output, error = stdout.read().decode(), stderr.read().decode()
     if stdout.channel.recv_exit_status():
         raise RuntimeError(error[:2500] + output[:2500])
