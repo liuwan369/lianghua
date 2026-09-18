@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { StrategyContext } from "../platform/contracts.js";
+import { createBtcReversalStrategy, type BtcReversalStrategy } from "../strategies/btc-reversal.js";
 
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), discover: vi.fn(), load: vi.fn(), save: vi.fn(), close: vi.fn(),
   setStrategyState: vi.fn(), updateLimits: vi.fn(), addMarkets: vi.fn(), open: vi.fn(), start: vi.fn(), stop: vi.fn(), attach: vi.fn(), ingest: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn(), settle: vi.fn() }));
@@ -23,6 +25,18 @@ let temporary: string;
 let output: ReturnType<typeof vi.spyOn>;
 let errors: ReturnType<typeof vi.spyOn>;
 const flush = async () => { for (let index = 0; index < 12; index++) await Promise.resolve(); };
+function freshTrigger(strategy: BtcReversalStrategy) {
+  const now = Math.floor(Date.now() / 1000);
+  const current = { ...market, name: `btc-updown-5m-${now}`, startsAt: now, endsAt: now + 300,
+    instruments: market.instruments.map((instrument, index) => ({ ...instrument, outcome: index ? "DOWN" : "UP" })) };
+  const context: StrategyContext = { mode: "live", now, markets: [current], books: [
+    { tokenId: "yes", ask: 0.68, ts: now, receivedAt: now, exchangeTs: now },
+    { tokenId: "no", ask: 0.33, ts: now, receivedAt: now, exchangeTs: now },
+  ], account: { schemaVersion: 1, accountId: "test", mode: "live", cashUsd: 1000, positions: [], orders: [],
+    risk: { halted: false, day: "2026-09-18", baselineAt: now, baselineEquityUsd: 1000,
+      equityUsd: 1000, dailyPnlUsd: 0, occupiedUsd: 0, availableUsd: 1000 } } };
+  return strategy.onEvent({ kind: "book", book: context.books[0] }, context);
+}
 beforeEach(() => {
   vi.resetAllMocks();
   temporary = mkdtempSync(join(tmpdir(), "platform-cli-"));
@@ -123,6 +137,73 @@ describe("generic platform CLI lifecycle", () => {
     await running;
     expect(mocks.attach.mock.calls[0][0].exportState().config.revision).toBe("2");
     expect(mocks.stop).toHaveBeenCalledWith("duration_elapsed");
+  });
+
+  it.each(["duration", "controller_stop"])("can restart the same strategy state after %s without inheriting a pause", async (end) => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json"), stopPath = join(temporary, "stop");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", end === "duration" ? "1" : "0", "--stop-file", stopPath]);
+    await flush();
+    if (end === "controller_stop") writeFileSync(stopPath, "stop");
+    await vi.advanceTimersByTimeAsync(1001);
+    await running;
+
+    const saved = mocks.setStrategyState.mock.calls
+      .map(([id, state]) => id === "btc-reversal" ? state : undefined)
+      .filter(Boolean)
+      .at(-1);
+    expect(saved).toEqual(expect.objectContaining({ paused: false }));
+    rmSync(stopPath, { force: true });
+    mocks.load.mockReturnValue({ strategyStates: { "btc-reversal": saved } });
+    const next = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "1"]);
+    await flush();
+    const attached = mocks.attach.mock.lastCall![0] as BtcReversalStrategy;
+    expect(freshTrigger(attached)).toContainEqual(expect.objectContaining({ kind: "submit" }));
+    await vi.advanceTimersByTimeAsync(1001);
+    await next;
+  });
+
+  it.each([false, true])("honors the new run's explicit pause control (paused=%s)", async (paused) => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json"), controlPath = join(temporary, "new-run.control.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    const previous = createBtcReversalStrategy();
+    previous.setPaused(true);
+    mocks.load.mockReturnValue({ strategyStates: { "btc-reversal": previous.exportState() } });
+    // Missing per-run control means a new dashboard Start, while a pause
+    // written for this run must survive startup/recovery.
+    if (paused) writeFileSync(controlPath, JSON.stringify({ paused: true }));
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "1", "--control-file", controlPath]);
+    await flush();
+    const attached = mocks.attach.mock.lastCall![0] as BtcReversalStrategy;
+    expect(attached.exportState().paused).toBe(paused);
+    expect(freshTrigger(attached).some(action => action.kind === "submit")).toBe(!paused);
+    await vi.advanceTimersByTimeAsync(1001);
+    await running;
+    expect(attached.exportState().paused).toBe(paused);
+  });
+
+  it("blocks new triggers immediately after stop without persisting a pause", async () => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    let finishStop!: () => void;
+    mocks.stop.mockReturnValue(new Promise<void>(resolve => { finishStop = resolve; }));
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "0"]);
+    await flush();
+    const attached = mocks.attach.mock.lastCall![0] as BtcReversalStrategy;
+    process.emit("SIGTERM");
+    await flush();
+    expect(mocks.stop).toHaveBeenCalledWith("SIGTERM");
+    expect(freshTrigger(attached)).toEqual([]);
+    expect(attached.exportState()).toMatchObject({ paused: false, rounds: [] });
+    finishStop();
+    await running;
   });
 
   it("continues beyond a round boundary and discovers future markets for the built-in strategy", async () => {

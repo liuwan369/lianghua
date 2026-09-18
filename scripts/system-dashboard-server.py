@@ -833,6 +833,11 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
         # The status endpoint must never fall back to a previous run while the
         # child process is still starting.
         candidate_log.touch()
+        if strategy_config:
+            # A new operator start resumes the saved strategy. Reusing a
+            # process/state alone must still preserve an intentional pause.
+            candidate_log.with_suffix(".control.json").write_text(
+                json.dumps({"paused": False}), encoding="utf-8")
         console_handle = candidate_console_log.open("a", encoding="utf-8")
         args = [
             "node", "dist/cli/platform.js", "--live",

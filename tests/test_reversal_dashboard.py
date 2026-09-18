@@ -85,6 +85,10 @@ def runner(monkeypatch, tmp_path):
         def poll(self):
             return None
     def start(args, **kw):
+        if "--control-file" in args:
+            # The child reads this before attaching the restored strategy.
+            control = Path(args[args.index("--control-file") + 1])
+            assert json.loads(control.read_text())["paused"] is False
         calls.append(args)
         return Child()
     monkeypatch.setattr(SERVER.subprocess, "Popen", start)
@@ -112,9 +116,26 @@ def test_real_strategy_start_uses_saved_config_and_stable_account_recovery(runne
     SERVER.strategy_control({"action": "resume"})
     assert json.loads(control.read_text())["paused"] is False
     monkeypatch.setattr(SERVER, "_trading_process", None)
+    SERVER.strategy_control(request)
+    assert len(runner) == 1  # Retrying a previous start cannot resume or relaunch.
     SERVER.strategy_control({**request, "request_id": str(uuid.uuid4())})
     assert runner[1][runner[1].index("--state-file") + 1] == state
     assert runner[1][runner[1].index("--journal-file") + 1] != args[args.index("--journal-file") + 1]
+
+
+def test_start_control_write_failure_never_launches_child(runner, monkeypatch):
+    SERVER.strategy_config_store().save(default_config(), 0)
+    write_text = Path.write_text
+
+    def fail_control(path, *args, **kwargs):
+        if path.name.endswith(".control.json"):
+            raise OSError("control write failed")
+        return write_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_control)
+    with pytest.raises(OSError, match="control write failed"):
+        SERVER.strategy_control({"action": "start", "revision": 1, "request_id": str(uuid.uuid4())})
+    assert not runner
 
 
 def test_stale_or_unsaved_start_cannot_create_process(runner):

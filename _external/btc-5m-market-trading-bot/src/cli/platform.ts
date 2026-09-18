@@ -228,7 +228,6 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const requestStop = (reason: string) => {
     signalReason ??= reason;
     discoveryAbort.abort();
-    try { reversal?.setPaused(true); } catch { /* Cleanup still needs to release process resources. */ }
     notifyStop?.();
   };
   const checkStopFile = () => {
@@ -397,6 +396,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       });
       const onEvent = reversal.onEvent.bind(reversal);
       reversal.onEvent = (event, context) => {
+        // Shutdown is local to this run. Do not persist it as an operator
+        // pause, or the next run would inherit a permanent admission lock.
+        if (signalReason || primaryFailure) return [];
         const actions = onEvent(event, context);
         const active = reversal!.exportState().rounds.find(round => round.startsAt <= context.now && context.now < round.endsAt);
         const dailyLossUsd = active?.config.dailyLossUsd ?? null;
@@ -408,10 +410,16 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         return actions;
       };
       strategy = reversal;
-      if (options.controlFile && existsSync(options.controlFile)) {
-        const control = JSON.parse(readFileSync(options.controlFile, "utf8"));
-        if (typeof control.paused !== "boolean") throw new CliInputError("invalid pause control");
-        reversal.setPaused(control.paused);
+      if (options.controlFile) {
+        // Dashboard starts have a fresh, per-run control path. An existing
+        // pause command still wins when recovering the same run.
+        let paused = false;
+        if (existsSync(options.controlFile)) {
+          const control = JSON.parse(readFileSync(options.controlFile, "utf8"));
+          if (typeof control.paused !== "boolean") throw new CliInputError("invalid pause control");
+          paused = control.paused;
+        }
+        reversal.setPaused(paused);
       }
     }
     phase = "market_discovery";

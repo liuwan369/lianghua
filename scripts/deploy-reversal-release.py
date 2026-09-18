@@ -135,7 +135,7 @@ def unit_state(unit):
         return completed.stdout.strip() or 'unknown'
     return {'active': query('is-active'), 'enabled': query('is-enabled')}
 before=status()
-if before.get('running') is not False or before.get('live_unlocked') is not False:
+if before.get('running') is not False or type(before.get('live_unlocked')) is not bool:
     raise RuntimeError('Program sync expects stopped trading and unchanged live lock')
 changed=[]
 unit_names={'config/pm-system-dashboard-dublin.service':'pm-system-dashboard-dublin.service',
@@ -251,7 +251,7 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
             except Exception:
                 if attempt==19: raise
                 time.sleep(1)
-        if after.get('running') is not False or after.get('live_unlocked') is not False:
+        if after.get('running') is not False or after.get('live_unlocked') is not before['live_unlocked']:
             raise RuntimeError('Unexpected trading state')
     except Exception:
         if collector_changed:
