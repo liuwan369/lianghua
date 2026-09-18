@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "title": "BTC 五分钟反转策略交付任务",
-  "updatedAt": "2026-09-18T11:35:00+08:00",
-  "summary": "生产热路径、真实持仓分类、分段延迟、服务器资源指标和移动端修复已随88dffba发布并通过公网验收。live-only版已删除生产PaperGateway、paper/backtest/旧maker CLI、旧启动脚本和旧网页并完成构建、回归、推送和发布；旧pm-r25停机行情仍待独立只读CLOB投影替换。当前真实有效持仓0、开放订单0，自动交易停止；真实生命周期等待用户发起[5,5,5,5]最小份额运行。",
+  "updatedAt": "2026-09-18T13:00:00+08:00",
+  "summary": "生产热路径、真实持仓分类、分段延迟、服务器资源指标、live-only瘦身和独立只读CLOB投影已随46d1cb5发布并通过公网验收。旧pm-r25仍作为回退和历史证据源保留，控制台已不再依赖它。当前真实有效持仓0、开放订单0，自动交易停止；真实生命周期等待用户发起[5,5,5,5]最小份额运行。",
   "hardRules": [
     "程序已部署并通过功能复核；未发生的真实订单和资金到账不得写成已验收。",
     "旧做市停止开发并保留回退备份；删除做市参数和界面，不再开展配对做市、库存补仓或做市奖励优化。",
@@ -35,7 +35,7 @@
             "id": "CORE-00",
             "title": "底座接入整体状态",
             "status": "PARTIAL",
-            "detail": "行情、账户、订单、恢复、结算和资金流已接通，生产热路径修复已随88dffba发布；真实运行证据待用户操作。",
+            "detail": "行情、账户、订单、恢复、结算和资金流已接通，生产热路径和独立只读CLOB行情投影已随46d1cb5发布；真实运行证据待用户操作。",
             "next": "按实际订单、资金变化和到账记录核对生命周期。",
             "verification": "live-only发布版：引擎544项，前端81项，后台受影响定向回归通过，类型检查和隔离生产构建通过；真实策略尚未运行。"
           },
@@ -45,7 +45,7 @@
             "status": "DONE",
             "detail": "Market WebSocket同一帧原子应用UP/DOWN后只调用一次策略；快BBO与L2独立时序，同毫秒深度可恢复权威状态，空盘口会进入不健康状态。",
             "next": "真实运行时继续记录盘口源时间和策略反应延迟。",
-            "verification": "保存帧、双边批次、同毫秒快事件和重连回归通过；88dffba已发布，公网桌面和手机页面通过。"
+            "verification": "保存帧、双边批次、同毫秒快事件和重连回归通过；独立CLOB投影新增10项测试，46d1cb5已发布，公网行情显示双边五档和实时源时钟。"
           },
           {
             "id": "CORE-02",
@@ -102,7 +102,7 @@
             "status": "DONE",
             "detail": "跨价、同向去重、阶段上限和pendingAmbiguity均已实现；覆盖双边冲突后方向明确、同毫秒多帧和重连只重建基线。",
             "next": "真实运行时继续核对触发记录与订单归属。",
-            "verification": "反转状态机和保存帧回归通过；修复已随88dffba发布。"
+            "verification": "反转状态机和保存帧回归通过；修复已随46d1cb5发布。"
           },
           {
             "id": "REV-03",
@@ -135,7 +135,7 @@
         "title": "订单恢复、换场和资金闭环",
         "owner": "执行 Agent",
         "scope": "CORE",
-        "detail": "订单恢复、换场、费用、结算、撤单ACK、到账证明及资金流能力已随88dffba发布。",
+        "detail": "订单恢复、换场、费用、结算、撤单ACK、到账证明及资金流能力已随46d1cb5发布。",
         "items": [
           {
             "id": "LIFE-01",
@@ -175,7 +175,7 @@
             "status": "PARTIAL",
             "detail": "官方结果、持仓读取、pUSD适配赎回和回执已实现；本批新增payout_verified、credited_usd、expected_payout_usd及到账前后现金投影。",
             "next": "由用户发起真实操作并核对官方结果、赎回回执和到账。",
-            "verification": "到账投影已随88dffba发布；只有confirmed且payout_verified=true才显示到账，本轮真实到账未完成。"
+            "verification": "到账投影已随46d1cb5发布；只有confirmed且payout_verified=true才显示到账，本轮真实到账未完成。"
           }
         ]
       },
@@ -216,7 +216,7 @@
             "status": "PARTIAL",
             "detail": "账户资金、成本、预留和预计结果已展示；本批接入到账证明字段，只有真实确认才显示到账，未知数据不补零。",
             "next": "用真实成交、费用和结算数据核对页面。",
-            "verification": "到账展示已随88dffba发布并通过前端81项和双视口检查；完整场次收益及到账仍缺本轮真实证据。"
+            "verification": "到账展示已随46d1cb5发布并通过前端81项和双视口检查；完整场次收益及到账仍缺本轮真实证据。"
           },
           {
             "id": "WEB-05",
@@ -279,9 +279,9 @@
             "id": "DEL-06",
             "title": "三段同步和回退",
             "status": "DONE",
-            "detail": "88dffba已推送并部署；613个文件校验、本批更新55个、删除145个，dashboard已重启，发布目录和回退入口保留。",
+            "detail": "46d1cb5已推送并部署；635个文件校验、本批更新25个、删除0个，CLOB行情服务和dashboard已重启，发布目录和回退入口保留。",
             "next": "后续程序变更继续执行三段同步，真实交易账本不随程序回退。",
-            "verification": "归档SHA256为c2874fec3847b706ca67761159db5f79c8c390c3ab8dbb0c7333fb2458f41d25；公网API、旧路径跳转和桌面/手机页面成功。"
+            "verification": "归档SHA256为b6adb9a309dbd6ed2a167f76894810c45286ba61c7d9a9d5dd0d56ef7161cc23；公网API、公共行情双边五档、旧路径跳转和桌面/手机页面成功。"
           }
         ]
       }
@@ -326,7 +326,7 @@
       "title": "策略与底座并行开发",
       "status": "DONE",
       "owner": "策略 Agent / 执行 Agent",
-      "detail": "策略、执行、换场和结算已实现；原子双边行情、快事件、冲突方向、持仓分类和并发资金复核已随88dffba发布。",
+      "detail": "策略、执行、换场和结算已实现；原子双边行情、快事件、冲突方向、持仓分类、并发资金复核和独立只读CLOB投影已随46d1cb5发布。",
       "tasks": [
         {
           "id": "R1-STRATEGY",
@@ -367,7 +367,7 @@
       "title": "前端与策略 API",
       "status": "RUNNING",
       "owner": "前端 Agent / 主 Agent",
-      "detail": "配置、控制、反转运行视图、订单分页、预算提示、撤单ACK、到账证明、资源和延迟展示已随88dffba部署。",
+      "detail": "配置、控制、反转运行视图、订单分页、预算提示、撤单ACK、到账证明、资源、延迟和公共行情五档展示已随46d1cb5部署。",
       "tasks": [
         {
           "id": "R2-API",
@@ -464,8 +464,8 @@
           "title": "live-only代码、网页和文档瘦身",
           "status": "RUNNING",
           "owner": "主 Agent",
-          "detail": "生产PaperGateway、paper/backtest/旧maker CLI、旧PM2/脚本入口和旧静态网页已删除，控制台与引擎新启动只允许live；历史paper日志与配置仅保留只读兼容。旧pm-r25停机行情仍有实际引用。",
-          "next": "建立独立只读CLOB WebSocket行情投影，替换pm-r25后再删除剩余旧做市、研究入口、旧网页和过时文件。"
+          "detail": "生产PaperGateway、paper/backtest/旧maker CLI、旧PM2/脚本入口和旧静态网页已删除，控制台与引擎新启动只允许live；历史paper日志与配置仅保留只读兼容。独立只读CLOB投影已发布，旧pm-r25仅作回退和历史证据源。",
+          "next": "观察独立投影跨场稳定后停用旧pm-r25停机行情依赖，再清理剩余旧做市、研究入口、旧网页和过时文件。"
         }
       ]
     },
@@ -474,14 +474,14 @@
       "title": "正式方案真实运行",
       "status": "TODO",
       "owner": "主 Agent",
-      "detail": "88dffba已完成三段同步和软件验收；正式交易尚未启动。",
+      "detail": "46d1cb5已完成三段同步和软件验收；正式交易尚未启动。",
       "tasks": [
         {
           "id": "R4-RELEASE",
           "title": "本地、Git、服务器同步发布",
           "status": "DONE",
           "owner": "主 Agent",
-          "detail": "88dffba已推送并部署到/root/.pm-releases/reversal-88dffba-20260918T031350Z；613文件校验、55个更新、145个删除、dashboard重启完成。",
+          "detail": "46d1cb5已推送并部署到/root/.pm-releases/reversal-46d1cb5-20260918T045546Z；635文件校验、25个更新、0个删除，CLOB行情服务和dashboard重启完成。",
           "next": "保留发布包、归档哈希和回退入口。"
         },
         {

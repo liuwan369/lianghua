@@ -2,12 +2,13 @@
 
 更新：2026-09-17。当前主线：[反转交付规划](REVERSAL-DELIVERY-PLAN-2026-09-17.md)。实时交付状态见[CURRENT-STATUS](CURRENT-STATUS.md)，历史发布记录不代表当前版本。
 
-入口 https://34-242-206-196.sslip.io/console/ 。服务器项目 `/root/pm-system`，后端 `127.0.0.1:18766`，控制台服务 `pm-system-dashboard-dublin.service`，采集服务 `pm-r25-dublin-collector.service`。
+入口 https://34-242-206-196.sslip.io/console/ 。服务器项目 `/root/pm-system`，后端 `127.0.0.1:18766`，控制台服务 `pm-system-dashboard-dublin.service`，公共行情服务 `pm-clob-market-snapshot.service`。旧 `pm-r25-dublin-collector.service` 仅作为回退期间的历史采集器保留，控制台不再依赖它。
 
 ## 发布内容
 
 - 引擎 `_external/btc-5m-market-trading-bot/src` 及 `dist`，策略显式选择 `btc-reversal`。
 - `scripts/system-dashboard-server.py` 与 `scripts/dashboard/` 配置、账本和投影。
+- 独立只读 CLOB 行情投影 `src/cli/market-snapshot.ts`、`src/dashboard/market-projection.ts` 和 `pm-clob-market-snapshot.service`。
 - `web/src` 与构建后的 `docs/console/`，当前规划、状态和 `docs/task-view.json`。
 - 不上传或覆盖账户凭据、运行账本、原始数据、状态文件和用户保存的策略参数。
 

@@ -51,6 +51,8 @@ REST / RPC 慢路径
 
 当前生产只注册 `btc-reversal`。底层 `StrategyPlugin` 契约仍允许后续策略复用同一行情、账户、订单、恢复、结算和遥测能力，但新增策略必须有独立配置 schema 和状态迁移，不能把字段塞进当前反转配置。
 
+控制台停机时的公共行情由独立 `pm-clob-market-snapshot.service` 提供：只做 Gamma 市场发现和 CLOB Market WebSocket 订阅，原子写入 `data/dashboard/market-snapshot.json`，不读取账户秘密、不连接 User WebSocket、不具备下单能力。后台重新检查快照心跳、场次窗口、交易所时间和接收时间，过期或断线时返回空行情。
+
 ## 并发与一致性
 
 - 一个 WebSocket 消息中的两侧变更先完整应用，再触发一次策略判断，避免读取半更新盘口。
@@ -67,7 +69,7 @@ REST / RPC 慢路径
 
 ## 控制台投影
 
-后台读取平台 JSONL，增量写入 `results/dashboard/ledger.sqlite3`，并提供固定快照分页。系统资源指标由后台缓存采集，页面读取不会触发高成本系统扫描。延迟只绑定当前 `run_id`，过期或没有样本时显示未知。
+后台读取平台 JSONL，增量写入 `results/dashboard/ledger.sqlite3`，并提供固定快照分页。公共行情由独立 CLOB WebSocket 投影提供；系统资源指标由后台缓存采集，页面读取不会触发高成本系统扫描。延迟只绑定当前 `run_id`，过期或没有样本时显示未知。
 
 当前有效持仓、待到账、待核对、已结算零价值历史残留分别投影。只有明确 `redeemable=true` 且 `currentValue=0` 的项可以排除出活动风险；分类不明的项继续保留。
 
