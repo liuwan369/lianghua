@@ -68,7 +68,8 @@ describe("live websocket safety", () => {
     expect(feed.isHealthy()).toBe(true);
     emit({event_type:"book",asset_id:"up",bids:[],asks:[],timestamp:Date.now()});
     expect(feed.isHealthy()).toBe(false);
-    expect(events).toContainEqual(expect.objectContaining({kind:"bookStatus",healthy:false}));
+    expect(events).toContainEqual(expect.objectContaining({kind:"bookStatus",healthy:false,
+      connected:true,reason:"incomplete_book"}));
   });
 
   it("keeps fast top separate from delayed L2 and lets newer L2 become authoritative", async () => {
@@ -161,6 +162,27 @@ describe("live websocket safety", () => {
     expect(latest?.upMarketAgeMs).toBe(5);
   });
 
+  it("marks a malformed market frame unhealthy and reconnects instead of silently skipping it", async () => {
+    const events: FeedEvent[]=[];
+    const feed=runPolymarketFeed((event)=>events.push(event),"up","down",Date.now()/1000+60);
+    stop=feed.stop;
+    const socket=await openSocket();
+    const at=Date.now();
+    const book=(asset_id:string,bid:string,ask:string)=>({event_type:"book",asset_id,timestamp:at,
+      bids:[{price:bid,size:"10"}],asks:[{price:ask,size:"10"}]});
+    socket.emit("message",JSON.stringify([book("up","0.4","0.41"),book("down","0.59","0.6")]));
+    expect(feed.isHealthy()).toBe(true);
+
+    socket.emit("message","{malformed");
+
+    expect(feed.isHealthy()).toBe(false);
+    expect(events.at(-1)).toMatchObject({kind:"bookStatus",healthy:false,
+      connected:false,reason:"transport_disconnected"});
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.sockets).toHaveLength(2);
+  });
+
   it.each(["INVALID AUTH", JSON.stringify({type:"user",status:"unauthorized"})])(
     "disables authenticated feed on explicit rejection: %s", async (rejection) => {
       const events: FeedEvent[] = [];
@@ -176,6 +198,24 @@ describe("live websocket safety", () => {
       expect(events).toContainEqual(expect.objectContaining({kind:"userStatus",healthy:false}));
     },
   );
+
+  it("aborts a user-ready waiter and removes its timeout", async () => {
+    const feed = runUserFeed(() => {}, {
+      creds:{key:"test",secret:"test",passphrase:"test"}, conditionId:"market",
+      upToken:"up", downToken:"down", isOurOrder:()=>false,
+    }, Date.now()/1000+60);
+    stop = feed.stop;
+    await openSocket();
+    const timersBeforeWait = vi.getTimerCount();
+    const controller = new AbortController();
+    const pending = feed.waitUntilReady(30_000, controller.signal);
+    expect(vi.getTimerCount()).toBe(timersBeforeWait + 1);
+
+    controller.abort();
+
+    await expect(pending).rejects.toThrow(/abort/i);
+    expect(vi.getTimerCount()).toBe(timersBeforeWait);
+  });
 
   it("waits for the built-in reconnect before taking the final trade snapshot", async () => {
     const events: FeedEvent[] = [];
@@ -224,5 +264,69 @@ describe("live websocket safety", () => {
     await vi.waitFor(() => expect(feed.isHealthy()).toBe(true));
     expect(verifyAuthenticated).toHaveBeenCalledTimes(1);
     expect(events).toContainEqual(expect.objectContaining({kind:"userStatus", healthy:true}));
+  });
+
+  it("marks malformed authenticated frames discontinuous and runs reconnect compensation", async () => {
+    const events: FeedEvent[]=[];
+    const fetchRecentTrades=vi.fn().mockResolvedValue([]);
+    const fetchOpenOrders=vi.fn().mockResolvedValue([]);
+    const reconcileAfterReconnect=vi.fn().mockResolvedValue(undefined);
+    const feed=runUserFeed((event)=>events.push(event),{
+      creds:{key:"test",secret:"test",passphrase:"test"},conditionId:"market",
+      upToken:"up",downToken:"down",isOurOrder:()=>false,fetchRecentTrades,fetchOpenOrders,reconcileAfterReconnect,
+    },Date.now()/1000+60);
+    stop=feed.stop;
+    const first=await openSocket();
+    first.emit("message","authenticated");
+    expect(feed.isHealthy()).toBe(true);
+
+    first.emit("message","{malformed");
+
+    expect(feed.isHealthy()).toBe(false);
+    expect(feed.isContinuous?.()).toBe(false);
+    expect(first.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.sockets).toHaveLength(2);
+    const second=mocks.sockets[1];
+    second.emit("open");
+    await vi.advanceTimersByTimeAsync(250);
+    await vi.waitFor(()=>expect(reconcileAfterReconnect).toHaveBeenCalledOnce());
+    second.emit("message","authenticated");
+    expect(feed.isContinuous?.()).toBe(true);
+    expect(fetchRecentTrades).toHaveBeenCalledTimes(2);
+    expect(fetchOpenOrders).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not leave a failed reconnect compensation socket permanently locked", async () => {
+    const fetchRecentTrades = vi.fn().mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("temporary REST failure"));
+    const fetchOpenOrders = vi.fn().mockResolvedValue([]);
+    const feed = runUserFeed(() => {}, {
+      creds:{key:"test",secret:"test",passphrase:"test"}, conditionId:"market",
+      upToken:"up", downToken:"down", isOurOrder:()=>false, fetchRecentTrades, fetchOpenOrders,
+    }, Date.now()/1000+60);
+    stop = feed.stop;
+    const first = await openSocket();
+    first.emit("message", "authenticated");
+    expect(feed.isHealthy()).toBe(true);
+    first.emit("close");
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.sockets).toHaveLength(2);
+    mocks.sockets[1].emit("open");
+    await vi.advanceTimersByTimeAsync(2_250);
+    expect(mocks.sockets).toHaveLength(3);
+    expect(feed.isContinuous?.()).toBe(false);
+  });
+
+  it("passes the venue order status separately from the user event type", async () => {
+    const onOrderEvent = vi.fn();
+    const feed = runUserFeed(() => {}, {
+      creds:{key:"test",secret:"test",passphrase:"test"}, conditionId:"market",
+      upToken:"up", downToken:"down", isOurOrder:id=>id === "order-1", onOrderEvent,
+    }, Date.now()/1000+60);
+    stop = feed.stop;
+    const socket = await openSocket();
+    socket.emit("message", "authenticated");
+    socket.emit("message", JSON.stringify({ event_type:"order", type:"UPDATE", status:"LIVE", id:"order-1", size_matched:"0" }));
+    expect(onOrderEvent).toHaveBeenCalledWith(expect.objectContaining({ orderId:"order-1", type:"UPDATE", venueStatus:"LIVE" }));
   });
 });

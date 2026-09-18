@@ -75,13 +75,14 @@ it("run submits a fill-driven hedge before the next book or heartbeat when REST 
   vi.spyOn(AccountExecutionGate.prototype, "prepare").mockImplementation(() => {});
   vi.spyOn(AccountExecutionGate.prototype, "transition").mockImplementation(() => {});
   const executor = new Executor(true, 20, 20, 50);
+  const cancelAll = vi.fn(async () => undefined);
   const submitOrder = vi.fn(async (_order: { tokenId: string; price: number; size: number }) => ({
     success: true, orderId: `order-${submitOrder.mock.calls.length}`,
   }));
   (executor as unknown as { clob: unknown }).clob = {
     funder: account, creds: { key: "test", secret: "test", passphrase: "test" },
     tickSize: async () => 0.01, minOrderSize: () => 5, warmMarket: async () => 0,
-    submitOrder, cancelAll: vi.fn(async () => undefined), stopHeartbeat: vi.fn(),
+    submitOrder, cancelAll, stopHeartbeat: vi.fn(),
   };
   vi.spyOn(Executor, "newLive").mockResolvedValue(executor);
   const openOrders = vi.spyOn(executor, "getOpenOrders").mockRejectedValue(new Error("REST unavailable"));
@@ -100,6 +101,10 @@ it("run submits a fill-driven hedge before the next book or heartbeat when REST 
     await vi.advanceTimersByTimeAsync(0);
     expect(pushBook).toBeTypeOf("function");
     expect(pushUser).toBeTypeOf("function");
+    pushBook!({ kind: "bookStatus", healthy: false, connected: true,
+      reason: "connected_waiting_book", tsUnix: now / 1000 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancelAll).not.toHaveBeenCalled();
     pushBook!({ kind: "book", snapshot: {
       source: "polymarket-ws", tsUnix: now / 1000,
       upExchangeTsUnix: now / 1000, downExchangeTsUnix: now / 1000,

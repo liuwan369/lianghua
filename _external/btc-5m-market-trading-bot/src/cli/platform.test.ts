@@ -138,8 +138,61 @@ describe("generic platform CLI lifecycle", () => {
     expect(mocks.start).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(2000);
     expect(mocks.stop).not.toHaveBeenCalled();
-    expect(mocks.addMarkets).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: "next" })]));
+    expect(mocks.addMarkets).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: "next" })]),
+      expect.anything(),
+    );
     process.emit("SIGTERM"); await running;
+  });
+
+  it("emits one exact market-end timer independently of the maintenance interval", async () => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    const now = Date.now() / 1000;
+    mocks.discover.mockResolvedValue([{ ...market, startsAt: now - 299, endsAt: now + 1 }]);
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "0", "--timer-ms", "60000"]);
+    await flush();
+    expect(mocks.ingest.mock.calls.filter(([event]) => event.kind === "timer")).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mocks.ingest.mock.calls.filter(([event]) => event.kind === "timer")).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.ingest.mock.calls.filter(([event]) => event.kind === "timer")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(mocks.ingest.mock.calls.filter(([event]) => event.kind === "timer")).toHaveLength(1);
+
+    process.emit("SIGTERM"); await running;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("prewarms a newly published market before the exact five-minute boundary", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(589_000);
+    const configPath = join(temporary, "reversal.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    const makeMarket = (start: number) => ({ ...market, id: `condition-${start}`, name: `btc-updown-5m-${start}`,
+      startsAt: start, endsAt: start + 300, instruments: market.instruments.map(instrument => ({ ...instrument,
+        marketId: `condition-${start}`, tokenId: `${instrument.tokenId}-${start}` })) });
+    const current = makeMarket(300), next = makeMarket(600);
+    mocks.discover.mockImplementation(async (at?: number) => {
+      if (at == null || at < 600) return [current];
+      return Date.now() >= 599_250 ? [next] : [];
+    });
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "0", "--timer-ms", "60000"]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.addMarkets.mock.calls.flat(2)).not.toContainEqual(expect.objectContaining({ id: next.id }));
+
+    await vi.advanceTimersByTimeAsync(10_250);
+
+    expect(mocks.addMarkets).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: next.id })]),
+      expect.anything(),
+    );
+    expect(Date.now()).toBeLessThan(600_000);
+    process.emit("SIGTERM"); await running;
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("runs without a strategy, emits timer events, then cancels/stops and closes durable state", async () => {
@@ -157,6 +210,49 @@ describe("generic platform CLI lifecycle", () => {
     expect(output.mock.calls.map(args => JSON.parse(String(args[0])))).toEqual([
       expect.objectContaining({ status: "starting", cashUsd: null }),
       expect.objectContaining({ status: "running", strategy: null }), expect.objectContaining({ status: "stopped" })]);
+  });
+
+  it("does not add a market when pending discovery completes after shutdown", async () => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    let finishDiscovery!: (markets: typeof market[]) => void;
+    const pending = new Promise<typeof market[]>(resolve => { finishDiscovery = resolve; });
+    mocks.discover.mockResolvedValueOnce([market]).mockImplementation(() => pending);
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath, "--duration-sec", "0"]);
+    await flush();
+    process.emit("SIGTERM");
+    finishDiscovery([{ ...market, id: "next-condition", instruments: market.instruments.map(instrument => ({ ...instrument, marketId: "next-condition" })) }]);
+    await running;
+    expect(mocks.addMarkets).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("starts platform shutdown before waiting for hanging discovery", async () => {
+    vi.useFakeTimers();
+    const configPath = join(temporary, "reversal.json");
+    writeFileSync(configPath, JSON.stringify({ strategyId: "btc-reversal", config: {} }));
+    const discoverySignals: AbortSignal[] = [];
+    let finishDiscovery!: () => void;
+    const pending = new Promise<typeof market[]>(resolve => { finishDiscovery = () => resolve([]); });
+    mocks.discover.mockResolvedValueOnce([market]).mockImplementation(
+      (_at?: number, _directOnly?: boolean, signal?: AbortSignal) => {
+        if (signal) discoverySignals.push(signal);
+        return pending;
+      },
+    );
+    const running = runPlatformCli(["--live", "--strategy", "btc-reversal", "--strategy-config", configPath,
+      "--duration-sec", "0"]);
+    await flush();
+    expect(discoverySignals.length).toBeGreaterThan(0);
+
+    process.emit("SIGTERM");
+
+    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledWith("SIGTERM"));
+    finishDiscovery();
+    await running;
+    expect(discoverySignals.every(signal => signal.aborted)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("uses supplied markets and attaches only the requested plugin", async () => {
@@ -231,7 +327,7 @@ describe("generic platform CLI lifecycle", () => {
     const levels = Array.from({ length: 8 }, (_, index) => [0.4 - index * 0.01, index + 1]);
     connection.platform.market.books = () => [{ tokenId: "yes", ts: 123, bids: levels, asks: levels }];
     const order = { clientOrderId: "client", orderId: "venue", strategyId: "manual", tokenId: "yes",
-      status: "OPEN", direction: "BUY", price: 0.4, shares: 5, filledShares: 0, reservedUsd: 2,
+      status: "OPEN", venueStatus: "delayed", direction: "BUY", price: 0.4, shares: 5, filledShares: 0, reservedUsd: 2,
       reservedShares: 0, cancelRequestedAt: 122.75, cancelAckAt: 123, cancelAckLatencyMs: 250, updatedAt: 123 };
     mocks.start.mockImplementation(() => {
       const record = mocks.subscribe.mock.calls.at(-1)![0];
@@ -264,7 +360,8 @@ describe("generic platform CLI lifecycle", () => {
     expect(rows.at(-1).runtime.books[0].stale).toBe(true);
     expect(rows.at(-1).runtime.books[0].received_age_ms).toBeGreaterThan(10_000);
     expect(rows[1]).toMatchObject({ event: "order", order_id: "venue", strategy_id: "manual",
-      direction: "BUY", side: "YES", market_slug: "Binary market", sign_latency_ms: null, ack_latency_ms: null,
+      direction: "BUY", side: "YES", market_slug: "Binary market", venue_status: "delayed",
+      sign_latency_ms: null, ack_latency_ms: null,
       cancel_requested_at: 122.75, cancel_ack_at: 123, cancel_ack_latency_ms: 250 });
     expect(rows[2]).toMatchObject({ event_id: 'fill:["trade","venue"]', strategy_id: "manual",
       fee: 0, is_maker: true, engine_ts: 124 });

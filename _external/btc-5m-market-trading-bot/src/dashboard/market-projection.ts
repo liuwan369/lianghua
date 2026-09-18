@@ -93,14 +93,17 @@ export class ClobMarketProjection {
   }
 
   markConnected(value = true): void { this.connected = value; }
-  disconnect(): void {
-    // A reconnect must wait for a fresh bilateral snapshot.  Retaining the
-    // previous book would make a silent socket look live after reconnect.
-    this.connected = false;
+  invalidateBook(): void {
     this.up = undefined;
     this.down = undefined;
     this.upReceivedAt = 0;
     this.downReceivedAt = 0;
+  }
+  disconnect(): void {
+    // A reconnect must wait for a fresh bilateral snapshot. Retaining the
+    // previous book would make a silent socket look live after reconnect.
+    this.connected = false;
+    this.invalidateBook();
   }
   isConnected(): boolean { return this.connected; }
 

@@ -41,6 +41,7 @@ export interface UserFeedOptions {
   onOrderEvent?: (event: {
     orderId: string;
     type: string;
+    venueStatus?: string;
     sizeMatched?: number;
     receivedAtMonoMs: number;
   }) => void;
@@ -53,7 +54,7 @@ export type UserFeedEvent =
 
 export interface UserFeedControl {
   stop: () => void;
-  waitUntilReady: (timeoutMs?: number) => Promise<void>;
+  waitUntilReady: (timeoutMs?: number, signal?: AbortSignal) => Promise<void>;
   isHealthy: (maxStaleMs?: number) => boolean;
   registerOrder: (orderId: string, tradeIds?: string[]) => void;
   reconcileRecentTrades: (afterUnix: number) => Promise<UserFeedEvent[]>;
@@ -484,7 +485,8 @@ export function runUserFeed(
       if (eventType === "order" && orderId && opts.isOurOrder(orderId)) {
         opts.onOrderEvent?.({
           orderId,
-          type: String(value.type ?? value.status ?? "").toUpperCase(),
+          type: String(value.type ?? "").toUpperCase(),
+          venueStatus: typeof value.status === "string" ? value.status : undefined,
           sizeMatched: num(value.size_matched),
           receivedAtMonoMs: performance.now(),
         });
@@ -578,6 +580,13 @@ export function runUserFeed(
                 throw new Error("authenticated account reconciliation failed after reconnect");
               }
             }
+            else {
+              ws.terminate();
+              throw new Error("authenticated account reconciliation incomplete after reconnect");
+            }
+          } else {
+            ws.terminate();
+            throw new Error("authenticated account reconciliation unavailable after reconnect");
           }
         } else {
           if (!discontinuity && authenticated) setReady(true);
@@ -622,8 +631,15 @@ export function runUserFeed(
                 }
                 pending.accept(raw);
               }
-            } catch {
-              /* ignore */
+            } catch (error) {
+              discontinuity = true;
+              gapStartUnix ??= lastTransportAtMs / 1000;
+              console.warn(`user message rejected: ${error instanceof SyntaxError ? "invalid_json" : "processing_failed"}`);
+              try { setReady(false); }
+              catch { console.warn("user unhealthy status notification failed"); }
+              try { opts.ledger?.markDiscontinuous("user websocket message processing failed"); }
+              catch { console.warn("user continuity marker write failed"); }
+              ws.terminate();
             }
           });
           ws.on("close", () => { gapStartUnix ??= lastTransportAtMs / 1000; resolve(); });
@@ -653,26 +669,48 @@ export function runUserFeed(
       setReady(false);
       activeWs?.terminate();
       activeWs = undefined;
+      for (const waiter of readyWaiters) waiter();
+      readyWaiters.clear();
     },
-    waitUntilReady: (timeoutMs = 10_000) => {
+    waitUntilReady: (timeoutMs = 10_000, signal?: AbortSignal) => {
       if (ready) return Promise.resolve();
+      if (!alive) return Promise.reject(new Error("user websocket stopped before becoming ready"));
+      if (signal?.aborted) return Promise.reject(signal.reason);
       const generation = readyGeneration;
       return new Promise<void>((resolve, reject) => {
         let done = false;
-        const onReady = () => {
-          if (done || readyGeneration === generation) return;
-          done = true;
+        const cleanup = () => {
           clearTimeout(timer);
           readyWaiters.delete(onReady);
+          signal?.removeEventListener("abort", onAbort);
+        };
+        const onReady = () => {
+          if (done) return;
+          if (!alive) {
+            done = true;
+            cleanup();
+            reject(new Error("user websocket stopped before becoming ready"));
+            return;
+          }
+          if (readyGeneration === generation) return;
+          done = true;
+          cleanup();
           resolve();
+        };
+        const onAbort = () => {
+          if (done) return;
+          done = true;
+          cleanup();
+          reject(signal?.reason);
         };
         const timer = setTimeout(() => {
           if (done) return;
           done = true;
-          readyWaiters.delete(onReady);
+          cleanup();
           reject(new Error(`user websocket not ready after ${timeoutMs}ms`));
         }, timeoutMs);
         readyWaiters.add(onReady);
+        signal?.addEventListener("abort", onAbort, { once: true });
       });
     },
     isHealthy: (maxStaleMs = 25_000) =>

@@ -47,6 +47,49 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe("continuous market platform adapter", () => {
+  it("pauses on an incomplete book without reporting a transport disconnect", async () => {
+    let bookSink: FeedSink | undefined;
+    mocks.books.mockImplementation((sink: FeedSink) => {
+      bookSink = sink;
+      sink({ kind: "bookStatus", healthy: true, connected: true, reason: "complete_book", tsUnix: Date.now() / 1000 });
+      return { stop: vi.fn(), isHealthy: () => true };
+    });
+    const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
+    const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],
+      limits: { capitalUsd: 148, dailyLossUsd: null, maxOrderUsd: 148, maxOpenOrders: 10 }, persist: () => {} });
+    const events: unknown[] = [];
+    const unsubscribe = connection.platform.subscribe(event => events.push(event));
+    await connection.start();
+
+    bookSink!({ kind: "bookStatus", healthy: false, connected: true,
+      reason: "incomplete_book", tsUnix: Date.now() / 1000 });
+    expect(events).not.toContainEqual(expect.objectContaining({ kind: "error", message: "market_feed_disconnected" }));
+    bookSink!({ kind: "bookStatus", healthy: false, connected: false,
+      reason: "transport_disconnected", tsUnix: Date.now() / 1000 });
+    expect(events).toContainEqual(expect.objectContaining({ kind: "error", message: "market_feed_disconnected" }));
+
+    unsubscribe(); await connection.stop();
+  });
+
+  it("aborts an in-flight market warmup before opening new feeds", async () => {
+    const now = Date.now() / 1000, current = market("current", now - 5, now + 295);
+    const connection = await connectPolymarketPlatform({ mode: "live", markets: [current],
+      limits: { capitalUsd: 148, dailyLossUsd: null, maxOrderUsd: 148, maxOpenOrders: 10 }, persist: () => {} });
+    await connection.start();
+    let finishWarm!: () => void;
+    mocks.warm.mockImplementationOnce(() => new Promise<void>(resolve => { finishWarm = resolve; }));
+    const controller = new AbortController();
+    const adding = connection.addMarkets([market("next", now + 295, now + 595)], controller.signal);
+    await vi.waitFor(() => expect(mocks.warm).toHaveBeenCalledTimes(2));
+    controller.abort();
+
+    await expect(adding).rejects.toThrow();
+    expect(mocks.books).toHaveBeenCalledTimes(1);
+    expect(mocks.users).toHaveBeenCalledTimes(1);
+    finishWarm();
+    await connection.stop();
+  });
+
   it("uses the configured account RPC before the public fallback", async () => {
     vi.stubEnv("POLYGON_RPC", ""); vi.stubEnv("PM_ACCOUNT_RPC_URL", "https://primary.example/rpc");
     vi.stubEnv("PM_ACCOUNT_RPC_FALLBACK_URL", "https://fallback.example/rpc");
@@ -71,6 +114,15 @@ describe("continuous market platform adapter", () => {
       positions: { available: true, complete: true, items: [] }, open_orders: { available: true, complete: true, items: [] } });
     expect(result.cashAt).toBe(Date.parse("2026-09-17T12:00:01.000Z") / 1000);
     expect(result.at).toBe(Date.parse("2026-09-17T12:00:03.000Z") / 1000);
+  });
+
+  it("normalizes official order status in account snapshots", () => {
+    const result = accountSnapshot({ wallet: "wallet", checked_at: "2026-09-17T12:00:03.000Z",
+      collateral: { available: true, complete: true, value: 200 },
+      positions: { available: true, complete: true, items: [] },
+      open_orders: { available: true, complete: true, items: [{ id: "delayed-order", asset_id: "UP",
+        side: "BUY", original_size: "5", size_matched: "0", price: ".7", status: "DELAYED" }] } });
+    expect(result.openOrders[0]).toMatchObject({ orderId: "delayed-order", status: "OPEN", venueStatus: "delayed" });
   });
 
   it("excludes explicit settled zero-value residue from executable positions", () => {
@@ -142,13 +194,19 @@ describe("continuous market platform adapter", () => {
     await connection.start();
     mocks.submit.mockImplementation(async args => {
       args.onPrepared({ orderHash: "prepared-hash", signedPayload: { signature: "signed" }, preparedAt: now });
-      return { success: true, orderId: "prepared-hash", tradeIds: ["ack-trade"] };
+      return { success: true, orderId: "prepared-hash", status: "delayed", tradeIds: ["ack-trade"] };
     });
     const order = await connection.platform.orders.submit({ clientOrderId: "stage", strategyId: "btc-reversal", tokenId: "current-UP",
       direction: "BUY", price: 0.7, shares: 5, postOnly: false, timeInForce: "GTC" });
     const register = mocks.users.mock.results[0].value.registerOrder;
     expect(register).toHaveBeenNthCalledWith(1, "prepared-hash", []);
     expect(register).toHaveBeenNthCalledWith(2, "prepared-hash", ["ack-trade"]);
+    expect(order).toMatchObject({ status: "OPEN", venueStatus: "delayed" });
+    const onOrderEvent = mocks.users.mock.calls[0][1].onOrderEvent;
+    onOrderEvent({ orderId: order.orderId, type: "UPDATE", venueStatus: "LIVE", receivedAtMonoMs: 1 });
+    expect(connection.platform.orders.get(order.orderId!)).toMatchObject({ status: "OPEN", venueStatus: "live" });
+    onOrderEvent({ orderId: order.orderId, type: "UPDATE", venueStatus: "MATCHED", receivedAtMonoMs: 2 });
+    expect(connection.platform.orders.get(order.orderId!)).toMatchObject({ status: "OPEN", venueStatus: "matched", filledShares: 0 });
     await connection.platform.orders.cancel(order.orderId!);
     connection.platform.core.confirmCancelled(order.orderId!, true);
     await connection.stop();
@@ -179,7 +237,7 @@ describe("continuous market platform adapter", () => {
       direction: "BUY", price: 0.7, shares: 5, postOnly: false, timeInForce: "GTC" });
     mocks.getOrder.mockResolvedValue({ status: "LIVE" });
     await expect(connection.recoverAccount()).rejects.toThrow("missing order needs trade/cancel evidence");
-    expect(connection.platform.orders.get(order.orderId!)?.status).toBe("OPEN");
+    expect(connection.platform.orders.get(order.orderId!)).toMatchObject({ status: "OPEN", venueStatus: "live" });
     await connection.platform.orders.cancel(order.orderId!);
     connection.platform.core.confirmCancelled(order.orderId!, true);
     await connection.stop();

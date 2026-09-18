@@ -7,6 +7,11 @@ import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import type { FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
 
+const MARKET_WINDOW_SEC = 300;
+const DISCOVERY_PREWARM_MS = 10_000;
+const DISCOVERY_PREWARM_RETRY_MS = 250;
+const DISCOVERY_POST_BOUNDARY_MS = 20_000;
+
 export interface MarketSnapshotOptions {
   output: string;
   durationSec: number;
@@ -46,14 +51,14 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
 
 export interface MarketSnapshotDependencies {
   now: () => number;
-  discover: (at: number) => Promise<Market | undefined>;
+  discover: (at: number, directOnly?: boolean, signal?: AbortSignal) => Promise<Market | undefined>;
   feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
 }
 
 const defaults: MarketSnapshotDependencies = {
   now: () => Date.now() / 1000,
-  discover: at => findMarket(at, false),
+  discover: (at, directOnly = false, signal) => findMarket(at, false, directOnly, signal),
   feed: runPolymarketFeed,
   publish: publishSnapshot,
 };
@@ -67,10 +72,19 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   let discoveryJob: Promise<void> | undefined;
   let publishTimer: ReturnType<typeof setInterval> | undefined;
   let discoveryTimer: ReturnType<typeof setInterval> | undefined;
+  let discoveryPrewarmStartTimer: ReturnType<typeof setTimeout> | undefined;
+  let discoveryBoundaryTimer: ReturnType<typeof setTimeout> | undefined;
+  let discoveryPrewarmTimer: ReturnType<typeof setInterval> | undefined;
+  let discoveryPrewarmStopTimer: ReturnType<typeof setTimeout> | undefined;
   let durationTimer: ReturnType<typeof setTimeout> | undefined;
   let finish!: () => void;
   const finished = new Promise<void>(resolvePromise => { finish = resolvePromise; });
-  const stop = () => { stopped = true; finish(); };
+  const discoveryAbort = new AbortController();
+  const stop = () => {
+    stopped = true;
+    discoveryAbort.abort();
+    finish();
+  };
   const publish = () => {
     const now = deps.now();
     for (const [key, item] of active) {
@@ -88,12 +102,15 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   const safePublish = () => {
     try { publish(); } catch (error) { failure ??= error; stop(); }
   };
-  const discover = (): Promise<void> => {
+  const discover = (target?: number, directOnly = false): Promise<void> => {
     if (discoveryJob || stopped) return discoveryJob ?? Promise.resolve();
     discoveryJob = (async () => {
       const now = deps.now();
-      const next = (Math.floor(now / 300) + 1) * 300;
-      const candidates = await Promise.allSettled([deps.discover(now), deps.discover(next)]);
+      const next = target ?? (Math.floor(now / MARKET_WINDOW_SEC) + 1) * MARKET_WINDOW_SEC;
+      const candidates = target == null
+        ? await Promise.allSettled([deps.discover(now, false, discoveryAbort.signal),
+          deps.discover(next, false, discoveryAbort.signal)])
+        : await Promise.allSettled([deps.discover(next, directOnly, discoveryAbort.signal)]);
       if (stopped) return;
       for (const result of candidates) {
         const market = result.status === "fulfilled" ? result.value : undefined;
@@ -104,14 +121,42 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
           if (event.kind === "book") projection.applySnapshot(event.snapshot);
           else if (event.kind === "bookStatus") {
             if (event.healthy) projection.markConnected(true);
+            else if (event.connected) { projection.markConnected(true); projection.invalidateBook(); }
             else projection.disconnect();
           }
         }, market.upToken, market.downToken, market.end);
         active.set(market.slug, { market, projection, stop: control.stop });
       }
       safePublish();
-    })().catch(error => { failure ??= error; stop(); }).finally(() => { discoveryJob = undefined; });
+    })().catch(error => {
+      if (!stopped) { failure ??= error; stop(); }
+    }).finally(() => { discoveryJob = undefined; });
     return discoveryJob;
+  };
+  const scheduleBoundaryDiscovery = () => {
+    if (stopped) return;
+    const nowMs = deps.now() * 1000;
+    const boundaryMs = (Math.floor(nowMs / (MARKET_WINDOW_SEC * 1000)) + 1) * MARKET_WINDOW_SEC * 1000;
+    const boundaryPrepared = () => [...active.values()].some(item =>
+      item.market.start <= boundaryMs / 1000 && boundaryMs / 1000 < item.market.end);
+    const stopPrewarm = () => {
+      clearInterval(discoveryPrewarmTimer);
+      discoveryPrewarmTimer = undefined;
+    };
+    const prewarm = () => {
+      void discover(boundaryMs / 1000, true).finally(() => { if (boundaryPrepared()) stopPrewarm(); });
+    };
+    const beginPrewarm = () => {
+      if (stopped || discoveryPrewarmTimer || boundaryPrepared()) return;
+      prewarm();
+      discoveryPrewarmTimer = setInterval(prewarm, DISCOVERY_PREWARM_RETRY_MS);
+    };
+    discoveryPrewarmStartTimer = setTimeout(beginPrewarm, Math.max(0, boundaryMs - DISCOVERY_PREWARM_MS - nowMs));
+    discoveryBoundaryTimer = setTimeout(() => { void discover(boundaryMs / 1000, true); }, Math.max(0, boundaryMs - nowMs));
+    discoveryPrewarmStopTimer = setTimeout(() => {
+      stopPrewarm();
+      scheduleBoundaryDiscovery();
+    }, Math.max(0, boundaryMs + DISCOVERY_POST_BOUNDARY_MS - nowMs));
   };
   const interrupt = () => stop();
   process.once("SIGINT", interrupt);
@@ -123,12 +168,15 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
       safePublish();
       publishTimer = setInterval(safePublish, options.publishMs);
       discoveryTimer = setInterval(() => { void discover(); }, options.discoveryMs);
+      scheduleBoundaryDiscovery();
       if (options.durationSec > 0) durationTimer = setTimeout(stop, options.durationSec * 1000);
       void discover();
     }
     await finished;
   } finally {
     clearInterval(publishTimer); clearInterval(discoveryTimer); clearTimeout(durationTimer);
+    clearTimeout(discoveryPrewarmStartTimer); clearTimeout(discoveryBoundaryTimer);
+    clearInterval(discoveryPrewarmTimer); clearTimeout(discoveryPrewarmStopTimer);
     for (const item of active.values()) { item.stop(); item.projection.disconnect(); }
     safePublish();
     await discoveryJob;

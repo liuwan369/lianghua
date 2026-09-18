@@ -45,6 +45,17 @@ describe("ClobMarketProjection", () => {
     expect(projection.snapshot(200).stale_reason).toContain("结束");
   });
 
+  it("distinguishes a connected incomplete book from a transport disconnect", () => {
+    const projection = new ClobMarketProjection({ upToken: "up", downToken: "down" });
+    projection.applySnapshot(quote(100));
+    projection.invalidateBook();
+    const incomplete = projection.snapshot(100.1);
+    expect(incomplete).toMatchObject({ collector_online: false, collector_connected: true, current_markets: [] });
+    expect(incomplete.stale_reason).toContain("完整 UP/DOWN");
+    projection.disconnect();
+    expect(projection.snapshot(100.2)).toMatchObject({ collector_online: false, collector_connected: false });
+  });
+
   it("rejects late old frames and incomplete halves", () => {
     const projection = new ClobMarketProjection({ upToken: "up", downToken: "down" });
     projection.applySnapshot(quote(100, 99.5));

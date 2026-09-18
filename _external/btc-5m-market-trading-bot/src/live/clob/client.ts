@@ -29,7 +29,7 @@ import {
   resolveWallet,
   signatureTypeLabel,
 } from "./wallet.js";
-import type { PreparedOrder } from "../../platform/contracts.js";
+import { normalizeVenueOrderStatus, type PreparedOrder, type VenueOrderStatus } from "../../platform/contracts.js";
 
 export type { ApiKeyCreds };
 
@@ -81,7 +81,7 @@ export function signedV2OrderHash(order: SignedOrder, negRisk: boolean): string 
 export interface SubmitOrderResult {
   success: boolean;
   orderId?: string;
-  status?: string;
+  status?: VenueOrderStatus;
   errorMsg?: string;
   latencyMs?: number;
   signLatencyMs?: number;
@@ -100,21 +100,27 @@ const DEFAULT_ORDER_TIMEOUT_MS = 3_000;
 const POST_ORDER_PATH = "/order";
 const CANCEL_ALL_PATH = "/cancel-all";
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
-      timeoutMs,
-    );
+    let done = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const complete = (callback: () => void) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      callback();
+    };
+    const onAbort = () => complete(() => reject(signal?.reason));
+    const timer = setTimeout(() => complete(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`))), timeoutMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
     promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
+      (value) => complete(() => resolve(value)),
+      (error) => complete(() => reject(error)),
     );
   });
 }
@@ -319,7 +325,9 @@ export class ClobWrapper {
     timeoutMs = this.requestTimeoutMs,
     onRequestStart?: (atMonoMs: number) => void,
   ): Promise<unknown> {
-    const request: RequestInit = { ...init, signal: AbortSignal.timeout(timeoutMs) };
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const request: RequestInit = { ...init,
+      signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout };
     onRequestStart?.(performance.now());
     const response = await fetch(`${DEFAULT_HOST}${path}`, request);
     const text = await response.text();
@@ -366,8 +374,8 @@ export class ClobWrapper {
     }, this.requestTimeoutMs, onRequestStart);
   }
 
-  private async currentVersion(): Promise<2> {
-    const payload = await this.fetchJson("/version", { method: "GET" });
+  private async currentVersion(signal?: AbortSignal): Promise<2> {
+    const payload = await this.fetchJson("/version", { method: "GET", signal });
     const version = (payload as Record<string, unknown>)?.version;
     if (version !== 2) {
       throw new Error("unsupported CLOB order version: this executor requires V2");
@@ -392,17 +400,20 @@ export class ClobWrapper {
     conditionId: string,
     timeoutMs = DEFAULT_WARM_TIMEOUT_MS,
     attempts = DEFAULT_WARM_ATTEMPTS,
+    signal?: AbortSignal,
   ): Promise<number> {
     const started = performance.now();
     let lastError: unknown;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      signal?.throwIfAborted();
       try {
         await withTimeout(
           (async () => {
             const [market, version] = await Promise.all([
               this.client.getClobMarketInfo(conditionId),
-              this.currentVersion(),
+              this.currentVersion(signal),
             ]);
+            signal?.throwIfAborted();
             const tokenId = market.t?.find((token) => token?.t)?.t;
             if (!tokenId) throw new Error(`market ${conditionId} has no tradable token`);
             const tickSize = sdkTickSize(Number(market.mts));
@@ -435,12 +446,15 @@ export class ClobWrapper {
               },
               { tickSize, negRisk: market.nr ?? false, version },
             );
+            signal?.throwIfAborted();
           })(),
           timeoutMs,
           "CLOB market warmup",
+          signal,
         );
         return performance.now() - started;
       } catch (error) {
+        signal?.throwIfAborted();
         lastError = error;
       }
     }
@@ -527,7 +541,7 @@ export class ClobWrapper {
           return {
             success,
             orderId,
-            status: resp?.status,
+            status: normalizeVenueOrderStatus(resp?.status),
             errorMsg: apiError ?? resp?.errorMsg,
             latencyMs: performance.now() - started,
             signLatencyMs,
@@ -664,7 +678,7 @@ export class ClobWrapper {
           return {
             success,
             orderId,
-            status: resp?.status,
+            status: normalizeVenueOrderStatus(resp?.status),
             errorMsg: apiError ?? resp?.errorMsg,
             latencyMs: performance.now() - started,
             signLatencyMs,
@@ -700,7 +714,7 @@ export class ClobWrapper {
       const response = await this.postSignedOrder(signed, type, args.postOnly ?? false);
       const error = responseError(response);
       return { success: !error && Boolean(response?.success ?? response?.orderID), orderId: response.orderID,
-        tradeIds: responseTradeIds(response), errorMsg: error };
+        status: normalizeVenueOrderStatus(response?.status), tradeIds: responseTradeIds(response), errorMsg: error };
     } catch (error) {
       return { success: false, stateUnknown: true, errorMsg: error instanceof Error ? error.message : "signed replay pending" };
     }
@@ -725,7 +739,7 @@ export class ClobWrapper {
       const orderId = resp?.orderID;
       const apiError = responseError(resp);
       return { success: !apiError && Boolean(resp?.success ?? orderId), orderId,
-        status: resp?.status, errorMsg: apiError ?? resp?.errorMsg,
+        status: normalizeVenueOrderStatus(resp?.status), errorMsg: apiError ?? resp?.errorMsg,
         latencyMs: performance.now() - started, tradeIds: responseTradeIds(resp) };
     } catch (e) {
       return { success: false, errorMsg: e instanceof Error ? e.message : String(e),

@@ -209,6 +209,7 @@ describe("ClobWrapper low-latency order path", () => {
     expect(result.decisionToPostLatencyMs).toBeTypeOf("number");
     expect(result.reactionLatencyMs).toBeTypeOf("number");
     expect(result.tradeIds).toEqual(["trade-1"]);
+    expect(result.status).toBe("live");
   });
 
   it("starts POST and ACK timing after asynchronous request headers are ready", async () => {
@@ -396,6 +397,32 @@ describe("ClobWrapper low-latency order path", () => {
     const wrapper = wrapperWith(client);
 
     await expect(wrapper.warmMarket("condition", 5, 1)).rejects.toThrow(/timed out/i);
+  });
+
+  it("aborts a stuck market warmup and clears its timeout", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ version: 2 })));
+    let finishMetadata!: () => void;
+    const client = {
+      getClobMarketInfo: vi.fn(() => new Promise(resolve => {
+        finishMetadata = () => resolve({ t: [{ t: "token" }], mts: "0.01", mos: 5, nr: false });
+      })),
+      createOrder: vi.fn(),
+    };
+    const wrapper = wrapperWith(client);
+    const controller = new AbortController();
+
+    const pending = wrapper.warmMarket("condition", 60_000, 2, controller.signal);
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(pending).rejects.toThrow(/abort/i);
+    expect(vi.getTimerCount()).toBe(0);
+    finishMetadata();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(client.createOrder).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 
   it("requests complete pages for unknown-state trade and order reconciliation", async () => {

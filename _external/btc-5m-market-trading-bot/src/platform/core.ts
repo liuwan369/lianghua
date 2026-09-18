@@ -323,8 +323,17 @@ export class TradingCore {
     const order = this.find(id);
     if (!order?.prepared || ack.status !== "accepted" || ack.orderId !== order.prepared.orderHash) return;
     order.orderId = ack.orderId; order.tradeIds = [...new Set([...(order.tradeIds ?? []), ...(ack.tradeIds ?? [])])];
+    if (ack.venueStatus && !order.venueStatus) order.venueStatus = ack.venueStatus;
     if (["SUBMITTING", "UNKNOWN"].includes(order.status)) order.status = order.filledShares > 0 ? "PARTIAL" : "OPEN";
     this.notify(order, true);
+  }
+  observeVenueStatus(id: string, status: NonNullable<OrderRecord["venueStatus"]>): boolean {
+    const order = this.find(id);
+    if (!order || order.venueStatus === status) return false;
+    order.venueStatus = status;
+    order.updatedAt = Math.max(order.updatedAt, this.clock());
+    this.notify(order, false);
+    return true;
   }
   private find(id: string): OrderRecord | undefined {
     return this.state.orders.find(order => order.orderId === id || order.clientOrderId === id);
@@ -552,6 +561,9 @@ export class TradingCore {
         queueMicrotask(() => this.emitLatency("durable_commit", order.durableCommitLatencyMs, order));
       }, timing);
       ackOutcome = ack.status;
+      // User WebSocket can report a newer venue state before the HTTP ACK
+      // arrives. An ACK only fills an unknown state; it must not move it back.
+      if (ack.venueStatus && !order.venueStatus) order.venueStatus = ack.venueStatus;
       order.tradeIds = ack.tradeIds; order.signLatencyMs = ack.signLatencyMs; order.ackLatencyMs = ack.ackLatencyMs;
       order.totalLatencyMs = ack.totalLatencyMs; order.triggerToPostLatencyMs = ack.triggerToPostLatencyMs;
       order.decisionToPostLatencyMs = ack.decisionToPostLatencyMs; order.reactionLatencyMs = ack.reactionLatencyMs;

@@ -64,4 +64,65 @@ describe("market snapshot CLI", () => {
     expect(output.every(snapshot => !snapshot.collector_online)).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it("aborts in-flight discovery when the snapshot process stops", async () => {
+    const controller = new AbortController();
+    const discover = vi.fn((_at: number, _directOnly?: boolean, signal?: AbortSignal) =>
+      new Promise<Market | undefined>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }));
+    const run = runMarketSnapshot(parseMarketSnapshotOptions(["--publish-ms", "1000"])!,
+      { discover, feed: vi.fn(), publish: vi.fn() }, controller.signal);
+    await vi.waitFor(() => expect(discover).toHaveBeenCalled());
+
+    controller.abort();
+
+    await expect(run).resolves.toBeUndefined();
+  });
+
+  it("prewarms the next market before the exact five-minute boundary", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(589_000);
+    const current: Market = { slug: "btc-300", conditionId: "c-300", upToken: "up-300", downToken: "down-300", start: 300, end: 600 };
+    const next: Market = { slug: "btc-600", conditionId: "c-600", upToken: "up-600", downToken: "down-600", start: 600, end: 900 };
+    const discover = vi.fn(async (at: number) => at < 600 ? current : Date.now() >= 599_250 ? next : undefined);
+    const feed = vi.fn((_sink: FeedSink, _up: string, _down: string, _deadline: number) => ({ stop: vi.fn() }));
+    const controller = new AbortController();
+    const options = parseMarketSnapshotOptions(["--publish-ms", "1000", "--discovery-ms", "15000"])!;
+    const run = runMarketSnapshot(options, { now: () => Date.now() / 1000, discover, feed, publish: vi.fn() }, controller.signal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(feed).toHaveBeenCalledTimes(1);
+    const initialDiscoveryCalls = discover.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(discover).toHaveBeenCalledTimes(initialDiscoveryCalls);
+    await vi.advanceTimersByTimeAsync(9_251);
+
+    expect(feed).toHaveBeenCalledWith(expect.any(Function), "up-600", "down-600", 900);
+    expect(Date.now()).toBeLessThan(600_000);
+    const nextFeedCalls = feed.mock.calls.filter(([, up]) => up === "up-600");
+    expect(nextFeedCalls).toHaveLength(1);
+    controller.abort(); await run;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps fast discovery alive when Gamma publishes the next market after the boundary", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(589_000);
+    const current: Market = { slug: "btc-300", conditionId: "c-300", upToken: "up-300", downToken: "down-300", start: 300, end: 600 };
+    const next: Market = { slug: "btc-600", conditionId: "c-600", upToken: "up-600", downToken: "down-600", start: 600, end: 900 };
+    const discover = vi.fn(async (at: number) => at < 600 ? current : Date.now() >= 606_000 ? next : undefined);
+    const feed = vi.fn(() => ({ stop: vi.fn() }));
+    const controller = new AbortController();
+    const options = parseMarketSnapshotOptions(["--publish-ms", "1000", "--discovery-ms", "15000"])!;
+    const run = runMarketSnapshot(options, { now: () => Date.now() / 1000, discover, feed, publish: vi.fn() }, controller.signal);
+
+    await vi.advanceTimersByTimeAsync(17_250);
+
+    expect(feed).toHaveBeenCalledWith(expect.any(Function), "up-600", "down-600", 900);
+    expect(Date.now()).toBeLessThan(615_000);
+    const callsAfterDiscovery = discover.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(discover.mock.calls.length).toBe(callsAfterDiscovery);
+    controller.abort(); await run;
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

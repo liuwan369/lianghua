@@ -10,6 +10,11 @@ import { PlatformStore } from "../platform/store.js";
 import { createBtcReversalStrategy, normalizeBtcReversalConfig, type BtcReversalConfig,
   type BtcReversalState, type BtcReversalStrategy } from "../strategies/btc-reversal.js";
 
+const MARKET_WINDOW_SEC = 300;
+const DISCOVERY_PREWARM_MS = 10_000;
+const DISCOVERY_PREWARM_RETRY_MS = 250;
+const DISCOVERY_POST_BOUNDARY_MS = 20_000;
+
 export interface PlatformCliOptions {
   mode: TradingMode;
   limits: HardLimits;
@@ -197,12 +202,19 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   let statusTimer: ReturnType<typeof setInterval> | undefined;
   let durationTimer: ReturnType<typeof setTimeout> | undefined;
   let marketTimer: ReturnType<typeof setTimeout> | undefined;
+  const marketEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const marketEndsProcessed = new Set<string>();
   let discoveryTimer: ReturnType<typeof setInterval> | undefined;
+  let discoveryPrewarmStartTimer: ReturnType<typeof setTimeout> | undefined;
+  let discoveryBoundaryTimer: ReturnType<typeof setTimeout> | undefined;
+  let discoveryPrewarmTimer: ReturnType<typeof setInterval> | undefined;
+  let discoveryPrewarmStopTimer: ReturnType<typeof setTimeout> | undefined;
   let controlTimer: ReturnType<typeof setInterval> | undefined;
   let settlementTimer: ReturnType<typeof setInterval> | undefined;
   let settlementJob: Promise<void> | undefined;
   const confirmedSettlements = new Set<string>();
   let discoveryJob: Promise<void> | undefined;
+  const discoveryAbort = new AbortController();
   let stopFileTimer: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
   let signalReason: string | undefined;
@@ -215,6 +227,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const stopRequested = new Promise<void>(done => { notifyStop = done; });
   const requestStop = (reason: string) => {
     signalReason ??= reason;
+    discoveryAbort.abort();
     try { reversal?.setPaused(true); } catch { /* Cleanup still needs to release process resources. */ }
     notifyStop?.();
   };
@@ -227,6 +240,23 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const remainingMs = lastExpiry * 1000 - Date.now();
     if (remainingMs <= 0) { requestStop("markets_expired"); return; }
     marketTimer = setTimeout(watchMarketExpiry, Math.min(remainingMs, 2_147_483_647));
+  };
+  const scheduleMarketEnd = (market: MarketInfo) => {
+    if (!continuousMarkets || signalReason || primaryFailure || marketEndsProcessed.has(market.id) || marketEndTimers.has(market.id)) return;
+    const trigger = () => {
+      marketEndTimers.delete(market.id);
+      if (signalReason || primaryFailure) return;
+      const remainingMs = market.endsAt * 1000 - Date.now();
+      if (remainingMs > 0) {
+        marketEndTimers.set(market.id, setTimeout(trigger, Math.min(remainingMs, 2_147_483_647)));
+        return;
+      }
+      if (marketEndsProcessed.has(market.id) || signalReason) return;
+      marketEndsProcessed.add(market.id);
+      try { connection?.platform.ingest({ kind: "timer", ts: Math.max(market.endsAt, Date.now() / 1000) }); }
+      catch (error) { primaryFailure ??= error; requestStop("market_end_event_failed"); }
+    };
+    trigger();
   };
   const interrupt = () => requestStop("SIGINT");
   const terminate = () => requestStop("SIGTERM");
@@ -250,6 +280,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       if (order.orderId) knownOrders.set(order.orderId, order);
       journal?.write("order", { client_order_id: order.clientOrderId, order_id: order.orderId ?? null,
         token_id: order.tokenId, strategy_id: order.strategyId, status: order.status,
+        venue_status: order.venueStatus ?? null,
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
         price: order.price, shares: order.shares, direction: order.direction, ...marketIdentity(order.tokenId),
         sign_latency_ms: order.signLatencyMs ?? null, ack_latency_ms: order.ackLatencyMs ?? null,
@@ -384,7 +415,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       }
     }
     phase = "market_discovery";
-    const markets = explicitMarkets ?? validateMarkets(await discoverBtcMarket());
+    const markets = explicitMarkets ?? validateMarkets(await discoverBtcMarket(undefined, false, discoveryAbort.signal));
     if (continuousMarkets && restored?.markets) {
       const unsettledTokens = new Set([
         ...restored.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
@@ -426,24 +457,61 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     if (connection && !signalReason) {
       phase = "running";
       if (continuousMarkets) {
-        const discover = () => {
-          if (discoveryJob || signalReason) return;
+        for (const market of selectedMarkets) scheduleMarketEnd(market);
+        const discover = (target?: number, directOnly = false): Promise<void> => {
+          if (discoveryJob || signalReason) return discoveryJob ?? Promise.resolve();
           discoveryJob = (async () => {
             const now = Date.now() / 1000;
-            const nextBoundary = (Math.floor(now / 300) + 1) * 300;
-            const candidates = await Promise.allSettled([discoverBtcMarket(now), discoverBtcMarket(nextBoundary)]);
+            const nextBoundary = target ?? (Math.floor(now / MARKET_WINDOW_SEC) + 1) * MARKET_WINDOW_SEC;
+            const candidates = target == null
+              ? await Promise.allSettled([
+                discoverBtcMarket(now, false, discoveryAbort.signal),
+                discoverBtcMarket(nextBoundary, false, discoveryAbort.signal),
+              ])
+              : await Promise.allSettled([discoverBtcMarket(nextBoundary, directOnly, discoveryAbort.signal)]);
+            if (signalReason || primaryFailure) return;
             for (const result of candidates) {
+              if (signalReason || primaryFailure) return;
               if (result.status !== "fulfilled") continue;
               const fresh = result.value.filter(market => market.endsAt > now && !selectedMarkets.some(old => old.id === market.id));
               if (fresh.length) {
-                await connection!.addMarkets(validateMarkets(fresh));
+                if (signalReason || primaryFailure) return;
+                await connection!.addMarkets(validateMarkets(fresh), discoveryAbort.signal);
+                for (const market of fresh) scheduleMarketEnd(market);
                 selectedMarkets = connection!.platform.market.list();
               }
             }
-          })().catch(() => reportError("market_discovery", "next_market_unavailable"))
+          })().catch(() => { if (!signalReason && !primaryFailure) reportError("market_discovery", "next_market_unavailable"); })
             .finally(() => { discoveryJob = undefined; });
+          return discoveryJob;
         };
-        discover(); discoveryTimer = setInterval(discover, 15_000);
+        const scheduleBoundaryDiscovery = () => {
+          if (signalReason || primaryFailure) return;
+          const nowMs = Date.now();
+          const boundaryMs = (Math.floor(nowMs / (MARKET_WINDOW_SEC * 1000)) + 1) * MARKET_WINDOW_SEC * 1000;
+          const boundaryPrepared = () => selectedMarkets.some(market =>
+            market.startsAt <= boundaryMs / 1000 && boundaryMs / 1000 < market.endsAt);
+          const stopPrewarm = () => {
+            clearInterval(discoveryPrewarmTimer);
+            discoveryPrewarmTimer = undefined;
+          };
+          const prewarm = () => {
+            void discover(boundaryMs / 1000, true).finally(() => { if (boundaryPrepared()) stopPrewarm(); });
+          };
+          const beginPrewarm = () => {
+            if (signalReason || primaryFailure || discoveryPrewarmTimer || boundaryPrepared()) return;
+            prewarm();
+            discoveryPrewarmTimer = setInterval(prewarm, DISCOVERY_PREWARM_RETRY_MS);
+          };
+          discoveryPrewarmStartTimer = setTimeout(beginPrewarm,
+            Math.max(0, boundaryMs - DISCOVERY_PREWARM_MS - nowMs));
+          discoveryBoundaryTimer = setTimeout(() => { void discover(boundaryMs / 1000, true); }, Math.max(0, boundaryMs - nowMs));
+          discoveryPrewarmStopTimer = setTimeout(() => {
+            stopPrewarm();
+            scheduleBoundaryDiscovery();
+          }, Math.max(0, boundaryMs + DISCOVERY_POST_BOUNDARY_MS - nowMs));
+        };
+        void discover(); discoveryTimer = setInterval(() => { void discover(); }, 15_000); scheduleBoundaryDiscovery();
       }
       if (reversal) {
         let lastConfig = JSON.stringify(strategyConfig);
@@ -503,19 +571,27 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       await stopRequested;
     }
   } catch (error) {
-    primaryFailure = error;
-    reportError(phase, "platform_run_failed");
+    const expectedStopAbort = signalReason && error instanceof Error && error.name === "AbortError";
+    if (!expectedStopAbort) {
+      primaryFailure = error;
+      reportError(phase, "platform_run_failed");
+    }
   } finally {
+    discoveryAbort.abort();
     clearInterval(timer); clearInterval(statusTimer); clearInterval(stopFileTimer);
     clearInterval(discoveryTimer); clearInterval(controlTimer); clearInterval(settlementTimer);
+    clearTimeout(discoveryPrewarmStartTimer); clearTimeout(discoveryBoundaryTimer);
+    clearInterval(discoveryPrewarmTimer); clearTimeout(discoveryPrewarmStopTimer);
     clearTimeout(durationTimer); clearTimeout(marketTimer);
-    await discoveryJob;
-    await settlementJob;
+    for (const marketEndTimer of marketEndTimers.values()) clearTimeout(marketEndTimer);
+    marketEndTimers.clear();
     try { await connection?.stop(signalReason ?? (primaryFailure ? "run_failed" : "run_complete")); }
     catch (error) {
       primaryFailure ??= error;
       reportError("shutdown", "platform_shutdown_failed");
     }
+    await discoveryJob;
+    await settlementJob;
     try { store?.close(); }
     catch (error) {
       primaryFailure ??= error;

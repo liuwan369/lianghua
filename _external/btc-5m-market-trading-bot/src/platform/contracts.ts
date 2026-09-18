@@ -53,9 +53,17 @@ export interface OrderRequest {
   roundBudgetUsd?: number;
 }
 export type OrderStatus = "SUBMITTING" | "OPEN" | "PARTIAL" | "FILLED" | "CANCELLED" | "REJECTED" | "UNKNOWN";
+export type VenueOrderStatus = "live" | "matched" | "delayed" | "unmatched" | "canceled" | "cancelled" | "expired";
+const VENUE_ORDER_STATUSES = new Set<VenueOrderStatus>(["live", "matched", "delayed", "unmatched", "canceled", "cancelled", "expired"]);
+export function normalizeVenueOrderStatus(value: unknown): VenueOrderStatus | undefined {
+  const status = typeof value === "string" ? value.trim().toLowerCase() as VenueOrderStatus : undefined;
+  return status && VENUE_ORDER_STATUSES.has(status) ? status : undefined;
+}
 export interface OrderRecord extends OrderRequest {
   orderId?: string;
   status: OrderStatus;
+  /** Last official CLOB order state; it does not replace the local lifecycle. */
+  venueStatus?: VenueOrderStatus;
   filledShares: number;
   reservedUsd: number;
   reservedShares: number;
@@ -193,6 +201,7 @@ export interface CoreState {
 }
 export interface GatewayAck {
   status: "accepted" | "rejected" | "unknown";
+  venueStatus?: VenueOrderStatus;
   orderId?: string;
   error?: string;
   tradeIds?: string[];

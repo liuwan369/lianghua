@@ -279,7 +279,8 @@ export function runPolymarketFeed(
   const setConnected = (value: boolean) => {
     if (connected === value) return;
     connected = value;
-    sink({ kind: "bookStatus", healthy: value, tsUnix: nowUnix() });
+    sink({ kind: "bookStatus", healthy: false, connected: value,
+      reason: value ? "connected_waiting_book" : "transport_disconnected", tsUnix: nowUnix() });
   };
 
   const loop = async () => {
@@ -368,11 +369,13 @@ export function runPolymarketFeed(
               const db = dn.bestBid();
               const da = dn.bestAsk();
               if (!ub || !ua || !db || !da) {
-                if (hasCompleteBook) sink({ kind: "bookStatus", healthy: false, tsUnix: nowUnix() });
+                if (hasCompleteBook) sink({ kind: "bookStatus", healthy: false, connected: true,
+                  reason: "incomplete_book", tsUnix: nowUnix() });
                 hasCompleteBook = false;
                 return;
               }
-              if (!hasCompleteBook) sink({ kind: "bookStatus", healthy: true, tsUnix: nowUnix() });
+              if (!hasCompleteBook) sink({ kind: "bookStatus", healthy: true, connected: true,
+                reason: "complete_book", tsUnix: nowUnix() });
               hasCompleteBook = true;
               const upTop = fastUp;
               const downTop = fastDown;
@@ -434,8 +437,12 @@ export function runPolymarketFeed(
                 downTickSize: tickSizes.down,
               };
               sink({ kind: "book", snapshot: snap });
-            } catch {
-              /* ignore */
+            } catch (error) {
+              hasCompleteBook = false;
+              console.warn(`polymarket message rejected: ${error instanceof SyntaxError ? "invalid_json" : "processing_failed"}`);
+              try { setConnected(false); }
+              catch { console.warn("polymarket unhealthy status notification failed"); }
+              ws.terminate();
             }
           });
           ws.on("close", () => {

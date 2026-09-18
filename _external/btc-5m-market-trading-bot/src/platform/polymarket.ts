@@ -9,6 +9,7 @@ import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
 import type { AccountSnapshot, Book, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
+import { normalizeVenueOrderStatus } from "./contracts.js";
 import { TradingPlatform } from "./platform.js";
 import { readCashFlowEvidence } from "./cash-flows.js";
 
@@ -17,11 +18,17 @@ const row = (value: unknown): Row => typeof value === "object" && value !== null
 const numeric = (value: unknown): number => value === null || value === undefined || value === "" ? NaN : Number(value);
 
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
-export async function discoverBtcMarket(at = Date.now() / 1000): Promise<MarketInfo[]> {
-  const market = await findMarket(at);
+export async function discoverBtcMarket(
+  at = Date.now() / 1000,
+  directOnly = false,
+  signal?: AbortSignal,
+): Promise<MarketInfo[]> {
+  const market = await findMarket(at, false, directOnly, signal);
   if (!market) return [];
   const instruments = await Promise.all([[market.upToken, "UP"], [market.downToken, "DOWN"]].map(async ([tokenId, outcome]) => {
-    const response = await fetch(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`, { signal: AbortSignal.timeout(8000) });
+    const timeout = AbortSignal.timeout(8000);
+    const response = await fetch(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`,
+      { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
     if (!response.ok) throw new Error("market rules unavailable");
     const book = row(await response.json());
     const tickSize = numeric(book.tick_size), minOrderSize = numeric(book.min_order_size);
@@ -42,9 +49,11 @@ export function accountSnapshot(raw: unknown): AccountSnapshot {
     if (direction !== "BUY" && direction !== "SELL") throw new Error("unknown account order direction");
     const shares = numeric(o.original_size ?? o.size), filledShares = numeric(o.size_matched ?? 0), price = numeric(o.price);
     if (!o.id || !o.asset_id || ![shares, filledShares, price].every(Number.isFinite)) throw new Error("invalid open account order");
+    const venueStatus = normalizeVenueOrderStatus(o.status);
     return { clientOrderId: `import:${String(o.id)}`, strategyId: "external", orderId: String(o.id),
       tokenId: String(o.asset_id), direction, price, shares, filledShares,
       timeInForce: "GTC", postOnly: false, status: filledShares > 0 ? "PARTIAL" : "OPEN",
+      ...(venueStatus ? { venueStatus } : {}),
       reservedUsd: direction === "BUY"
         ? Math.max(0, shares - filledShares) * (price + 0.07 * 0.25) : 0,
       reservedShares: direction === "SELL" ? Math.max(0, shares - filledShares) : 0, createdAt: at, updatedAt: at } as OrderRecord;
@@ -80,6 +89,7 @@ export class PolymarketGateway implements OrderGateway {
     return { status: response.success && response.orderId ? "accepted"
       : response.stateUnknown || response.orderId || response.success ? "unknown" : "rejected",
       orderId: response.orderId, error: response.errorMsg, tradeIds: response.tradeIds,
+      venueStatus: response.status,
       signLatencyMs: response.signLatencyMs, ackLatencyMs: response.ackLatencyMs,
       totalLatencyMs: response.latencyMs, triggerToPostLatencyMs: response.triggerToPostLatencyMs,
       decisionToPostLatencyMs: response.decisionToPostLatencyMs,
@@ -219,7 +229,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     try {
       if (event.kind === "bookStatus") {
         booksHealthy.set(market.id, event.healthy);
-        if (!event.healthy && market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error",
+        if (!event.healthy && event.connected !== true && market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error",
           strategyId: "btc-reversal", marketId: market.id, message: "market_feed_disconnected" });
         return;
       }
@@ -332,6 +342,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           replayed = true;
         }
         const status = String(detail.status ?? "").toUpperCase();
+        const venueStatus = normalizeVenueOrderStatus(detail.status);
+        if (venueStatus) platform.core.observeVenueStatus(order.orderId, venueStatus);
         if (["CANCELED", "CANCELLED", "EXPIRED"].includes(status)) cancelledIds.push(order.orderId);
         // Missing/404 or FILLED without its priced fills cannot release reserve.
       }
@@ -344,9 +356,25 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     return recoveryJob;
   };
   let feedDeadline = Infinity;
-  const startMarket = async (market: MarketInfo) => {
+  const duringMarketSetup = async (job: () => Promise<unknown>, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
+    if (!signal) { await job(); return; }
+    let onAbort!: () => void;
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try { await Promise.race([job(), aborted]); }
+    finally { signal.removeEventListener("abort", onAbort); }
+    signal.throwIfAborted();
+  };
+  const startMarket = async (market: MarketInfo, signal?: AbortSignal) => {
+    signal?.throwIfAborted();
     if (stopped || connectedMarkets.has(market.id)) return;
-    if (client && market.endsAt > Date.now() / 1000) await client.warmMarket(market.id);
+    if (client && market.endsAt > Date.now() / 1000) {
+      await duringMarketSetup(() => client!.warmMarket(market.id, undefined, undefined, signal), signal);
+    }
+    signal?.throwIfAborted();
     if (stopped) return;
     if (client) {
       market.instruments = market.instruments.map(instrument => {
@@ -367,6 +395,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         upToken: up.tokenId, downToken: down.tokenId, accountAddress: client.funder,
         includeSellTrades: true, includeTradeStatusUpdates: true, orderDirection: id => platform.orders.get(id)?.direction,
         isOurOrder: id => !!platform.orders.get(id),
+        onOrderEvent: event => {
+          const order = platform.orders.get(event.orderId);
+          const venueStatus = normalizeVenueOrderStatus(event.venueStatus);
+          if (order && venueStatus) platform.core.observeVenueStatus(event.orderId, venueStatus);
+        },
         fetchTrades: ids => client!.getTradesByIds(ids), fetchRecentTrades: after => client!.getRecentTrades(market.id, after),
         fetchOpenOrders: () => client!.getOpenOrders(market.id),
         reconcileAfterReconnect: async () => { await recoverAccount(); },
@@ -379,7 +412,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           user.registerOrder(order.orderId, order.tradeIds);
         }
       }
-      await user.waitUntilReady();
+      await duringMarketSetup(() => user.waitUntilReady(10_000, signal), signal);
     }
   };
   const cleanupExpiredFeeds = () => {
@@ -416,11 +449,13 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   return {
     platform,
     recoverAccount,
-    async addMarkets(markets: MarketInfo[]) {
+    async addMarkets(markets: MarketInfo[], signal?: AbortSignal) {
       for (const market of markets) {
+        signal?.throwIfAborted();
+        if (stopped) return;
         if (!options.markets.some(existing => existing.id === market.id)) options.markets.push(market);
         platform.ingest({ kind: "market", market });
-        if (started) await startMarket(market);
+        if (started) await startMarket(market, signal);
       }
     },
     async start() {
@@ -429,7 +464,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       feedDeadline = Date.now() / 1000 + (options.durationSec ?? 3600);
       if (client) stopHeartbeat = client.startHeartbeat();
       try {
-        await Promise.all(options.markets.map(startMarket));
+        await Promise.all(options.markets.map(market => startMarket(market)));
         if (client && options.restored) await recoverAccount().catch(() => {
           platform.ingest({ kind: "error", message: "startup account recovery remains pending" });
         });
@@ -444,12 +479,15 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     async stop(reason = "operator stop") {
       stopped = true; clearInterval(cleanupTimer); clearInterval(cashFlowTimer);
       cashFlowAbort.abort();
-      await recoveryJob?.catch(() => undefined);
+      let stopError: unknown;
       try { await platform.stop(reason); }
+      catch (error) { stopError = error; }
       finally {
         for (const control of controls) control.stop();
         bookHealth.clear(); stopHeartbeat?.(); client?.stopHeartbeat();
       }
+      await recoveryJob?.catch(() => undefined);
+      if (stopError) throw stopError;
     },
   };
 }

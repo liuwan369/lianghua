@@ -55,15 +55,16 @@ describe("strategy-independent account core", () => {
     const gateway: OrderGateway = { mode: "live", cancel: async () => true,
       submit: async (_request, _instrument, prepared) => {
         prepared!({ orderHash: "venue-hash", signedPayload: { signature: "signed" }, preparedAt: 101 });
+        core.observeVenueStatus("venue-hash", "matched");
         core.applyFill({ tradeId: "early", orderId: "venue-hash", tokenId: "up", direction: "BUY",
           price: 0.5, shares: 4, feeUsd: 0, ts: 101, isMaker: false, status: "MATCHED" });
-        return { status: "accepted", orderId: "venue-hash" };
+        return { status: "accepted", orderId: "venue-hash", venueStatus: "delayed" };
       } };
     core = new TradingCore({ account, instruments: [instrument], limits: {
       capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
     }, adapters: { gateway } });
     const order = await core.submit(request());
-    expect(order).toMatchObject({ orderId: "venue-hash", status: "FILLED", filledShares: 4 });
+    expect(order).toMatchObject({ orderId: "venue-hash", status: "FILLED", venueStatus: "matched", filledShares: 4 });
     expect(core.snapshot().cashUsd).toBe(18);
   });
 
@@ -79,6 +80,23 @@ describe("strategy-independent account core", () => {
     const order = await core.submit(request());
     expect(order).toMatchObject({ orderId: "lost-ack-hash", status: "UNKNOWN", reservedUsd: 2 });
     expect(core.risk().halted).toBe(true);
+    core.observeVenueStatus("lost-ack-hash", "matched");
+    core.recoverPreparedAck("lost-ack-hash", {
+      status: "accepted", orderId: "lost-ack-hash", venueStatus: "delayed",
+    });
+    expect(core.order("lost-ack-hash")).toMatchObject({ status: "OPEN", venueStatus: "matched", filledShares: 0 });
+  });
+  it("keeps venue acceptance status separate from the local order lifecycle", async () => {
+    const gateway: OrderGateway = { mode: "live", cancel: async () => true,
+      submit: async () => ({ status: "accepted", orderId: "delayed-1", venueStatus: "delayed" }) };
+    const core = new TradingCore({ account, instruments: [instrument], limits: {
+      capitalUsd: 20, dailyLossUsd: null, maxOrderUsd: 20, maxOpenOrders: 10,
+    }, adapters: { gateway } });
+    const order = await core.submit(request());
+    expect(order).toMatchObject({ orderId: "delayed-1", status: "OPEN", venueStatus: "delayed", filledShares: 0 });
+    expect(core.observeVenueStatus("delayed-1", "matched")).toBe(true);
+    expect(core.observeVenueStatus("delayed-1", "matched")).toBe(false);
+    expect(core.order("delayed-1")).toMatchObject({ status: "OPEN", venueStatus: "matched" });
   });
   it("compensates a failed provisional fill exactly once and blocks duplicate resubmission", async () => {
     const core = setup(), order = await core.submit(request());

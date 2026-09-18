@@ -886,7 +886,7 @@ async function runOneMarket(
         break;
 
       case "bookStatus":
-        if (cfg.live && !msg.healthy) {
+        if (cfg.live && !msg.healthy && msg.connected !== true) {
           console.error("Polymarket order book feed dropped — cancelling and stopping");
           await executor.cancelAll();
           throw new Error("Polymarket order book feed disconnected");

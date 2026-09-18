@@ -15,10 +15,15 @@ export function marketToken(mkt: Market, side: Side): string {
   return side === Side.Up ? mkt.upToken : mkt.downToken;
 }
 
-function httpInit(): RequestInit {
+function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function httpInit(signal?: AbortSignal): RequestInit {
   return {
     headers: { "User-Agent": "Mozilla/5.0 (btc-5m-live)" },
-    signal: AbortSignal.timeout(10_000),
+    signal: requestSignal(signal, 10_000),
   };
 }
 
@@ -131,9 +136,9 @@ function marketFrom(c: Candidate, fc: number): Market {
   };
 }
 
-async function fetchBySlug(slug: string): Promise<Candidate | undefined> {
+async function fetchBySlug(slug: string, signal?: AbortSignal): Promise<Candidate | undefined> {
   const url = `${GAMMA}/markets?slug=${slug}`;
-  const resp = await fetch(url, httpInit());
+  const resp = await fetch(url, httpInit(signal));
   if (!resp.ok) return undefined;
   const v = (await resp.json()) as unknown;
   return marketList(v)
@@ -144,14 +149,14 @@ async function fetchBySlug(slug: string): Promise<Candidate | undefined> {
 /** Fallback for environments where Gamma is unreachable but our local read-only
  * collector is available. This endpoint never places orders; it only supplies
  * the current market identifiers collected from Gamma. */
-async function fetchFromCollector(): Promise<Candidate | undefined> {
+async function fetchFromCollector(signal?: AbortSignal): Promise<Candidate | undefined> {
   const base = process.env.PM_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
   try {
     // The local collector is the low-latency source on the trading host. Keep
     // this probe short so a stale/unavailable dashboard cannot delay discovery.
     // The dashboard may need one SSH-backed refresh on a cold start. Allow it
     // to complete; later requests are served from the five-second cache.
-    const resp = await fetch(base, { signal: AbortSignal.timeout(30_000) });
+    const resp = await fetch(base, { signal: requestSignal(signal, 30_000) });
     if (!resp.ok) return undefined;
     const payload = (await resp.json()) as { collector_online?: boolean; current_markets?: Array<Record<string, unknown>> };
     if (payload.collector_online !== true) return undefined;
@@ -177,6 +182,7 @@ async function fetchFromCollector(): Promise<Candidate | undefined> {
       }
     }
   } catch (e) {
+    signal?.throwIfAborted();
     console.warn("Collector market discovery failed:", e);
   }
   return undefined;
@@ -186,14 +192,17 @@ async function fetchFromCollector(): Promise<Candidate | undefined> {
 export async function findMarket(
   now: number,
   allowCollectorFallback = true,
+  directOnly = false,
+  signal?: AbortSignal,
 ): Promise<Market | undefined> {
+  signal?.throwIfAborted();
   const fc = Math.floor(now / 300) * 300;
   const slug = `btc-updown-5m-${fc}`;
 
   // Paper mode may use the nearby collector for instant discovery.
   // Live mode passes allowCollectorFallback=false and never takes this branch.
   if (allowCollectorFallback) {
-    const collector = await fetchFromCollector();
+    const collector = await fetchFromCollector(signal);
     if (collector && isWindowLive(collector.slugStart, now)) {
       return marketFrom(collector, collector.slugStart);
     }
@@ -201,13 +210,18 @@ export async function findMarket(
 
   let direct: Candidate | undefined;
   try {
-    direct = await fetchBySlug(slug);
+    direct = await fetchBySlug(slug, signal);
   } catch (e) {
+    signal?.throwIfAborted();
     console.warn("Gamma direct discovery failed:", e);
   }
   if (direct && isWindowLive(direct.slugStart, now)) {
     return marketFrom(direct, fc);
   }
+
+  // Boundary prewarm probes only the deterministic next slug. Do not fan out
+  // to the two large Gamma listings until the normal discovery path runs.
+  if (directOnly) return undefined;
 
   const urls = [
     `${GAMMA}/markets?closed=false&limit=500&order=startDate&ascending=false`,
@@ -217,7 +231,7 @@ export async function findMarket(
   const cands: Candidate[] = [];
   for (const url of urls) {
     try {
-      const resp = await fetch(url, httpInit());
+      const resp = await fetch(url, httpInit(signal));
       if (!resp.ok) continue;
       const v = (await resp.json()) as unknown;
       for (const m of marketList(v)) {
@@ -225,6 +239,7 @@ export async function findMarket(
         if (c) cands.push(c);
       }
     } catch (e) {
+      signal?.throwIfAborted();
       console.warn("gamma discovery failed:", e);
     }
   }
