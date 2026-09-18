@@ -15,7 +15,6 @@ import sys
 import threading
 import time
 import uuid
-import re
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -64,7 +63,6 @@ _trading_account_id: str | None = None
 _trading_request_id: str | None = None
 _trading_engine: str | None = None
 _projection_pending: deque = deque()
-_evidence_download_lock = threading.BoundedSemaphore(6)
 _system_metrics: SystemMetrics | None = None
 _system_metrics_lock = threading.Lock()
 
@@ -84,23 +82,12 @@ def _static_content_type(path: Path) -> str:
 
 def _live_config() -> dict:
     project_root = Path(__file__).resolve().parents[1]
-    local_data_dir = Path(
-        os.environ.get(
-            "PM_LIVE_DATA_DIR",
-            str(project_root / "data" / "pm-r25-live" / "days"),
-        )
-    )
     local_setting = os.environ.get("PM_LIVE_LOCAL", "")
     snapshot_path = Path(os.environ.get("PM_MARKET_SNAPSHOT_PATH", str(project_root / "data" / "dashboard" / "market-snapshot.json")))
     collector_is_local = local_setting == "1" if local_setting else snapshot_path.is_file()
     return {
         "node_label": os.environ.get("PM_NODE_LABEL", "都柏林节点"),
-        "local_data_dir": local_data_dir,
         "collector_is_local": collector_is_local,
-        "remote_data_dir": os.environ.get(
-            "PM_REMOTE_DATA_DIR", "/root/pm-system/data/pm-r25-live/days"
-        ),
-        "evidence_glob": os.environ.get("PM_EVIDENCE_GLOB", "dublin-evidence-*.sqlite3"),
         "collector_service": os.environ.get(
             "PM_COLLECTOR_SERVICE", "pm-clob-market-snapshot.service"
         ),
@@ -113,10 +100,8 @@ def _live_config() -> dict:
         "remote_host": os.environ.get("PM_REMOTE_HOST", "root@34.242.206.196"),
         "remote_port": os.environ.get("PM_REMOTE_PORT", "22"),
         "connect_timeout": os.environ.get("PM_REMOTE_CONNECT_TIMEOUT", "5"),
-        "remote_python": os.environ.get("PM_REMOTE_PYTHON", "python3"),
         "snapshot_path": snapshot_path,
         "remote_snapshot_path": os.environ.get("PM_REMOTE_SNAPSHOT_PATH", "/root/pm-system/data/dashboard/market-snapshot.json"),
-        "evidence_download_token": os.environ.get("PM_EVIDENCE_DOWNLOAD_TOKEN", "").strip(),
     }
 
 
@@ -554,32 +539,36 @@ def trading_status(include_stats: bool = True) -> dict:
                 _trading_pid = None
                 _persist_trading_state()
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
+        retired_paper = not running and _trading_mode == "paper"
         account = account_config_status()
         status = {
             "available": (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file(),
             "execution_target": "platform",
-            "engine": _trading_engine,
-            "execution": ("strategy" if (_trading_params or {}).get("strategy_id") else "observation") if _trading_engine == "platform" else ("legacy" if _trading_engine else None),
-            "strategy_id": (_trading_params or {}).get("strategy_id"),
+            "engine": None if retired_paper else _trading_engine,
+            "execution": None if retired_paper else (("strategy" if (_trading_params or {}).get("strategy_id") else "observation") if _trading_engine == "platform" else ("legacy" if _trading_engine else None)),
+            "strategy_id": None if retired_paper else (_trading_params or {}).get("strategy_id"),
             "running": running,
-            "mode": _trading_mode,
+            "mode": None if retired_paper else _trading_mode,
             "pid": process.pid if process and running else (_trading_pid if running else None),
             "exit_code": _trading_exit_code,
-            "started_at": _trading_started_at,
-            "params": dict(_trading_params or {}),
-            "stop_result": dict(_trading_stop_result or {}),
+            "started_at": None if retired_paper else _trading_started_at,
+            "params": {} if retired_paper else dict(_trading_params or {}),
+            "stop_result": ({"confirmed": True, "process_stopped": True,
+                             "message": "当前没有正在运行的交易任务。"}
+                            if retired_paper else dict(_trading_stop_result or {})),
             "live_unlocked": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
             # A present .env is not enough: report configured only when the key
             # exists and is non-empty after dotenv loading by the child process.
             "account_configured": account["execution_credentials_ready"],
             "account": account,
-            "log": str(_trading_log).replace("\\", "/") if _trading_log else None,
-            "run_id": _trading_run_id,
-            "config_revision": _trading_config_revision,
-            "account_id": _trading_account_id,
+            "log": (str(_trading_log).replace("\\", "/") if _trading_log else None) if not retired_paper else None,
+            "run_id": None if retired_paper else _trading_run_id,
+            "config_revision": None if retired_paper else _trading_config_revision,
+            "account_id": None if retired_paper else _trading_account_id,
         }
     # No journal parsing, database aggregation or console scans in this lock.
-        selection = (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision)
+        selection = ((None, None, None, None, None) if retired_paper else
+                     (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision))
     if include_stats:
         status["stats"] = trade_log_stats(selection)
     return status
@@ -1052,9 +1041,6 @@ def make_handler(root: Path):
 
         def _get_v1(self, path: str) -> None:
             try:
-                if path == "/api/v1/evidence":
-                    self._get_evidence()
-                    return
                 if path == "/api/v1/config":
                     with _config_control_lock:
                         value = config_store().get()
@@ -1117,44 +1103,6 @@ def make_handler(root: Path):
                 self._send_json('{"error":"请求参数不正确"}'.encode(), 400)
             except (OSError, sqlite3.Error, RuntimeError):
                 self._send_json('{"error":"数据暂不可用，请稍后重试"}'.encode(), 503)
-
-        def _get_evidence(self) -> None:
-            cfg = _live_config()
-            token = cfg.get("evidence_download_token", "")
-            if not token or not hmac.compare_digest(self.headers.get("X-PM-Evidence-Token", ""), token):
-                self._send_json(b'{"error":"evidence download unauthorized"}', 403)
-                return
-            query = parse_qs(urlsplit(self.path).query)
-            date = (query.get("date", [""])[0] or "").strip()
-            if not re.fullmatch(r"202[0-9]-[0-9]{2}-[0-9]{2}", date):
-                self._send_json(b'{"error":"invalid date"}', 400); return
-            try:
-                offset = int(query.get("offset", ["0"])[0])
-                size = int(query.get("size", [str(8 * 1024 * 1024)])[0])
-            except ValueError:
-                self._send_json(b'{"error":"invalid range"}', 400); return
-            if offset < 0 or size < 1 or size > 8 * 1024 * 1024:
-                self._send_json(b'{"error":"range exceeds limit"}', 416); return
-            path = cfg["local_data_dir"] / f"dublin-evidence-{date}.sqlite3"
-            if not path.is_file():
-                self._send_json(b'{"error":"evidence not found"}', 404); return
-            total = path.stat().st_size
-            if offset >= total:
-                self._send_json(b'{"error":"offset beyond file"}', 416); return
-            if not _evidence_download_lock.acquire(timeout=5):
-                self._send_json(b'{"error":"download busy"}', 429); return
-            try:
-                with path.open("rb") as handle:
-                    handle.seek(offset); body = handle.read(min(size, total - offset))
-                self.send_response(206 if offset > 0 or len(body) < total else 200)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Range", f"bytes {offset}-{offset + len(body) - 1}/{total}")
-                self.send_header("Accept-Ranges", "bytes")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers(); self.wfile.write(body)
-            finally:
-                _evidence_download_lock.release()
 
         def _send_json(self, body: bytes, status: int = 200) -> None:
             self.send_response(status)

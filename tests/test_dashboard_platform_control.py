@@ -108,6 +108,31 @@ def test_service_restart_recovers_platform_identity_without_spawning(control, mo
     assert status["config_revision"] == 7 and SERVER._trading_request_id == "same-request"
 
 
+def test_stopped_historical_paper_run_is_not_current_status(control, monkeypatch):
+    journal = control / "historical-paper.jsonl"
+    journal.touch()
+    monkeypatch.setattr(SERVER, "_trading_mode", "paper")
+    monkeypatch.setattr(SERVER, "_trading_engine", "platform")
+    monkeypatch.setattr(SERVER, "_trading_log", journal)
+    monkeypatch.setattr(SERVER, "_trading_run_id", "historical-paper")
+    monkeypatch.setattr(SERVER, "_trading_config_revision", 7)
+    monkeypatch.setattr(SERVER, "_trading_params", {"mode": "paper", "order_usd": 5})
+    monkeypatch.setattr(SERVER, "_trading_stop_result", {
+        "confirmed": True, "process_stopped": True, "message": "模拟已停止，没有真实挂单。",
+    })
+    selections = []
+    monkeypatch.setattr(SERVER, "trade_log_stats", lambda selection: selections.append(selection) or {})
+
+    status = SERVER.trading_status()
+
+    assert status["running"] is False
+    assert status["mode"] is None and status["engine"] is None and status["execution"] is None
+    assert status["run_id"] is None and status["config_revision"] is None
+    assert status["params"] == {} and status["log"] is None
+    assert status["stop_result"]["message"] == "当前没有正在运行的交易任务。"
+    assert selections == [(None, None, None, None, None)]
+
+
 def test_runtime_cannot_stay_fresh_after_source_or_projection_expires(monkeypatch):
     original = {"source_at": 100, "expires_at": 110, "stale": False}
     view = {"stats": {"runtime": original}, "stale": False}

@@ -24,16 +24,12 @@ SPEC.loader.exec_module(MODULE)
 
 GENERIC_ENV = (
     "PM_NODE_LABEL",
-    "PM_LIVE_DATA_DIR",
-    "PM_EVIDENCE_GLOB",
     "PM_COLLECTOR_SERVICE",
     "PM_LIVE_LOCAL",
-    "PM_REMOTE_DATA_DIR",
     "PM_REMOTE_SSH_KEY",
     "PM_REMOTE_HOST",
     "PM_REMOTE_PORT",
     "PM_REMOTE_CONNECT_TIMEOUT",
-    "PM_REMOTE_PYTHON",
     "PM_MARKET_SNAPSHOT_PATH",
     "PM_REMOTE_SNAPSHOT_PATH",
 )
@@ -48,7 +44,6 @@ def test_default_configuration_uses_current_dublin_deployment(monkeypatch) -> No
     clear_live_environment(monkeypatch)
     config = MODULE._live_config()
     assert config["node_label"] == "都柏林节点"
-    assert config["evidence_glob"] == "dublin-evidence-*.sqlite3"
     assert config["collector_service"] == "pm-clob-market-snapshot.service"
     assert config["remote_host"] == "root@34.242.206.196"
     assert config["ssh_key"].name == "id_ed25519_dublin_pm"
@@ -75,7 +70,6 @@ def test_local_snapshot_read_preserves_source_clock_and_does_not_rewrite(monkeyp
     from datetime import datetime, timezone
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
-    monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
     target = tmp_path / "snapshot.json"
     monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(target))
     monkeypatch.setattr(MODULE, "_live_cache_at", 0.0)
@@ -102,18 +96,17 @@ def test_local_snapshot_read_preserves_source_clock_and_does_not_rewrite(monkeyp
 def test_generic_environment_configures_collector(monkeypatch, tmp_path: Path) -> None:
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "0")
-    monkeypatch.setenv("PM_REMOTE_DATA_DIR", "/new/data")
+    monkeypatch.setenv("PM_REMOTE_SNAPSHOT_PATH", "/new/data/market-snapshot.json")
     monkeypatch.setenv("PM_REMOTE_SSH_KEY", str(tmp_path / "new-key"))
     config = MODULE._live_config()
     assert config["collector_is_local"] is False
-    assert config["remote_data_dir"] == "/new/data"
+    assert config["remote_snapshot_path"] == "/new/data/market-snapshot.json"
     assert config["ssh_key"] == tmp_path / "new-key"
 
 
 def test_missing_local_snapshot_is_offline_without_child_or_file_write(monkeypatch, tmp_path: Path) -> None:
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
-    monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(tmp_path / "snapshot.json"))
     calls = []
 
@@ -149,7 +142,6 @@ def test_busy_live_status_still_returns_configured_node(monkeypatch) -> None:
 def test_invalid_local_snapshot_returns_offline_without_overwriting_producer(monkeypatch, tmp_path):
     clear_live_environment(monkeypatch)
     monkeypatch.setenv("PM_LIVE_LOCAL", "1")
-    monkeypatch.setenv("PM_LIVE_DATA_DIR", str(tmp_path))
     target = tmp_path / "snapshot.json"
     monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(target))
     target.write_text('{"collector_online":', encoding="utf-8")
@@ -294,19 +286,15 @@ def test_account_placeholders_do_not_enable_live_trading(monkeypatch, tmp_path: 
 
 
 def test_dublin_service_bundle_is_consistent() -> None:
-    collector_text = (ROOT / "config" / "pm-r25-dublin-collector.json").read_text(encoding="utf-8")
-    collector = json.loads(collector_text)
+    snapshot = (ROOT / "config" / "pm-clob-market-snapshot.service").read_text(encoding="utf-8")
     dashboard = (ROOT / "config" / "pm-system-dashboard-dublin.service").read_text(encoding="utf-8")
-    analyzer = (ROOT / "config" / "pm-r25-dublin-live-analyzer.service").read_text(encoding="utf-8")
-    restart = (ROOT / "config" / "pm-r25-dublin-daily-restart.service").read_text(encoding="utf-8")
     nginx = (ROOT / "config" / "paper-grid-dublin.server.conf").read_text(encoding="utf-8")
-    assert collector["sqlite_path"].endswith("dublin-evidence-{date}.sqlite3")
-    assert collector["trade_authorization"] is False
+    assert "dist/cli/market-snapshot.js" in snapshot
+    assert "data/dashboard/market-snapshot.json" in snapshot
+    assert "PM_MARKET_SNAPSHOT_STALE_MS=2000" in snapshot
     assert "pm-clob-market-snapshot.service" in dashboard
-    assert "pm-r25-dublin-collector.service" not in dashboard
+    assert "PM_COLLECTOR_SERVICE=pm-clob-market-snapshot.service" in dashboard
     assert "PM_NODE_LABEL=都柏林节点" in dashboard
     assert "EnvironmentFile=-/root/pm-system/config/dashboard-secret.env" in dashboard
-    assert "dublin-evidence.sqlite3" in analyzer
-    assert "pm-r25-dublin-collector.service" in restart
     assert "listen 127.0.0.1:8765" in nginx
     assert "listen 0.0.0.0" not in nginx
