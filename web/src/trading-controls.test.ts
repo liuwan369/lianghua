@@ -25,3 +25,19 @@ it('drops a rejected revision so a new saved revision can start',async()=>{
   await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(2));expect(JSON.parse(fetch.mock.calls[1][1].body).revision).toBe(4);
   expect(JSON.parse(fetch.mock.calls[1][1].body).request_id).not.toBe(JSON.parse(fetch.mock.calls[0][1].body).request_id);control.close();
 });
+it.each([401,400,403,409])('shows an HTTP %s start rejection on both overview and automatic trading pages',async(status)=>{
+  const fetch=vi.fn().mockResolvedValue(new Response(JSON.stringify({ok:false,error:'启动未接受'}),{status}));vi.stubGlobal('fetch',fetch);
+  const control=setup();control.receive({...config,params:{mode:'live'}},{...({running:false,mode:'paper'} as Status),live_unlocked:true});control.receiveStrategy(strategy);
+  const start=document.querySelector<HTMLButtonElement>('[data-start]')!;start.click();
+  await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1));
+  await vi.waitFor(()=>expect(document.querySelectorAll<HTMLElement>('[data-trading-message]')).toHaveLength(2));
+  await vi.waitFor(()=>expect(document.querySelector<HTMLElement>('[data-trading-message]')?.textContent).toContain(`HTTP ${status}`));
+  const messages=Array.from(document.querySelectorAll<HTMLElement>('[data-trading-message]')).map(node=>node.textContent);
+  expect(messages[0]).toContain(`HTTP ${status}`);expect(messages[1]).toBe(messages[0]);
+  expect(document.querySelectorAll<HTMLElement>('[data-trading-message]')[0].getAttribute('aria-live')).toBe('polite');
+  if(status===401){
+    start.click();await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetch.mock.calls[1][1].body).request_id).not.toBe(JSON.parse(fetch.mock.calls[0][1].body).request_id);
+  }
+  control.close();
+});
