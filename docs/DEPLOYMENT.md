@@ -4,7 +4,7 @@
 
 入口 https://34-242-206-196.sslip.io/console/ 。服务器项目 `/root/pm-system`，后端 `127.0.0.1:18766`，控制台服务 `pm-system-dashboard-dublin.service`，公共行情服务 `pm-clob-market-snapshot.service`。旧 pm-r25 采集、分析、重启服务及 timer 已从生产主机删除，状态为 `not-found/inactive`；历史数据和程序回退包保留。
 
-当前发布目录为 `/root/.pm-releases/reversal-1c304eb-20260918T112829Z`，归档 SHA-256 为 `8744df3f1a64219b9965fbbb391b7e5fdb6d8e7c123ae9177f737e63789aece3`。manifest 校验 `495` 个文件，本批实际更新 `9` 个、删除 `14` 个。发布后自动交易保持 `running=false`、`mode=null`、`strategy_id=null`、`live_unlocked=false`，开放订单和当前有效持仓均为 `0`；真实生命周期、实际费用、结算到账和正式运行仍未完成。
+当前发布目录为 `/root/.pm-releases/reversal-1c304eb-20260918T112829Z`，归档 SHA-256 为 `8744df3f1a64219b9965fbbb391b7e5fdb6d8e7c123ae9177f737e63789aece3`。manifest 校验 `495` 个文件，本批实际更新 `9` 个、删除 `14` 个。当前自动交易保持 `running=false`、`mode=null`、`strategy_id=null`、`live_unlocked=true`，开放订单和当前有效持仓均为 `0`；解锁只为用户发起的最小真实验证准备，真实生命周期、实际费用、结算到账和正式运行仍未完成。
 
 ## 发布内容
 

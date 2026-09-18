@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runPolymarketFeed } from "./polymarket.js";
+import {
+  PM_WS_BILATERAL_QUOTE_TIMEOUT_MS,
+  PM_WS_MESSAGE_TIMEOUT_MS,
+  runPolymarketFeed,
+} from "./polymarket.js";
 import { runUserFeed } from "./user.js";
 import type { FeedEvent } from "./index.js";
 
@@ -183,6 +187,87 @@ describe("live websocket safety", () => {
     expect(mocks.sockets).toHaveLength(2);
   });
 
+  it("terminates a silent OPEN socket and recovers quotes through the existing reconnect loop", async () => {
+    const events: FeedEvent[] = [];
+    const feed = runPolymarketFeed((event) => events.push(event), "up", "down", Date.now()/1000+60);
+    stop = feed.stop;
+    const first = await openSocket();
+
+    await vi.advanceTimersByTimeAsync(PM_WS_MESSAGE_TIMEOUT_MS - 1_000);
+    expect(first.readyState).toBe(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(first.readyState).toBe(3);
+    expect(feed.isHealthy()).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "bookStatus", healthy: false, connected: false, reason: "transport_disconnected",
+    }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.sockets).toHaveLength(2);
+
+    const second = mocks.sockets[1];
+    second.emit("open");
+    await Promise.resolve();
+    const book = (asset_id: string) => ({ event_type: "book", asset_id, timestamp: Date.now(),
+      bids: [{ price: "0.4", size: "10" }], asks: [{ price: "0.41", size: "10" }] });
+    second.emit("message", JSON.stringify([book("up"), book("down")]));
+    expect(feed.isHealthy()).toBe(true);
+  });
+
+  it.each(["message", "pong"])("does not let %s PONG keep a stalled quote subscription alive", async (eventName) => {
+    const events: FeedEvent[] = [];
+    const feed = runPolymarketFeed((event) => events.push(event), "up", "down", Date.now()/1000+60);
+    stop = feed.stop;
+    const socket = await openSocket();
+    const book = (asset_id: string) => ({ event_type: "book", asset_id, timestamp: Date.now(),
+      bids: [{ price: "0.4", size: "10" }], asks: [{ price: "0.41", size: "10" }] });
+    socket.emit("message", JSON.stringify([book("up"), book("down")]));
+    expect(feed.isHealthy()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    socket.emit(eventName, "PONG");
+    expect(feed.isHealthy()).toBe(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    socket.emit(eventName, "PONG");
+    expect(socket.readyState).toBe(1);
+    expect(events.filter((event) => event.kind === "book")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(PM_WS_BILATERAL_QUOTE_TIMEOUT_MS - 20_000);
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.sockets).toHaveLength(2);
+  });
+
+  it("reconnects when only one outcome keeps updating", async () => {
+    const feed = runPolymarketFeed(() => {}, "up", "down", Date.now()/1000+60);
+    stop = feed.stop;
+    const socket = await openSocket();
+    const book = (asset_id: string) => ({ event_type: "book", asset_id, timestamp: Date.now(),
+      bids: [{ price: "0.4", size: "10" }], asks: [{ price: "0.41", size: "10" }] });
+    socket.emit("message", JSON.stringify([book("up"), book("down")]));
+    for (let elapsed = 10_000; elapsed < PM_WS_BILATERAL_QUOTE_TIMEOUT_MS; elapsed += 10_000) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      socket.emit("message", JSON.stringify(book("up")));
+      expect(socket.readyState).toBe(1);
+    }
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(socket.readyState).toBe(3);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.sockets).toHaveLength(2);
+  });
+
+  it("keeps a bilateral quote stream connected beyond both watchdog limits", async () => {
+    const feed = runPolymarketFeed(() => {}, "up", "down", Date.now()/1000+120);
+    stop = feed.stop;
+    const socket = await openSocket();
+    const book = (asset_id: string) => ({ event_type: "book", asset_id, timestamp: Date.now(),
+      bids: [{ price: "0.4", size: "10" }], asks: [{ price: "0.41", size: "10" }] });
+    for (let step = 0; step < 4; step += 1) {
+      socket.emit("message", JSON.stringify([book("up"), book("down")]));
+      expect(feed.isHealthy()).toBe(true);
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    expect(socket.readyState).toBe(1);
+    expect(mocks.sockets).toHaveLength(1);
+  });
   it.each(["INVALID AUTH", JSON.stringify({type:"user",status:"unauthorized"})])(
     "disables authenticated feed on explicit rejection: %s", async (rejection) => {
       const events: FeedEvent[] = [];

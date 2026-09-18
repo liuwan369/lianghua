@@ -20,4 +20,10 @@ describe('market read model', () => {
   it('reports the connection failure instead of hiding it as an empty book',()=>{
     expect(marketMessage({...resource,data:{...data,collector_online:false,error_code:'collector_connection_failed'}},1000000)).toContain('SSH');
   });
+  it('distinguishes a connected incomplete book from a transport failure',()=>{
+    const connected = {...data,collector_online:false,collector_connected:true,current_markets:[],stale_reason:'等待完整 UP/DOWN 双边盘口'};
+    expect(marketMessage({...resource,data:connected},1000000)).toBe('Dublin · 已连接 · 等待完整 UP/DOWN 双边盘口');
+    expect(marketMessage({...resource,data:{...connected,collector_connected:false,stale_reason:'CLOB Market WebSocket 未连接'}},1000000)).toBe('Dublin · CLOB Market WebSocket 未连接');
+    expect(marketMessage({...resource,data:{...connected,cache_age_seconds:16}},1000000)).toBe('Dublin · 行情快照已过期');
+  });
 });

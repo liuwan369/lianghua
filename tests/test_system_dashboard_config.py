@@ -291,7 +291,7 @@ def test_dublin_service_bundle_is_consistent() -> None:
     nginx = (ROOT / "config" / "paper-grid-dublin.server.conf").read_text(encoding="utf-8")
     assert "dist/cli/market-snapshot.js" in snapshot
     assert "data/dashboard/market-snapshot.json" in snapshot
-    assert "PM_MARKET_SNAPSHOT_STALE_MS=2000" in snapshot
+    assert "--stale-after-ms 2000" in snapshot
     assert "pm-clob-market-snapshot.service" in dashboard
     assert "PM_COLLECTOR_SERVICE=pm-clob-market-snapshot.service" in dashboard
     assert "PM_NODE_LABEL=都柏林节点" in dashboard

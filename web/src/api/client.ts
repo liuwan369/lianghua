@@ -62,6 +62,8 @@ export function validate(kind: string, data: unknown): void {
       && Array.isArray(runtime.markets) && runtime.markets.every(object) && Array.isArray(runtime.books) && runtime.books.every(object);
   }
   if (kind === 'markets') valid = typeof data.collector_online === 'boolean' && typeof data.node_label === 'string'
+    && (data.collector_connected === undefined || typeof data.collector_connected === 'boolean')
+    && (data.stale_reason === undefined || typeof data.stale_reason === 'string')
     && num(data.asOf) && nullableNumber(data.cache_age_seconds) && Array.isArray(data.current_markets)
     && data.current_markets.every(m => object(m) && typeof m.slug === 'string' && num(m.start) && num(m.end)
       && ['up_bid','up_ask','down_bid','down_ask','ask_sum'].every(k => nullableNumber(m[k])) && nullableString(m.quote_at));

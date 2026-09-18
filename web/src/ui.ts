@@ -40,7 +40,12 @@ export function marketMessage(r: Resource<Markets>, now = Date.now()) {
   const data=fresh(r,now);
   if (!data) return '行情快照尚未获取或已过期';
   if (data.error_code === 'collector_connection_failed') return `${data.node_label}连接失败 · 请检查 SSH 配置或采集服务`;
-  if (!data.collector_online) return `${data.node_label} · 采集离线或数据过期`;
+  if (!data.collector_online) {
+    if (data.cache_age_seconds === null || data.cache_age_seconds + (now-r.receivedAt)/1000 > 15)
+      return `${data.node_label} · 行情快照已过期`;
+    const reason = data.stale_reason || (data.collector_connected === false ? '行情连接已断开' : '等待有效盘口');
+    return `${data.node_label} · ${data.collector_connected === true ? '已连接 · ' : ''}${reason}`;
+  }
   if (!activeMarkets(r,now).length) return `${data.node_label} · 等待当前市场`;
   if (usableMarket(activeMarkets(r,now)[0],r,now)) return `行情已更新 · ${data.node_label}`;
   return `${data.node_label} · 盘口缺边、过期或价格异常`;

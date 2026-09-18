@@ -10,6 +10,13 @@ import {
 
 const PM_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
 
+// A connected socket can remain OPEN after the venue stops delivering data.
+// Keep these limits independent from the strategy's book freshness threshold:
+// the watchdog only decides when to reconnect the transport.
+export const PM_WS_MESSAGE_TIMEOUT_MS = 15_000;
+export const PM_WS_BILATERAL_QUOTE_TIMEOUT_MS = 30_000;
+const PM_WS_WATCHDOG_INTERVAL_MS = 1_000;
+
 export interface AppliedBookTimes {
   upMs: number;
   downMs: number;
@@ -316,11 +323,28 @@ export function runPolymarketFeed(
         const ping = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send("PING");
         }, 5000);
+        const connectedAtMs = Date.now();
+        let lastAnyMessageAtMs = connectedAtMs;
+        let lastBilateralQuoteAtMs = 0;
+        const watchdog = setInterval(() => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          const nowMs = Date.now();
+          const silent = nowMs - lastAnyMessageAtMs >= PM_WS_MESSAGE_TIMEOUT_MS;
+          const quoteStalled = nowMs - (lastBilateralQuoteAtMs || connectedAtMs)
+            >= PM_WS_BILATERAL_QUOTE_TIMEOUT_MS;
+          if (!silent && !quoteStalled) return;
+          const reason = silent ? "message_timeout" : "bilateral_quote_timeout";
+          console.warn(`polymarket feed watchdog terminating stale socket: ${reason}`);
+          hasCompleteBook = false;
+          setConnected(false);
+          ws.terminate();
+        }, PM_WS_WATCHDOG_INTERVAL_MS);
 
         await new Promise<void>((resolve) => {
           ws.on("message", (data) => {
             const receivedAtUnix = nowUnix();
             const receivedAtMonoMs = performance.now();
+            lastAnyMessageAtMs = Date.now();
             const t = String(data);
             if (t === "PONG" || t === "pong") return;
             if (trace) console.info(`PM_RAW ${t.slice(0, 220)}`);
@@ -377,6 +401,9 @@ export function runPolymarketFeed(
               if (!hasCompleteBook) sink({ kind: "bookStatus", healthy: true, connected: true,
                 reason: "complete_book", tsUnix: nowUnix() });
               hasCompleteBook = true;
+              if (lastUpAtMs > 0 && lastDownAtMs > 0) {
+                lastBilateralQuoteAtMs = Math.min(lastUpAtMs, lastDownAtMs);
+              }
               const upTop = fastUp;
               const downTop = fastDown;
               const upBid = upTop?.bid ?? ub[0];
@@ -445,6 +472,11 @@ export function runPolymarketFeed(
               ws.terminate();
             }
           });
+          // `ws` protocol PONG frames do not arrive through `message`.
+          // They prove the transport is alive but carry no market quote.
+          ws.on("pong", () => {
+            lastAnyMessageAtMs = Date.now();
+          });
           ws.on("close", () => {
             setConnected(false);
             resolve();
@@ -456,6 +488,7 @@ export function runPolymarketFeed(
         });
 
         clearInterval(ping);
+        clearInterval(watchdog);
         ws.terminate();
         if (activeWs === ws) activeWs = undefined;
       } catch (e) {
