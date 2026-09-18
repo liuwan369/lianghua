@@ -1,5 +1,5 @@
 /** Offline equity accounting contract. It never authorizes an order. */
-import { riskDayKey } from '../risk.js';
+import { accountDayKey } from './account-day.js';
 
 const SCALE = 1_000_000;
 const CAPITAL_LIMIT = 50 * SCALE;
@@ -119,7 +119,7 @@ function identity(account: string, mode: Mode): string {
   return account.toLowerCase();
 }
 function key(position: { conditionId: string; assetId: string }): string { return JSON.stringify([position.conditionId, position.assetId]); }
-function dayStart(atMs: number): number { return Date.parse(`${riskDayKey(atMs / 1000)}T00:00:00Z`) - 28_800_000; }
+function dayStart(atMs: number): number { return Date.parse(`${accountDayKey(atMs / 1000)}T00:00:00Z`) - 28_800_000; }
 function policy(nowMs: number, maxAgeMs: number): void {
   if (!time(nowMs) || !unsigned(maxAgeMs) || maxAgeMs === 0) fail('invalid_clock_or_freshness_policy');
 }
@@ -260,7 +260,7 @@ export function parseAccountEquityState(value: unknown, account: string, mode: M
     // policy by accountEquityView, so it remains eligible to age after restart.
     const opening = snapshot(raw.opening, expected, mode, 0);
     const latest = snapshot(raw.latest, expected, mode, closed ? 0 : Number.MAX_SAFE_INTEGER);
-    if (opening.atMs !== dayStart(opening.atMs) || raw.riskDay !== riskDayKey(opening.atMs / 1000)
+    if (opening.atMs !== dayStart(opening.atMs) || raw.riskDay !== accountDayKey(opening.atMs / 1000)
         || !ids.has(opening.id) || !ids.has(latest.id) || latest.id === opening.id || latest.atMs < opening.atMs || latest.sequence <= opening.sequence
         || raw.pnlMicrousd !== pnl(opening, latest, state.knownCashFlows) || typeof raw.lossLimitReached !== 'boolean'
         || (raw.pnlMicrousd as number) <= -DAILY_LOSS_LIMIT && !raw.lossLimitReached
@@ -269,7 +269,7 @@ export function parseAccountEquityState(value: unknown, account: string, mode: M
       const day = raw as unknown as ClosedEquityDay;
       if (latest.atMs !== opening.atMs + 86_400_000
           || day.externalNetFlowMicrousd !== netFlows(state.knownCashFlows, opening.atMs, latest.atMs)) fail('invalid_closed_equity_day');
-    } else if (riskDayKey(latest.atMs / 1000) !== raw.riskDay) fail('invalid_current_risk_day');
+    } else if (accountDayKey(latest.atMs / 1000) !== raw.riskDay) fail('invalid_current_risk_day');
     if (previous && canonicalSnapshot(opening) !== canonicalSnapshot(previous.latest)) fail('broken_day_continuity');
     if ((raw.pnlMicrousd as number) <= -DAILY_LOSS_LIMIT && !state.halted) fail('lost_daily_loss_stop');
     previous = raw as unknown as EquityDay;
@@ -285,7 +285,7 @@ export function accountEquityView(state: AccountEquityState, nowMs: number, maxA
   const latest = state.day?.latest;
   const reason = state.reconciliationIssue ?? (!latest ? 'opening_equity_required'
     : nowMs < latest.atMs ? 'clock_before_reconciliation'
-      : riskDayKey(nowMs / 1000) !== state.day!.riskDay ? 'day_rollover_required'
+      : accountDayKey(nowMs / 1000) !== state.day!.riskDay ? 'day_rollover_required'
         : nowMs - latest.atMs > maxAgeMs ? 'stale_reconciliation'
           : latest.positions!.some(p => p.quantityMicros! > 0 && nowMs - p.pricedAtMs > maxAgeMs) ? 'stale_position_valuation' : null);
   return { execution_ready: false, accounting_ready: reason === null, paused: state.halted || reason !== null,
@@ -313,20 +313,20 @@ export function reduceAccountEquity(state: AccountEquityState, event: unknown, n
       // The opening cut is intentionally historical within the current risk day.
       // Only the current cut is subject to the live freshness window.
       const opening = snapshot(event.opening, next.account, next.mode, Number.MAX_SAFE_INTEGER);
-      if (opening.atMs !== dayStart(opening.atMs) || riskDayKey(opening.atMs / 1000) !== riskDayKey(current.atMs / 1000)) fail('missing_day_opening');
-      next.day = { riskDay: riskDayKey(opening.atMs / 1000), opening: clone(opening), latest: clone(opening), pnlMicrousd: 0, lossLimitReached: false };
+      if (opening.atMs !== dayStart(opening.atMs) || accountDayKey(opening.atMs / 1000) !== accountDayKey(current.atMs / 1000)) fail('missing_day_opening');
+      next.day = { riskDay: accountDayKey(opening.atMs / 1000), opening: clone(opening), latest: clone(opening), pnlMicrousd: 0, lossLimitReached: false };
       next.seenSnapshotIds.push(opening.id);
     } else if (next.day === null) fail('opening_equity_required');
     if (event.type === 'rollover') {
       exact(event.boundary, ['snapshot', 'previousSnapshotId', 'cashFlows', 'positionReleases']);
       const boundary = snapshot(event.boundary.snapshot, next.account, next.mode, maxAgeMs);
       if (boundary.atMs !== next.day!.opening.atMs + 86_400_000
-          || riskDayKey(boundary.atMs / 1000) !== riskDayKey(current.atMs / 1000)) fail('missing_day_boundary');
+          || accountDayKey(boundary.atMs / 1000) !== accountDayKey(current.atMs / 1000)) fail('missing_day_boundary');
       applyReconciliation(next, event.boundary, maxAgeMs);
       next.closedDays.push({ ...clone(next.day!), externalNetFlowMicrousd: netFlows(next.knownCashFlows, next.day!.opening.atMs, boundary.atMs) });
-      next.day = { riskDay: riskDayKey(boundary.atMs / 1000), opening: clone(boundary), latest: clone(boundary), pnlMicrousd: 0, lossLimitReached: false };
+      next.day = { riskDay: accountDayKey(boundary.atMs / 1000), opening: clone(boundary), latest: clone(boundary), pnlMicrousd: 0, lossLimitReached: false };
     }
-    if (riskDayKey(current.atMs / 1000) !== next.day!.riskDay) fail('day_rollover_required');
+    if (accountDayKey(current.atMs / 1000) !== next.day!.riskDay) fail('day_rollover_required');
     applyReconciliation(next, event.current, maxAgeMs);
     next.reconciliationIssue = null;
     parseAccountEquityState(next, next.account, next.mode);

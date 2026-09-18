@@ -1,4 +1,4 @@
-import { riskDayKey } from '../risk.js';
+import { accountDayKey } from './account-day.js';
 
 export interface MidnightBaselineOptions {
   /** Allowed distance from Beijing 00:00 for the opening observation. */
@@ -39,7 +39,7 @@ function checkedAt(value: unknown): number {
 }
 
 function dayStartMs(atMs: number): number {
-  return Date.parse(`${riskDayKey(atMs / 1000)}T00:00:00Z`) - 28_800_000;
+  return Date.parse(`${accountDayKey(atMs / 1000)}T00:00:00Z`) - 28_800_000;
 }
 
 function completeAtomicCut(value: unknown): number {
@@ -87,7 +87,7 @@ export async function captureMidnightBaseline(
   const currentAtMs = completeAtomicCut(current);
   if (currentAtMs <= openingAtMs) throw new Error('baseline_current_not_after_opening');
   if (currentAtMs > nowMs + windowMs + delayMs + 5_000) throw new Error('baseline_current_in_future');
-  const riskDay = riskDayKey(openingAtMs / 1000);
+  const riskDay = accountDayKey(openingAtMs / 1000);
   return {
     opening, current, riskDay, openingAtMs, currentAtMs,
     cashFlows: packet.cashFlows, positionReleases: packet.positionReleases, source: 'provider-atomic-midnight-window',

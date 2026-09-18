@@ -4,7 +4,11 @@ import { availableMicrousd, prepareReservation, transitionReservation,
 import { AccountStateStore } from './account-state-store.js';
 import { accountDataToEquitySnapshot } from './account-equity-adapter.js';
 import { reduceAccountEquity, createAccountEquityState, type AccountEquityState, type EquityReconciliation, type PositionRelease } from './account-equity.js';
-import type { ReservationCoordinator } from './executor.js';
+
+export interface ReservationCoordinator {
+  prepare(id: string, amountUsd: number, feeReserveUsd: number): void;
+  transition(id: string, status: ReservationStatus): void;
+}
 
 export type AuthoritativeAccountReader = () => Promise<unknown>;
 export type AuthoritativeOpeningReader = () => Promise<{
