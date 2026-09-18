@@ -45,7 +45,7 @@ describe("ClobMarketProjection", () => {
     expect(projection.snapshot(200).stale_reason).toContain("结束");
   });
 
-  it("rejects late old frames, incomplete halves, and future clocks", () => {
+  it("rejects late old frames and incomplete halves", () => {
     const projection = new ClobMarketProjection({ upToken: "up", downToken: "down" });
     projection.applySnapshot(quote(100, 99.5));
     expect(projection.applySnapshot(quote(100.5, 98))).toBe(false);
@@ -55,6 +55,18 @@ describe("ClobMarketProjection", () => {
     expect(projection.snapshot(101).current_markets).toEqual([]);
     projection.applySnapshot(quote(110, 110));
     expect(projection.snapshot(101).collector_online).toBe(false);
+  });
+
+  it("accepts bounded source clock skew, rejects larger skew, and recovers", () => {
+    const projection = new ClobMarketProjection({ upToken: "up", downToken: "down" });
+    expect(projection.applySnapshot(quote(100, 100.5))).toBe(true);
+    const withinSkew = projection.snapshot(100);
+    expect(withinSkew.collector_online).toBe(true);
+    expect(withinSkew.current_markets[0]!.quote_at).toBe(new Date(100_500).toISOString());
+    expect(projection.applySnapshot(quote(101, 102.001))).toBe(false);
+    expect(projection.snapshot(101).collector_online).toBe(false);
+    expect(projection.applySnapshot(quote(101.1))).toBe(true);
+    expect(projection.snapshot(101.1).collector_online).toBe(true);
   });
 
   it("requires both source clocks and both receive clocks to be fresh", () => {

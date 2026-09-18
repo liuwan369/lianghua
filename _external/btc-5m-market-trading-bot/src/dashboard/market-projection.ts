@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type { BookSnapshot } from "../live/feeds/index.js";
 
 export const DEFAULT_STALE_AFTER_MS = 2_000;
+const MAX_CLOCK_SKEW_MS = 1_000;
 
 export interface MarketProjectionConfig {
   upToken: string;
@@ -117,6 +118,12 @@ export class ClobMarketProjection {
       this.disconnect();
       return false;
     }
+    // Bound exchange/local clock skew. The raw exchange clock remains in the
+    // snapshot, so a dashboard heartbeat still cannot refresh an old quote.
+    if (clocks.some(clock => clock != null && clock * 1_000 > receivedAt * 1_000 + MAX_CLOCK_SKEW_MS)) {
+      this.disconnect();
+      return false;
+    }
     if ((this.up?.upExchangeTsUnix ?? 0) > snapshot.upExchangeTsUnix!
       || (this.down?.downExchangeTsUnix ?? 0) > snapshot.downExchangeTsUnix!) return false;
     this.connected = true;
@@ -140,7 +147,7 @@ export class ClobMarketProjection {
     const downAge = downReceiveAge != null ? Math.max(0, downReceiveAge, downExchangeAge ?? 0) : null;
     const ready = up?.upBid != null && up.upAsk != null && down?.downBid != null && down.downAsk != null;
     const ages = [upReceiveAge, downReceiveAge, upExchangeAge, downExchangeAge];
-    const fresh = ready && ages.every(age => age != null && age >= -1_000 && age <= this.staleAfterMs);
+    const fresh = ready && ages.every(age => age != null && age >= -MAX_CLOCK_SKEW_MS && age <= this.staleAfterMs);
     const quoteAt = ready && up?.upExchangeTsUnix != null && down?.downExchangeTsUnix != null
       ? Math.min(up.upExchangeTsUnix, down.downExchangeTsUnix) : 0;
     return {

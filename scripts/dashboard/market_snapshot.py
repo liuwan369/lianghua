@@ -51,12 +51,18 @@ def validate_snapshot(value: dict, now: float | None = None) -> dict:
         rows = value.get("current_markets")
         try:
             quotes_fresh = (limit is not None and 0 < limit <= 15_000
+                            and value.get("collector_connected") is True
                             and isinstance(rows, list) and bool(rows)
                             and all(isinstance(row, dict)
-                                    and number(row.get("start")) is not None
-                                    and number(row.get("end")) is not None
+                                    and all(isinstance(row.get(key), str) and row.get(key) for key in ("slug", "up_token", "down_token"))
+                                    and row["up_token"] != row["down_token"]
+                                    and all(type(row.get(key)) in (int, float) and math.isfinite(row[key]) for key in ("start", "end"))
                                     and row["start"] <= now < row["end"]
-                                    and 0 <= (now - datetime.fromisoformat(row["quote_at"]).timestamp()) * 1000 <= limit
+                                    and all(type(row.get(key)) in (int, float) and math.isfinite(row[key]) and 0 < row[key] < 1 for key in ("up_bid", "up_ask", "down_bid", "down_ask"))
+                                    and row["up_bid"] <= row["up_ask"] <= 1
+                                    and row["down_bid"] <= row["down_ask"] <= 1
+                                    and isinstance(row.get("quote_at"), str) and row.get("quote_at")
+                                    and -1_000 <= (now - datetime.fromisoformat(row["quote_at"]).timestamp()) * 1000 <= limit
                                     for row in rows))
         except (KeyError, TypeError, ValueError, OverflowError):
             quotes_fresh = False

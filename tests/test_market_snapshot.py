@@ -249,11 +249,26 @@ def test_published_snapshot_preserves_source_quote_clock_and_is_atomic(tmp_path)
     assert not path.with_name(path.name + ".tmp").exists()
 
 
-@pytest.mark.parametrize("quote_age,end,online", [(3, NOW+60, True), (.1, NOW, True), (.1, NOW+60, False), (-1, NOW+60, True)])
+@pytest.mark.parametrize("quote_age,end,online", [(3, NOW+60, True), (.1, NOW, True), (.1, NOW+60, False), (-1.001, NOW+60, True)])
 def test_clob_heartbeat_cannot_refresh_old_expired_or_disconnected_quotes(quote_age, end, online):
     value = {"checked_at": iso(NOW), "source": "polymarket-ws", "stale_after_ms": 2000,
-             "collector_online": online, "current_markets": [{"start": NOW-60, "end": end, "quote_at": iso(NOW-quote_age)}]}
+             "collector_online": online, "collector_connected": True,
+             "current_markets": [{"slug": "btc", "up_token": "up", "down_token": "down",
+                 "up_bid": .4, "up_ask": .5, "down_bid": .4, "down_ask": .5,
+                 "start": NOW-60, "end": end, "quote_at": iso(NOW-quote_age)}]}
     result = validate_snapshot(value, NOW)
     assert result["collector_online"] is False
     assert result["current_markets"] == []
     assert value["current_markets"]
+
+
+def test_clob_snapshot_accepts_bounded_clock_skew_without_rewriting_source_time():
+    quote_at = iso(NOW + .5)
+    value = {"checked_at": iso(NOW), "source": "polymarket-ws", "stale_after_ms": 2000,
+             "collector_online": True, "collector_connected": True,
+             "current_markets": [{"slug": "btc", "up_token": "up", "down_token": "down",
+                 "up_bid": .4, "up_ask": .5, "down_bid": .4, "down_ask": .5,
+                 "start": NOW-60, "end": NOW+60, "quote_at": quote_at}]}
+    result = validate_snapshot(value, NOW)
+    assert result["collector_online"] is True
+    assert result["current_markets"][0]["quote_at"] == quote_at

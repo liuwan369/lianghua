@@ -11,6 +11,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "system-dashboard-server.py"
@@ -80,9 +82,10 @@ def test_local_snapshot_read_preserves_source_clock_and_does_not_rewrite(monkeyp
     monkeypatch.setattr(MODULE, "_live_cache", {})
     now = time.time()
     timestamp = datetime.fromtimestamp(now - .2, timezone.utc).isoformat()
-    value = {"checked_at": timestamp, "source": "polymarket-ws", "collector_online": True,
+    value = {"checked_at": timestamp, "source": "polymarket-ws", "collector_online": True, "collector_connected": True,
              "stale_after_ms": 2000, "current_markets": [{"slug": "btc-test", "up_token": "up",
-                 "start": now - 100, "end": now + 150, "up_ask": .5, "quote_at": timestamp}]}
+                 "down_token": "down", "start": now - 100, "end": now + 150, "up_bid": .4, "up_ask": .5,
+                 "down_bid": .4, "down_ask": .5, "quote_at": timestamp}]}
     target.write_text(json.dumps(value), encoding="utf-8")
     before = target.read_bytes(), target.stat().st_mtime_ns
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no subprocess needed")))
@@ -154,6 +157,37 @@ def test_invalid_local_snapshot_returns_offline_without_overwriting_producer(mon
     monkeypatch.setattr(MODULE, "_live_cache_at", 0.)
     assert MODULE._live_status_fetch()["collector_online"] is False
     assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize("row_update", [
+    {"up_bid": None},
+    {"down_ask": 1.1},
+    {"up_bid": .7, "up_ask": .6},
+    {"down_ask": "0.5"},
+    {"down_token": "up"},
+    {"quote_at": None},
+    {"collector_connected": False},
+])
+def test_invalid_clob_snapshot_is_cleared(monkeypatch, tmp_path, row_update):
+    import time
+    from datetime import datetime, timezone
+    clear_live_environment(monkeypatch)
+    monkeypatch.setenv("PM_LIVE_LOCAL", "1")
+    target = tmp_path / "snapshot.json"
+    monkeypatch.setenv("PM_MARKET_SNAPSHOT_PATH", str(target))
+    now = time.time()
+    stamp = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    value = {"checked_at": stamp, "source": "polymarket-ws", "collector_online": True,
+             "collector_connected": True, "stale_after_ms": 2000,
+             "current_markets": [{"slug": "btc", "up_token": "up", "down_token": "down",
+                 "start": now - 10, "end": now + 100, "up_bid": .4, "up_ask": .5,
+                 "down_bid": .4, "down_ask": .5, "quote_at": stamp}]}
+    value.update({key: update for key, update in row_update.items() if key == "collector_connected"})
+    if "collector_connected" not in row_update:
+        value["current_markets"][0].update(row_update)
+    target.write_text(json.dumps(value), encoding="utf-8")
+    monkeypatch.setattr(MODULE, "_live_cache_at", 0.)
+    assert MODULE._live_status_fetch()["current_markets"] == []
 
 
 def test_remote_status_reads_lightweight_snapshot_with_configured_host_key_port(monkeypatch, tmp_path: Path) -> None:
