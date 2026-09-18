@@ -6,6 +6,8 @@
 
 当前发布目录为 `/root/.pm-releases/reversal-eed88b2-20260918T154705Z`，归档 SHA-256 为 `b93c976f9b744a0a757fb984b5eae2a357f733363a88738164d00a968e77f980`。manifest 校验 `497` 个文件，本批实际更新 `3` 个、删除 `0` 个。当前自动交易保持 `running=false`、`mode=null`、`strategy_id=null`、`live_unlocked=true`，开放订单和当前有效持仓均为 `0`；解锁只为用户发起的最小真实验证准备，真实生命周期、实际费用、结算到账和正式运行仍未完成。
 
+服务器当前保存策略配置 revision 5：阶段份额 `[5,5,5,5]`、单场预算 `14.5` 美元、运行时长 `20` 分钟。配置备份位于 `/root/.pm-releases/validation-config-20260919T000000Z/`；保存配置没有启动交易。
+
 ## 发布内容
 
 - 引擎 `_external/btc-5m-market-trading-bot/src` 及 `dist`，策略显式选择 `btc-reversal`。
