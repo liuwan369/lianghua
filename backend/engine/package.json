@@ -1,0 +1,40 @@
+{
+  "name": "btc-5m-market-trading-bot",
+  "version": "0.3.0",
+  "description": "TypeScript Polymarket BTC 5m reversal trading platform",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "trading-platform": "./dist/cli/platform.js"
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc",
+    "dev": "tsx src/cli/platform.ts --live",
+    "start": "node dist/cli/platform.js --live",
+    "platform": "node dist/cli/platform.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@polymarket/client": "^0.9.0",
+    "@polymarket/clob-client-v2": "1.1.0",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "viem": "^2.23.2",
+    "ws": "^8.18.0"
+  },
+  "overrides": {
+    "@ethersproject/providers": {
+      "ws": "^8.21.3"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

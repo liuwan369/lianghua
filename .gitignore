@@ -1,0 +1,22 @@
+# Dependencies and generated output
+**/node_modules/
+**/dist/
+**/results/
+**/__pycache__/
+**/.pytest_cache/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+**/*.sqlite
+**/*.db
+**/runtime-data/
+**/logs/
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
