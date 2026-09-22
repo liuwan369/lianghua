@@ -679,7 +679,10 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     connectedMarkets.add(market.id);
     const [up, down] = market.instruments;
     if (market.endsAt > Date.now() / 1000) {
-      const feed = runPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt));
+      const feed = runPolymarketFeed(
+        sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt),
+        { marketId: market.id, roundId: String(market.startsAt) },
+      );
       controls.add(feed); bookFeeds.set(market.id, feed);
       bookHealth.set(market.id, feed.isHealthy);
     }
