@@ -676,12 +676,80 @@ class Ledger:
                 "traded_markets": traded, "fill_notional": summary["fill_notional"],
                 "fees": summary["fees"], "settled_markets": summary["settled_markets"],
                 "pnl": summary["settled_pnl"], "pnl_semantics": summary["pnl_semantics"],
+                "settled_wins": summary.get("settled_wins", 0),
+                "settled_losses": summary.get("settled_losses", 0),
+                "win_rate": summary.get("win_rate"),
                 "last_event": events[0]["event"] if events else None,
                 "error": ("交易日志待核对" if summary["error"] or summary["invalid_records"]
                           else "引擎报告异常，请检查运行状态" if counts.get("error", 0) else None),
                 "events": list(reversed(events)), "market_summaries": markets,
                 "latency": summary.get("latency"), "runtime": runtime,
                 "orders": orders, "order_count": order_count, "orders_truncated": order_count > len(orders)}
+
+    def position(self, run_id, round_id=None):
+        """Return the latest projected BTC reversal round position.
+
+        This reads the platform status projection only.  It never queries the
+        exchange from an HTTP request and reports an unavailable/stale result
+        when the projection has no authoritative position snapshot.
+        """
+        with self._connect() as db:
+            self._run(db, run_id)
+            if not self._has_table(db, "platform_runtime"):
+                return {"available": False, "stale": True, "error": "position projection unavailable",
+                        "runId": run_id, "roundId": round_id}
+            row = db.execute("SELECT source_at,payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
+        if row is None:
+            return {"available": False, "stale": True, "error": "position projection pending",
+                    "runId": run_id, "roundId": round_id}
+        try:
+            runtime = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            return {"available": False, "stale": True, "error": "position projection invalid",
+                    "runId": run_id, "roundId": round_id}
+        strategy = runtime.get("strategy_runtime") if isinstance(runtime, dict) else None
+        candidates = []
+        if isinstance(strategy, dict):
+            current = strategy.get("currentRound")
+            if isinstance(current, dict):
+                candidates.append(current)
+            candidates.extend(item for item in strategy.get("rounds", []) if isinstance(item, dict))
+        selected = None
+        for item in candidates:
+            market = item.get("marketId")
+            if round_id is None or market == round_id:
+                selected = item
+                if round_id is not None:
+                    break
+        if selected is None:
+            return {"available": True, "stale": False, "error": None, "runId": run_id,
+                    "roundId": round_id, "marketId": None, "stage": None, "confirmations": 0,
+                    "yesShares": 0, "noShares": 0, "averagePrice": None, "occupiedUsd": 0,
+                    "outcomePnl": {"yes": None, "no": None}, "updatedAt": row["source_at"]}
+        positions = runtime.get("positions") if isinstance(runtime, dict) else []
+        by_token = {item.get("tokenId"): item for item in positions if isinstance(item, dict)}
+        yes = by_token.get(selected.get("upTokenId"), {})
+        no = by_token.get(selected.get("downTokenId"), {})
+        yes_shares, no_shares = yes.get("shares") or 0, no.get("shares") or 0
+        occupied = (yes.get("costUsd") or 0) + (no.get("costUsd") or 0)
+        total_shares = yes_shares + no_shares
+        total_cost = occupied
+        return {
+            "available": True,
+            "stale": False,
+            "error": None,
+            "runId": run_id,
+            "roundId": selected.get("marketId") or round_id,
+            "marketId": selected.get("marketId"),
+            "stage": selected.get("nextStage") or len(selected.get("stages") or []),
+            "confirmations": selected.get("confirmationCount") or 0,
+            "yesShares": yes_shares,
+            "noShares": no_shares,
+            "averagePrice": total_cost / total_shares if total_shares > 0 else None,
+            "occupiedUsd": occupied,
+            "outcomePnl": {"yes": selected.get("netIfUpUsd"), "no": selected.get("netIfDownUsd")},
+            "updatedAt": row["source_at"],
+        }
 
     def summary(self, run_id):
         with self._connect() as db:
@@ -697,6 +765,14 @@ class Ledger:
                           order_lifecycle_available=self._has_table(db, "order_details") and bool(db.execute(
                               "SELECT 1 FROM order_details WHERE run_id=? LIMIT 1", (run_id,)).fetchone()),
                           error=run["source_error"])
+            settled = db.execute("""SELECT
+                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                    SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses
+                FROM market_details WHERE run_id=? AND status='已结算' AND pnl IS NOT NULL""", (run_id,)).fetchone()
+            wins = int(settled["wins"] or 0)
+            losses = int(settled["losses"] or 0)
+            result.update(settled_wins=wins, settled_losses=losses,
+                          win_rate=(wins / (wins + losses) if wins + losses else None))
             try:
                 source_bytes = Path(run["path"]).stat().st_size
                 lag = max(0, source_bytes - run["byte_offset"])

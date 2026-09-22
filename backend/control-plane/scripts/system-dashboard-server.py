@@ -1194,12 +1194,228 @@ def stop_trading() -> dict:
         return trading_status(include_stats=False)
 
 
+def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
+    """Map the collector's paired UP/DOWN row to the shared YES/NO DTO."""
+    now = time.time() if now is None else now
+    slug = str(row.get("slug") or "")
+    start, end = row.get("start"), row.get("end")
+    quote_at = row.get("quote_at")
+    stale_after = row.get("stale_after_ms", stale_after_ms)
+    try:
+        quote_epoch = datetime.fromisoformat(quote_at).timestamp() if isinstance(quote_at, str) else None
+    except (TypeError, ValueError, OverflowError):
+        quote_epoch = None
+    expires_at = quote_epoch + float(stale_after) / 1000 if quote_epoch is not None and isinstance(stale_after, (int, float)) else None
+    return {
+        "assetId": "btc",
+        "symbol": "BTC",
+        "name": str(row.get("name") or slug or "BTC 五分钟反转"),
+        "marketId": slug,
+        "roundId": slug,
+        "cycle": "5m",
+        "startAt": start,
+        "endAt": end,
+        "yesToken": row.get("up_token"),
+        "noToken": row.get("down_token"),
+        "yesBid": row.get("up_bid"),
+        "yesAsk": row.get("up_ask"),
+        "noBid": row.get("down_bid"),
+        "noAsk": row.get("down_ask"),
+        "volume": row.get("volume", 0),
+        "liquidity": row.get("liquidity", 0),
+        "quoteAt": quote_at,
+        "sourceAt": quote_at,
+        "expiresAt": expires_at,
+        "enabled": True,
+        "current": isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= now < end,
+        "stale": expires_at is not None and now >= expires_at,
+        "source": row.get("source") or "collector",
+    }
+
+
+def _modern_markets() -> dict:
+    """Read the already cached market feed; never perform a collector probe."""
+    raw = cached_live_status()
+    rows = raw.get("current_markets") if isinstance(raw.get("current_markets"), list) else []
+    stale_after = raw.get("stale_after_ms") if isinstance(raw.get("stale_after_ms"), (int, float)) else None
+    items = [_modern_market(row, stale_after_ms=stale_after) for row in rows if isinstance(row, dict)]
+    stale = raw.get("collector_online") is not True or not items
+    return {"schemaVersion": 1, "items": items, "markets": items,
+            "source": raw.get("source") or raw.get("node_label") or "collector",
+            "asOf": raw.get("checked_at") or time.time(), "stale": stale,
+            "error": raw.get("error") or raw.get("stale_reason"),
+            "collector_online": raw.get("collector_online") is True}
+
+
+def _modern_runtime(status: dict) -> dict:
+    stats = status.get("stats") if isinstance(status, dict) else {}
+    projection = stats.get("projection") if isinstance(stats, dict) else {}
+    runtime = stats.get("runtime") if isinstance(stats, dict) else None
+    projection = projection if isinstance(projection, dict) else {}
+    runtime = runtime if isinstance(runtime, dict) else {}
+    if status.get("running"):
+        state = runtime.get("status") or "starting"
+    else:
+        state = "failed" if status.get("exit_code") not in (None, 0) else "stopped"
+    stale = bool(projection.get("stale") or runtime.get("stale"))
+    return {"schemaVersion": 1, "status": state, "state": state,
+            "source": "platform-runtime" if runtime else "control-plane",
+            "asOf": runtime.get("source_at") or projection.get("as_of") or time.time(),
+            "stale": stale, "runId": status.get("run_id"),
+            "strategyId": status.get("strategy_id") or "btc-reversal",
+            "execution": status.get("execution"), "markets": runtime.get("markets", []),
+            "error": runtime.get("error") or (status.get("stop_result") or {}).get("message"),
+            "projection": projection}
+
+
+def _api_run_id() -> str | None:
+    _restore_trading_state()
+    with _trading_lock:
+        return _run_identity()
+
+
+def _api_ledger() -> Ledger:
+    return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+
+
+def _modern_events(run_id: str | None, query: dict) -> dict:
+    if not run_id:
+        return {"schemaVersion": 1, "items": [], "cursor": None, "runId": None,
+                "source": "ledger", "asOf": time.time(), "stale": True,
+                "error": "当前没有运行记录"}
+    cursor = query.get("cursor", [None])[0]
+    result = _api_ledger().events(run_id, before_id=int(cursor) if cursor else None,
+                                  limit=int(query.get("limit", ["50"])[0]))
+    return {"schemaVersion": 1, "items": result["events"], "events": result["events"],
+            "cursor": result.get("next_before_id"), "runId": run_id,
+            "source": "ledger", "asOf": time.time(), "stale": False, "error": None}
+
+
 def make_handler(root: Path):
     docs = root / "docs"
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            query = parse_qs(urlsplit(self.path).query)
+            if path == "/api/bootstrap":
+                status = trading_status(include_stats=False)
+                self._send_json(json.dumps({
+                    "schemaVersion": 1, "app": "polymarket-btc-reversal",
+                    "strategyId": "btc-reversal", "cycle": "5m",
+                    "source": "control-plane", "asOf": time.time(), "stale": False,
+                    "capabilities": ["markets", "runtime", "orders", "positions", "metrics", "events"],
+                    "runtime": _modern_runtime({**status, "stats": {}}),
+                }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/markets":
+                self._send_json(json.dumps(_modern_markets(), ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path.startswith("/api/markets/") and path.endswith("/snapshot"):
+                market_id = path[len("/api/markets/"):-len("/snapshot")].strip("/")
+                catalog = _modern_markets()
+                market = next((item for item in catalog["items"] if item["marketId"] == market_id), None)
+                if market is None:
+                    self._send_json(json.dumps({"error": "market not found", "source": catalog["source"],
+                                                 "asOf": catalog["asOf"], "stale": catalog["stale"]}).encode("utf-8"), 404)
+                    return
+                self._send_json(json.dumps({"schemaVersion": 1, **market,
+                    "orderBook": {"marketId": market_id, "roundId": market["roundId"],
+                                  "yes": {"bid": market["yesBid"], "ask": market["yesAsk"]},
+                                  "no": {"bid": market["noBid"], "ask": market["noAsk"]},
+                                  "sourceAt": market["sourceAt"], "expiresAt": market["expiresAt"],
+                                  "stale": market["stale"]},
+                    "source": catalog["source"], "asOf": catalog["asOf"],
+                    "stale": catalog["stale"], "error": catalog["error"]},
+                    ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/runtime/status":
+                status = trading_status()
+                self._send_json(json.dumps(_modern_runtime(status), ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/runtime/market-pool":
+                catalog = _modern_markets()
+                current = [item["assetId"] for item in catalog["items"] if item.get("current")]
+                self._send_json(json.dumps({"schemaVersion": 1, "desiredIds": current,
+                    "currentIds": current, "nextRoundIds": [], "effectiveRoundId": None,
+                    "source": "control-plane", "updatedAt": time.time(), "stale": catalog["stale"],
+                    "error": catalog["error"]}, ensure_ascii=False).encode("utf-8"))
+                return
+            if path == "/api/strategy/config":
+                config = strategy_config_status()
+                self._send_json(json.dumps({"schemaVersion": 1, "source": "control-plane",
+                    "asOf": config.get("savedAt") or time.time(), "stale": False, "error": None,
+                    **config}, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/account/snapshot":
+                snapshot = account_data().snapshot()
+                self._send_json(json.dumps({"source": "account-reader",
+                    "asOf": snapshot.get("checked_at") or time.time(),
+                    "error": snapshot.get("error_code"), **snapshot},
+                    ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/diagnostics/health":
+                status = trading_status(include_stats=False)
+                metrics = system_metrics().snapshot()
+                collector = _modern_markets()
+                value = {"schemaVersion": 1, "status": "ok" if collector["collector_online"] else "degraded",
+                         "source": "control-plane", "asOf": metrics.get("asOf") or time.time(),
+                         "stale": collector["stale"] or metrics.get("asOf") is None,
+                         "services": {"trading": status, "collector": collector,
+                         "projection": _metric_services().get("projection", {})},
+                         "resources": metrics, "error": collector.get("error")}
+                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/metrics/summary":
+                status = trading_status()
+                stats = status.get("stats") if isinstance(status, dict) else None
+                stats = stats if isinstance(stats, dict) else {}
+                projection = stats.get("projection") if isinstance(stats.get("projection"), dict) else {}
+                value = {"schemaVersion": 1, "range": query.get("range", ["today"])[0],
+                         "source": "ledger", "asOf": time.time(), "stale": bool(projection.get("stale")),
+                         "error": stats.get("error"), **stats}
+                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
+            if path == "/api/events":
+                try:
+                    value = _modern_events(_api_run_id(), query)
+                    self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                except (KeyError, ValueError, TypeError, OSError, sqlite3.Error, RuntimeError):
+                    self._send_json('{"error":"事件查询参数不正确","stale":true}'.encode("utf-8"), 400)
+                return
+            if path.startswith("/api/rounds/") and path.endswith("/orders"):
+                round_id = path[len("/api/rounds/"):-len("/orders")].strip("/")
+                run_id = _api_run_id()
+                if not run_id:
+                    self._send_json(json.dumps({"schemaVersion": 1, "orders": [], "total": 0,
+                        "roundId": round_id, "source": "ledger", "asOf": time.time(), "stale": True,
+                        "error": "当前没有运行记录"}, ensure_ascii=False).encode("utf-8"))
+                    return
+                try:
+                    result = _api_ledger().orders_page(run_id, limit=int(query.get("limit", ["50"])[0]),
+                                                       offset=int(query.get("offset", ["0"])[0]), market=round_id)
+                    self._send_json(json.dumps({"schemaVersion": 1, "roundId": round_id,
+                        "source": "ledger", "asOf": time.time(), "stale": False, "error": None, **result},
+                        ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                except (KeyError, ValueError, TypeError, OSError, sqlite3.Error, RuntimeError):
+                    self._send_json('{"error":"订单查询参数不正确","stale":true}'.encode("utf-8"), 400)
+                return
+            if path.startswith("/api/rounds/") and path.endswith("/position"):
+                round_id = path[len("/api/rounds/"):-len("/position")].strip("/")
+                run_id = _api_run_id()
+                if not run_id:
+                    value = {"schemaVersion": 1, "available": False, "stale": True,
+                             "source": "ledger", "asOf": time.time(),
+                             "error": "当前没有运行记录", "roundId": round_id}
+                else:
+                    try:
+                        value = {"schemaVersion": 1, "source": "ledger", **_api_ledger().position(run_id, round_id)}
+                        value.setdefault("asOf", value.get("updatedAt") or time.time())
+                    except (KeyError, OSError, sqlite3.Error, RuntimeError):
+                        value = {"schemaVersion": 1, "available": False, "stale": True,
+                                 "error": "持仓投影暂不可用", "runId": run_id, "roundId": round_id}
+                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                return
             if path == "/api/strategy-config":
                 try:
                     self._send_json(json.dumps(strategy_config_status(), ensure_ascii=False).encode("utf-8"))
@@ -1315,20 +1531,28 @@ def make_handler(root: Path):
             self.wfile.write(body)
 
         def do_PUT(self) -> None:  # noqa: N802
-            if self.path.split("?", 1)[0] != "/api/strategy-config":
+            path = self.path.split("?", 1)[0]
+            if path == "/api/runtime/market-pool":
+                self._send_json(json.dumps({"accepted": False, "status": "unsupported",
+                    "source": "control-plane", "asOf": time.time(), "stale": False,
+                    "error": "当前系统只运行 BTC 五分钟策略，运行池由服务器固定"}, ensure_ascii=False).encode("utf-8"), 501)
+                return
+            if path != "/api/strategy-config":
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             self.do_POST()
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
+            modern_order_path = path.startswith("/api/orders/") and path.endswith("/cancel")
             if path not in {"/api/account/check", "/api/account/save", "/api/strategy-config",
-                            "/api/trading/control", "/api/trading/auth/session"}:
+                            "/api/trading/control", "/api/trading/auth/session", "/api/runtime/commands",
+                            "/api/strategy/drafts", "/api/strategy/activate", "/api/runtime/flatten"} and not modern_order_path:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if length <= 0 or length > 32_000:
+                if (length <= 0 and not (modern_order_path or path == "/api/runtime/flatten")) or length > 32_000:
                     raise ValueError("请求内容为空或过大")
                 raw = self.rfile.read(length)
                 payload = json.loads(raw.decode("utf-8") or "{}") if raw else {}
@@ -1366,6 +1590,44 @@ def make_handler(root: Path):
                         json.dumps({"ok": True, "expires_in": _control_session_ttl(), "persistent": True}, ensure_ascii=False).encode("utf-8"),
                         response_headers={"Set-Cookie": _control_cookie_header(session, self.headers)},
                     )
+                    return
+                if path == "/api/runtime/commands":
+                    auth_error = _control_request_error(self.headers, "live")
+                    if auth_error:
+                        status, message = auth_error
+                        self._send_json(json.dumps({"ok": False, "error": message}, ensure_ascii=False).encode("utf-8"), status)
+                        return
+                    action = payload.get("action")
+                    translated = {"action": action, "strategy_id": payload.get("strategyId", "btc-reversal"),
+                                  "revision": payload.get("revision"), "request_id": payload.get("requestId")}
+                    if action == "start" and translated["revision"] is None:
+                        translated["revision"] = payload.get("expectedRevision")
+                    result = strategy_control(translated)
+                    self._send_json(json.dumps({"accepted": True, "status": result,
+                        "source": "control-plane", "asOf": time.time(), "stale": False},
+                        ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    return
+                if path == "/api/strategy/drafts":
+                    modern_config = payload.get("config", payload)
+                    expected = payload.get("expectedRevision", payload.get("revision"))
+                    result = save_strategy_config({"strategyId": "btc-reversal",
+                                                   "expectedRevision": expected, "config": modern_config})
+                    self._send_json(json.dumps({"accepted": True, **result}, ensure_ascii=False,
+                                                allow_nan=False).encode("utf-8"))
+                    return
+                if path == "/api/strategy/activate":
+                    config = strategy_config_status()
+                    effective = payload.get("effectiveRoundId")
+                    self._send_json(json.dumps({"accepted": True, "strategyId": "btc-reversal",
+                        "revision": config.get("savedRevision"), "effectiveRoundId": effective,
+                        "source": "control-plane", "asOf": time.time(), "stale": False},
+                        ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    return
+                if path == "/api/runtime/flatten" or modern_order_path:
+                    self._send_json(json.dumps({"accepted": False, "status": "unsupported",
+                        "source": "control-plane", "asOf": time.time(), "stale": False,
+                        "error": "当前运行时只提供账本查询；撤单和清余量由交易运行会话处理"},
+                        ensure_ascii=False).encode("utf-8"), 501)
                     return
                 mode = payload.get("mode", "live")
                 if path == "/api/trading/control":

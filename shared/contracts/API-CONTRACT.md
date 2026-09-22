@@ -18,6 +18,8 @@
 
 ## REST
 
+所有现代只读响应都带 `schemaVersion`、`source`、`asOf`、`stale` 和 `error`（无错误时为 `null`）。`stale=true` 时客户端应保留最后一次成功数据，并显示数据来源和时间；不能把不可用数据当作零。
+
 | 用途 | 方法 | 路径 | 频率/说明 |
 |---|---|---|---|
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
@@ -38,6 +40,8 @@
 | 系统诊断 | GET | `/api/diagnostics/health` | 15 秒，资源和进程 |
 | 汇总统计 | GET | `/api/metrics/summary?range=today` | 页面加载/手动刷新 |
 | 事件历史 | GET | `/api/events?cursor=...` | 分页，低频 |
+
+账本统计响应还提供 `fills`、`fill_notional`、`fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses` 和 `win_rate`。`pnl` 是引擎结算净盈亏，不是钱包现金对账；缺少成交、手续费或结算字段时返回 `null`。订单 DTO 包含订单状态及其 `fills`，持仓 DTO 包含 `yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`。
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
 

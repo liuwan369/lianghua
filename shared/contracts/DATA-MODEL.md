@@ -40,6 +40,10 @@ desired 是用户选择，current/next 是服务器确认结果。停用当前�
 
 系统健康包含行情节点、控制台、采集、交易、账本投影、CPU、内存、磁盘和负载。账户只返回钱包摘要、配置状态和最近检查结果，不返回私钥。事件必须有 id、time、kind、marketId、roundId、severity 和 message。
 
+## Ledger response metadata
+
+账本、运行状态和诊断响应必须带 `source`、`asOf`、`stale`、`error`。账本投影进程负责从运行日志生成订单、成交、结算、持仓和统计；HTTP 请求只读 SQLite/原子快照，不触碰实时下单链路。`stale` 或 `error` 时保留上一次有效字段，未知金额和盈亏使用 `null`。
+
 ## 页面状态
 
 每个模块都要能表达 `loading`、`ready`、`stale`、`empty`、`error`、`unavailable`。错误时保留最后成功快照，同时在标题处显示来源和更新时间。
