@@ -4,6 +4,7 @@
 **/results/
 **/__pycache__/
 **/.pytest_cache/
+.worktrees/
 
 # Local secrets and runtime state
 .env

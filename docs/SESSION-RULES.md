@@ -22,11 +22,13 @@
 
 | 会话 | 分支 | worktree | 负责目录 |
 |---|---|---|---|
-| 前端 | `codex/frontend-console` | `C:\Users\Administrator\Desktop\polymarket-worktrees\frontend-console` | `frontend/console/` |
-| 行情 | `codex/market-data` | `C:\Users\Administrator\Desktop\polymarket-worktrees\market-data` | `backend/engine/src/live/feeds/`、`discovery.ts`、`orderbook.ts` |
-| 交易运行 | `codex/trading-runtime` | `C:\Users\Administrator\Desktop\polymarket-worktrees\trading-runtime` | `backend/engine/src/strategies/`、`platform/`、`live/clob/` |
-| 账本 API | `codex/ledger-api` | `C:\Users\Administrator\Desktop\polymarket-worktrees\ledger-api` | `backend/control-plane/scripts/`、`shared/contracts/` |
-| 集成 | `codex/integration` | `C:\Users\Administrator\Desktop\polymarket-worktrees\integration` | 跨模块接线、部署和端到端验证 |
+| 前端 | `codex/frontend-console` | `C:\Users\Administrator\Desktop\polymarket\.worktrees\frontend-console` | `frontend/console/` |
+| 行情 | `codex/market-data` | `C:\Users\Administrator\Desktop\polymarket\.worktrees\market-data` | `backend/engine/src/live/feeds/`、`discovery.ts`、`orderbook.ts` |
+| 交易运行 | `codex/trading-runtime` | `C:\Users\Administrator\Desktop\polymarket\.worktrees\trading-runtime` | `backend/engine/src/strategies/`、`platform/`、`live/clob/` |
+| 账本 API | `codex/ledger-api` | `C:\Users\Administrator\Desktop\polymarket\.worktrees\ledger-api` | `backend/control-plane/scripts/`、`shared/contracts/` |
+| 集成 | `codex/integration` | `C:\Users\Administrator\Desktop\polymarket\.worktrees\integration` | 跨模块接线、部署和端到端验证 |
+
+主工作文件夹始终是 `C:\Users\Administrator\Desktop\polymarket`。`.worktrees` 只是同一 Git 仓库的分支隔离目录，完成后由集成分支合并回主目录。Codex 左侧顶层会话需要用户在这个项目下点击“新对话”，不能用并行 worker 代替。
 
 ## 完成标准
 
