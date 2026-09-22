@@ -39,7 +39,14 @@ from dashboard.account_data import AccountData
 from dashboard.system_metrics import SystemMetrics
 
 
-TRADING_ROOT = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
+_SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+_TRADING_ROOT_CANDIDATES = (
+    _SCRIPT_ROOT / "_external" / "btc-5m-market-trading-bot",
+    _REPOSITORY_ROOT / "backend" / "engine",
+    _REPOSITORY_ROOT / "_external" / "btc-5m-market-trading-bot",
+)
+TRADING_ROOT = next((path for path in _TRADING_ROOT_CANDIDATES if path.is_dir()), _TRADING_ROOT_CANDIDATES[0])
 DEPLOYMENT_LOCK_PATH = TRADING_ROOT.parents[1] / "data" / "dashboard" / "deployment.lock"
 _trading_lock = threading.RLock()
 _account_check_lock = threading.Lock()
@@ -1195,7 +1202,10 @@ def stop_trading() -> dict:
 
 
 def make_handler(root: Path):
-    docs = root / "docs"
+    frontend_root = root / "frontend" / "console"
+    generated_docs = root / "docs"
+    docs = frontend_root if frontend_root.is_dir() else generated_docs
+    generated_console = (docs / "console").is_dir()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -1224,7 +1234,12 @@ def make_handler(root: Path):
             if path == "/api/live":
                 self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
                 return
-            relative = "console/index.html" if path in {"/console", "/console/"} else path.lstrip("/")
+            if path in {"/console", "/console/"}:
+                relative = "console/index.html" if generated_console else "index.html"
+            elif path.startswith("/console/") and not generated_console:
+                relative = path.removeprefix("/console/")
+            else:
+                relative = path.lstrip("/")
             candidate = (docs / relative).resolve()
             if docs not in candidate.parents or not candidate.is_file():
                 self.send_error(404)
@@ -1408,7 +1423,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Trading dashboard and isolated analytics")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
+    default_root = (_REPOSITORY_ROOT if (_REPOSITORY_ROOT / "frontend" / "console").is_dir()
+                    else Path(__file__).resolve().parents[1])
+    parser.add_argument("--root", default=str(default_root))
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         parser.error("交易控制台只允许监听本机地址")

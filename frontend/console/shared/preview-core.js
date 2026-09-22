@@ -68,6 +68,7 @@
     marketPool: (options) => request("/api/runtime/market-pool", options),
     runtimeStatus: () => request("/api/runtime/status"),
     runtimeCommand: (payload) => request("/api/runtime/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+    legacyRuntimeCommand: (payload) => request("/api/trading/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyConfig: () => request("/api/strategy/config"),
     strategyDraft: (payload) => request("/api/strategy/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     legacyStrategySave: (payload) => request("/api/strategy-config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
@@ -92,7 +93,16 @@
     legacyStrategyConfig: () => request("/api/strategy-config")
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  const config = { apiBase: "", mode: "local-preview", apiFlavor: "contract", demo: true, marketCycle: "5m", strategyId: "reversal", ...runtimeConfig };
+  const servedByDashboard = /^\/console(?:\/|$)/.test(window.location.pathname);
+  const config = {
+    apiBase: "",
+    mode: servedByDashboard ? "backend" : "local-preview",
+    apiFlavor: "contract",
+    demo: !servedByDashboard,
+    marketCycle: "5m",
+    strategyId: "btc-reversal",
+    ...runtimeConfig
+  };
   window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, on, emit });
   window.addEventListener("storage", (event) => {
     if (event.key) emit(`storage:${event.key}`, storage.read(event.key, null));

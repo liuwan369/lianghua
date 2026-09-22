@@ -66,7 +66,22 @@
     },
     async commandRuntime(payload) {
       if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：运行控制接口尚未连接" };
-      return core.api.runtimeCommand(payload);
+      const requestId = typeof payload?.requestId === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.requestId)
+        ? payload.requestId : crypto.randomUUID();
+      const legacyPayload = {
+        action: payload?.action,
+        strategy_id: "btc-reversal",
+        request_id: requestId,
+        revision: Number.isInteger(payload?.revision) ? payload.revision : store.getState().strategy.revision
+      };
+      return modernOrLegacy(
+        () => core.api.runtimeCommand(payload),
+        async () => {
+          const response = await core.api.legacyRuntimeCommand(legacyPayload);
+          return { accepted: response?.ok === true, status: response?.status || response, requestId };
+        }
+      );
     },
     async saveStrategy(payload) {
       if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略保存接口尚未连接" };
