@@ -366,6 +366,7 @@ export function runPolymarketFeed(
         let publishedAtMs = 0;
         let upDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
         let downDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
+        const tickSizeAt: { up?: number; down?: number } = {};
         let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
         let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
         let upProcessedAtMonoMs = 0, downProcessedAtMonoMs = 0;
@@ -419,9 +420,13 @@ export function runPolymarketFeed(
                 if (typeof id === "string" && id) resolvedMarketId = id;
               }
               for (const change of tickSizeChanges(v)) {
-                sink({ kind: "tickSize", ...change, tsUnix: change.tsUnix ?? nowUnix() });
-                if (change.token === upToken) tickSizes.up = change.tickSize;
-                if (change.token === downToken) tickSizes.down = change.tickSize;
+                const tsUnix = change.tsUnix ?? nowUnix();
+                const side = change.token === upToken ? "up" : change.token === downToken ? "down" : undefined;
+                if (!side || tsUnix <= (tickSizeAt[side] ?? 0)) continue;
+                tickSizeAt[side] = tsUnix;
+                sink({ kind: "tickSize", token: change.token, tickSize: change.tickSize, tsUnix });
+                if (side === "up") tickSizes.up = change.tickSize;
+                else tickSizes.down = change.tickSize;
               }
               for (const trade of marketTrades(v)) {
                 sink({ kind: "marketTrade", ...trade });
@@ -487,10 +492,16 @@ export function runPolymarketFeed(
               const upAsk = upTop?.ask ?? ua![0];
               const downBid = downTop?.bid ?? db![0];
               const downAsk = downTop?.ask ?? da![0];
-              const upBidSz = upDepth?.bids.find(([price]) => price === upBid)?.[1];
-              const upAskSz = upDepth?.asks.find(([price]) => price === upAsk)?.[1];
-              const downBidSz = downDepth?.bids.find(([price]) => price === downBid)?.[1];
-              const downAskSz = downDepth?.asks.find(([price]) => price === downAsk)?.[1];
+              const upDepthMatches = upDepth != null
+                && (upTop == null || (upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk));
+              const downDepthMatches = downDepth != null
+                && (downTop == null || (downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk));
+              const outputUpDepth = upDepthMatches ? upDepth : undefined;
+              const outputDownDepth = downDepthMatches ? downDepth : undefined;
+              const upBidSz = outputUpDepth?.bids.find(([price]) => price === upBid)?.[1];
+              const upAskSz = outputUpDepth?.asks.find(([price]) => price === upAsk)?.[1];
+              const downBidSz = outputDownDepth?.bids.find(([price]) => price === downBid)?.[1];
+              const downAskSz = outputDownDepth?.asks.find(([price]) => price === downAsk)?.[1];
               const processedAtMonoMs = performance.now();
               if (fastChanges.some(change => change.side === "up") && fastUp) fastUp.processedAtMonoMs = processedAtMonoMs;
               if (fastChanges.some(change => change.side === "down") && fastDown) fastDown.processedAtMonoMs = processedAtMonoMs;
@@ -533,8 +544,8 @@ export function runPolymarketFeed(
                 ask: upAsk,
                 bidSize: upBidSz,
                 askSize: upAskSz,
-                bids: upDepth?.bids,
-                asks: upDepth?.asks,
+                bids: outputUpDepth?.bids,
+                asks: outputUpDepth?.asks,
                 sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -545,8 +556,8 @@ export function runPolymarketFeed(
                 ask: downAsk,
                 bidSize: downBidSz,
                 askSize: downAskSz,
-                bids: downDepth?.bids,
-                asks: downDepth?.asks,
+                bids: outputDownDepth?.bids,
+                asks: outputDownDepth?.asks,
                 sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
                 expiresAt,
                 sequence: snapshotSequence,
