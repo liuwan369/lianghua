@@ -366,6 +366,8 @@ export function runPolymarketFeed(
         let publishedAtMs = 0;
         let upDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
         let downDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
+        let upDepthAtMs = 0;
+        let downDepthAtMs = 0;
         const tickSizeAt: { up?: number; down?: number } = {};
         let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
         let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
@@ -443,8 +445,14 @@ export function runPolymarketFeed(
                 lastDownAtMs = atMs; downReceivedAtUnix = receivedAtUnix; downReceivedAtMonoMs = receivedAtMonoMs;
                 if (fastDown && applied.downMs >= fastDown.exchangeMs) fastDown = undefined;
               }
-              if (changed.upUpdated) upDepth = up.levels(5);
-              if (changed.downUpdated) downDepth = dn.levels(5);
+              if (changed.upUpdated) {
+                upDepth = up.levels(5);
+                upDepthAtMs = applied.upMs;
+              }
+              if (changed.downUpdated) {
+                downDepth = dn.levels(5);
+                downDepthAtMs = applied.downMs;
+              }
               const fastChanges = bestBidAskChanges(v, upToken, downToken, {
                 upMs: Math.max(applied.upMs, fastApplied.upMs),
                 downMs: Math.max(applied.downMs, fastApplied.downMs),
@@ -493,9 +501,11 @@ export function runPolymarketFeed(
               const downBid = downTop?.bid ?? db![0];
               const downAsk = downTop?.ask ?? da![0];
               const upDepthMatches = upDepth != null
-                && (upTop == null || (upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk));
+                && (upTop == null || (upDepthAtMs >= upTop.exchangeMs
+                  && upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk));
               const downDepthMatches = downDepth != null
-                && (downTop == null || (downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk));
+                && (downTop == null || (downDepthAtMs >= downTop.exchangeMs
+                  && downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk));
               const outputUpDepth = upDepthMatches ? upDepth : undefined;
               const outputDownDepth = downDepthMatches ? downDepth : undefined;
               const upBidSz = outputUpDepth?.bids.find(([price]) => price === upBid)?.[1];
