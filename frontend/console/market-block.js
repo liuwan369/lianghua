@@ -141,31 +141,49 @@
     text("[data-selection-note]", coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "下一场可开始运行。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
 
-  function toggleEnabled(id) {
+  async function toggleEnabled(id) {
     const coin = coins.find((item) => item.id === id);
     if (!coin) return;
-    coin.enabled = !coin.enabled;
-    // running describes the already accepted current round. Disabling only
-    // changes the desired pool for the next round; the backend owns rollover.
-    store.setMarketPool({ desiredIds: coins.filter((item) => item.enabled).map((item) => item.id), currentIds: coins.filter((item) => item.running).map((item) => item.id), source: "local-preview" });
-    syncCoins();
-    renderCounts();
-    renderList();
-    renderDetail();
+    const state = store.getState();
+    const desiredIds = state.marketPool.desiredIds.filter((value) => value !== id);
+    if (!coin.enabled) desiredIds.push(id);
+    const controls = [...document.querySelectorAll(`[data-enable-coin="${id}"], [data-detail-enable]`)];
+    controls.forEach((control) => { control.disabled = true; });
+    text("[data-selection-note]", `${coin.symbol} 运行池更新中…`);
+    try {
+      // The current round is server-owned. Only desiredIds is changed here;
+      // the backend decides when currentIds/nextRoundIds roll over.
+      await adapter.saveMarketPool({
+        desiredIds,
+        currentIds: state.marketPool.currentIds,
+        nextRoundIds: state.marketPool.nextRoundIds
+      });
+      syncCoins();
+      renderCounts();
+      renderList();
+      renderDetail();
+      text("[data-market-refresh-note]", `运行池已更新 · ${window.PolyPreview.format.clock()}`);
+    } catch (error) {
+      text("[data-selection-note]", error.message || "运行池更新失败，保留当前状态");
+    } finally {
+      controls.forEach((control) => { control.disabled = false; });
+    }
   }
 
-  document.querySelector("[data-detail-enable]")?.addEventListener("click", () => toggleEnabled(selectedId));
+  document.querySelector("[data-detail-enable]")?.addEventListener("click", () => { void toggleEnabled(selectedId); });
   document.querySelector("[data-coin-search]")?.addEventListener("input", (event) => { search = event.target.value; renderList(); });
   document.querySelector("[data-refresh-markets]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     try {
-      await adapter.loadMarkets();
+      const resource = await adapter.loadMarkets();
       syncCoins();
       renderCounts();
       renderList();
       renderDetail();
-      text("[data-market-refresh-note]", `最后刷新 · ${window.PolyPreview.format.clock()}`);
+      text("[data-market-refresh-note]", resource?.status === "stale" || resource?.status === "unavailable"
+        ? `连接中断 · ${resource.error || "保留上次数据"}`
+        : `最后刷新 · ${window.PolyPreview.format.clock()}`);
     } catch (error) { text("[data-market-refresh-note]", error.message || "市场目录读取失败"); }
     finally { button.disabled = false; }
   });

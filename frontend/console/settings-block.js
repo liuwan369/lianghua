@@ -96,13 +96,13 @@
   const renderDiagnostics = (resource) => {
     const stamp = resource?.data?.asOf ? new Date(resource.data.asOf * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "--:--:--";
     const ready = resource?.status === "ready";
-    text("[data-diagnostic-state]", ready ? "已连接 · 只读" : "设计稿 · 数据待接入");
+    text("[data-diagnostic-state]", ready ? "已连接 · 只读" : resource?.status === "stale" ? "连接中断 · 保留上次数据" : "设计稿 · 数据待接入");
     text("[data-diagnostic-time]", `最后检查 ${stamp}`);
     text("[data-header-check]", stamp);
     text("[data-note-time]", ready ? `后端诊断 · ${stamp}` : "原型预览 · 未连接后端");
-    text("[data-header-health]", ready ? "正常" : "待接入");
-    text("[data-connection-value=\"market\"]", ready ? "已读取" : "等待接入");
-    text("[data-connection-value=\"trade\"]", ready ? "已读取" : "未检查");
+    text("[data-header-health]", ready ? "正常" : resource?.status === "stale" ? "连接中断" : "待接入");
+    text("[data-connection-value=\"market\"]", ready ? "已读取" : resource?.status === "stale" ? "保留上次数据" : "等待接入");
+    text("[data-connection-value=\"trade\"]", ready ? "已读取" : resource?.status === "stale" ? "保留上次数据" : "未检查");
   };
   store.subscribe("diagnostics", renderDiagnostics);
 
