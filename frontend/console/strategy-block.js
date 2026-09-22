@@ -244,6 +244,8 @@
   store.subscribe("strategy", (resource) => {
     const revision = resource?.revision;
     text("[data-strategy-revision]", revision == null ? "--" : `REV-${revision}`);
+    if (resource?.status === "stale") text("[data-save-state]", "策略接口断开，保留上次成功配置");
+    if (resource?.status === "unavailable") text("[data-save-state]", "策略配置待接入");
   });
   void adapter.loadStrategy();
 })();

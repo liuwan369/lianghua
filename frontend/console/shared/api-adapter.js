@@ -5,6 +5,28 @@
   const vm = window.PolyPreviewViewModel;
   if (!core || !store || !vm) throw new Error("preview shared modules must load before api-adapter.js");
   const demoMode = () => core.config.mode === "local-preview";
+  const errorText = (error) => error?.message || "接口暂时不可用，页面保留上次成功数据";
+  const hasSnapshot = (slice, resource) => {
+    if (!resource) return false;
+    if (slice === "marketCatalog") return Array.isArray(resource.items) && resource.items.length > 0;
+    if (slice === "events") return resource.data != null || Array.isArray(resource.items) && resource.items.length > 0;
+    if (slice === "runtime") return resource.status !== "unavailable" && (resource.asOf != null || resource.runId != null || Array.isArray(resource.markets) && resource.markets.length > 0);
+    return resource.data != null;
+  };
+  const retainOnError = (slice, error) => {
+    const current = store.getState()[slice] || {};
+    return store.setSlice(slice, {
+      ...current,
+      status: hasSnapshot(slice, current) ? "stale" : "unavailable",
+      stale: true,
+      error: errorText(error),
+      lastErrorAt: Date.now()
+    });
+  };
+  const readSlice = async (slice, operation) => {
+    try { return await operation(); }
+    catch (error) { return retainOnError(slice, error); }
+  };
   const modernOrLegacy = async (modern, legacy) => {
     if (core.config.apiFlavor === "legacy") return legacy ? legacy() : modern();
     try { return await modern(); } catch (error) {
@@ -15,48 +37,58 @@
   const adapter = {
     async loadMarkets() {
       if (demoMode()) return store.getState().marketCatalog;
-      const raw = await modernOrLegacy(() => core.api.markets(), () => core.api.legacyMarkets());
-      store.setMarketCatalog(raw);
-      return store.getState().marketCatalog;
+      return readSlice("marketCatalog", async () => {
+        const raw = await modernOrLegacy(() => core.api.markets(), () => core.api.legacyMarkets());
+        store.setMarketCatalog(raw);
+        return store.getState().marketCatalog;
+      });
     },
     async loadRuntime() {
       if (demoMode()) return store.getState().runtime;
-      const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
-      return store.setSlice("runtime", { ...vm.runtime(raw), status: "ready" });
+      return readSlice("runtime", async () => {
+        const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
+        return store.setSlice("runtime", { ...vm.runtime(raw), status: "ready", stale: false, error: null });
+      });
     },
     async loadStrategy() {
       if (demoMode()) return store.getState().strategy;
-      const raw = await modernOrLegacy(() => core.api.strategyConfig(), () => core.api.legacyStrategyConfig());
-      return store.setSlice("strategy", { status: "ready", data: raw, revision: raw.savedRevision ?? raw.revision ?? null, error: null });
+      return readSlice("strategy", async () => {
+        const raw = await modernOrLegacy(() => core.api.strategyConfig(), () => core.api.legacyStrategyConfig());
+        return store.setSlice("strategy", { status: "ready", stale: false, data: raw, revision: raw.savedRevision ?? raw.revision ?? null, error: null });
+      });
     },
     async loadAccount() {
       if (demoMode()) return store.getState().account;
-      const raw = await modernOrLegacy(() => core.api.accountSnapshot(), () => core.api.legacyAccount());
-      return store.setSlice("account", { status: "ready", data: raw, error: null });
+      return readSlice("account", async () => {
+        const raw = await modernOrLegacy(() => core.api.accountSnapshot(), () => core.api.legacyAccount());
+        return store.setSlice("account", { status: "ready", stale: false, data: raw, error: null });
+      });
     },
     async loadDiagnostics() {
       if (demoMode()) return store.getState().diagnostics;
-      const raw = await modernOrLegacy(() => core.api.diagnostics(), () => core.api.legacySystemMetrics());
-      return store.setSlice("diagnostics", { status: "ready", data: raw, error: null });
+      return readSlice("diagnostics", async () => {
+        const raw = await modernOrLegacy(() => core.api.diagnostics(), () => core.api.legacySystemMetrics());
+        return store.setSlice("diagnostics", { status: "ready", stale: false, data: raw, error: null });
+      });
     },
     async loadMetrics(runId) {
       if (demoMode()) return store.getState().metrics;
-      let activeRunId = runId || store.getState().runtime.runId;
-      if (!activeRunId) {
-        try { activeRunId = (await adapter.loadRuntime()).runId; } catch {}
-      }
-      const raw = await modernOrLegacy(() => core.api.metrics(), () => activeRunId ? core.api.legacySummary(activeRunId) : Promise.reject(new Error("run id missing")));
-      return store.setSlice("metrics", { status: "ready", data: raw, error: null });
+      return readSlice("metrics", async () => {
+        let activeRunId = runId || store.getState().runtime.runId;
+        if (!activeRunId) activeRunId = (await adapter.loadRuntime()).runId;
+        const raw = await modernOrLegacy(() => core.api.metrics(), () => activeRunId ? core.api.legacySummary(activeRunId) : Promise.reject(new Error("run id missing")));
+        return store.setSlice("metrics", { status: "ready", stale: false, data: raw, error: null });
+      });
     },
     async loadEvents(runId) {
       if (demoMode()) return store.getState().events;
-      let activeRunId = runId || store.getState().runtime.runId;
-      if (!activeRunId) {
-        try { activeRunId = (await adapter.loadRuntime()).runId; } catch {}
-      }
-      const raw = await modernOrLegacy(() => core.api.events(), () => activeRunId ? core.api.legacyEvents(activeRunId) : Promise.reject(new Error("run id missing")));
-      const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.events) ? raw.events : [];
-      return store.setSlice("events", { status: "ready", items, cursor: raw?.cursor ?? raw?.next_before_id ?? null, data: raw, error: null });
+      return readSlice("events", async () => {
+        let activeRunId = runId || store.getState().runtime.runId;
+        if (!activeRunId) activeRunId = (await adapter.loadRuntime()).runId;
+        const raw = await modernOrLegacy(() => core.api.events(), () => activeRunId ? core.api.legacyEvents(activeRunId) : Promise.reject(new Error("run id missing")));
+        const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.events) ? raw.events : [];
+        return store.setSlice("events", { status: "ready", stale: false, items, cursor: raw?.cursor ?? raw?.next_before_id ?? null, data: raw, error: null });
+      });
     },
     async saveMarketPool(payload) {
       const next = vm.pool(payload, store.getState().marketCatalog.items);

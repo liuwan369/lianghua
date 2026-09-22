@@ -53,7 +53,7 @@
           <article class="metric-group"><div class="metric-heading"><span class="metric-mark green-mark">\u7387</span><div><h3>\u80DC\u7387</h3><p>\u5DF2\u5B8C\u6210\u573A\u6B21\u7684\u6BD4\u4F8B</p></div></div><strong class="metric-primary"><span data-metric="rate-current">0.00</span><em>%</em></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="rate-today">0.00</span>%</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="rate-month">0.00</span>%</dd></div></dl></article>
           <article class="metric-group"><div class="metric-heading"><span class="metric-mark violet-mark">\u51C0</span><div><h3>\u7D2F\u8BA1\u76C8\u5229</h3><p>\u5DF2\u7ED3\u7B97\u51C0\u7ED3\u679C</p></div></div><strong class="metric-primary"><span data-metric="pnl-current">0.00</span> <em>\u03BCUSD</em></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="pnl-today">0.00</span> \u03BCUSD</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="pnl-month">0.00</span> \u03BCUSD</dd></div></dl></article>
         </div>
-        <div class="metrics-footnote"><span class="info-dot">i</span><span>\u4EC5\u7EDF\u8BA1\u5DF2\u53D6\u5F97\u7684\u771F\u5B9E\u8BB0\u5F55\uFF1B\u540E\u7AEF\u63A5\u5165\u540E\u518D\u663E\u793A\u771F\u5B9E\u8D26\u6237\u6570\u636E\u3002</span></div>
+        <div class="metrics-footnote"><span class="info-dot">i</span><span data-metrics-state>\u4EC5\u7EDF\u8BA1\u5DF2\u53D6\u5F97\u7684\u771F\u5B9E\u8BB0\u5F55\uFF1B\u540E\u7AEF\u63A5\u5165\u540E\u518D\u663E\u793A\u771F\u5B9E\u8D26\u6237\u6570\u636E\u3002</span></div>
       </section>
 
       <section class="server-panel" aria-labelledby="server-title">
@@ -63,7 +63,7 @@
       </section>
 
       <section class="log-panel" aria-labelledby="log-title">
-        <div class="panel-heading"><div><p class="eyebrow">SERVICE ACTIVITY</p><h2 id="log-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><div class="log-state"><span class="state-dot"></span><span>\u8BBE\u8BA1\u7A3F\u9884\u89C8</span><small>\u672C\u5730\u793A\u4F8B</small></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">SERVICE ACTIVITY</p><h2 id="log-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><div class="log-state"><span class="state-dot"></span><span data-events-state>\u8BBE\u8BA1\u7A3F\u9884\u89C8</span><small>\u672C\u5730\u793A\u4F8B</small></div></div>
         <ol class="log-list" data-overview-log-list aria-live="polite">
           <li class="log-entry"><time>14:02:18.440</time><span class="log-icon good-icon">\u2713</span><div><strong>\u884C\u60C5\u91C7\u96C6\u670D\u52A1\u5DF2\u8FDE\u63A5</strong><p>\u7B49\u5F85\u5F53\u524D 平台支持加密货币 \u4E94\u5206\u949F\u573A\u6B21</p></div><span class="log-status good-text">\u5DF2\u8FDE\u63A5</span></li>
           <li class="log-entry"><time>14:02:17.902</time><span class="log-icon info-icon">i</span><div><strong>\u63A7\u5236\u53F0\u5DF2\u8FDE\u63A5\u5230\u914D\u7F6E</strong><p>btc-reversal \xB7 \u914D\u7F6E\u7248\u672C REV-001</p></div><span class="log-status info-text">\u5DF2\u52A0\u8F7D</span></li>
@@ -86,7 +86,7 @@
     if (action === "start" || action === "exit") {
       button.disabled = true;
       adapter.commandRuntime({ action: action === "start" ? "start" : "stop", marketIds: store.getState().marketPool.desiredIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
-        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "设计稿 · 待接入")); if (action === "start") window.PolyPreview.navigate("auto-trade.html"); })
+        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "设计稿 · 待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
         .finally(() => { button.disabled = false; });
       return;
@@ -95,7 +95,10 @@
     if (action === "refresh") {
       button.disabled = true;
       Promise.allSettled([adapter.loadMarkets(), adapter.loadRuntime(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadAccount(), adapter.loadEvents()])
-        .then(() => text(".server-expired", "状态已刷新 · 数据源已更新"))
+        .then((results) => {
+          const disconnected = results.some((result) => result.status === "fulfilled" && ["stale", "unavailable"].includes(result.value?.status));
+          text(".server-expired", disconnected ? "连接中断 · 保留上次成功数据" : "状态已刷新 · 数据源已更新");
+        })
         .finally(() => { button.disabled = false; });
     }
   }));
@@ -127,6 +130,7 @@
   };
   const renderMetrics = (resource) => {
     const data = resource?.data;
+    text("[data-metrics-state]", resource?.status === "stale" ? "统计接口断开，保留上次成功数据。" : resource?.status === "unavailable" ? "统计数据待接入。" : "仅统计已取得的真实记录；后端接入后再显示真实账户数据。");
     if (!data) return;
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);
     ["current", "today", "month"].forEach((period) => {
@@ -154,7 +158,9 @@
       const stateClass = state === "active" ? "service-good" : state === "stopped" || state === "inactive" ? "" : "service-warning";
       return `<div><span>${window.PolyPreview.format.escape(names[name] || name)}</span><strong class="${stateClass}">${window.PolyPreview.format.escape(states[state] || state)}</strong><small>PID ${service?.pid ?? "--"} · 内存 ${bytes(service?.rss_bytes)} · 运行 ${service?.uptime_seconds == null ? "--" : `${Math.floor(service.uptime_seconds)} 秒`}</small></div>`;
     }).join("");
-    text(".server-expired", data.asOf == null ? "等待系统采样" : `更新 ${new Date(Number(data.asOf) * 1000).toLocaleTimeString("zh-CN", { hour12: false })}`);
+    text(".server-expired", resource?.status === "stale"
+      ? `连接中断 · 保留上次采样${data.asOf == null ? "" : ` · ${new Date(Number(data.asOf) * 1000).toLocaleTimeString("zh-CN", { hour12: false })}`}`
+      : data.asOf == null ? "等待系统采样" : `更新 ${new Date(Number(data.asOf) * 1000).toLocaleTimeString("zh-CN", { hour12: false })}`);
   };
   const renderAccount = (resource) => {
     const data = resource?.data;
@@ -166,6 +172,7 @@
     text("[data-account-available]", formatUsd(available));
   };
   const renderEvents = (resource) => {
+    text("[data-events-state]", resource?.status === "stale" ? "连接中断 · 保留上次事件" : resource?.status === "ready" ? "已连接" : "设计稿预览");
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
     const list = document.querySelector("[data-overview-log-list]");
@@ -185,7 +192,10 @@
   store.subscribe("diagnostics", renderDiagnostics);
   store.subscribe("account", renderAccount);
   store.subscribe("events", renderEvents);
-  store.subscribe("runtime", (runtime) => text("[data-overview-runtime]", runtime.status === "unavailable" ? "设计稿 · 待接入" : runtime.status));
+  store.subscribe("runtime", (runtime) => {
+    const label = runtime.status === "unavailable" ? "设计稿 · 待接入" : runtime.status === "stale" ? "连接中断 · 保留上次状态" : runtime.status;
+    text("[data-overview-runtime]", label);
+  });
   if (window.PolyPreview.config.mode !== "local-preview") {
     void adapter.loadMarkets();
     void adapter.loadRuntime();
