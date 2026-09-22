@@ -413,8 +413,16 @@ export function runPolymarketFeed(
             const t = String(data);
             if (t === "PONG" || t === "pong") return;
             if (trace) console.info(`PM_RAW ${t.slice(0, 220)}`);
+            let v: unknown;
             try {
-              const v = JSON.parse(t) as unknown;
+              v = JSON.parse(t) as unknown;
+            } catch {
+              // Unknown or malformed control frames should not tear down a
+              // healthy market socket. The watchdog still handles silence.
+              console.warn("polymarket message rejected: invalid_json");
+              return;
+            }
+            try {
               for (const raw of (Array.isArray(v) ? v : [v])) {
                 if (!raw || typeof raw !== "object") continue;
                 const e = raw as Record<string, unknown>;
