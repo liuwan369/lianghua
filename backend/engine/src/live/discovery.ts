@@ -5,6 +5,8 @@ const GAMMA = "https://gamma-api.polymarket.com";
 export interface Market {
   slug: string;
   conditionId: string;
+  /** Five-minute round identity, equal to the Unix start boundary. */
+  roundId: string;
   upToken: string;
   downToken: string;
   start: number;
@@ -69,16 +71,16 @@ export function parseMarket(m: Record<string, JsonValue>): Candidate | undefined
   const slugRaw = m.slug;
   if (typeof slugRaw !== "string") return undefined;
   const slug = slugRaw.toLowerCase();
-  if (!slug.includes("btc-updown-5m")) return undefined;
+  const match = /^btc-updown-5m-(\d+)$/.exec(slug);
+  if (!match) return undefined;
   if (m.closed === true) return undefined;
 
   const toks =
     jsonOrStrArray(m.clobTokenIds) ?? jsonOrStrArray(m.clob_token_ids);
-  if (!toks || toks.length < 2) return undefined;
+  if (!toks || toks.length < 2 || !toks[0] || !toks[1] || toks[0] === toks[1]) return undefined;
 
   const outs = jsonOrStrArray(m.outcomes) ?? [];
-  const parts = slug.split("-");
-  const slugStart = Number.parseInt(parts[parts.length - 1] ?? "", 10);
+  const slugStart = Number.parseInt(match[1]!, 10);
   if (!Number.isFinite(slugStart)) return undefined;
 
   const upI =
@@ -86,10 +88,9 @@ export function parseMarket(m: Record<string, JsonValue>): Candidate | undefined
       ? 1
       : 0;
 
-  const conditionId =
-    (typeof m.conditionId === "string" ? m.conditionId : undefined) ??
-    (typeof m.condition_id === "string" ? m.condition_id : undefined) ??
-    "";
+  const conditionId = [m.conditionId, m.condition_id]
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
+  if (!conditionId) return undefined;
 
   return {
     slug,
@@ -125,14 +126,15 @@ export function select(cands: Candidate[], now: number): Candidate | undefined {
   });
 }
 
-function marketFrom(c: Candidate, fc: number): Market {
+function marketFrom(c: Candidate): Market {
   return {
     slug: c.slug,
     conditionId: c.conditionId,
+    roundId: String(c.slugStart),
     upToken: c.upToken,
     downToken: c.downToken,
-    start: fc,
-    end: fc + 300,
+    start: c.slugStart,
+    end: c.slugStart + 300,
   };
 }
 
@@ -168,16 +170,19 @@ async function fetchFromCollector(signal?: AbortSignal): Promise<Candidate | und
       const downToken = typeof item.down_token === "string" ? item.down_token : "";
       const start = Number(item.start);
       const end = Number(item.end);
+      const match = /^btc-updown-5m-(\d+)$/.exec(slug.toLowerCase());
       const quoteAt = typeof item.quote_at === "string" ? Date.parse(item.quote_at) : NaN;
       const quoteAgeSec = Number.isFinite(quoteAt) ? (Date.now() - quoteAt) / 1000 : Number.POSITIVE_INFINITY;
-      if (slug && upToken && downToken && Number.isFinite(start) && Number.isFinite(end) &&
+      const conditionId = typeof item.condition_id === "string" ? item.condition_id : "";
+      if (match && slug && upToken && downToken && upToken !== downToken && conditionId && Number.isFinite(start) &&
+          Number.isFinite(end) && end - start === 300 && start === Number(match[1]) &&
           start <= now && now < end && quoteAgeSec >= 0 && quoteAgeSec <= 20) {
         return {
           slug,
           slugStart: start,
           upToken,
           downToken,
-          conditionId: typeof item.condition_id === "string" ? item.condition_id : "",
+          conditionId,
         };
       }
     }
@@ -203,7 +208,7 @@ export async function findMarket(
   if (allowCollectorFallback) {
     const collector = await fetchFromCollector(signal);
     if (collector && isWindowLive(collector.slugStart, now)) {
-      return marketFrom(collector, collector.slugStart);
+      return marketFrom(collector);
     }
   }
 
@@ -215,7 +220,7 @@ export async function findMarket(
     console.warn("Gamma direct discovery failed:", e);
   }
   if (direct && isWindowLive(direct.slugStart, now)) {
-    return marketFrom(direct, fc);
+    return marketFrom(direct);
   }
 
   // Boundary prewarm probes only the deterministic next slug. Do not fan out
@@ -254,5 +259,5 @@ export async function findMarket(
     return undefined;
   }
 
-  return marketFrom(picked, fc);
+  return marketFrom(picked);
 }
