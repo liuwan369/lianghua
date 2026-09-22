@@ -138,6 +138,7 @@ function expiredBook(event: FeedEvent): boolean {
 export class FeedQueue {
   private priority: FeedEvent[] = [];
   private decisions: FeedEvent[] = [];
+  private config: FeedEvent[] = [];
   private telemetry: FeedEvent[] = [];
   private waiters: Array<() => void> = [];
   private static readonly MAX_TELEMETRY_EVENTS = 256;
@@ -146,10 +147,14 @@ export class FeedQueue {
     if (
       event.kind === "user" ||
       event.kind === "userStatus" ||
-      event.kind === "bookStatus" ||
-      event.kind === "tickSize"
+      event.kind === "bookStatus"
     ) {
       this.priority.push(event);
+    } else if (event.kind === "tickSize") {
+      const existing = this.config.findIndex((queued) =>
+        queued.kind === "tickSize" && queued.token === event.token);
+      if (existing >= 0) this.config.splice(existing, 1);
+      this.config.push(event);
     } else if (event.kind === "venue") {
       // Already consumed by the BTC aggregator. Do not add unused queue load.
       return;
@@ -176,6 +181,8 @@ export class FeedQueue {
       const event = this.decisions.shift()!;
       if (!expiredBook(event)) return event;
     }
+    const config = this.config.shift();
+    if (config) return config;
     while (this.telemetry.length > 0) {
       const event = this.telemetry.shift()!;
       if (!expiredBook(event)) return event;

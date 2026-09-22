@@ -22,6 +22,7 @@ export const PM_WS_SOURCE_FRESH_MAX_MS = 2_000;
 // timestamps. The strategy still requires <=2s source age before trading; this
 // watchdog only bounds how long a bad socket can keep that gate closed.
 export const PM_WS_SOURCE_AGE_TIMEOUT_MS = 5_000;
+export const PM_WS_DEPTH_REFRESH_MS = 250;
 const PM_WS_MAX_CLOCK_SKEW_MS = 1_000;
 const PM_WS_WATCHDOG_INTERVAL_MS = 1_000;
 
@@ -362,6 +363,9 @@ export function runPolymarketFeed(
         let publishedUpAsk: number | undefined;
         let publishedDownBid: number | undefined;
         let publishedDownAsk: number | undefined;
+        let publishedAtMs = 0;
+        let upDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
+        let downDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
         let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
         let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
         let upProcessedAtMonoMs = 0, downProcessedAtMonoMs = 0;
@@ -434,6 +438,8 @@ export function runPolymarketFeed(
                 lastDownAtMs = atMs; downReceivedAtUnix = receivedAtUnix; downReceivedAtMonoMs = receivedAtMonoMs;
                 if (fastDown && applied.downMs >= fastDown.exchangeMs) fastDown = undefined;
               }
+              if (changed.upUpdated) upDepth = up.levels(5);
+              if (changed.downUpdated) downDepth = dn.levels(5);
               const fastChanges = bestBidAskChanges(v, upToken, downToken, {
                 upMs: Math.max(applied.upMs, fastApplied.upMs),
                 downMs: Math.max(applied.downMs, fastApplied.downMs),
@@ -481,17 +487,15 @@ export function runPolymarketFeed(
               const upAsk = upTop?.ask ?? ua![0];
               const downBid = downTop?.bid ?? db![0];
               const downAsk = downTop?.ask ?? da![0];
-              const upBidSz = !upTop && ub![0] === upBid ? ub![1] : undefined;
-              const upAskSz = !upTop && ua![0] === upAsk ? ua![1] : undefined;
-              const downBidSz = !downTop && db![0] === downBid ? db![1] : undefined;
-              const downAskSz = !downTop && da![0] === downAsk ? da![1] : undefined;
+              const upBidSz = upDepth?.bids.find(([price]) => price === upBid)?.[1];
+              const upAskSz = upDepth?.asks.find(([price]) => price === upAsk)?.[1];
+              const downBidSz = downDepth?.bids.find(([price]) => price === downBid)?.[1];
+              const downAskSz = downDepth?.asks.find(([price]) => price === downAsk)?.[1];
               const processedAtMonoMs = performance.now();
               if (fastChanges.some(change => change.side === "up") && fastUp) fastUp.processedAtMonoMs = processedAtMonoMs;
               if (fastChanges.some(change => change.side === "down") && fastDown) fastDown.processedAtMonoMs = processedAtMonoMs;
               if (changed.upUpdated || fastChanges.some(change => change.side === "up")) upProcessedAtMonoMs = processedAtMonoMs;
               if (changed.downUpdated || fastChanges.some(change => change.side === "down")) downProcessedAtMonoMs = processedAtMonoMs;
-              const upDepthAuthoritative = !upTop;
-              const downDepthAuthoritative = !downTop;
               const upExchangeMs = Math.max(applied.upMs, upTop?.exchangeMs ?? 0);
               const downExchangeMs = Math.max(applied.downMs, downTop?.exchangeMs ?? 0);
               const selectedUpReceivedAtUnix = upTop?.receivedAtUnix ?? upReceivedAtUnix;
@@ -518,7 +522,9 @@ export function runPolymarketFeed(
               const sourceAtMs = Math.max(upExchangeMs, downExchangeMs);
               const topChanged = publishedUpBid !== upBid || publishedUpAsk !== upAsk
                 || publishedDownBid !== downBid || publishedDownAsk !== downAsk;
-              if (!topChanged) return;
+              const depthChanged = changed.upUpdated || changed.downUpdated;
+              const depthRefreshDue = depthChanged && atMs - publishedAtMs >= PM_WS_DEPTH_REFRESH_MS;
+              if (!topChanged && !depthRefreshDue) return;
               const snapshotSequence = ++sequence;
               const expiresAt = Number.isFinite(deadline) ? deadline : undefined;
               const yes: MarketAssetSnapshot = {
@@ -527,8 +533,8 @@ export function runPolymarketFeed(
                 ask: upAsk,
                 bidSize: upBidSz,
                 askSize: upAskSz,
-                bids: upDepthAuthoritative ? up.bidLevels(5) : undefined,
-                asks: upDepthAuthoritative ? up.askLevels(5) : undefined,
+                bids: upDepth?.bids,
+                asks: upDepth?.asks,
                 sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -539,8 +545,8 @@ export function runPolymarketFeed(
                 ask: downAsk,
                 bidSize: downBidSz,
                 askSize: downAskSz,
-                bids: downDepthAuthoritative ? dn.bidLevels(5) : undefined,
-                asks: downDepthAuthoritative ? dn.askLevels(5) : undefined,
+                bids: downDepth?.bids,
+                asks: downDepth?.asks,
                 sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -593,6 +599,7 @@ export function runPolymarketFeed(
               publishedUpAsk = upAsk;
               publishedDownBid = downBid;
               publishedDownAsk = downAsk;
+              publishedAtMs = atMs;
               sink({ kind: "book", snapshot: snap });
             } catch (error) {
               hasCompleteBook = false;
