@@ -137,14 +137,17 @@ function expiredBook(event: FeedEvent): boolean {
 /** Async queue feeds push into; orchestrator drains. */
 export class FeedQueue {
   private priority: FeedEvent[] = [];
-  private events: FeedEvent[] = [];
+  private decisions: FeedEvent[] = [];
+  private telemetry: FeedEvent[] = [];
   private waiters: Array<() => void> = [];
+  private static readonly MAX_TELEMETRY_EVENTS = 256;
 
   push(event: FeedEvent): void {
     if (
       event.kind === "user" ||
       event.kind === "userStatus" ||
-      event.kind === "bookStatus"
+      event.kind === "bookStatus" ||
+      event.kind === "tickSize"
     ) {
       this.priority.push(event);
     } else if (event.kind === "venue") {
@@ -153,11 +156,14 @@ export class FeedQueue {
     } else if (event.kind === "book" || event.kind === "btc" || event.kind === "oracle") {
       // Decisions only need the newest unprocessed market state. Keeping every
       // stale quote after an HTTP ACK pause creates avoidable reaction lag.
-      const existing = this.events.findIndex((queued) => queued.kind === event.kind);
-      if (existing >= 0) this.events.splice(existing, 1);
-      this.events.push(event);
+      const existing = this.decisions.findIndex((queued) => queued.kind === event.kind);
+      if (existing >= 0) this.decisions.splice(existing, 1);
+      this.decisions.push(event);
     } else {
-      this.events.push(event);
+      // Trades are useful telemetry, but they must never delay a decision
+      // snapshot after a slow consumer pauses the queue.
+      if (this.telemetry.length >= FeedQueue.MAX_TELEMETRY_EVENTS) this.telemetry.shift();
+      this.telemetry.push(event);
     }
     const w = this.waiters.shift();
     if (w) w();
@@ -166,8 +172,12 @@ export class FeedQueue {
   tryPop(): FeedEvent | undefined {
     const priority = this.priority.shift();
     if (priority) return priority;
-    while (this.events.length > 0) {
-      const event = this.events.shift()!;
+    while (this.decisions.length > 0) {
+      const event = this.decisions.shift()!;
+      if (!expiredBook(event)) return event;
+    }
+    while (this.telemetry.length > 0) {
+      const event = this.telemetry.shift()!;
       if (!expiredBook(event)) return event;
     }
     return undefined;

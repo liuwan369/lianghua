@@ -95,6 +95,22 @@ function applyMessage(
   const events = Array.isArray(v) ? v : [v];
   let upOrder = -1;
   let downOrder = -1;
+  let frameUpMs: number | undefined;
+  let frameDownMs: number | undefined;
+  const acceptsTimestamp = (side: boolean, eventMs: number | undefined): boolean => {
+    if (eventMs == null) return true;
+    const lastMs = side ? applied.upMs : applied.downMs;
+    const frameMs = side ? frameUpMs : frameDownMs;
+    if (eventMs < lastMs) return false;
+    // Equal timestamps are valid only for later events in this same frame.
+    // Across websocket frames, equality is treated as a duplicate and rejected.
+    if (eventMs === lastMs && frameMs !== eventMs) return false;
+    if (eventMs > lastMs) {
+      if (side) frameUpMs = eventMs;
+      else frameDownMs = eventMs;
+    }
+    return (side ? frameUpMs : frameDownMs) === eventMs;
+  };
   for (const [eventOrder, raw] of events.entries()) {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
@@ -109,11 +125,10 @@ function applyMessage(
     if (topTok) {
       const side = sideOf(topTok, upToken, downToken);
       if (side != null) {
-        const lastMs = side ? applied.upMs : applied.downMs;
         const bids = levelList(e.bids ?? e.buys);
         const asks = levelList(e.asks ?? e.sells);
         const isSnapshot = Array.isArray(e.bids ?? e.buys) && Array.isArray(e.asks ?? e.sells);
-        if ((eventMs == null || eventMs >= lastMs) && isSnapshot) {
+        if (isSnapshot && acceptsTimestamp(side, eventMs)) {
           const ob = side ? up : dn;
           ob.applySnapshot(bids, asks);
           if (side) {
@@ -152,8 +167,7 @@ function applyMessage(
         const isBuy = dside === "BUY" || dside === "BID";
         const isSell = dside === "SELL" || dside === "ASK";
         if (isBuy || isSell) {
-          const lastMs = side ? applied.upMs : applied.downMs;
-          if (eventMs != null && eventMs < lastMs) continue;
+          if (!acceptsTimestamp(side, eventMs)) continue;
           const ob = side ? up : dn;
           ob.applyChange(price, size, isBuy);
           if (side) {
@@ -344,6 +358,10 @@ export function runPolymarketFeed(
         const fastApplied: AppliedBookTimes = { upMs: 0, downMs: 0 };
         let fastUp: BestBidAskChange | undefined;
         let fastDown: BestBidAskChange | undefined;
+        let publishedUpBid: number | undefined;
+        let publishedUpAsk: number | undefined;
+        let publishedDownBid: number | undefined;
+        let publishedDownAsk: number | undefined;
         let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
         let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
         let upProcessedAtMonoMs = 0, downProcessedAtMonoMs = 0;
@@ -498,6 +516,9 @@ export function runPolymarketFeed(
                 lastBothStaleAtMs = 0;
               }
               const sourceAtMs = Math.max(upExchangeMs, downExchangeMs);
+              const topChanged = publishedUpBid !== upBid || publishedUpAsk !== upAsk
+                || publishedDownBid !== downBid || publishedDownAsk !== downAsk;
+              if (!topChanged) return;
               const snapshotSequence = ++sequence;
               const expiresAt = Number.isFinite(deadline) ? deadline : undefined;
               const yes: MarketAssetSnapshot = {
@@ -506,8 +527,8 @@ export function runPolymarketFeed(
                 ask: upAsk,
                 bidSize: upBidSz,
                 askSize: upAskSz,
-                bids: upDepthAuthoritative ? up.bidLevels() : undefined,
-                asks: upDepthAuthoritative ? up.askLevels() : undefined,
+                bids: upDepthAuthoritative ? up.bidLevels(5) : undefined,
+                asks: upDepthAuthoritative ? up.askLevels(5) : undefined,
                 sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -518,8 +539,8 @@ export function runPolymarketFeed(
                 ask: downAsk,
                 bidSize: downBidSz,
                 askSize: downAskSz,
-                bids: downDepthAuthoritative ? dn.bidLevels() : undefined,
-                asks: downDepthAuthoritative ? dn.askLevels() : undefined,
+                bids: downDepthAuthoritative ? dn.bidLevels(5) : undefined,
+                asks: downDepthAuthoritative ? dn.askLevels(5) : undefined,
                 sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -568,6 +589,10 @@ export function runPolymarketFeed(
                 upTickSize: tickSizes.up,
                 downTickSize: tickSizes.down,
               };
+              publishedUpBid = upBid;
+              publishedUpAsk = upAsk;
+              publishedDownBid = downBid;
+              publishedDownAsk = downAsk;
               sink({ kind: "book", snapshot: snap });
             } catch (error) {
               hasCompleteBook = false;
