@@ -24,3 +24,5 @@ python -m http.server 5175
 ## 研发原则
 
 每个分支只改自己的目录；接口先用 `shared/contracts` 中的现有模型；先复用 `backend/engine` 已经验证过的链路，不为了拆分而重写。具体分工和验收见 [docs/WORKSTREAMS.md](docs/WORKSTREAMS.md)。
+
+GitHub：<https://github.com/liuwan369/lianghua>。本地 `main` 当前对应干净基线分支 `codex/clean-baseline-20260922`；模块分支和集成分支都在同一个远程仓库。服务器工作目录是 `/root/pm-system`。
