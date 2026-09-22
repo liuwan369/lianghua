@@ -146,6 +146,45 @@ def _state_path() -> Path:
     return TRADING_ROOT / "results" / "dashboard-state.json"
 
 
+def _market_pool_path() -> Path:
+    return TRADING_ROOT / "results" / "dashboard" / "market-pool.json"
+
+
+def market_pool() -> dict:
+    default = {"schemaVersion": 1, "desiredIds": [], "currentIds": [],
+               "nextRoundIds": [], "effectiveRoundId": None,
+               "source": "backend", "updatedAt": None}
+    try:
+        value = json.loads(_market_pool_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+    if not isinstance(value, dict):
+        return default
+    clean = lambda raw: list(dict.fromkeys(item for item in raw if isinstance(item, str) and item.strip())) if isinstance(raw, list) else []
+    return {**default, "desiredIds": clean(value.get("desiredIds")),
+            "currentIds": clean(value.get("currentIds")),
+            "nextRoundIds": clean(value.get("nextRoundIds")),
+            "effectiveRoundId": value.get("effectiveRoundId") if isinstance(value.get("effectiveRoundId"), str) else None,
+            "updatedAt": value.get("updatedAt") if isinstance(value.get("updatedAt"), (int, float)) else None}
+
+
+def save_market_pool(payload: dict) -> dict:
+    allowed = {"desiredIds", "currentIds", "nextRoundIds", "effectiveRoundId", "source", "updatedAt"}
+    if set(payload) - allowed:
+        raise ValueError("运行池字段不正确")
+    clean = lambda key: list(dict.fromkeys(item for item in payload.get(key, []) if isinstance(item, str) and item.strip()))
+    current = market_pool()
+    value = {"schemaVersion": 1, "desiredIds": clean("desiredIds"),
+             "currentIds": current["currentIds"], "nextRoundIds": current["nextRoundIds"],
+             "effectiveRoundId": current["effectiveRoundId"], "source": "backend", "updatedAt": time.time()}
+    path = _market_pool_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+    return value
+
+
 def control_source() -> dict:
     """Market data may be remote; account/config/control always belong here."""
     config = _live_config()
@@ -1231,6 +1270,9 @@ def make_handler(root: Path):
             if path == "/api/account/status":
                 self._send_json(json.dumps({**account_config_status(), "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
                 return
+            if path == "/api/runtime/market-pool":
+                self._send_json(json.dumps({**market_pool(), "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
+                return
             if path == "/api/live":
                 self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
                 return
@@ -1330,7 +1372,11 @@ def make_handler(root: Path):
             self.wfile.write(body)
 
         def do_PUT(self) -> None:  # noqa: N802
-            if self.path.split("?", 1)[0] != "/api/strategy-config":
+            path = self.path.split("?", 1)[0]
+            if path == "/api/runtime/market-pool":
+                self.do_POST()
+                return
+            if path != "/api/strategy-config":
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             self.do_POST()
@@ -1338,7 +1384,7 @@ def make_handler(root: Path):
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
             if path not in {"/api/account/check", "/api/account/save", "/api/strategy-config",
-                            "/api/trading/control", "/api/trading/auth/session"}:
+                            "/api/trading/control", "/api/trading/auth/session", "/api/runtime/market-pool"}:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
@@ -1381,6 +1427,14 @@ def make_handler(root: Path):
                         json.dumps({"ok": True, "expires_in": _control_session_ttl(), "persistent": True}, ensure_ascii=False).encode("utf-8"),
                         response_headers={"Set-Cookie": _control_cookie_header(session, self.headers)},
                     )
+                    return
+                if path == "/api/runtime/market-pool":
+                    auth_error = _control_request_error(self.headers, "live")
+                    if auth_error:
+                        status, message = auth_error
+                        self._send_json(json.dumps({"ok": False, "error": message}, ensure_ascii=False).encode("utf-8"), status)
+                        return
+                    self._send_json(json.dumps({"ok": True, **save_market_pool(payload)}, ensure_ascii=False).encode("utf-8"))
                     return
                 mode = payload.get("mode", "live")
                 if path == "/api/trading/control":
