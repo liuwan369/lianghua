@@ -180,6 +180,10 @@ async function venueLoop(
   while (running()) {
     try {
       const ws = await connectWs(spec.url);
+      if (!running()) {
+        ws.terminate();
+        break;
+      }
       sockets.add(ws);
       if (spec.sub) ws.send(spec.sub);
       console.info(`BTC venue '${spec.name}' connected`);

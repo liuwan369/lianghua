@@ -3,6 +3,18 @@
 import type { UserFeedEvent } from "./user.js";
 
 export interface BookSnapshot {
+  /** Stable market identity shared by the strategy and public projection. */
+  marketId?: string;
+  roundId?: string;
+  /** Local monotonic sequence for accepted bilateral snapshots. */
+  sequence?: number;
+  /** Newest venue timestamp represented by this snapshot. */
+  sourceAt?: number;
+  /** Unix time after which this snapshot must not be used for trading. */
+  expiresAt?: number;
+  /** Paired normalized asset quotes consumed by new clients. */
+  YES?: MarketAssetSnapshot;
+  NO?: MarketAssetSnapshot;
   tsUnix: number;
   receivedAtUnix?: number;
   receivedAtMonoMs?: number;
@@ -37,6 +49,19 @@ export interface BookSnapshot {
   tickSize?: number;
   upTickSize?: number;
   downTickSize?: number;
+}
+
+export interface MarketAssetSnapshot {
+  assetId: string;
+  bid?: number;
+  ask?: number;
+  bidSize?: number;
+  askSize?: number;
+  bids?: [number, number][];
+  asks?: [number, number][];
+  sourceAt?: number;
+  expiresAt?: number;
+  sequence?: number;
 }
 
 export interface BookSnapshotMethods {
@@ -104,6 +129,11 @@ export function num(v: unknown): number | undefined {
 
 export type FeedSink = (event: FeedEvent) => void;
 
+function expiredBook(event: FeedEvent): boolean {
+  return event.kind === "book" && event.snapshot.expiresAt != null
+    && event.snapshot.expiresAt <= nowUnix();
+}
+
 /** Async queue feeds push into; orchestrator drains. */
 export class FeedQueue {
   private priority: FeedEvent[] = [];
@@ -134,7 +164,13 @@ export class FeedQueue {
   }
 
   tryPop(): FeedEvent | undefined {
-    return this.priority.shift() ?? this.events.shift();
+    const priority = this.priority.shift();
+    if (priority) return priority;
+    while (this.events.length > 0) {
+      const event = this.events.shift()!;
+      if (!expiredBook(event)) return event;
+    }
+    return undefined;
   }
 
   pop(timeoutMs: number): Promise<FeedEvent | null> {

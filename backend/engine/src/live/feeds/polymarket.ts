@@ -3,6 +3,7 @@ import { OrderBook } from "../orderbook.js";
 import {
   type BookSnapshot,
   type FeedSink,
+  type MarketAssetSnapshot,
   nowUnix,
   num,
   sleep,
@@ -27,6 +28,11 @@ const PM_WS_WATCHDOG_INTERVAL_MS = 1_000;
 export interface AppliedBookTimes {
   upMs: number;
   downMs: number;
+}
+
+export interface MarketFeedIdentity {
+  marketId?: string;
+  roundId?: string;
 }
 
 function exchangeTimeMs(event: Record<string, unknown>): number | undefined {
@@ -196,7 +202,10 @@ function bestBidAskChanges(
     if (side == null || bid == null || ask == null || exchangeMs == null || !(bid > 0 && bid < 1)
       || !(ask > 0 && ask < 1) || bid > ask) continue;
     const lastMs = side ? accepted.upMs : accepted.downMs;
-    if (exchangeMs < lastMs) continue;
+    // A timestamp is the only venue ordering key available on this channel.
+    // Treat equal timestamps as already applied so a delayed duplicate cannot
+    // replace a newer top-of-book frame.
+    if (exchangeMs <= lastMs) continue;
     changes.push({ side: side ? "up" : "down", bid, ask, exchangeMs, order });
     if (side) accepted.upMs = Math.max(accepted.upMs, exchangeMs);
     else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
@@ -282,6 +291,7 @@ export function runPolymarketFeed(
   upToken: string,
   downToken: string,
   deadline: number,
+  identity: MarketFeedIdentity = {},
 ): { stop: () => void; isHealthy: (maxStaleMs?: number) => boolean } {
   let alive = true;
   let activeWs: WebSocket | undefined;
@@ -291,6 +301,10 @@ export function runPolymarketFeed(
   let lastDownAtMs = 0;
   let lastFreshBilateralAtMs = 0;
   let lastBothStaleAtMs = 0;
+  let sequence = 0;
+  let resolvedMarketId = identity.marketId;
+  const inferredRoundId = identity.roundId ?? (Number.isFinite(deadline) && deadline % 300 === 0
+    ? String(deadline - 300) : undefined);
 
   const setConnected = (value: boolean) => {
     if (connected === value) return;
@@ -338,6 +352,13 @@ export function runPolymarketFeed(
         const ping = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) ws.send("PING");
         }, 5000);
+        const expiryTimer = Number.isFinite(deadline)
+          ? setTimeout(() => {
+              hasCompleteBook = false;
+              setConnected(false);
+              ws.terminate();
+            }, Math.max(0, (deadline - nowUnix()) * 1000))
+          : undefined;
         const connectedAtMs = Date.now();
         let lastAnyMessageAtMs = connectedAtMs;
         // Empty books still prove subscription activity, but cannot enable trading.
@@ -369,6 +390,12 @@ export function runPolymarketFeed(
             if (trace) console.info(`PM_RAW ${t.slice(0, 220)}`);
             try {
               const v = JSON.parse(t) as unknown;
+              for (const raw of (Array.isArray(v) ? v : [v])) {
+                if (!raw || typeof raw !== "object") continue;
+                const e = raw as Record<string, unknown>;
+                const id = e.market_id ?? e.market ?? e.condition_id;
+                if (typeof id === "string" && id) resolvedMarketId = id;
+              }
               for (const change of tickSizeChanges(v)) {
                 sink({ kind: "tickSize", ...change, tsUnix: change.tsUnix ?? nowUnix() });
                 if (change.token === upToken) tickSizes.up = change.tickSize;
@@ -470,7 +497,41 @@ export function runPolymarketFeed(
               } else if (!sourceBothStale) {
                 lastBothStaleAtMs = 0;
               }
+              const sourceAtMs = Math.max(upExchangeMs, downExchangeMs);
+              const snapshotSequence = ++sequence;
+              const expiresAt = Number.isFinite(deadline) ? deadline : undefined;
+              const yes: MarketAssetSnapshot = {
+                assetId: upToken,
+                bid: upBid,
+                ask: upAsk,
+                bidSize: upBidSz,
+                askSize: upAskSz,
+                bids: upDepthAuthoritative ? up.bidLevels() : undefined,
+                asks: upDepthAuthoritative ? up.askLevels() : undefined,
+                sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
+                expiresAt,
+                sequence: snapshotSequence,
+              };
+              const no: MarketAssetSnapshot = {
+                assetId: downToken,
+                bid: downBid,
+                ask: downAsk,
+                bidSize: downBidSz,
+                askSize: downAskSz,
+                bids: downDepthAuthoritative ? dn.bidLevels() : undefined,
+                asks: downDepthAuthoritative ? dn.askLevels() : undefined,
+                sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
+                expiresAt,
+                sequence: snapshotSequence,
+              };
               const snap: BookSnapshot = {
+                marketId: resolvedMarketId,
+                roundId: inferredRoundId,
+                sequence: snapshotSequence,
+                sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
+                expiresAt,
+                YES: yes,
+                NO: no,
                 tsUnix: nowUnix(),
                 source: "polymarket-ws",
                 receivedAtUnix,
@@ -499,10 +560,10 @@ export function runPolymarketFeed(
                 upAskSz,
                 downBidSz,
                 downAskSz,
-                upBidLevels: upDepthAuthoritative ? up.bidLevels() : undefined,
-                upAskLevels: upDepthAuthoritative ? up.askLevels() : undefined,
-                downBidLevels: downDepthAuthoritative ? dn.bidLevels() : undefined,
-                downAskLevels: downDepthAuthoritative ? dn.askLevels() : undefined,
+                upBidLevels: yes.bids,
+                upAskLevels: yes.asks,
+                downBidLevels: no.bids,
+                downAskLevels: no.asks,
                 tickSize: tickSizes.up ?? tickSizes.down,
                 upTickSize: tickSizes.up,
                 downTickSize: tickSizes.down,
@@ -533,6 +594,7 @@ export function runPolymarketFeed(
 
         clearInterval(ping);
         clearInterval(watchdog);
+        if (expiryTimer) clearTimeout(expiryTimer);
         ws.terminate();
         if (activeWs === ws) activeWs = undefined;
       } catch (e) {
