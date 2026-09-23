@@ -85,7 +85,10 @@ Before a snapshot reaches strategy execution, the integration adapter must:
 6. Publish the accepted snapshot object to both strategy input and the market stream.
 
 The runtime adapter must pass the market identity when starting each feed:
-`{ marketId: market.id, roundId: String(market.startsAt) }`. It must preserve
+`{ marketId: market.id, roundId: String(market.startsAt) }`. In this example
+`market` is the platform adapter's internal `MarketInfo`, whose `id` and
+`startsAt` fields are derived from discovery's `conditionId` and `start`; it is
+not the `Market` object returned directly by `findFiveMinuteMarket`. It must preserve
 the `YES`/`NO` asset ids and never rebuild a second quote object from the
 legacy `up*`/`down*` compatibility fields. A `bookStatus` event is scoped by
 its market and token pair; it must not be applied to every active market.

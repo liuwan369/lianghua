@@ -64,29 +64,6 @@ export interface MarketAssetSnapshot {
   sequence?: number;
 }
 
-export interface BookSnapshotMethods {
-  prices(): [number, number, number, number] | undefined;
-  isComplete(): boolean;
-}
-
-export function bookPrices(
-  b: BookSnapshot,
-): [number, number, number, number] | undefined {
-  if (
-    b.upBid == null ||
-    b.upAsk == null ||
-    b.downBid == null ||
-    b.downAsk == null
-  ) {
-    return undefined;
-  }
-  return [b.upBid, b.upAsk, b.downBid, b.downAsk];
-}
-
-export function bookIsComplete(b: BookSnapshot): boolean {
-  return bookPrices(b) != null;
-}
-
 export interface FeedMarketIdentity {
   marketId?: string;
   roundId?: string;

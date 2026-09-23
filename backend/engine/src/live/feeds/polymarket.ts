@@ -34,7 +34,6 @@ export interface AppliedBookTimes {
   upInitialized?: boolean;
   downInitialized?: boolean;
 }
-
 export interface MarketFeedIdentity {
   marketId?: string;
   roundId?: string;
@@ -52,7 +51,7 @@ function exchangeTimeMs(event: Record<string, unknown>): number | undefined {
   return value > 1e12 ? value : value * 1000;
 }
 
-export function bookFeedHealthy(
+function bookFeedHealthy(
   connected: boolean,
   hasCompleteBook: boolean,
   lastUpAtMs: number,
@@ -852,5 +851,3 @@ export function runPolymarketFeed(
         && Date.now() - lastFreshBilateralAtMs <= PM_WS_SOURCE_FRESH_MAX_MS,
   };
 }
-
-export { applyMessage, bestBidAskChanges, sideOf, levelList, marketTrades, tickSizeChanges };
