@@ -70,6 +70,34 @@ test("nested price_change uses the frame timestamp and last valid top", async t 
   assert.equal(h.books().at(-1).upExchangeTsUnix, (time + 1) / 1000);
 });
 
+test("multiple feeds emit scoped health and snapshots without leaking other markets", async t => {
+  const h = await harness(t), time = stamp();
+  const otherEvents = [];
+  const other = runPolymarketFeed(e => otherEvents.push(e), "eth-yes", "eth-no", Date.now() / 1000 + 60,
+    { marketId: "eth-market", roundId: "round" });
+  t.after(() => other.stop());
+  await delay(0);
+  const otherSocket = Socket.instances.at(-1);
+  h.socket.frame([book("eth-yes", time), book("eth-no", time)]);
+  assert.equal(h.books().length, 0);
+  h.socket.frame([book("yes", time), book("no", time)]);
+  otherSocket.frame([book("eth-yes", time), book("eth-no", time)]);
+  h.feed.stop();
+  assert.equal(other.isHealthy(), true);
+  for (const status of h.events.filter(e => e.kind === "bookStatus")) {
+    assert.equal(status.marketId, "market");
+    assert.equal(status.roundId, "round");
+    assert.equal(status.yesAssetId, "yes");
+    assert.equal(status.noAssetId, "no");
+  }
+  for (const status of otherEvents.filter(e => e.kind === "bookStatus")) {
+    assert.equal(status.marketId, "eth-market");
+    assert.equal(status.yesAssetId, "eth-yes");
+    assert.equal(status.noAssetId, "eth-no");
+  }
+  assert.equal(otherEvents.find(e => e.kind === "book").snapshot.marketId, "eth-market");
+});
+
 test("empty top invalidates both same-frame and later equal-time L2", async t => {
   const h = await harness(t), time = stamp();
   h.socket.frame([book("yes", time), book("no", time)]);

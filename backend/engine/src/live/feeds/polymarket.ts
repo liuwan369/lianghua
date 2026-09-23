@@ -421,6 +421,7 @@ export function runPolymarketFeed(
     if (connected === value) return;
     connected = value;
     sink({ kind: "bookStatus", healthy: false, connected: value,
+      marketId: resolvedMarketId, roundId: inferredRoundId, yesAssetId: upToken, noAssetId: downToken,
       reason: value ? "connected_waiting_book" : "transport_disconnected", tsUnix: nowUnix() });
   };
 
@@ -495,7 +496,9 @@ export function runPolymarketFeed(
         const reportHealth = (healthy: boolean, reason: "complete_book" | "incomplete_book" | "stale_book") => {
           if (reportedHealthy === healthy) return;
           reportedHealthy = healthy;
-          sink({ kind: "bookStatus", healthy, connected: true, reason, tsUnix: nowUnix() });
+          sink({ kind: "bookStatus", healthy, connected: true,
+            marketId: resolvedMarketId, roundId: inferredRoundId, yesAssetId: upToken, noAssetId: downToken,
+            reason, tsUnix: nowUnix() });
         };
         const trace = process.env.PM_TRACE != null;
 
