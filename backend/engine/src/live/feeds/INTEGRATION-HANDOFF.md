@@ -14,9 +14,15 @@ replacement for the shared API contract.
 - Connection Promise reuse, reconnect backoff with jitter, watchdogs, and stop cancellation.
 - Source timestamp watermarks across reconnects and same-frame wire ordering.
 - Invalid-frame rejection, empty quote tombstones, source freshness, and expiry handling.
+- Multi-market decision queue isolation by `roundId` and YES/NO token pair. Queue
+  watermarks reject sequence/source-time regressions, and expired snapshots are
+  discarded before a consumer can receive them.
+- `bookStatus` carries `marketId`, `roundId`, `yesAssetId`, and `noAssetId`, so
+  a disconnected feed cannot invalidate another market's health state.
 
-The implementation is committed on `codex/market-data` at `1366549`; the
-parameterized discovery follow-up is committed after that baseline.
+The implementation is committed on `codex/market-data`. Use `git rev-parse
+HEAD` on the branch being integrated; do not copy a stale commit hash from an
+older handoff.
 
 ## Asset Parameter
 
@@ -61,6 +67,12 @@ and the paired `sequence`. Compatibility `up*` and `down*` fields remain in
 Consumers must use `YES` and `NO` for new code. The frontend adapter may map
 them to lowercase `yes` and `no`; it must not create a second quote source.
 
+When multiple markets are active, keep the complete `BookSnapshot` as the one
+shared object for strategy and frontend publication. Do not merge by
+`event.kind`, token side, or local receive time. The feed queue coalesces only
+within the same `roundId` and YES/NO token pair; current and next rounds may be
+held concurrently while the runtime decides which round is executable.
+
 ## Required Integration Checks
 
 Before a snapshot reaches strategy execution, the integration adapter must:
@@ -72,6 +84,12 @@ Before a snapshot reaches strategy execution, the integration adapter must:
 5. Treat `bookStatus.healthy === false`, `stale_book`, and `transport_disconnected` as execution gate failures.
 6. Publish the accepted snapshot object to both strategy input and the market stream.
 
+The runtime adapter must pass the market identity when starting each feed:
+`{ marketId: market.id, roundId: String(market.startsAt) }`. It must preserve
+the `YES`/`NO` asset ids and never rebuild a second quote object from the
+legacy `up*`/`down*` compatibility fields. A `bookStatus` event is scoped by
+its market and token pair; it must not be applied to every active market.
+
 `tsUnix` and local receive time do not make an expired source quote fresh.
 `sourceAt`, `expiresAt`, and the two per-asset source timestamps are the
 freshness fields.
@@ -80,7 +98,7 @@ freshness fields.
 
 | Workstream | Owns | Required action |
 | --- | --- | --- |
-| `codex/market-data` | WebSocket, discovery, order book, quote freshness | Complete. Do not add strategy or API logic here. |
+| `codex/market-data` | WebSocket, discovery, order book, quote freshness, multi-market queue semantics | Complete on this branch. Do not add strategy or API logic here. |
 | `codex/trading-runtime` | Strategy input, execution gate, order lifecycle | Consume the accepted snapshot, block stale/mismatched rounds, and preserve order idempotency and recovery. |
 | `codex/ledger-api` | Shared DTOs, runtime API, ledger projections | Turn the documented DTOs into typed contracts and expose market pool, runtime status, commands, orders, and events. |
 | `codex/integration` | Cross-module wiring and deployment | Merge the module branches, add adapters/startup order, and run server end-to-end checks. |
@@ -123,6 +141,37 @@ node dist/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after
 This validates discovery and public quotes for the requested asset only. It
 does not enable a strategy or place an order.
 
+## Server Read-Only Verification
+
+Run these commands from `/root/pm-system/backend/engine` after the integration
+branch has been built. The probe imports only public discovery and market WS
+code; it does not import the order gateway or start a strategy:
+
+```bash
+npm ci
+npm run build
+node dist/live/feeds/verify.mjs --asset btc --duration-sec 25 --disconnect-after-sec 8
+node dist/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after-sec 8
+```
+
+Record `DISCOVERY` and `PROBE` for each asset. Acceptance requires a live
+`marketId`/`roundId`, paired YES/NO best bid/ask, five-level depth when the venue
+provides it, strictly increasing local `sequence`, non-decreasing `sourceAt`,
+`expiresAt` at or before the round end, a `recoveryMs` value after the forced
+disconnect, and no sequence/source regressions. A missing market or no quotes
+is a failed read-only check, not a reason to start trading.
+
+The server process is foreground-only for this check:
+
+```bash
+node dist/live/feeds/verify.mjs --asset btc --duration-sec 25 --disconnect-after-sec 8
+```
+
+Stop with `Ctrl-C` or `SIGTERM`; do not use `killall node` or stop nginx. Before
+starting, record `git status`, the active branch, and existing project PIDs.
+Afterward confirm no probe process remains. Do not put credentials in the
+command line, output, or repository.
+
 ## Verification Order
 
 1. Build the merged integration branch and run the existing engine tests.
@@ -134,8 +183,18 @@ does not enable a strategy or place an order.
 ## Remaining Risks
 
 - The current server worktree is not the integrated branch. A server checkout or deployment of `codex/integration` is required before testing runtime APIs or order execution.
+- The market-data branch can be verified independently on the server, but the
+  current platform adapter still needs to pass `marketId`/`roundId` and connect
+  the snapshot gate before this feed can drive the trading runtime.
+- `FeedQueue` has correct multi-market semantics but is not yet the active
+  `platform.publish()` dispatch path. Integration must wire it without making
+  historical queries, resource sampling, or synchronous record listeners block
+  the feed callback.
 - The existing shared contract is still partly documentation. Until typed DTO validation exists, a field rename can silently break one consumer.
 - `codex/trading-runtime` must still wire the snapshot gate to the selected strategy and gateway. Parameterized discovery does not make the existing BTC strategy valid for every asset.
 - Each asset needs an explicit strategy/reference-feed mapping before automatic trading is enabled. Discovering an ETH or SOL market alone is not evidence that its oracle, outcome order, fee rules, or liquidity are compatible.
 - This work has not placed a real order and does not verify fills, cancellation, reconciliation, settlement, or ledger projection.
 - Polymarket event formats, venue clocks, Gamma availability, or server network conditions can change. The read-only probe must remain part of deployment verification.
+- Each active market currently owns one feed WebSocket. A shared subscription
+  registry can reduce connection count later, but it is not required for the
+  current correctness checks and must preserve per-market watermarks.
