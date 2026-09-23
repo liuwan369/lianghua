@@ -10,13 +10,15 @@
 
 ### MarketAssetViewModel
 
-`{ assetId, symbol, name, marketId, roundId, cycle: "5m", startAt, endAt, yes, no, volume, liquidity, quoteAt, eligibility, enabled, effectiveRoundId, runtimeState }`
+`{ assetId, symbol, name, marketId, roundId, cycle: "5m", startAt, endAt, yesBid, yesAsk, noBid, noAsk, volume, liquidity, quoteAt, enabled, current, nextRound }`
 
-`yes/no` 统一表示 YES/NO；自动交易页面不能再用没有映射说明的 UP/DOWN。
+市场目录的报价字段统一使用 `yesBid/yesAsk/noBid/noAsk`。页面显示层可以把 `yes/no` 作为方向标签，但不能直接使用没有映射说明的 UP/DOWN 字段。
+
+生产环境的 `marketId` 和 `roundId` 都是必填的服务器标识。旧 `/api/v1/markets` 若只返回市场 ID 而没有轮次 ID，adapter 仍可展示目录和报价，但必须把 `roundId` 保持为空，并阻止依赖轮次的持仓、订单查询。页面需要明确显示“当前轮次标识待后端提供”。
 
 ### MarketPoolViewModel
 
-`{ assets, desiredIds, currentIds, nextRoundIds, updatedAt, source }`
+`{ desiredIds, currentIds, nextRoundIds, effectiveRoundId, updatedAt, source, stale }`
 
 desired 是用户选择，current/next 是服务器确认结果。停用当前币种只影响下一场，不删除当前场次订单。
 
@@ -24,7 +26,7 @@ desired 是用户选择，current/next 是服务器确认结果。停用当前�
 
 `{ marketId, roundId, yes: { bids, asks }, no: { bids, asks }, sequence, sourceAt, expiresAt, stale }`
 
-五档是独立的高频快照；不能用定时器正弦波生成。
+五档是独立的高频快照；不能用定时器或演示数值生成。行情帧只允许更新相同 `marketId + roundId` 的盘口节点。
 
 ### RoundPositionViewModel
 
@@ -39,6 +41,8 @@ desired 是用户选择，current/next 是服务器确认结果。停用当前�
 ### SystemHealthViewModel / AccountViewModel / ActivityEventViewModel
 
 系统健康包含行情节点、控制台、采集、交易、账本投影、CPU、内存、磁盘和负载。账户只返回钱包摘要、配置状态和最近检查结果，不返回私钥。事件必须有 id、time、kind、marketId、roundId、severity 和 message。
+
+账户 ViewModel 的真实数据源是服务器账户快照、账户状态和账户检查接口。当前前端只完成 adapter 和展示层，尚未连接真实后端账户或交易环境；因此没有快照时应显示 `unavailable`，请求失败后保留上一次快照并显示 `stale`。
 
 ## 页面状态
 
