@@ -1,51 +1,65 @@
-# 后端接口契约草案
+# 后端接口契约
 
-下面是前端需要的最小接口集合。路径可以按现有服务命名调整，但语义和字段边界应保持一致。
+当前仅支持 BTC 五分钟反转策略。以下列出已提供的接口及尚未接通的能力；前端以 `/api/bootstrap` 的 `capabilityDetails` 判断能力是否可用。
 
 ## 现有服务可复用接口
 
 生产前端已经有这些只读接口，可以先作为 adapter 的第一版数据源：
 
 - `GET /api/v1/status`：运行状态、策略版本、当前运行摘要。
-- `GET /api/v1/markets`：采集器当前市场和报价快照。
+- `GET /api/v1/markets`：优先使用交易运行时市场快照，采集器为回退来源。
 - `GET /api/account/status`：账户配置状态，不应回显秘密。
 - `GET /api/v1/runs?limit=50`、`GET /api/v1/events?run_id=...`：运行和事件记录。
 - `GET /api/v1/summary?run_id=...`：当前运行汇总。
 - `GET /api/v1/system-metrics`：CPU、内存、磁盘、负载和服务进程。
 - `GET /api/strategy-config`、`PUT /api/strategy-config`：策略读取和保存。
 
-这些接口目前仍是单运行/单当前市场模型，不能直接满足多币种运行池；需要新增市场目录、运行池和按 marketId/roundId 的运行数据契约。现有交易控制接口的最终状态应统一为 runtime command response + status/event stream，避免页面猜测按钮结果。
+旧接口保留既有字段和时间格式。系统只运行 BTC，不扩展多币种运行池。交易控制响应表示请求处理状态，最终运行状态由 `/api/runtime/status` 和事件查询确认，不能只根据 `accepted` 判断执行完成。
 
 ## REST
 
-所有现代只读响应都带 `schemaVersion`、`source`、`asOf`、`stale` 和 `error`（无错误时为 `null`）。`stale=true` 时客户端应保留最后一次成功数据，并显示数据来源和时间；不能把不可用数据当作零。
+现代接口的成功与错误响应都带 `schemaVersion`、`source`、`asOf`、`stale` 和 `error`（无错误时为 `null`）。`asOf/sourceAt/quoteAt/startAt/endAt/expiresAt/updatedAt/savedAt/time` 等现代 DTO 时间统一使用 UTC Unix 秒数（可带小数），未知为 `null`。`asOf` 是数据来源时间，不用本次请求时间刷新旧数据的新鲜度。旧接口以及保留的原始兼容字段不改变格式。
+
+失败时保留最后一次成功快照及其原始来源时间，设置 `stale=true` 和明确的 `error`。从未成功取得数据时使用 unavailable 状态和 `null`，不能清零、伪造空仓或成功结果。HTTP 请求只读取独立投影的 SQLite/原子快照或已有缓存，不解析运行日志，不在交易循环中执行账户、资源或历史统计查询。
 
 | 用途 | 方法 | 路径 | 频率/说明 |
 |---|---|---|---|
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
-| 加密货币五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 15 秒或手动刷新 |
+| BTC 五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 复用运行时/采集器已有快照 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
-| 运行池 | GET/PUT | `/api/runtime/market-pool` | desired enabled + effectiveRoundId |
+| 固定运行池 | GET | `/api/runtime/market-pool` | BTC 当前状态，只读；PUT 不支持 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载 |
-| 保存策略草稿 | POST | `/api/strategy/drafts` | 校验后保存，不自动启动 |
-| 激活策略 | POST | `/api/strategy/activate` | `effectiveRoundId` |
-| 策略参考参数 | GET/POST/DELETE | `/api/strategy/presets` | 用户可增删 |
+| 保存策略草稿 | POST | `/api/strategy/drafts` | 独立持久化，不发布、不自动启动 |
+| 激活策略 | POST | `/api/strategy/activate` | `{ expectedRevision, draftId, effectiveRoundId?: null }` |
+| 策略参考参数 | GET/POST/DELETE | `/api/strategy/presets` | 尚未提供，`presets=false` |
 | 本场持仓 | GET | `/api/rounds/{roundId}/position` | 首次加载/切场 |
 | 本场订单 | GET | `/api/rounds/{roundId}/orders` | 分页历史 |
-| 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 明确返回 command 状态 |
+| 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 尚未接通，返回 501 和 `accepted=false` |
 | 账户快照 | GET | `/api/account/snapshot` | 15 秒；不返回秘密 |
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
 | 系统诊断 | GET | `/api/diagnostics/health` | 15 秒，资源和进程 |
-| 汇总统计 | GET | `/api/metrics/summary?range=today` | 页面加载/手动刷新 |
-| 事件历史 | GET | `/api/events?cursor=...` | 分页，低频 |
+| 汇总统计 | GET | `/api/metrics/summary?range=today` | `run/today/all`，低频 |
+| 事件历史 | GET | `/api/events?runId=...&cursor=...&limit=50` | 按事件 ID 游标分页，低频 |
+| 成交记录 | GET | `/api/fills?runId=...&cursor=...&limit=50` | 同一账本的成交 journal 记录 |
+| 结算记录 | GET | `/api/settlements?runId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏 |
 
-账本统计响应还提供 `fills`、`fill_notional`、`fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses` 和 `win_rate`。`pnl` 是引擎结算净盈亏，不是钱包现金对账；缺少成交、手续费或结算字段时返回 `null`。订单 DTO 包含订单状态及其 `fills`，持仓 DTO 包含 `yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`。
+账本统计响应提供 `fills`、`fill_notional`、`fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
 
-市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+`platform_settlement` 只有 `state=confirmed` 且 `payout_verified=true` 才计入已确认结算，同一结算重复记录不重复计数。`pnl` 是已确认结算净盈亏，不是钱包现金对账；只有完整的已确认成交、实际手续费及已核实结算款齐全，且平台持仓快照可核对成交成本时才给数值，否则为 `null`。`abs(pnl) <= 1e-9` 为平局，不计失败；胜率分母仅包含盈亏已确定的胜局与负局，无结果或平局不进入分母，分母为零时 `win_rate=null`。
+
+`pending_settlements` 表示结算尚未确认到账的场次数；`settled_pnl_pending` 表示已确认到账但成本或费用不完整、暂时无法确定盈亏的场次数，两者都不能被统计成失败或零盈亏。
+
+订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。`/api/fills` 返回成交 journal 修订记录，不能将各页记录直接累加为成交金额；汇总以投影去重结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；`accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。
+
+市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是 BTC 五分钟场次 slug。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+
+事件 `items` 必须含 `id/time/kind/marketId/roundId/severity/message`，保留原始 `event/market/side` 等字段供旧调用方使用；标识与时间未知时为 `null`。分页响应含下一页 `cursor`，无后续记录时为 `null`。运行时市场快照优先于采集器缓存，过期报价不能被标为新鲜。
 
 ## WebSocket / SSE
+
+以下为预留能力，当前 `capabilityDetails.streams=false`，尚未提供，不能以这些流确认控制命令完成：
 
 - `/api/stream/markets`：报价、五档 depth、场次切换；按 marketId 订阅。
 - `/api/stream/runtime`：启动/暂停/停止状态、策略阶段、错误、服务事件。
@@ -58,14 +72,15 @@
 ```json
 {
   "action": "start",
-  "marketIds": ["btc-5m-..."],
-  "strategyId": "reversal-5m",
+  "strategyId": "btc-reversal",
   "revision": 12,
   "requestId": "uuid"
 }
 ```
 
-响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。
+控制命令、草稿保存和策略激活使用服务器现有控制认证。响应只代表命令处理状态；最终结果由运行状态和事件查询确认。服务状态使用 `stopped/starting/running/paused/failed` 等运行时实际状态，不能用进程存在推断所有交易动作已完成。
+
+策略激活使用 `expectedRevision` 检查版本，并以 `draftId` 指定已保存草稿，成功后原子发布新版本。`activationScope=future_uncreated_round` 表示仅影响引擎尚未创建的未来场次：当前及已预热场次配置已冻结。任意非空 `effectiveRoundId` 暂不支持，返回 501，不伪造指定场次已排期。旧 `PUT /api/strategy-config` 保留保存即发布行为，不能当作现代“只保存草稿”的等价回退。
 
 ## 前端调用方式
 
@@ -73,10 +88,10 @@
 
 ```js
 await PolyPreviewAdapter.loadMarkets();
-await PolyPreviewAdapter.commandRuntime({ action: "start", marketIds, strategyId, requestId });
+await PolyPreviewAdapter.commandRuntime({ action: "start", strategyId, revision, requestId });
 await PolyPreviewAdapter.saveStrategy(draft);
 ```
 
 adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。预览模式返回明确的“待接入”结果，不模拟成功，也不把本地草稿当成服务器运行状态。
 
-后端联调时需要先提供：市场目录、运行池和 runtime status；随后接入 markets/runtime/orders 三条实时流。若暂时只有现有策略接口，adapter 会把策略草稿转换成 `{ expectedRevision, config }` 并回退到 `PUT /api/strategy-config`。账户秘密不经过浏览器接口，账户页面只读取服务器保存状态；如需更换账户，由服务器环境配置或部署系统完成。
+运行池编辑、策略 presets、指定场次激活、逐笔撤单、flatten 和实时流均按 bootstrap 中对应的 `false` 能力展示不可用，不模拟成功。账户页面只读取服务器保存状态；账户秘密不进入 DTO、浏览器存储或日志，如需更换账户，由服务器环境配置或部署系统完成。

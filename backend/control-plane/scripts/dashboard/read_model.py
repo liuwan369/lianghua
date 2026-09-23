@@ -117,7 +117,7 @@ class ReadModel:
             return {**value, "run_id": run_id, "worker_alive": alive,
                     "checked_at": checked_at,
                     "age_seconds": age,
-                    "stale": not alive or age is None or age > 3,
+                    "stale": not alive or age is None or age > 3 or damaged or bool(value.get("ingestion", {}).get("pending")),
                     "state": "incomplete" if damaged else ("catching_up" if value.get("ingestion", {}).get("pending")
                               else "ready" if value else "waiting")}
 

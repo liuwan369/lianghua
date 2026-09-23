@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 from collections import OrderedDict
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -72,6 +73,25 @@ CREATE TABLE IF NOT EXISTS trade_details (
  run_id TEXT NOT NULL REFERENCES runs(run_id), trade_id TEXT NOT NULL, order_id TEXT NOT NULL,
  payload TEXT NOT NULL, PRIMARY KEY(run_id,trade_id,order_id)
 );
+CREATE TABLE IF NOT EXISTS market_aliases (
+ run_id TEXT NOT NULL, market_id TEXT NOT NULL, market TEXT NOT NULL,
+ PRIMARY KEY(run_id,market_id)
+);
+CREATE INDEX IF NOT EXISTS market_alias_slug ON market_aliases(run_id,market);
+CREATE TABLE IF NOT EXISTS settlement_details (
+ run_id TEXT NOT NULL, market TEXT NOT NULL, market_id TEXT,
+ source_at REAL NOT NULL, verified INTEGER NOT NULL DEFAULT 0, pnl REAL, payload TEXT NOT NULL,
+ PRIMARY KEY(run_id,market)
+);
+CREATE INDEX IF NOT EXISTS settlement_period ON settlement_details(run_id,source_at);
+CREATE INDEX IF NOT EXISTS order_identity_history ON events(
+ run_id,json_extract(payload,'$.client_order_id'),id DESC) WHERE kind='order';
+CREATE INDEX IF NOT EXISTS order_market_history ON events(
+ run_id,json_extract(payload,'$.market'),id DESC) WHERE kind='order';
+CREATE INDEX IF NOT EXISTS fill_order_history ON events(
+ run_id,json_extract(payload,'$.order_id'),id) WHERE kind='fill';
+CREATE INDEX IF NOT EXISTS trade_market ON trade_details(run_id,json_extract(payload,'$.market'));
+CREATE TABLE IF NOT EXISTS projection_migrations (name TEXT PRIMARY KEY);
 """
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
                          "order", "settlement", "platform_status"})
@@ -170,6 +190,11 @@ def _runtime_projection(value, mode):
     result["positions"] = [{"tokenId": _text(p.get("tokenId")),
                             **{key: _number(p.get(key)) for key in ("shares", "costUsd", "realizedPnlUsd")}}
                            for p in positions[:1000] if isinstance(p, dict)]
+    result["positions_complete"] = (isinstance(value.get("positions"), list) and len(positions) <= 1000
+        and _number(value.get("positions_count")) == len(positions)
+        and len(result["positions"]) == len(positions)
+        and all(p["tokenId"] and p["shares"] is not None and p["shares"] >= 0
+                and p["costUsd"] is not None and p["costUsd"] >= 0 for p in result["positions"]))
     if ((result["execution"] == "observation" and result["strategy_id"] is not None)
             or (result["execution"] == "strategy" and not result["strategy_id"])):
         return None
@@ -234,7 +259,7 @@ def _runtime_projection(value, mode):
 
 def _projection(record):
     """Only these typed business fields leave the journal; no raw messages/config."""
-    result = {"event": record["event"], "market": _text(record.get("market_slug")),
+    result = {"event": record["event"], "market": _text(record.get("market_slug")) or _text(record.get("market_id")),
               "side": record.get("side") if record.get("side") in ("UP", "DOWN", "up", "down") else None,
               "winner": record.get("winner") if record.get("winner") in ("UP", "DOWN", "up", "down") else None}
     if record["event"] in ("order", "fill"):
@@ -293,6 +318,23 @@ class Ledger:
             with self._connect() as db:
                 db.execute("PRAGMA journal_mode=WAL")
                 db.executescript(SCHEMA)
+                if not db.execute("SELECT 1 FROM projection_migrations WHERE name='platform_settlements_v1'").fetchone():
+                    for row in db.execute("SELECT run_id,payload FROM platform_runtime").fetchall():
+                        runtime = json.loads(row["payload"])
+                        for market in runtime.get("markets", []):
+                            if market.get("id") and market.get("name"):
+                                db.execute("INSERT OR IGNORE INTO market_aliases VALUES(?,?,?)",
+                                           (row["run_id"], market["id"], market["name"]))
+                    # Existing journals were already consumed; backfill only settlement projections once.
+                    for row in db.execute("SELECT run_id,payload FROM events WHERE kind='settlement' ORDER BY id").fetchall():
+                        event = json.loads(row["payload"])
+                        event["market"] = event.get("market") or event.get("market_id")
+                        if event["market"]:
+                            db.execute("INSERT OR IGNORE INTO markets(run_id,market) VALUES(?,?)", (row["run_id"], event["market"]))
+                            db.execute("INSERT OR IGNORE INTO market_details(run_id,market,last_time) VALUES(?,?,?)",
+                                       (row["run_id"], event["market"], event.get("time") or 0))
+                            self._record_settlement(db, row["run_id"], event)
+                    db.execute("INSERT INTO projection_migrations VALUES('platform_settlements_v1')")
 
     @contextmanager
     def _connect(self):
@@ -423,6 +465,11 @@ class Ledger:
                             db.execute("UPDATE runs SET invalid_records=invalid_records+1 WHERE run_id=?", (run_id,))
                             continue
                     projected = _projection(record)
+                    if projected["market_id"]:
+                        alias = db.execute("SELECT market FROM market_aliases WHERE run_id=? AND market_id=?",
+                                           (run_id, projected["market_id"])).fetchone()
+                        if alias and projected["market"] == projected["market_id"]:
+                            projected["market"] = alias[0]
                     if kind == "resolved":
                         prior_market = db.execute("SELECT fills FROM markets WHERE run_id=? AND market=?",
                                                   (run_id, projected["market"])).fetchone()
@@ -447,6 +494,36 @@ class Ledger:
                             ON CONFLICT(run_id) DO UPDATE SET source_at=excluded.source_at,payload=excluded.payload
                             WHERE excluded.source_at>=platform_runtime.source_at""",
                                    (run_id, at, json.dumps(runtime, allow_nan=False)))
+                        rounds = runtime.get("strategy_runtime") or {}
+                        identities = runtime["markets"] + [
+                            {"id": item.get("marketId"), "name": item.get("name")}
+                            for item in rounds.get("rounds", []) if isinstance(item, dict)]
+                        if isinstance(rounds.get("currentRound"), dict):
+                            identities.append({"id": rounds["currentRound"].get("marketId"),
+                                               "name": rounds["currentRound"].get("name")})
+                        for identity_row in identities:
+                            if identity_row.get("id") and identity_row.get("name"):
+                                db.execute("INSERT INTO market_aliases VALUES(?,?,?) ON CONFLICT(run_id,market_id) "
+                                           "DO UPDATE SET market=excluded.market",
+                                           (run_id, identity_row["id"], identity_row["name"]))
+                        # Settlement can be journaled just before the final account
+                        # snapshot. Recompute once the authoritative cost coverage arrives.
+                        if self._has_table(db, "settlement_details"):
+                            for settlement in db.execute(
+                                    "SELECT market FROM settlement_details WHERE run_id=?", (run_id,)).fetchall():
+                                self._refresh_settlement(db, run_id, settlement["market"])
+                        # A settlement can be emitted before the next status snapshot. Revisit
+                        # pending settlement rows once authoritative positions arrive.
+                        if self._has_table(db, "settlement_details"):
+                            for settlement in db.execute(
+                                    "SELECT market,market_id,payload FROM settlement_details WHERE run_id=? AND verified=1", (run_id,)):
+                                payload = json.loads(settlement["payload"])
+                                coverage = self._coverage_from_runtime(runtime, settlement["market_id"], settlement["market"])
+                                if coverage is not None:
+                                    payload["coverage"] = coverage
+                                    db.execute("UPDATE settlement_details SET payload=? WHERE run_id=? AND market=?",
+                                               (json.dumps(payload, allow_nan=False), run_id, settlement["market"]))
+                                self._refresh_settlement(db, run_id, settlement["market"])
                 new_offset = offset + cursor
                 for metric in latency_metrics:
                     db.execute("""DELETE FROM latency_samples WHERE run_id=? AND byte_offset IN
@@ -553,6 +630,8 @@ class Ledger:
                            (event["pnl"] or 0, int(event["pnl"] is None), run_id))
             elif not row["fills"]:
                 db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND market=?", (run_id, market))
+        elif kind == "settlement" and market:
+            Ledger._record_settlement(db, run_id, event)
         elif kind in {"stopped", "unresolved"} and market:
             db.execute("UPDATE market_details SET status='未结算（已停止）' WHERE run_id=? AND market=? AND pnl IS NULL", (run_id, market))
 
@@ -583,6 +662,97 @@ class Ledger:
                            (sign * (amount or 0), item.get("time") or 0, run_id, market))
         db.execute("INSERT INTO trade_details VALUES(?,?,?,?) ON CONFLICT(run_id,trade_id,order_id) DO UPDATE SET payload=excluded.payload",
                    (run_id, event["trade_id"], event["order_id"], json.dumps(event, allow_nan=False)))
+        for market in {item.get("market") for item in (prior, event) if item and item.get("market")}:
+            Ledger._refresh_settlement(db, run_id, market)
+
+    @staticmethod
+    def _record_settlement(db, run_id, event):
+        prior = db.execute("SELECT verified,source_at,payload FROM settlement_details WHERE run_id=? AND market=?",
+                           (run_id, event["market"])).fetchone()
+        verified = event.get("payout_verified") is True
+        if prior and (prior["verified"] and not verified or prior["source_at"] > (event.get("time") or 0)):
+            return
+        payload = dict(event)
+        payload["coverage"] = None
+        row = db.execute("SELECT source_at,payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
+        if row and event.get("time") and 0 <= event["time"] - row["source_at"] <= RUNTIME_MAX_AGE:
+            payload["coverage"] = Ledger._coverage_from_runtime(
+                json.loads(row["payload"]), event.get("market_id"), event.get("market"))
+        if payload["coverage"] is None and prior:
+            payload["coverage"] = json.loads(prior["payload"]).get("coverage")
+        db.execute("""INSERT INTO settlement_details VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(run_id,market) DO UPDATE SET market_id=excluded.market_id,
+            source_at=excluded.source_at,verified=excluded.verified,payload=excluded.payload""",
+                   (run_id, event["market"], event.get("market_id"), event.get("time") or 0,
+                    int(verified), None, json.dumps(payload, allow_nan=False)))
+        Ledger._refresh_settlement(db, run_id, event["market"])
+
+    @staticmethod
+    def _coverage_from_runtime(runtime, market_id, market):
+        if not isinstance(runtime, dict) or runtime.get("positions_complete") is not True:
+            return None
+        if (runtime.get("risk") or {}).get("reconciliationRequired"):
+            return None
+        strategy = runtime.get("strategy_runtime") or {}
+        rounds = [strategy.get("currentRound")] + strategy.get("rounds", [])
+        for candidate in rounds:
+            if (not isinstance(candidate, dict)
+                    or not (({candidate.get("marketId"), candidate.get("name")} & {market_id, market}) - {None})):
+                continue
+            tokens = (candidate.get("upTokenId"), candidate.get("downTokenId"))
+            shares = (candidate.get("upShares"), candidate.get("downShares"))
+            if all(tokens) and all(_number(value) is not None and value >= 0 for value in shares):
+                return dict(zip(tokens, shares))
+        return None
+
+    @staticmethod
+    def _refresh_settlement(db, run_id, market):
+        row = db.execute("SELECT * FROM settlement_details WHERE run_id=? AND market=?", (run_id, market)).fetchone()
+        if row is None:
+            return
+        payload = json.loads(row["payload"])
+        pnl = None
+        reason = "payout_unverified"
+        if row["verified"]:
+            trades = [json.loads(item[0]) for item in db.execute(
+                "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=?",
+                (run_id, market))]
+            trades = [item for item in trades if item.get("trade_status") != "FAILED"]
+            coverage = payload.get("coverage")
+            reason = "cost_basis_unverified"
+            if (trades and isinstance(coverage, dict)
+                    and all(item.get("trade_status") == "CONFIRMED" and item.get("fee_source") == "reported"
+                            and item.get("amount") is not None and item.get("fee") is not None
+                            and item["fee"] >= 0 and item.get("shares") is not None
+                            and item.get("direction") in ("BUY", "SELL") and item.get("token_id") in coverage
+                            for item in trades)):
+                net_shares = {token: 0.0 for token in coverage}
+                net_cost = 0.0
+                for item in trades:
+                    sign = 1 if item["direction"] == "BUY" else -1
+                    net_shares[item["token_id"]] += sign * item["shares"]
+                    net_cost += sign * item["amount"] + item["fee"]
+                if all(abs(net_shares[token] - shares) < 1e-6 for token, shares in coverage.items()):
+                    pnl = _number(payload["credited_usd"] - net_cost)
+                    reason = None if pnl is not None else "invalid_pnl"
+        payload.update(pnl=pnl, accounting_state="confirmed" if row["verified"] else "pending", pnl_error=reason)
+        db.execute("UPDATE settlement_details SET pnl=?,payload=? WHERE run_id=? AND market=?",
+                   (pnl, json.dumps(payload, allow_nan=False), run_id, market))
+        prior = db.execute("SELECT m.settled,m.fills,d.pnl FROM markets m JOIN market_details d "
+                           "ON d.run_id=m.run_id AND d.market=m.market WHERE m.run_id=? AND m.market=?",
+                           (run_id, market)).fetchone()
+        if row["verified"] and prior and prior["fills"]:
+            settled, old_pnl = prior["settled"], prior["pnl"]
+            db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND market=?", (run_id, market))
+            db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND market=?", (pnl, run_id, market))
+            db.execute("""UPDATE runs SET settled_markets=settled_markets+?,
+                known_settled_pnl=known_settled_pnl+?,missing_pnl=missing_pnl+? WHERE run_id=?""",
+                       (int(not settled), (pnl or 0) - ((old_pnl or 0) if settled else 0),
+                        int(pnl is None) - int(bool(settled) and old_pnl is None), run_id))
+        elif prior and not prior["fills"]:
+            db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND market=?", (run_id, market))
+        elif prior and not prior["settled"]:
+            db.execute("UPDATE market_details SET status='待结算' WHERE run_id=? AND market=?", (run_id, market))
 
     def orders_page(self, run_id, *, limit=10, offset=0, status=None, market=None, as_of=None, snapshot_event_id=None):
         """Page order snapshots at one journal cutoff so new events do not shift pages."""
@@ -598,22 +768,29 @@ class Ledger:
         if snapshot_event_id is not None and (type(snapshot_event_id) is not int or snapshot_event_id < 0):
             raise ValueError("invalid snapshot event id")
         cte = """WITH selected AS (
-            SELECT id,payload,
-                   ROW_NUMBER() OVER (PARTITION BY json_extract(payload,'$.client_order_id') ORDER BY id DESC) AS n,
-                   MIN(id) OVER (PARTITION BY json_extract(payload,'$.client_order_id')) AS first_id
-            FROM events WHERE run_id=? AND kind='order' AND id<=?
-              AND json_extract(payload,'$.client_order_id') IS NOT NULL
-              AND json_extract(payload,'$.time')<=?
-        ), filtered AS (SELECT * FROM selected WHERE n=1
+            SELECT e.id,e.payload,
+                   (SELECT MIN(first.id) FROM events first WHERE first.run_id=e.run_id AND first.kind='order'
+                    AND json_extract(first.payload,'$.client_order_id')=json_extract(e.payload,'$.client_order_id')) AS first_id
+            FROM events e WHERE e.run_id=? AND e.kind='order' AND e.id<=?
+              AND json_extract(e.payload,'$.client_order_id') IS NOT NULL
+              AND json_extract(e.payload,'$.time')<=?
+              AND NOT EXISTS (SELECT 1 FROM events newer WHERE newer.run_id=e.run_id AND newer.kind='order'
+                  AND json_extract(newer.payload,'$.client_order_id')=json_extract(e.payload,'$.client_order_id')
+                  AND newer.id>e.id AND newer.id<=? AND json_extract(newer.payload,'$.time')<=?)
+        ), filtered AS (SELECT * FROM selected WHERE 1=1
             AND (? IS NULL OR json_extract(payload,'$.status')=?
               OR (?='active' AND json_extract(payload,'$.status') IN ('SUBMITTING','OPEN','PARTIAL','UNKNOWN'))
               OR (?='failed' AND json_extract(payload,'$.status')='REJECTED'))
-            AND (? IS NULL OR json_extract(payload,'$.market')=?)) """
+            AND (? IS NULL OR json_extract(payload,'$.market')=? OR json_extract(payload,'$.market_id')=?
+                OR json_extract(payload,'$.market')=?)) """
         with self._connect() as db:
             self._run(db, run_id)
             cutoff = snapshot_event_id if snapshot_event_id is not None else db.execute(
                 "SELECT COALESCE(MAX(id),0) FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
-            args = (run_id, cutoff, stamp, status, status, status, status, market, market)
+            alias = db.execute("SELECT market FROM market_aliases WHERE run_id=? AND market_id=?", (run_id, market)).fetchone() \
+                if market and self._has_table(db, "market_aliases") else None
+            args = (run_id, cutoff, stamp, cutoff, stamp, status, status, status, status, market, market, market,
+                    alias[0] if alias else market)
             total = db.execute(cte + "SELECT COUNT(*) FROM filtered", args).fetchone()[0]
             rows = db.execute(cte + "SELECT payload FROM filtered ORDER BY first_id DESC LIMIT ? OFFSET ?",
                               (*args, limit, offset)).fetchall()
@@ -678,6 +855,9 @@ class Ledger:
                 "pnl": summary["settled_pnl"], "pnl_semantics": summary["pnl_semantics"],
                 "settled_wins": summary.get("settled_wins", 0),
                 "settled_losses": summary.get("settled_losses", 0),
+                "settled_draws": summary.get("settled_draws", 0),
+                "pending_settlements": summary.get("pending_settlements", 0),
+                "settled_pnl_pending": summary.get("settled_pnl_pending", 0),
                 "win_rate": summary.get("win_rate"),
                 "last_event": events[0]["event"] if events else None,
                 "error": ("交易日志待核对" if summary["error"] or summary["invalid_records"]
@@ -693,20 +873,35 @@ class Ledger:
         exchange from an HTTP request and reports an unavailable/stale result
         when the projection has no authoritative position snapshot.
         """
+        unavailable = {"available": False, "stale": True, "runId": run_id, "roundId": round_id,
+                       "marketId": None, "stage": None, "confirmations": None, "yesShares": None,
+                       "noShares": None, "averagePrice": None, "occupiedUsd": None,
+                       "outcomePnl": {"yes": None, "no": None}, "updatedAt": None}
         with self._connect() as db:
-            self._run(db, run_id)
+            run = self._run(db, run_id)
             if not self._has_table(db, "platform_runtime"):
-                return {"available": False, "stale": True, "error": "position projection unavailable",
-                        "runId": run_id, "roundId": round_id}
+                return {**unavailable, "error": "position projection unavailable"}
             row = db.execute("SELECT source_at,payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
         if row is None:
-            return {"available": False, "stale": True, "error": "position projection pending",
-                    "runId": run_id, "roundId": round_id}
+            return {**unavailable, "error": "position projection pending"}
         try:
             runtime = json.loads(row["payload"])
         except (TypeError, ValueError):
-            return {"available": False, "stale": True, "error": "position projection invalid",
-                    "runId": run_id, "roundId": round_id}
+            return {**unavailable, "error": "position projection invalid"}
+        if not isinstance(runtime, dict):
+            return {**unavailable, "error": "position projection invalid"}
+        now, at = time.time(), row["source_at"]
+        error = "position snapshot expired" if now - at > RUNTIME_MAX_AGE or at > now + 1 else None
+        try:
+            caught_up = Path(run["path"]).stat().st_size == run["byte_offset"]
+        except OSError:
+            caught_up = False
+        if run["source_error"] or run["invalid_records"] or not caught_up:
+            error = "position projection incomplete"
+        if runtime.get("status") != "running":
+            error = "runtime is not running"
+        if (runtime.get("risk") or {}).get("reconciliationRequired"):
+            error = "account reconciliation pending"
         strategy = runtime.get("strategy_runtime") if isinstance(runtime, dict) else None
         candidates = []
         if isinstance(strategy, dict):
@@ -716,42 +911,46 @@ class Ledger:
             candidates.extend(item for item in strategy.get("rounds", []) if isinstance(item, dict))
         selected = None
         for item in candidates:
-            market = item.get("marketId")
-            if round_id is None or market == round_id:
+            if round_id is None or round_id in (item.get("marketId"), item.get("name"), item.get("roundId")):
                 selected = item
-                if round_id is not None:
-                    break
+                break
         if selected is None:
-            return {"available": True, "stale": False, "error": None, "runId": run_id,
-                    "roundId": round_id, "marketId": None, "stage": None, "confirmations": 0,
-                    "yesShares": 0, "noShares": 0, "averagePrice": None, "occupiedUsd": 0,
-                    "outcomePnl": {"yes": None, "no": None}, "updatedAt": row["source_at"]}
-        positions = runtime.get("positions") if isinstance(runtime, dict) else []
+            return {**unavailable, "error": "round position unavailable", "updatedAt": at}
+        positions = runtime.get("positions") if isinstance(runtime.get("positions"), list) else []
         by_token = {item.get("tokenId"): item for item in positions if isinstance(item, dict)}
         yes = by_token.get(selected.get("upTokenId"), {})
         no = by_token.get(selected.get("downTokenId"), {})
-        yes_shares, no_shares = yes.get("shares") or 0, no.get("shares") or 0
-        occupied = (yes.get("costUsd") or 0) + (no.get("costUsd") or 0)
-        total_shares = yes_shares + no_shares
-        total_cost = occupied
+        complete = runtime.get("positions_complete") is True
+        yes_shares = _number(yes.get("shares")) if yes else 0 if complete and selected.get("upTokenId") else None
+        no_shares = _number(no.get("shares")) if no else 0 if complete and selected.get("downTokenId") else None
+        costs = [_number(item.get("costUsd")) if item else 0 if complete else None for item in (yes, no)]
+        occupied = sum(costs) if all(value is not None for value in costs) else None
+        total_shares = yes_shares + no_shares if yes_shares is not None and no_shares is not None else None
+        if not complete:
+            error = "position snapshot incomplete"
         return {
             "available": True,
-            "stale": False,
-            "error": None,
+            "stale": error is not None,
+            "error": error,
             "runId": run_id,
-            "roundId": selected.get("marketId") or round_id,
+            "roundId": selected.get("name") or selected.get("roundId") or round_id,
             "marketId": selected.get("marketId"),
-            "stage": selected.get("nextStage") or len(selected.get("stages") or []),
-            "confirmations": selected.get("confirmationCount") or 0,
+            "stage": selected.get("nextStage"),
+            "confirmations": selected.get("confirmationCount"),
             "yesShares": yes_shares,
             "noShares": no_shares,
-            "averagePrice": total_cost / total_shares if total_shares > 0 else None,
+            "averagePrice": occupied / total_shares if total_shares and total_shares > 0 and occupied is not None else None,
             "occupiedUsd": occupied,
             "outcomePnl": {"yes": selected.get("netIfUpUsd"), "no": selected.get("netIfDownUsd")},
-            "updatedAt": row["source_at"],
+            "updatedAt": at,
+            "expiresAt": at + RUNTIME_MAX_AGE,
         }
 
-    def summary(self, run_id):
+    def summary(self, run_id, *, range=None):
+        if range not in (None, "run", "today", "all"):
+            raise ValueError("invalid metrics range")
+        if range in ("today", "all"):
+            return self.metrics_summary(run_id, range=range)
         with self._connect() as db:
             run = self._run(db, run_id)
             result = {key: run[key] for key in ("run_id", "mode", "account_id", "config_revision", "created_at",
@@ -766,12 +965,16 @@ class Ledger:
                               "SELECT 1 FROM order_details WHERE run_id=? LIMIT 1", (run_id,)).fetchone()),
                           error=run["source_error"])
             settled = db.execute("""SELECT
-                    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS wins,
-                    SUM(CASE WHEN pnl <= 0 THEN 1 ELSE 0 END) AS losses
+                    SUM(CASE WHEN pnl > 0.000000001 THEN 1 ELSE 0 END) AS wins,
+                    SUM(CASE WHEN pnl < -0.000000001 THEN 1 ELSE 0 END) AS losses,
+                    SUM(CASE WHEN ABS(pnl) <= 0.000000001 THEN 1 ELSE 0 END) AS draws
                 FROM market_details WHERE run_id=? AND status='已结算' AND pnl IS NOT NULL""", (run_id,)).fetchone()
             wins = int(settled["wins"] or 0)
             losses = int(settled["losses"] or 0)
             result.update(settled_wins=wins, settled_losses=losses,
+                          settled_draws=int(settled["draws"] or 0), settled_pnl_pending=run["missing_pnl"],
+                          pending_settlements=db.execute("SELECT COUNT(*) FROM settlement_details WHERE run_id=? AND verified=0",
+                                                        (run_id,)).fetchone()[0] if self._has_table(db, "settlement_details") else 0,
                           win_rate=(wins / (wins + losses) if wins + losses else None))
             try:
                 source_bytes = Path(run["path"]).stat().st_size
@@ -799,6 +1002,96 @@ class Ledger:
             result["latency"] = latency
             return result
 
+    def metrics_summary(self, run_id, *, range="today"):
+        """Slow, read-only statistics scoped to one account and UTC calendar days."""
+        if range not in ("run", "today", "all"):
+            raise ValueError("invalid metrics range")
+        now = time.time()
+        start = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() \
+            if range == "today" else None
+        if range == "run":
+            return {**self.summary(run_id), "range": range, "from": None, "to": now, "as_of": now}
+        with self._connect() as db:
+            selected = self._run(db, run_id)
+            runs = list(db.execute("SELECT * FROM runs WHERE mode='live' AND account_id=?", (selected["account_id"],))) \
+                if selected["account_id"] else [selected]
+            run_ids = [row["run_id"] for row in runs]
+            placeholders = ",".join("?" for _ in run_ids)
+            period = " AND COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))>=?" \
+                " AND COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))<=?" if start is not None else ""
+            parameters = (*run_ids, start, now) if start is not None else tuple(run_ids)
+            fill_rows = db.execute(f"SELECT run_id,NULL AS id,payload FROM trade_details WHERE run_id IN ({placeholders})" + period
+                + " UNION ALL SELECT run_id,id,payload FROM events "
+                + f"WHERE run_id IN ({placeholders}) AND kind='fill' AND (json_extract(payload,'$.trade_status') IS NULL "
+                + "OR json_extract(payload,'$.trade_id') IS NULL OR json_extract(payload,'$.order_id') IS NULL)" + period,
+                (*parameters, *parameters))
+            latest_fills = {}
+            for row in fill_rows:
+                fill = json.loads(row["payload"])
+                key = (fill.get("trade_id"), fill.get("order_id")) if fill.get("trade_id") and fill.get("order_id") \
+                    else (row["run_id"], row["id"])
+                revised = _trade_revision(latest_fills.get(key), fill)
+                if revised is not None:
+                    latest_fills[key] = revised
+            count, notional, fees, missing_notional, missing_fees = 0, 0.0, 0.0, 0, 0
+            for fill in latest_fills.values():
+                if fill.get("trade_status") == "FAILED":
+                    continue
+                count += 1
+                notional += fill.get("amount") or 0
+                fees += fill.get("fee") or 0
+                missing_notional += int(fill.get("amount") is None)
+                missing_fees += int(fill.get("fee") is None)
+            settled_rows = list(db.execute(f"SELECT d.run_id,d.market,d.pnl,d.last_time FROM market_details d "
+                + f"WHERE d.run_id IN ({placeholders}) AND d.status='已结算'", run_ids))
+            settlements = {(row["run_id"], row["market"]): dict(row) for row in db.execute(
+                f"SELECT * FROM settlement_details WHERE run_id IN ({placeholders})", run_ids)} \
+                if self._has_table(db, "settlement_details") else {}
+            settled_markets = {}
+            for row in settled_rows:
+                modern = settlements.get((row["run_id"], row["market"]))
+                if modern:
+                    at = modern["source_at"]
+                else:
+                    stamp = db.execute("SELECT MIN(json_extract(payload,'$.time')) FROM events WHERE run_id=? "
+                                       "AND kind='resolved' AND json_extract(payload,'$.market')=?",
+                                       (row["run_id"], row["market"])).fetchone()[0]
+                    at = stamp if stamp is not None else row["last_time"]
+                if start is None or start <= at <= now:
+                    key = modern.get("market_id") or row["market"] if modern else row["market"]
+                    prior = settled_markets.get(key)
+                    if key not in settled_markets or prior is None:
+                        settled_markets[key] = row["pnl"]
+            pnl_values = list(settled_markets.values())
+            pending_markets = {item.get("market_id") or item["market"] for item in settlements.values()
+                               if not item["verified"] and (start is None or start <= item["source_at"] <= now)}
+            pending_markets.difference_update(item.get("market_id") or item["market"]
+                                             for item in settlements.values() if item["verified"])
+            wins = sum(value is not None and value > 1e-9 for value in pnl_values)
+            losses = sum(value is not None and value < -1e-9 for value in pnl_values)
+            draws = sum(value is not None and abs(value) <= 1e-9 for value in pnl_values)
+            missing_pnl = sum(value is None for value in pnl_values)
+            stale, lag = False, 0
+            for run in runs:
+                try:
+                    pending = max(0, Path(run["path"]).stat().st_size - run["byte_offset"])
+                except OSError:
+                    pending = None
+                stale |= bool(run["source_error"] or run["invalid_records"] or pending is None or pending)
+                lag += pending or 0
+            return {"run_id": run_id, "mode": "live", "account_id": selected["account_id"], "range": range,
+                    "from": start, "to": now, "as_of": now, "run_count": len(runs),
+                    "fill_count": count, "fill_notional": None if missing_notional else notional,
+                    "known_fill_notional": notional, "fees": None if missing_fees else fees, "known_fees": fees,
+                    "missing_fee_count": missing_fees, "settled_markets": len(pnl_values),
+                    "settled_pnl": sum(pnl_values) if pnl_values and not missing_pnl else None,
+                    "settled_wins": wins, "settled_losses": losses, "settled_draws": draws,
+                    "settled_pnl_pending": missing_pnl, "win_rate": wins / (wins + losses) if wins + losses else None,
+                    "pending_settlements": len(pending_markets),
+                    "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
+                    "completeness": "incomplete" if stale else "caught_up", "lag_bytes": lag,
+                    "error": "statistics projection incomplete" if stale else None}
+
     def list_runs_page(self, *, before_id=None, limit=50):
         """Return a bounded, stable page of runs without reading journal files."""
         limit = max(1, min(int(limit), 200))
@@ -814,7 +1107,7 @@ class Ledger:
             runs = [dict(row) for row in rows[:limit]]
             return {"runs": runs, "next_before_id": runs[-1]["id"] if len(rows) > limit else None}
 
-    def events(self, run_id, *, before_id=None, limit=100):
+    def events(self, run_id, *, before_id=None, limit=100, kinds=None):
         limit = max(1, min(int(limit), 200))
         with self._connect() as db:
             self._run(db, run_id)
@@ -823,9 +1116,52 @@ class Ledger:
             if before_id is not None:
                 clause = " AND id < ?"
                 args.append(int(before_id))
+            if kinds is not None:
+                kinds = tuple(kinds)
+                if not kinds or any(kind not in EVENT_KINDS for kind in kinds):
+                    raise ValueError("invalid event kinds")
+                clause += f" AND kind IN ({','.join('?' for _ in kinds)})"
+                args.extend(kinds)
             args.append(limit + 1)
             rows = list(db.execute("SELECT id,byte_offset,payload FROM events WHERE run_id=? AND kind!='platform_status'"
                                    + clause + " ORDER BY id DESC LIMIT ?", args))
             items = [{"id": row["id"], "byte_offset": row["byte_offset"], **json.loads(row["payload"])} for row in rows[:limit]]
             return {"run_id": run_id, "events": items,
                     "next_before_id": items[-1]["id"] if len(rows) > limit else None}
+
+    def settlements_page(self, run_id, *, before_id=None, limit=100):
+        limit = max(1, min(int(limit), 200))
+        with self._connect() as db:
+            self._run(db, run_id)
+            if not self._has_table(db, "settlement_details"):
+                return {"run_id": run_id, "settlements": [], "next_before_id": None,
+                        "available": False, "error": "settlement projection unavailable"}
+            args = [run_id]
+            clause = ""
+            if before_id is not None:
+                clause = " AND rowid<?"
+                args.append(int(before_id))
+            args.append(limit + 1)
+            rows = list(db.execute("SELECT rowid AS id,payload FROM settlement_details WHERE run_id=?"
+                                   + clause + " ORDER BY rowid DESC LIMIT ?", args))
+            items = [{"id": row["id"], **json.loads(row["payload"])} for row in rows[:limit]]
+            return {"run_id": run_id, "settlements": items,
+                    "next_before_id": items[-1]["id"] if len(rows) > limit else None}
+
+    def metadata(self, run_id):
+        """Return projection freshness without ingesting or reading journal contents."""
+        with self._connect() as db:
+            run = self._run(db, run_id)
+            runtime = db.execute("SELECT source_at FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone() \
+                if self._has_table(db, "platform_runtime") else None
+            latest_event = db.execute("SELECT MAX(COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))) "
+                                      "FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
+        try:
+            pending = max(0, Path(run["path"]).stat().st_size - run["byte_offset"])
+        except OSError:
+            pending = None
+        as_of = runtime["source_at"] if runtime else latest_event
+        stale = bool(run["source_error"] or run["invalid_records"] or pending is None or pending or as_of is None)
+        return {"source": "ledger", "asOf": as_of,
+                "stale": stale, "error": "ledger_projection_incomplete" if stale else None,
+                "runId": run_id}
