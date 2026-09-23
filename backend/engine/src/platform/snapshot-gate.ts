@@ -1,4 +1,4 @@
-import type { MarketBookSnapshot, MarketAssetSnapshot } from "./contracts.js";
+import type { MarketBookSnapshot, RuntimeMarketAssetSnapshot } from "./contracts.js";
 
 export type SnapshotRejectReason =
   | "market_id_mismatch"
@@ -40,7 +40,7 @@ function validSourceAt(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function validAsset(asset: MarketAssetSnapshot | undefined, assetId: string, now: number): boolean {
+function validAsset(asset: RuntimeMarketAssetSnapshot | undefined, assetId: string, now: number): boolean {
   return !!asset && asset.assetId === assetId
     && validPrice(asset.bid) && validPrice(asset.ask) && asset.bid <= asset.ask
     && Number.isSafeInteger(asset.sequence) && asset.sequence! >= 0

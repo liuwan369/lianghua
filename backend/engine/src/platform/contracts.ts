@@ -41,7 +41,7 @@ export interface Book {
   asks?: PriceLevel[];
 }
 /** Paired market snapshot accepted by the trading runtime after feed gating. */
-export interface MarketAssetSnapshot {
+export interface RuntimeMarketAssetSnapshot {
   assetId: string;
   bid?: number;
   ask?: number;
@@ -59,8 +59,8 @@ export interface MarketBookSnapshot {
   sequence?: number;
   sourceAt?: number;
   expiresAt?: number;
-  YES?: MarketAssetSnapshot;
-  NO?: MarketAssetSnapshot;
+  YES?: RuntimeMarketAssetSnapshot;
+  NO?: RuntimeMarketAssetSnapshot;
   /** Feed receive/processing telemetry. These never replace sourceAt. */
   tsUnix: number;
   receivedAtUnix?: number;

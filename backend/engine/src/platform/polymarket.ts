@@ -67,10 +67,10 @@ export async function discoverBtcMarket(
   const market = modern ?? (!discovery.findFiveMinuteMarket
     ? await discovery.findMarket(at, false, directOnly, signal) : undefined);
   if (!market) return [];
-  const marketId = typeof (market as { marketId?: unknown }).marketId === "string"
-    ? (market as { marketId: string }).marketId
-    : typeof (market as { conditionId?: unknown }).conditionId === "string"
-      ? (market as { conditionId: string }).conditionId : "";
+  const discovered = market as unknown as { marketId?: unknown; conditionId?: unknown };
+  const marketId = typeof discovered.marketId === "string"
+    ? discovered.marketId
+    : typeof discovered.conditionId === "string" ? discovered.conditionId : "";
   if (!marketId) throw new Error("market discovery returned no condition id");
   const upToken = String(market.upToken);
   const downToken = String(market.downToken);
