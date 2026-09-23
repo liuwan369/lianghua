@@ -54,18 +54,22 @@ function binaryMarketSides(market: MarketInfo): { up: Instrument; down: Instrume
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
 export async function discoverBtcMarket(
   at = Date.now() / 1000,
-  directOnly = false,
+  _directOnly = false,
   signal?: AbortSignal,
 ): Promise<MarketInfo[]> {
   const discovery = marketDiscovery as DiscoveryModule;
-  const modern = discovery.findFiveMinuteMarket
-    ? await discovery.findFiveMinuteMarket("btc", { now: at, allowCollectorFallback: false, directOnly: true, signal })
-    : undefined;
-  // The legacy call is only a compatibility path for a pre-handoff checkout.
-  // Once the identity-aware discovery exists, an unavailable direct slug must
-  // stay unavailable instead of silently widening into collector/listing data.
-  const market = modern ?? (!discovery.findFiveMinuteMarket
-    ? await discovery.findMarket(at, false, directOnly, signal) : undefined);
+  // Trading runtime requires the identity-aware market-data handoff. Do not
+  // silently fall back to the old listing/collector discovery path: that path
+  // cannot provide the marketId/roundId contract required by execution gates.
+  if (typeof discovery.findFiveMinuteMarket !== "function") {
+    throw new Error("identity-aware market discovery unavailable; deploy with codex/market-data");
+  }
+  const market = await discovery.findFiveMinuteMarket("btc", {
+    now: at,
+    allowCollectorFallback: false,
+    directOnly: true,
+    signal,
+  });
   if (!market) return [];
   const discovered = market as unknown as { marketId?: unknown; conditionId?: unknown };
   const marketId = typeof discovered.marketId === "string"
