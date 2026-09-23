@@ -20,6 +20,7 @@ export class TradingCore {
   private preparationTail: Promise<void> = Promise.resolve();
   private fillByKey = new Map<string, TradeFill>();
   private fillIndexByKey = new Map<string, number>();
+  private fillOrderByTradeId = new Map<string, string>();
   private clock: () => number;
   private stopped = false;
   private recovering = false;
@@ -78,6 +79,10 @@ export class TradingCore {
     this.validateCashFlowTracking(this.state.cashFlowTracking);
     if (!options.restored) this.applyCashFlowEvidence(this.state, initial);
     this.state.fills.forEach((fill, index) => {
+      if (!fill.tradeId || !fill.orderId) throw new Error("invalid persisted fill identity");
+      const existingOrderId = this.fillOrderByTradeId.get(fill.tradeId);
+      if (existingOrderId && existingOrderId !== fill.orderId) throw new Error("duplicate persisted trade identity");
+      this.fillOrderByTradeId.set(fill.tradeId, fill.orderId);
       const key = this.fillKey(fill);
       this.fillByKey.set(key, fill);
       this.fillIndexByKey.set(key, index);
@@ -947,6 +952,11 @@ export class TradingCore {
     this.notify(order, true);
   }
   applyFill(fill: TradeFill): boolean {
+    if (!fill.tradeId || !fill.orderId) throw new Error("invalid trade identity");
+    const existingOrderId = this.fillOrderByTradeId.get(fill.tradeId);
+    if (existingOrderId && existingOrderId !== fill.orderId) {
+      throw new Error("trade identity collision requires reconciliation");
+    }
     const key = this.fillKey(fill);
     const previous = this.fillByKey.get(key);
     if (previous) return this.updateFill(previous, fill);
@@ -960,6 +970,7 @@ export class TradingCore {
       const saved = copy(fill), failedKey = this.fillKey(saved);
       this.fillIndexByKey.set(failedKey, this.state.fills.length);
       this.fillByKey.set(failedKey, saved);
+      this.fillOrderByTradeId.set(saved.tradeId, saved.orderId);
       this.state.fills.push(saved);
       this.notify(order, true); this.emit({ kind: "fill", fill: copy(fill) }); return true;
     }
@@ -1001,6 +1012,7 @@ export class TradingCore {
     const saved = copy(fill), savedKey = this.fillKey(saved);
     this.fillIndexByKey.set(savedKey, this.state.fills.length);
     this.fillByKey.set(savedKey, saved);
+    this.fillOrderByTradeId.set(saved.tradeId, saved.orderId);
     this.state.fills.push(saved);
     this.persist(true);
     // Inventory is authoritative in the event context before the strategy sees the fill.

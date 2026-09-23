@@ -90,6 +90,8 @@ const lifecycle = async () => {
   platform.ingest({ kind: "fill", fill });
   platform.ingest({ kind: "fill", fill });
   assert.equal(platform.portfolio.fills().length, 1, "duplicate trade event is ignored");
+  assert.throws(() => platform.ingest({ kind: "fill", fill: { ...fill, orderId: "foreign-order" } }),
+    /trade identity collision/, "one venue trade cannot be attached to two orders");
   assert.equal(platform.orders.get(order.orderId!)?.status, "FILLED");
   assert.equal(platform.orders.get(order.orderId!)?.reservedUsd, 0, "fill releases the working-order reserve");
   assert.equal(platform.risk.current().occupiedUsd, 0.7, "filled cost moves into position occupancy");

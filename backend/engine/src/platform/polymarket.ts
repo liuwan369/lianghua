@@ -12,7 +12,7 @@ import type { AccountSnapshot, CoreState, ExecutionTiming, GatewayAck, HardLimit
 import { normalizeVenueOrderStatus } from "./contracts.js";
 import { TradingPlatform } from "./platform.js";
 import { readCashFlowEvidence } from "./cash-flows.js";
-import { validateMarketSnapshot, type SnapshotGateIdentity, type SnapshotRejectReason, type SnapshotWatermark } from "./snapshot-gate.js";
+import { isSnapshotFreshAfter, validateMarketSnapshot, type SnapshotGateIdentity, type SnapshotRejectReason, type SnapshotWatermark } from "./snapshot-gate.js";
 
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row => typeof value === "object" && value !== null ? value as Row : {};
@@ -192,6 +192,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const feedQueue = new FeedQueue();
   const snapshotWatermarks = new Map<string, SnapshotWatermark>();
   const snapshotRejectNotice = new Map<string, SnapshotRejectReason>();
+  // A disconnect invalidates snapshots already waiting in the queue. The next
+  // accepted book must carry a receive timestamp at or after the status event.
+  const snapshotFreshAfter = new Map<string, number>();
   const snapshotStateKey = (market: MarketInfo): string => JSON.stringify([market.id, String(market.startsAt)]);
   let feedConsumerAlive = false;
   let feedConsumer: Promise<void> | undefined;
@@ -400,14 +403,25 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const acceptSnapshot = (market: MarketInfo, snapshot: MarketBookSnapshot): boolean => {
     const identity = marketIdentity(market);
     const key = snapshotStateKey(market);
+    const freshAfter = snapshotFreshAfter.get(key);
+    if (!isSnapshotFreshAfter(snapshot, freshAfter)) {
+      rejectSnapshot(market, "awaiting_fresh_snapshot");
+      return false;
+    }
     const result = validateMarketSnapshot(snapshot, identity, snapshotWatermarks.get(key), Date.now() / 1000,
       booksHealthy.get(market.id) === true && (bookHealth.get(market.id)?.() ?? false));
     if (!result.ok) {
       rejectSnapshot(market, result.reason);
       return false;
     }
-    snapshotWatermarks.set(key, result.watermark);
     snapshotRejectNotice.delete(key);
+    const accepted = platform.ingestSnapshot(snapshot, market.id, String(market.startsAt));
+    if (!accepted) {
+      rejectSnapshot(market, "incomplete_book");
+      return false;
+    }
+    snapshotWatermarks.set(key, result.watermark);
+    snapshotFreshAfter.delete(key);
     return true;
   };
   const consumeFeedEvent = (raw: FeedEvent): void => {
@@ -424,10 +438,27 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (!sides || eventMarketId !== market.id || eventRoundId !== String(market.startsAt)
         || (eventYesAssetId !== undefined && eventYesAssetId !== sides.up.tokenId)
         || (eventNoAssetId !== undefined && eventNoAssetId !== sides.down.tokenId)) return;
+      const key = snapshotStateKey(market);
+      if (!Number.isFinite(event.tsUnix) || event.tsUnix < 0) {
+        booksHealthy.set(market.id, false);
+        snapshotFreshAfter.set(key, Number.POSITIVE_INFINITY);
+        rejectSnapshot(market, "awaiting_fresh_snapshot");
+        return;
+      }
       booksHealthy.set(market.id, event.healthy);
-      if (event.healthy) snapshotRejectNotice.delete(snapshotStateKey(market));
-      else if (market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
-        code: "market_feed_unhealthy", message: `market_feed_unhealthy:${event.reason ?? "unknown"}` });
+      const previousFreshAfter = snapshotFreshAfter.get(key);
+      if (event.healthy) {
+        if (previousFreshAfter !== undefined && !Number.isFinite(previousFreshAfter)) {
+          snapshotFreshAfter.set(key, event.tsUnix);
+        }
+        snapshotRejectNotice.delete(key);
+      }
+      else {
+        snapshotFreshAfter.set(key, Number.isFinite(previousFreshAfter)
+          ? Math.max(previousFreshAfter!, event.tsUnix) : event.tsUnix);
+        if (market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
+          code: "market_feed_unhealthy", message: `market_feed_unhealthy:${event.reason ?? "unknown"}` });
+      }
       return;
     }
     if (event.kind === "userStatus") {
@@ -437,7 +468,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     if (event.kind === "book") {
       const snapshot = payload.snapshot as MarketBookSnapshot | undefined;
       if (!market || !snapshot || !acceptSnapshot(market, snapshot)) return;
-      platform.ingest({ kind: "book", snapshot, marketId: market.id, roundId: String(market.startsAt) });
       return;
     }
     if (!market && (event.kind === "tickSize" || event.kind === "user")) return;
@@ -872,6 +902,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     };
     pruneSnapshotState(snapshotWatermarks);
     pruneSnapshotState(snapshotRejectNotice);
+    pruneSnapshotState(snapshotFreshAfter);
     const account = platform.account.current();
     if (client && !stopped && !recoveryJob && (account.risk.reason?.includes("reconciliation")
       || account.orders.some(order => (order.status === "UNKNOWN" || order.reconciliationPending)

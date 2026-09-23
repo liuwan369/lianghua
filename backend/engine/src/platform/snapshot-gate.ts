@@ -9,6 +9,7 @@ export type SnapshotRejectReason =
   | "round_ended"
   | "book_unhealthy"
   | "incomplete_book"
+  | "awaiting_fresh_snapshot"
   | "invalid_yes_quote"
   | "invalid_no_quote"
   | "source_at_regression";
@@ -31,6 +32,13 @@ export interface SnapshotWatermark {
 export type SnapshotGateResult =
   | { ok: true; watermark: SnapshotWatermark }
   | { ok: false; reason: SnapshotRejectReason };
+
+/** A reconnect cannot reuse a frame received before the disconnect status. */
+export function isSnapshotFreshAfter(snapshot: MarketBookSnapshot, disconnectedAt: number | undefined): boolean {
+  return disconnectedAt === undefined
+    || (typeof snapshot.receivedAtUnix === "number" && Number.isFinite(snapshot.receivedAtUnix)
+      && snapshot.receivedAtUnix >= disconnectedAt);
+}
 
 function validPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;

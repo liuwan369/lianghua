@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { validateMarketSnapshot, type SnapshotGateIdentity, type SnapshotGateResult } from "./snapshot-gate.js";
+import { isSnapshotFreshAfter, validateMarketSnapshot, type SnapshotGateIdentity, type SnapshotGateResult } from "./snapshot-gate.js";
 import type { MarketBookSnapshot } from "./contracts.js";
 
 const identity: SnapshotGateIdentity = {
@@ -44,6 +44,12 @@ assert.equal(rejectReason(validateMarketSnapshot(snapshot({ YES: { assetId: "yes
   sourceAt: 1001, expiresAt: 1100, sequence: 1 } }), identity, undefined, 1002, true)),
   "invalid_yes_quote");
 assert.equal(rejectReason(validateMarketSnapshot(snapshot(), identity, undefined, 1002, false)), "book_unhealthy");
+assert.equal(isSnapshotFreshAfter(snapshot({ receivedAtUnix: 999 }), 1000), false,
+  "a frame received before disconnect cannot resume execution");
+assert.equal(isSnapshotFreshAfter(snapshot({ receivedAtUnix: 1000 }), 1000), true,
+  "a frame received after disconnect status can rebuild the pair");
+assert.equal(isSnapshotFreshAfter(snapshot(), 1000), false,
+  "a reconnect frame without receive evidence is not trusted");
 assert.equal(validateMarketSnapshot(snapshot({ roundId: "1300" }),
   { ...identity, roundId: "1300", endsAt: 1600 }, undefined, 1002, true).ok, true,
   "the next round has an independent identity and watermark");
