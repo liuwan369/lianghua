@@ -57,6 +57,16 @@
   const createResource = () => ({ data: null, error: null, receivedAt: 0, loading: false, stale: false });
   const format = {
     clock(value = Date.now()) { return new Date(value).toLocaleTimeString("zh-CN", { hour12: false }); },
+    timestamp(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const number = Number(value);
+      const date = Number.isFinite(number) ? new Date(Math.abs(number) < 1e12 ? number * 1000 : number) : new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date;
+    },
+    time(value, fallback = "--:--:--") {
+      const date = this.timestamp(value);
+      return date ? date.toLocaleTimeString("zh-CN", { hour12: false }) : fallback;
+    },
     money(value) { return Number.isFinite(value) ? `$${value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toFixed(0)}` : "--"; },
     escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); }
   };
@@ -68,6 +78,7 @@
     marketPool: (options) => request("/api/runtime/market-pool", options),
     runtimeStatus: () => request("/api/runtime/status"),
     runtimeCommand: (payload) => request("/api/runtime/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+    legacyRuntimeCommand: (payload) => request("/api/trading/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyConfig: () => request("/api/strategy/config"),
     strategyDraft: (payload) => request("/api/strategy/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     legacyStrategySave: (payload) => request("/api/strategy-config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
@@ -78,13 +89,15 @@
     cancelOrder: (orderId) => request(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" }),
     flatten: () => request("/api/runtime/flatten", { method: "POST" }),
     accountSnapshot: () => request("/api/account/snapshot"),
-    accountCheck: (payload) => request("/api/account/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+    accountStatus: () => request("/api/account/status"),
+    accountCheck: (payload = {}) => request("/api/account/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     diagnostics: () => request("/api/diagnostics/health"),
     metrics: (range = "today") => request(`/api/metrics/summary?range=${encodeURIComponent(range)}`),
     events: (cursor = "") => request(`/api/events${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
     legacyStatus: () => request("/api/v1/status"),
     legacyMarkets: () => request("/api/v1/markets"),
     legacyAccount: () => request("/api/account/status"),
+    legacyAccountSnapshot: () => request("/api/v1/account-data"),
     legacyRuns: () => request("/api/v1/runs?limit=50"),
     legacyEvents: (runId) => request(`/api/v1/events?run_id=${encodeURIComponent(runId)}&limit=50`),
     legacySummary: (runId) => request(`/api/v1/summary?run_id=${encodeURIComponent(runId)}`),
@@ -92,9 +105,9 @@
     legacyStrategyConfig: () => request("/api/strategy-config")
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  const config = { apiBase: "", mode: "local-preview", apiFlavor: "contract", demo: true, marketCycle: "5m", strategyId: "reversal", ...runtimeConfig };
+  const config = { apiBase: "", mode: "local-preview", apiFlavor: "contract", demo: true, marketCycle: "5m", strategyId: "btc-reversal", streams: {}, ...runtimeConfig };
   window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, on, emit });
   window.addEventListener("storage", (event) => {
-    if (event.key) emit(`storage:${event.key}`, storage.read(event.key, null));
+    if (config.mode === "local-preview" && event.key) emit(`storage:${event.key}`, storage.read(event.key, null));
   });
 })();

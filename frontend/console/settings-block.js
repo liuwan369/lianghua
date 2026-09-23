@@ -94,7 +94,7 @@
   document.querySelectorAll("[data-settings-tab]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.settingsTab)));
 
   const renderDiagnostics = (resource) => {
-    const stamp = resource?.data?.asOf ? new Date(resource.data.asOf * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "--:--:--";
+    const stamp = resource?.data?.asOf ? window.PolyPreview.format.time(resource.data.asOf) : "--:--:--";
     const ready = resource?.status === "ready";
     text("[data-diagnostic-state]", ready ? "已连接 · 只读" : resource?.status === "stale" ? "连接中断 · 保留上次数据" : "设计稿 · 数据待接入");
     text("[data-diagnostic-time]", `最后检查 ${stamp}`);
@@ -105,13 +105,24 @@
     text("[data-connection-value=\"trade\"]", ready ? "已读取" : resource?.status === "stale" ? "保留上次数据" : "未检查");
   };
   store.subscribe("diagnostics", renderDiagnostics);
+  const renderAccount = (resource) => {
+    const data = resource?.data || {};
+    const configured = data.execution_credentials_ready || data.wallet_configured || data.configured;
+    const state = resource?.status === "ready" ? (configured ? "已配置" : "只读") : resource?.status === "stale" ? "连接中断" : "未接入";
+    text("[data-header-account]", state);
+    text("[data-connection-value=\"account\"]", state);
+    text("[data-connection-detail=\"account\"]", resource?.status === "ready" ? (configured ? "服务器账户可读取" : "仅账户状态可读取") : resource?.error || "等待服务器账户状态");
+    const chip = document.querySelector('[data-settings-pane="account"] .warning-chip b');
+    if (chip) chip.textContent = state;
+  };
+  store.subscribe("account", renderAccount);
 
   document.querySelector("[data-refresh-diagnostics]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     button.classList.add("is-loading");
     text("[data-diagnostic-state]", "正在检查 · 只读");
-    try { await adapter.loadDiagnostics(); await adapter.loadAccount(); }
+    try { await adapter.loadDiagnostics(); await adapter.loadAccountStatus(); await adapter.loadAccount(); }
     catch (error) { text("[data-diagnostic-state]", error.message || "诊断读取失败"); }
     finally { button.disabled = false; button.classList.remove("is-loading"); }
   });
@@ -121,13 +132,16 @@
     button.disabled = true;
     text("[data-account-message]", "正在读取服务器账户状态…");
     try {
+      const check = await adapter.checkAccount();
+      await adapter.loadAccountStatus();
       const result = await adapter.loadAccount();
-      text("[data-account-message]", result.status === "ready" ? `账户状态已更新 · ${now()}` : "设计稿演示：账户接口尚未连接");
+      text("[data-account-message]", result.status === "ready" && check?.ok !== false ? `账户检查完成 · ${now()}` : result.error || check?.message || "账户检查未完成");
     } catch (error) { text("[data-account-message]", error.message || "账户状态读取失败"); }
     finally { button.disabled = false; }
   });
   if (window.PolyPreview.config.mode !== "local-preview") {
     void adapter.loadDiagnostics();
+    void adapter.loadAccountStatus();
     void adapter.loadAccount();
   }
 })();
