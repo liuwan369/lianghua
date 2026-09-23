@@ -106,4 +106,3 @@ receipt and includes `requestId`; the runtime stream is authoritative for
 - `codex/trading-runtime` must still wire the snapshot gate to the strategy and gateway. Market data tests do not prove strategy or order correctness.
 - This work has not placed a real order and does not verify fills, cancellation, reconciliation, settlement, or ledger projection.
 - Polymarket event formats, venue clocks, Gamma availability, or server network conditions can change. The read-only probe must remain part of deployment verification.
-
