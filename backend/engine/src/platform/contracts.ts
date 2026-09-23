@@ -40,6 +40,58 @@ export interface Book {
   bids?: PriceLevel[];
   asks?: PriceLevel[];
 }
+/** Paired market snapshot accepted by the trading runtime after feed gating. */
+export interface MarketAssetSnapshot {
+  assetId: string;
+  bid?: number;
+  ask?: number;
+  bidSize?: number;
+  askSize?: number;
+  bids?: PriceLevel[];
+  asks?: PriceLevel[];
+  sourceAt?: number;
+  expiresAt?: number;
+  sequence?: number;
+}
+export interface MarketBookSnapshot {
+  marketId?: string;
+  roundId?: string;
+  sequence?: number;
+  sourceAt?: number;
+  expiresAt?: number;
+  YES?: MarketAssetSnapshot;
+  NO?: MarketAssetSnapshot;
+  /** Feed receive/processing telemetry. These never replace sourceAt. */
+  tsUnix: number;
+  receivedAtUnix?: number;
+  receivedAtMonoMs?: number;
+  processedAtMonoMs?: number;
+  marketAgeMs?: number;
+  source?: "polymarket-ws" | "clob-rest" | "collector-rest";
+  /** Legacy fields remain readable by old observers only. */
+  upExchangeTsUnix?: number;
+  downExchangeTsUnix?: number;
+  upReceivedAtUnix?: number;
+  downReceivedAtUnix?: number;
+  upReceivedAtMonoMs?: number;
+  downReceivedAtMonoMs?: number;
+  upProcessedAtMonoMs?: number;
+  downProcessedAtMonoMs?: number;
+  upMarketAgeMs?: number;
+  downMarketAgeMs?: number;
+  upBid?: number;
+  upAsk?: number;
+  downBid?: number;
+  downAsk?: number;
+  upBidSz?: number;
+  upAskSz?: number;
+  downBidSz?: number;
+  downAskSz?: number;
+  upBidLevels?: PriceLevel[];
+  upAskLevels?: PriceLevel[];
+  downBidLevels?: PriceLevel[];
+  downAskLevels?: PriceLevel[];
+}
 export interface OrderRequest {
   clientOrderId: string;
   strategyId: string;
@@ -294,7 +346,8 @@ export interface PlatformAdapters {
 }
 export type TradingEvent =
   | { kind: "market"; market: MarketInfo }
-  | { kind: "book"; book: Book }
+  | { kind: "book"; book: Book; snapshot?: undefined }
+  | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; book?: undefined }
   | { kind: "reference"; symbol: string; price: number; ts: number }
   | { kind: "fill"; fill: TradeFill }
   | { kind: "order"; order: OrderRecord }

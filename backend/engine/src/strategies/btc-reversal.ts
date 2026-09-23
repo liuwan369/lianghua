@@ -1,4 +1,4 @@
-import type { Book, Instrument, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
+import type { Instrument, MarketBookSnapshot, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
   StrategyContext, StrategyPlugin, TradingEvent } from "../platform/contracts.js";
 
 export type ReversalDirection = "UP" | "DOWN";
@@ -42,6 +42,8 @@ interface QuoteReference {
 }
 export interface ReversalRound {
   marketId: string;
+  /** Five-minute Unix start identity carried by paired market snapshots. */
+  roundId?: string;
   name: string;
   startsAt: number;
   endsAt: number;
@@ -219,7 +221,13 @@ export class BtcReversalStrategy implements StrategyPlugin {
         this.createdStages.delete(stage.clientOrderId); changed = true;
       }
     }
-    if (event.kind === "error" && (event.message === "market_feed_disconnected" || event.message === "account_recovery_started")) {
+    const quoteGateBlocked = event.kind === "error" && (event.code === "market_feed_unhealthy" || event.code === "feed_processing_failed"
+      || event.code === "market_snapshot_rejected"
+      || event.message === "market_feed_disconnected"
+      || event.message === "market_feed_unhealthy"
+      || event.message.startsWith("market_feed_unhealthy:")
+      || event.message === "account_recovery_started");
+    if (quoteGateBlocked) {
       this.resetQuoteReference(event.marketId);
     }
     if (event.kind === "stopped") this.resetQuoteReference();
@@ -259,17 +267,27 @@ export class BtcReversalStrategy implements StrategyPlugin {
         this.invalidateReference(round);
         continue;
       }
-      for (const stage of round.stages) {
-        if (!this.replayIntents.delete(stage.clientOrderId) || stage.status !== "CREATED") continue;
-        actions.push({ kind: "submit", order: this.orderIntent(stage, round.config) });
-      }
-      const pair = this.pair(round, context);
+      // Only a gated paired book can update the reversal reference. Latency,
+      // order, fill, timer and other lifecycle events must not look like a
+      // missing quote and erase a baseline that was just accepted.
+      if (event.kind !== "book") continue;
+      const snapshot = event.snapshot;
+      if (!snapshot || snapshot.marketId !== round.marketId
+        || snapshot.roundId !== (round.roundId ?? String(round.startsAt))) continue;
+      const snapshotForRound = snapshot;
+      const pair = this.pairFromSnapshot(round, snapshotForRound, context.now);
       if (!pair) {
         if (round.reference) this.invalidateReference(round);
         round.reason = "等待新鲜双边行情";
         continue;
       }
-      if (event.kind !== "book" || ![round.upTokenId, round.downTokenId].includes(event.book.tokenId)) continue;
+      // A restored CREATED intent is also held until this round has supplied
+      // a fresh, identity-matched paired snapshot. Account/order events and
+      // another round's book can never replay it into the venue.
+      if (!quoteGateBlocked) for (const stage of round.stages) {
+        if (!this.replayIntents.delete(stage.clientOrderId) || stage.status !== "CREATED") continue;
+        actions.push({ kind: "submit", order: this.orderIntent(stage, round.config) });
+      }
       const previous = round.reference;
       if (previous && pair.upTs === previous.upTs && pair.downTs === previous.downTs
         && pair.upAsk === previous.upAsk && pair.downAsk === previous.downAsk) continue;
@@ -385,7 +403,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const instruments = this.marketInstruments(market);
       if (!instruments) continue;
       const eligible = context.now <= market.startsAt;
-      const round: ReversalRound = { marketId: market.id, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
+      const round: ReversalRound = { marketId: market.id, roundId: String(market.startsAt), name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
         upTokenId: instruments.UP.tokenId, downTokenId: instruments.DOWN.tokenId, config: clone(this.state.config),
         status: eligible ? "waiting_start" : "waiting_next_round", firstSampleSeen: false, rebuildingReference: false,
         pendingAmbiguity: false, confirmationCount: 0, stages: [], reason: eligible ? "等待本场开始" : "中途启动，等待下一场" };
@@ -406,37 +424,19 @@ export class BtcReversalStrategy implements StrategyPlugin {
     return { UP: up, DOWN: down };
   }
 
-  private pair(round: ReversalRound, context: StrategyContext): QuoteReference | undefined {
-    const up = context.books.find(book => book.tokenId === round.upTokenId);
-    const down = context.books.find(book => book.tokenId === round.downTokenId);
-    if (!up || !down || !this.fresh(up, context.now, round) || !this.fresh(down, context.now, round)) return undefined;
-    const upTs = up.exchangeTs ?? up.ts, downTs = down.exchangeTs ?? down.ts;
+  private pairFromSnapshot(round: ReversalRound, snapshot: MarketBookSnapshot, now: number): QuoteReference | undefined {
+    if (snapshot.marketId !== round.marketId || snapshot.roundId !== (round.roundId ?? String(round.startsAt))
+      || snapshot.expiresAt == null || snapshot.expiresAt <= now
+      || snapshot.marketAgeMs != null && snapshot.marketAgeMs > round.config.maxQuoteAgeSeconds * 1000) return undefined;
+    const yes = snapshot.YES, no = snapshot.NO;
+    if (!yes || !no || yes.assetId !== round.upTokenId || no.assetId !== round.downTokenId
+      || !positive(yes.ask) || yes.ask >= 1 || !positive(no.ask) || no.ask >= 1
+      || yes.sourceAt == null || no.sourceAt == null) return undefined;
+    const upTs = yes.sourceAt, downTs = no.sourceAt;
     if (Math.abs(upTs - downTs) > round.config.maxQuoteSkewSeconds) return undefined;
     if (round.reference && (upTs < round.reference.upTs || downTs < round.reference.downTs)) return undefined;
     if (round.referenceFloor && (upTs <= round.referenceFloor.upTs || downTs <= round.referenceFloor.downTs)) return undefined;
-    return { upAsk: up.ask!, downAsk: down.ask!, upTs, downTs };
-  }
-
-  private fresh(book: Book, now: number, round: ReversalRound): boolean {
-    const sourceTs = book.exchangeTs ?? book.ts;
-    const received = book.receivedAt ?? book.ts;
-    // `exchangeTs` is an ordering timestamp from the venue. It is not a
-    // reliable wall clock for the local process: an event can spend time in
-    // the WebSocket/event-loop queue, and the venue clock can have an offset.
-    // Use the feed's measured source age for venue freshness and the local
-    // receive timestamp for queue/process freshness. Comparing `now` directly
-    // with `exchangeTs` made fresh quotes look several seconds old.
-    const sourceAge = book.sourceAgeMs == null ? undefined : book.sourceAgeMs / 1000;
-    const derivedSourceAge = sourceAge == null && book.exchangeTs != null
-      ? received - book.exchangeTs : sourceAge;
-    const receiveAge = now - received;
-    return positive(book.ask) && book.ask < 1 && Number.isFinite(sourceTs) && Number.isFinite(received)
-      && (derivedSourceAge == null || (derivedSourceAge >= -round.config.maxQuoteSkewSeconds
-        && derivedSourceAge <= round.config.maxQuoteAgeSeconds))
-      && sourceTs >= round.startsAt && received >= round.startsAt
-      && received <= now + round.config.maxQuoteSkewSeconds
-      && receiveAge >= -round.config.maxQuoteSkewSeconds
-      && receiveAge <= round.config.maxQuoteAgeSeconds;
+    return { upAsk: yes.ask, downAsk: no.ask, upTs, downTs };
   }
 
   private uniqueDirection(up: boolean, down: boolean): ReversalDirection | undefined {
@@ -491,9 +491,11 @@ export class BtcReversalStrategy implements StrategyPlugin {
     if (state.instanceId !== state.config.instanceId) throw new Error("invalid reversal state identity");
     const markets = new Set<string>(), clients = new Set<string>();
     for (const round of state.rounds) {
+      round.roundId ??= String(round.startsAt);
       round.config = normalizeBtcReversalConfig(round.config);
       if (!round.marketId || markets.has(round.marketId) || round.config.instanceId !== state.instanceId
         || !Number.isFinite(round.startsAt) || round.endsAt - round.startsAt !== 300
+        || round.roundId !== String(round.startsAt)
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
         || !Array.isArray(round.stages) || round.stages.length > round.config.maxStages
         || !Number.isSafeInteger(round.confirmationCount) || round.confirmationCount < 0

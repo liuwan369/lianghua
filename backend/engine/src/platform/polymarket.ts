@@ -1,17 +1,18 @@
 import { ClobWrapper, geocheck } from "../live/clob/client.js";
 import { connectAccountReader } from "../live/account-data.js";
-import { findMarket } from "../live/discovery.js";
+import * as marketDiscovery from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import { parseAuthenticatedTrade, runUserFeed, type UserFeedControl } from "../live/feeds/user.js";
 import { runBtcFeed } from "../live/feeds/btc.js";
-import type { FeedEvent } from "../live/feeds/index.js";
+import { FeedQueue, type FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
-import type { AccountSnapshot, Book, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketInfo,
+import type { AccountSnapshot, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketBookSnapshot, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
 import { normalizeVenueOrderStatus } from "./contracts.js";
 import { TradingPlatform } from "./platform.js";
 import { readCashFlowEvidence } from "./cash-flows.js";
+import { validateMarketSnapshot, type SnapshotGateIdentity, type SnapshotRejectReason, type SnapshotWatermark } from "./snapshot-gate.js";
 
 type Row = Record<string, unknown>;
 const row = (value: unknown): Row => typeof value === "object" && value !== null ? value as Row : {};
@@ -19,15 +20,63 @@ const numeric = (value: unknown): number => value === null || value === undefine
 const UNKNOWN_ABANDON_AFTER_SEC = 5 * 60;
 const UNKNOWN_ACCOUNT_MAX_AGE_SEC = 2 * 60;
 
+type FiveMinuteDiscovery = {
+  asset?: string;
+  marketId?: string;
+  conditionId?: string;
+  roundId?: string;
+  upToken: string;
+  downToken: string;
+  start: number;
+  end: number;
+  slug?: string;
+};
+type DiscoveryModule = typeof marketDiscovery & {
+  findFiveMinuteMarket?: (asset: string, options: { now: number; allowCollectorFallback: boolean; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
+};
+type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string };
+type RuntimeFeedStarter = (
+  sink: (event: FeedEvent) => void,
+  upToken: string,
+  downToken: string,
+  deadline: number,
+  identity?: { marketId: string; roundId: string },
+) => { stop: () => void; isHealthy?: (maxStaleMs?: number) => boolean };
+const startPolymarketFeed = runPolymarketFeed as unknown as RuntimeFeedStarter;
+
+function binaryMarketSides(market: MarketInfo): { up: Instrument; down: Instrument } | undefined {
+  const up = market.instruments.find(item => item.outcome.toUpperCase() === "UP");
+  const down = market.instruments.find(item => item.outcome.toUpperCase() === "DOWN");
+  if (!up || !down || up.tokenId === down.tokenId || up.marketId !== market.id || down.marketId !== market.id) return undefined;
+  return { up, down };
+}
+
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
 export async function discoverBtcMarket(
   at = Date.now() / 1000,
   directOnly = false,
   signal?: AbortSignal,
 ): Promise<MarketInfo[]> {
-  const market = await findMarket(at, false, directOnly, signal);
+  const discovery = marketDiscovery as DiscoveryModule;
+  const modern = discovery.findFiveMinuteMarket
+    ? await discovery.findFiveMinuteMarket("btc", { now: at, allowCollectorFallback: false, directOnly: true, signal })
+    : undefined;
+  // The legacy call is only a compatibility path for a pre-handoff checkout.
+  // Once the identity-aware discovery exists, an unavailable direct slug must
+  // stay unavailable instead of silently widening into collector/listing data.
+  const market = modern ?? (!discovery.findFiveMinuteMarket
+    ? await discovery.findMarket(at, false, directOnly, signal) : undefined);
   if (!market) return [];
-  const instruments = await Promise.all([[market.upToken, "UP"], [market.downToken, "DOWN"]].map(async ([tokenId, outcome]) => {
+  const marketId = typeof (market as { marketId?: unknown }).marketId === "string"
+    ? (market as { marketId: string }).marketId
+    : typeof (market as { conditionId?: unknown }).conditionId === "string"
+      ? (market as { conditionId: string }).conditionId : "";
+  if (!marketId) throw new Error("market discovery returned no condition id");
+  const upToken = String(market.upToken);
+  const downToken = String(market.downToken);
+  const start = Number(market.start);
+  const end = Number(market.end);
+  const instruments = await Promise.all([[upToken, "UP"], [downToken, "DOWN"]].map(async ([tokenId, outcome]) => {
     const timeout = AbortSignal.timeout(8000);
     const response = await fetch(`https://clob.polymarket.com/book?token_id=${encodeURIComponent(tokenId)}`,
       { signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
@@ -35,9 +84,9 @@ export async function discoverBtcMarket(
     const book = row(await response.json());
     const tickSize = numeric(book.tick_size), minOrderSize = numeric(book.min_order_size);
     if (!(tickSize > 0 && tickSize < 1 && minOrderSize > 0)) throw new Error("invalid venue instrument rules");
-    return { tokenId, outcome, marketId: market.conditionId, tickSize, minOrderSize };
+    return { tokenId, outcome, marketId, tickSize, minOrderSize };
   }));
-  return [{ id: market.conditionId, name: market.slug, startsAt: market.start, endsAt: market.end, instruments }];
+  return [{ id: marketId, name: String(market.slug ?? `btc-updown-5m-${start}`), startsAt: start, endsAt: end, instruments }];
 }
 
 export function accountSnapshot(raw: unknown): AccountSnapshot {
@@ -120,7 +169,7 @@ export interface ConnectOptions {
 
 export async function connectPolymarketPlatform(options: ConnectOptions) {
   if (options.mode !== "live") throw new Error("the platform connector only supports live execution");
-  if (!options.markets.length || options.markets.some(m => m.instruments.length !== 2)) {
+  if (!options.markets.length || options.markets.some(m => m.instruments.length !== 2 || !binaryMarketSides(m))) {
     throw new Error("the current Polymarket feed adapter requires explicit binary markets");
   }
   let platform!: TradingPlatform;
@@ -140,6 +189,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const usersByMarket = new Map<string, UserFeedControl>();
   const connectedMarkets = new Set<string>();
   const registered = new Map<string, Set<string>>();
+  const feedQueue = new FeedQueue();
+  const snapshotWatermarks = new Map<string, SnapshotWatermark>();
+  const snapshotRejectNotice = new Map<string, SnapshotRejectReason>();
+  const snapshotStateKey = (market: MarketInfo): string => JSON.stringify([market.id, String(market.startsAt)]);
+  let feedConsumerAlive = false;
+  let feedConsumer: Promise<void> | undefined;
   let started = false;
   let stopped = false;
   let acceptUserEvents = true;
@@ -323,88 +378,134 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     user?.registerOrder(event.order.orderId, freshTrades);
   });
 
-  const sink = (market: MarketInfo) => (event: FeedEvent) => {
-    try {
-      if (event.kind === "bookStatus") {
-        booksHealthy.set(market.id, event.healthy);
-        if (!event.healthy && event.connected !== true && market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error",
-          strategyId: "btc-reversal", marketId: market.id, code: "market_feed_disconnected", message: "market_feed_disconnected" });
-        return;
-      }
-      if (event.kind === "userStatus") {
-        userHealthy.set(market.id, event.healthy);
-        return;
-      }
-      if (event.kind === "book") {
-        const b = event.snapshot;
-        const values: Book[] = [
-          { tokenId: market.instruments[0].tokenId, ts: b.upExchangeTsUnix ?? b.tsUnix, exchangeTs: b.upExchangeTsUnix,
-            receivedAt: b.upReceivedAtUnix ?? b.receivedAtUnix, receivedAtMonoMs: b.upReceivedAtMonoMs ?? b.receivedAtMonoMs,
-            processedAtMonoMs: b.upProcessedAtMonoMs ?? b.processedAtMonoMs,
-            processingLatencyMs: (b.upReceivedAtMonoMs ?? b.receivedAtMonoMs) != null && (b.upProcessedAtMonoMs ?? b.processedAtMonoMs) != null
-              ? (b.upProcessedAtMonoMs ?? b.processedAtMonoMs)! - (b.upReceivedAtMonoMs ?? b.receivedAtMonoMs)! : undefined,
-            sourceAgeMs: b.upMarketAgeMs ?? b.marketAgeMs, source: b.source, bid: b.upBid, ask: b.upAsk, bidSize: b.upBidSz, askSize: b.upAskSz,
-            bids: b.upBidLevels, asks: b.upAskLevels },
-          { tokenId: market.instruments[1].tokenId, ts: b.downExchangeTsUnix ?? b.tsUnix, exchangeTs: b.downExchangeTsUnix,
-            receivedAt: b.downReceivedAtUnix ?? b.receivedAtUnix, receivedAtMonoMs: b.downReceivedAtMonoMs ?? b.receivedAtMonoMs,
-            processedAtMonoMs: b.downProcessedAtMonoMs ?? b.processedAtMonoMs,
-            processingLatencyMs: (b.downReceivedAtMonoMs ?? b.receivedAtMonoMs) != null && (b.downProcessedAtMonoMs ?? b.processedAtMonoMs) != null
-              ? (b.downProcessedAtMonoMs ?? b.processedAtMonoMs)! - (b.downReceivedAtMonoMs ?? b.receivedAtMonoMs)! : undefined,
-            sourceAgeMs: b.downMarketAgeMs ?? b.marketAgeMs, source: b.source, bid: b.downBid, ask: b.downAsk, bidSize: b.downBidSz, askSize: b.downAskSz,
-            bids: b.downBidLevels, asks: b.downAskLevels },
-        ];
-        platform.ingestBooks(values);
-      } else if (event.kind === "tickSize") {
-        const instrument = platform.core.instrument(event.token);
-        if (instrument) {
-          market.instruments = market.instruments.map(i => i.tokenId === event.token ? { ...i, tickSize: event.tickSize } : i);
-          platform.ingest({ kind: "market", market }); client?.updateTickSize(event.token, event.tickSize);
-        }
-      } else if (event.kind === "marketTrade") {
-        // Public market trades are telemetry only. Live fills arrive from the
-        // authenticated user stream and are applied after ownership checks.
-      } else if (event.kind === "btc" || event.kind === "oracle") {
-        platform.ingest({ kind: "reference", symbol: event.kind === "btc" ? "BTC" : "BTC_ORACLE", price: event.price, ts: event.tsUnix });
-      } else if (event.kind === "user") {
-        if (!acceptUserEvents) return;
-        const userEvent = event.event;
-        if (userEvent.kind === "orderCancelled") {
-          if (platform.orders.get(userEvent.orderId)) {
-            platform.core.observeVenueStatus(userEvent.orderId, "canceled", {
-              source: "user_ws", observedAt: userEvent.receivedAtUnix,
-            });
-            platform.core.confirmCancelled(userEvent.orderId, false, "user_ws", userEvent.receivedAtUnix);
-            allowRecoveryAfterEvidence(userEvent.orderId);
-          }
-        } else {
-          if (!userEvent.orderId || !userEvent.tradeId || !userEvent.tokenId || !userEvent.direction) {
-            throw new Error("account trade requires order ownership reconciliation");
-          }
-          // Maker trade rows can include another service's order from the
-          // same wallet. Do not take the authenticated feed offline for an
-          // order this runtime does not own; only owned orders enter the
-          // execution ledger.
-          if (!platform.orders.get(userEvent.orderId)) return;
-          const f = userEvent.fill;
-          if (userEvent.reportLatencyMs != null) platform.ingest({ kind: "latency", metric: "authenticated_trade_report",
-            durationMs: userEvent.reportLatencyMs, ts: Date.now() / 1000, marketId: market.id,
-            tokenId: userEvent.tokenId, orderId: userEvent.orderId });
-          const feeRule = client?.feeRule(userEvent.tokenId);
-          platform.ingest({ kind: "fill", fill: { tradeId: userEvent.tradeId, orderId: userEvent.orderId,
-            tokenId: userEvent.tokenId, direction: userEvent.direction, price: f.price, shares: f.shares,
-            feeUsd: f.isMaker ? 0 : f.feeUsd ?? Math.round(polymarketFillFee(f.shares, f.price, false,
-              feeRule?.rate ?? (f.feeRateBps != null ? f.feeRateBps / 10_000 : 0.07), 0, feeRule?.exponent ?? 1) * 100_000) / 100_000,
-            status: f.status, feeSource: f.isMaker || f.feeUsd != null ? "reported" : feeRule || f.feeRateBps != null ? "rate-derived" : "estimate",
-             ts: f.tsUnix, isMaker: f.isMaker } });
-          const order = platform.orders.get(userEvent.orderId);
-          if (order?.status === "FILLED") allowRecoveryAfterEvidence(userEvent.orderId);
-        }
-      }
-    } catch (error) {
-      userHealthy.set(market.id, false);
-      platform.ingest({ kind: "error", code: "feed_processing_failed",
-        message: error instanceof Error ? error.message : "feed processing failed" });
+  const marketIdentity = (market: MarketInfo): SnapshotGateIdentity => {
+    const sides = binaryMarketSides(market);
+    if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
+    return { marketId: market.id, roundId: String(market.startsAt), endsAt: market.endsAt,
+      yesAssetId: sides.up.tokenId, noAssetId: sides.down.tokenId };
+  };
+  const routeMarket = (event: RoutedFeedEvent): MarketInfo | undefined => {
+    const payload = event as unknown as Record<string, unknown>;
+    const snapshot = event.kind === "book" ? payload.snapshot as MarketBookSnapshot | undefined : undefined;
+    const eventMarketId = typeof payload.marketId === "string" ? payload.marketId : snapshot?.marketId;
+    return options.markets.find(market => market.id === (eventMarketId ?? event.__runtimeMarketId));
+  };
+  const rejectSnapshot = (market: MarketInfo, reason: SnapshotRejectReason): void => {
+    const key = snapshotStateKey(market);
+    if (snapshotRejectNotice.get(key) === reason) return;
+    snapshotRejectNotice.set(key, reason);
+    platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id, code: "market_snapshot_rejected",
+      message: `market_snapshot_rejected:${reason}` });
+  };
+  const acceptSnapshot = (market: MarketInfo, snapshot: MarketBookSnapshot): boolean => {
+    const identity = marketIdentity(market);
+    const key = snapshotStateKey(market);
+    const result = validateMarketSnapshot(snapshot, identity, snapshotWatermarks.get(key), Date.now() / 1000,
+      booksHealthy.get(market.id) === true && (bookHealth.get(market.id)?.() ?? false));
+    if (!result.ok) {
+      rejectSnapshot(market, result.reason);
+      return false;
     }
+    snapshotWatermarks.set(key, result.watermark);
+    snapshotRejectNotice.delete(key);
+    return true;
+  };
+  const consumeFeedEvent = (raw: FeedEvent): void => {
+    const event = raw as RoutedFeedEvent;
+    const market = routeMarket(event);
+    const payload = event as unknown as Record<string, unknown>;
+    if (event.kind === "bookStatus") {
+      if (!market) return;
+      const eventMarketId = typeof payload.marketId === "string" ? payload.marketId : market.id;
+      const eventRoundId = typeof payload.roundId === "string" ? payload.roundId : String(market.startsAt);
+      const sides = binaryMarketSides(market);
+      const eventYesAssetId = typeof payload.yesAssetId === "string" ? payload.yesAssetId : undefined;
+      const eventNoAssetId = typeof payload.noAssetId === "string" ? payload.noAssetId : undefined;
+      if (!sides || eventMarketId !== market.id || eventRoundId !== String(market.startsAt)
+        || (eventYesAssetId !== undefined && eventYesAssetId !== sides.up.tokenId)
+        || (eventNoAssetId !== undefined && eventNoAssetId !== sides.down.tokenId)) return;
+      booksHealthy.set(market.id, event.healthy);
+      if (event.healthy) snapshotRejectNotice.delete(snapshotStateKey(market));
+      else if (market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
+        code: "market_feed_unhealthy", message: `market_feed_unhealthy:${event.reason ?? "unknown"}` });
+      return;
+    }
+    if (event.kind === "userStatus") {
+      if (market) userHealthy.set(market.id, event.healthy);
+      return;
+    }
+    if (event.kind === "book") {
+      const snapshot = payload.snapshot as MarketBookSnapshot | undefined;
+      if (!market || !snapshot || !acceptSnapshot(market, snapshot)) return;
+      platform.ingest({ kind: "book", snapshot, marketId: market.id, roundId: String(market.startsAt) });
+      return;
+    }
+    if (!market && (event.kind === "tickSize" || event.kind === "user")) return;
+    if (event.kind === "tickSize") {
+      const instrument = platform.core.instrument(event.token);
+      if (instrument && market) {
+        market.instruments = market.instruments.map(i => i.tokenId === event.token ? { ...i, tickSize: event.tickSize } : i);
+        platform.ingest({ kind: "market", market }); client?.updateTickSize(event.token, event.tickSize);
+      }
+      return;
+    }
+    if (event.kind === "marketTrade") return;
+    if (event.kind === "btc" || event.kind === "oracle") {
+      platform.ingest({ kind: "reference", symbol: event.kind === "btc" ? "BTC" : "BTC_ORACLE", price: event.price, ts: event.tsUnix });
+      return;
+    }
+    if (event.kind !== "user" || !market || !acceptUserEvents) return;
+    const userEvent = event.event;
+    if (userEvent.kind === "orderCancelled") {
+      if (platform.orders.get(userEvent.orderId)) {
+        platform.core.observeVenueStatus(userEvent.orderId, "canceled", { source: "user_ws", observedAt: userEvent.receivedAtUnix });
+        platform.core.confirmCancelled(userEvent.orderId, false, "user_ws", userEvent.receivedAtUnix);
+        allowRecoveryAfterEvidence(userEvent.orderId);
+      }
+      return;
+    }
+    if (!userEvent.orderId || !userEvent.tradeId || !userEvent.tokenId || !userEvent.direction) {
+      throw new Error("account trade requires order ownership reconciliation");
+    }
+    if (!platform.orders.get(userEvent.orderId)) return;
+    const f = userEvent.fill;
+    if (userEvent.reportLatencyMs != null) platform.ingest({ kind: "latency", metric: "authenticated_trade_report",
+      durationMs: userEvent.reportLatencyMs, ts: Date.now() / 1000, marketId: market.id,
+      tokenId: userEvent.tokenId, orderId: userEvent.orderId });
+    const feeRule = client?.feeRule(userEvent.tokenId);
+    platform.ingest({ kind: "fill", fill: { tradeId: userEvent.tradeId, orderId: userEvent.orderId,
+      tokenId: userEvent.tokenId, direction: userEvent.direction, price: f.price, shares: f.shares,
+      feeUsd: f.isMaker ? 0 : f.feeUsd ?? Math.round(polymarketFillFee(f.shares, f.price, false,
+        feeRule?.rate ?? (f.feeRateBps != null ? f.feeRateBps / 10_000 : 0.07), 0, feeRule?.exponent ?? 1) * 100_000) / 100_000,
+      status: f.status, feeSource: f.isMaker || f.feeUsd != null ? "reported" : feeRule || f.feeRateBps != null ? "rate-derived" : "estimate",
+      ts: f.tsUnix, isMaker: f.isMaker } });
+    if (platform.orders.get(userEvent.orderId)?.status === "FILLED") allowRecoveryAfterEvidence(userEvent.orderId);
+  };
+  const sink = (market: MarketInfo) => (event: FeedEvent) => {
+    // The venue callback only performs a bounded queue push. Strategy code,
+    // record listeners, account reads and HTTP work run in the consumer.
+    feedQueue.push({ ...event, __runtimeMarketId: market.id } as RoutedFeedEvent as FeedEvent);
+  };
+  const startFeedConsumer = (): void => {
+    if (feedConsumer) return;
+    feedConsumerAlive = true;
+    feedConsumer = (async () => {
+      while (feedConsumerAlive) {
+        const event = await feedQueue.pop(250);
+        if (!event || !feedConsumerAlive) continue;
+        try { consumeFeedEvent(event); }
+        catch (error) {
+          const market = routeMarket(event as RoutedFeedEvent);
+          if (market) { booksHealthy.set(market.id, false); userHealthy.set(market.id, false); }
+          platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market?.id, code: "feed_processing_failed",
+            message: error instanceof Error ? error.message : "feed processing failed" });
+        }
+      }
+    })().finally(() => { feedConsumer = undefined; });
+  };
+  const stopFeedConsumer = async (): Promise<void> => {
+    feedConsumerAlive = false;
+    await feedConsumer?.catch(() => undefined);
   };
   const recoverAccount = (): Promise<void> => {
     if (stopped) return Promise.resolve();
@@ -453,9 +554,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           if (!owned.length) return;
           const after = Math.max(0, Math.min(...owned.map(order => order.createdAt)) - 5);
           const rows = await client!.getRecentTrades(market.id, after);
+          const sides = binaryMarketSides(market);
+          if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
           for (const raw of rows) for (const event of parseAuthenticatedTrade(raw, {
-            creds: client!.creds, conditionId: market.id, upToken: market.instruments[0].tokenId,
-            downToken: market.instruments[1].tokenId, accountAddress: client!.funder,
+            creds: client!.creds, conditionId: market.id, upToken: sides.up.tokenId,
+            downToken: sides.down.tokenId, accountAddress: client!.funder,
             isOurOrder: id => !!platform.orders.get(id), orderDirection: id => platform.orders.get(id)?.direction,
           }, new Set())) sink(market)({ kind: "user", event });
           for (const order of owned) if (order.orderId) tradeScanComplete.add(order.orderId);
@@ -683,11 +786,15 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       platform.ingest({ kind: "market", market });
     }
     connectedMarkets.add(market.id);
-    const [up, down] = market.instruments;
+    const sides = binaryMarketSides(market);
+    if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
+    const { up, down } = sides;
     if (market.endsAt > Date.now() / 1000) {
-      const feed = runPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt));
+      const feed = startPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt), {
+        marketId: market.id, roundId: String(market.startsAt),
+      });
       controls.add(feed); bookFeeds.set(market.id, feed);
-      bookHealth.set(market.id, feed.isHealthy);
+      bookHealth.set(market.id, feed.isHealthy ?? (() => false));
     }
     if (client) {
       const user = runUserFeed(sink(market), { creds: client.creds, conditionId: market.id,
@@ -749,6 +856,22 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   };
   const cleanupExpiredFeeds = () => {
     const now = Date.now() / 1000;
+    const pruneSnapshotState = (entries: Map<string, unknown>) => {
+      for (const key of entries.keys()) {
+        let marketId: string | undefined;
+        let roundId: string | undefined;
+        try {
+          const parsed = JSON.parse(key) as unknown;
+          if (Array.isArray(parsed) && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
+            marketId = parsed[0]; roundId = parsed[1];
+          }
+        } catch { /* An invalid local key is safe to discard. */ }
+        const market = marketId ? options.markets.find(item => item.id === marketId) : undefined;
+        if (!market || String(market.startsAt) !== roundId || market.endsAt <= now) entries.delete(key);
+      }
+    };
+    pruneSnapshotState(snapshotWatermarks);
+    pruneSnapshotState(snapshotRejectNotice);
     const account = platform.account.current();
     if (client && !stopped && !recoveryJob && (account.risk.reason?.includes("reconciliation")
       || account.orders.some(order => (order.status === "UNKNOWN" || order.reconciliationPending)
@@ -808,6 +931,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       // five-minute scheduler can proceed while account reads run in parallel.
       let startupRecovery: Promise<void> | undefined;
       try {
+        startFeedConsumer();
         if (client && options.restored) {
           startupRecovery = recoverAccount().catch(() => {
             recoveryFailureNotice = true;
@@ -821,6 +945,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         refreshCashFlows(); cashFlowTimer = setInterval(refreshCashFlows, 30_000);
       } catch (error) {
         await startupRecovery?.catch(() => undefined);
+        await stopFeedConsumer();
         for (const control of controls) control.stop();
         stopHeartbeat?.(); stopped = true; cashFlowAbort.abort(); throw error;
       }
@@ -828,6 +953,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     async stop(reason = "operator stop") {
       stopped = true; clearInterval(cleanupTimer); clearInterval(cashFlowTimer);
       cashFlowAbort.abort();
+      await stopFeedConsumer();
       // A startup recovery pass now runs in the background. Let it settle
       // before closing the platform so a late account snapshot cannot publish
       // into an already-stopped execution ledger.
