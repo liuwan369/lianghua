@@ -135,7 +135,7 @@ receipt and includes `requestId`; the runtime stream is authoritative for
 The read-only feed probe accepts `--asset` and defaults to BTC:
 
 ```bash
-node dist/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after-sec 8
+node src/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after-sec 8
 ```
 
 This validates discovery and public quotes for the requested asset only. It
@@ -150,8 +150,8 @@ code; it does not import the order gateway or start a strategy:
 ```bash
 npm ci
 npm run build
-node dist/live/feeds/verify.mjs --asset btc --duration-sec 25 --disconnect-after-sec 8
-node dist/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after-sec 8
+node src/live/feeds/verify.mjs --asset btc --duration-sec 25 --disconnect-after-sec 8
+node src/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after-sec 8
 ```
 
 Record `DISCOVERY` and `PROBE` for each asset. Acceptance requires a live
@@ -164,13 +164,28 @@ is a failed read-only check, not a reason to start trading.
 The server process is foreground-only for this check:
 
 ```bash
-node dist/live/feeds/verify.mjs --asset btc --duration-sec 25 --disconnect-after-sec 8
+node src/live/feeds/verify.mjs --asset btc --duration-sec 25 --disconnect-after-sec 8
 ```
 
 Stop with `Ctrl-C` or `SIGTERM`; do not use `killall node` or stop nginx. Before
 starting, record `git status`, the active branch, and existing project PIDs.
 Afterward confirm no probe process remains. Do not put credentials in the
 command line, output, or repository.
+
+Latest read-only server result (34.242.206.196, 2026-09-23, no strategy or
+order process):
+
+| Asset | Snapshots | Five levels | Recovery | Processing P50 / P99 | Regressions |
+| --- | ---: | --- | ---: | ---: | --- |
+| BTC | 155 | YES + NO | 310 ms | 0.062 / 1.742 ms | sequence 0, source 0 |
+| ETH | 205 | YES + NO | 261 ms | 0.042 / 0.411 ms | sequence 0, source 0 |
+
+The raw-frame check also observed `book`, `price_changes`, and
+`best_bid_ask` events on the server. A first short BTC run started at a round
+boundary and ended before a complete baseline arrived; the repeated run passed.
+For deployment verification, run the probe at least 25 seconds and treat a
+zero-snapshot result as inconclusive only when the log shows a round boundary;
+repeat it and investigate any repeated zero-snapshot result.
 
 ## Verification Order
 
