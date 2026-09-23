@@ -23,7 +23,6 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
-import { quantizeBuyPrice } from "../../models.js";
 import {
   envWalletOverrides,
   resolveWallet,
@@ -35,14 +34,8 @@ export type { ApiKeyCreds };
 
 const DEFAULT_RPC = "https://polygon-bor-rpc.publicnode.com";
 
-export const MIN_ORDER_SHARES = 5;
-
 export const DEFAULT_HOST =
   process.env.CLOB_HOST ?? "https://clob.polymarket.com";
-
-export function tickRoundDown(price: number, tick: number): number {
-  return quantizeBuyPrice(price, tick) ?? 0;
-}
 
 export interface ClobWrapperOptions {
   key: string;
@@ -110,7 +103,6 @@ const DEFAULT_WARM_TIMEOUT_MS = 3_000;
 const DEFAULT_WARM_ATTEMPTS = 2;
 const DEFAULT_ORDER_TIMEOUT_MS = 3_000;
 const POST_ORDER_PATH = "/order";
-const CANCEL_ALL_PATH = "/cancel-all";
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) return Promise.reject(signal.reason);
@@ -203,7 +195,6 @@ export class ClobWrapper {
   private heartbeatId?: string;
   private orderVersion: 2 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
-  private marketMinOrderSizes = new Map<string, number>();
   private negRiskByToken = new Map<string, boolean>();
   private feeRulesByToken = new Map<string, { rate: number; exponent: number; takerDelayMs: number }>();
 
@@ -467,7 +458,6 @@ export class ClobWrapper {
             }
             for (const token of market.t) {
               if (token?.t) {
-                this.marketMinOrderSizes.set(token.t, minOrderSize);
                 const rate = market.fd?.r ?? 0, exponent = market.fd?.e ?? 0;
                 if (!Number.isFinite(rate) || rate < 0 || !Number.isFinite(exponent) || exponent < 0) {
                   throw new Error("invalid market fee metadata");
@@ -510,17 +500,6 @@ export class ClobWrapper {
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
-  }
-
-  async tickSize(tokenId: string): Promise<number> {
-    const ts = await withTimeout(this.client.getTickSize(tokenId), this.requestTimeoutMs, "CLOB tick size");
-    const n = Number(ts);
-    sdkTickSize(n);
-    return n;
-  }
-
-  minOrderSize(tokenId: string): number | undefined {
-    return this.marketMinOrderSizes.get(tokenId);
   }
 
   updateTickSize(tokenId: string, tickSize: number): void {
@@ -671,30 +650,6 @@ export class ClobWrapper {
     return canceled.includes(orderId);
   }
 
-  async cancelAll(): Promise<void> {
-    const resp = (await this.l2Json(CANCEL_ALL_PATH, "DELETE")) as Record<string, unknown>;
-    const error = responseError(resp);
-    if (error) throw new Error(`CLOB cancel-all failed: ${error}`);
-    if (!("canceled" in resp) || !("not_canceled" in resp)) {
-      throw new Error("CLOB cancel-all response did not confirm cancellation status");
-    }
-    if (!Array.isArray(resp.canceled)) {
-      throw new Error("CLOB cancel-all response has invalid canceled field");
-    }
-    const notCanceled = resp.not_canceled;
-    if (!Array.isArray(notCanceled) && (!notCanceled || typeof notCanceled !== "object")) {
-      throw new Error("CLOB cancel-all response has invalid not_canceled field");
-    }
-    const unresolved = Array.isArray(notCanceled)
-      ? notCanceled.length
-      : notCanceled && typeof notCanceled === "object"
-        ? Object.keys(notCanceled).length
-        : 0;
-    if (unresolved > 0) {
-      throw new Error(`CLOB cancel-all left ${unresolved} order(s) unresolved`);
-    }
-  }
-
   async getTradesByIds(ids: string[]): Promise<unknown[]> {
     const unique = [...new Set(ids)].filter(Boolean);
     const pages = await Promise.all(
@@ -725,71 +680,6 @@ export class ClobWrapper {
     );
   }
 
-  /** Fixed-quantity FOK buy at a price cap; never expand strategy share limits. */
-  async submitMarketBuy(
-    tokenId: string,
-    usdcAmount: number,
-    price: number,
-    tickSize: number,
-  ): Promise<SubmitOrderResult> {
-    const started = performance.now();
-    let postAttempted = false;
-    try {
-      const negRisk = await this.negRisk(tokenId);
-      let signLatencyMs = 0;
-      let ackLatencyMs = 0;
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const signStarted = performance.now();
-        const order = await withTimeout(this.client.createOrder(
-          {
-            tokenID: tokenId,
-            size: Math.floor((usdcAmount / price + 1e-9) * 100) / 100,
-            price,
-            side: ClobSide.BUY,
-          },
-          {
-            tickSize: sdkTickSize(tickSize),
-            negRisk,
-            version: this.orderVersion,
-          },
-        ), this.requestTimeoutMs, "CLOB order signing");
-        signLatencyMs += performance.now() - signStarted;
-
-        const ackStarted = performance.now();
-        postAttempted = true;
-        const resp = await this.postSignedOrder(order, OrderType.FOK, false);
-        postAttempted = false;
-        ackLatencyMs += performance.now() - ackStarted;
-        const orderId = resp?.orderID;
-        const apiError = responseError(resp);
-        const success = !apiError && Boolean(resp?.success ?? orderId);
-        if (success || attempt > 0 || !isVersionMismatch(resp)) {
-          return {
-            success,
-            orderId,
-            status: normalizeVenueOrderStatus(resp?.status),
-            errorMsg: apiError ?? resp?.errorMsg,
-            latencyMs: performance.now() - started,
-            signLatencyMs,
-            ackLatencyMs,
-            tradeIds: responseTradeIds(resp),
-          };
-        }
-
-        this.orderVersion = await this.currentVersion();
-
-      }
-      throw new Error("market order submission exhausted retries");
-    } catch (e) {
-      return {
-        success: false,
-        errorMsg: e instanceof Error ? e.message : String(e),
-        latencyMs: performance.now() - started,
-        stateUnknown: postAttempted && requestStateUnknown(e),
-      };
-    }
-  }
   async getOrder(orderId: string): Promise<unknown> {
     return withTimeout(this.client.getOrder(orderId), 3_000, "order identity reconciliation");
   }
@@ -810,32 +700,6 @@ export class ClobWrapper {
     }
   }
 
-  /** FOK sell used only to reduce an already-held residual position. */
-  async submitMarketSell(
-    tokenId: string,
-    shares: number,
-    price: number,
-    tickSize: number,
-  ): Promise<SubmitOrderResult> {
-    const started = performance.now();
-    let postAttempted = false;
-    try {
-      const negRisk = await this.negRisk(tokenId);
-      const order = await withTimeout(this.client.createOrder({ tokenID: tokenId, size: shares, price, side: ClobSide.SELL },
-        { tickSize: sdkTickSize(tickSize), negRisk, version: this.orderVersion }), this.requestTimeoutMs, "CLOB order signing");
-      postAttempted = true;
-      const resp = await this.postSignedOrder(order, OrderType.FOK, false);
-      postAttempted = false;
-      const orderId = resp?.orderID;
-      const apiError = responseError(resp);
-      return { success: !apiError && Boolean(resp?.success ?? orderId), orderId,
-        status: normalizeVenueOrderStatus(resp?.status), errorMsg: apiError ?? resp?.errorMsg,
-        latencyMs: performance.now() - started, tradeIds: responseTradeIds(resp) };
-    } catch (e) {
-      return { success: false, errorMsg: e instanceof Error ? e.message : String(e),
-        latencyMs: performance.now() - started, stateUnknown: postAttempted && requestStateUnknown(e) };
-    }
-  }
 }
 
 // Official geoblock docs list these countries as close-only on the frontend;
