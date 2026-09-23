@@ -2,20 +2,42 @@
 
 This document records the handoff from `codex/market-data` to the integration,
 trading-runtime, ledger-api, and frontend workstreams. It describes the
-contract and checks required to consume the live BTC five-minute feed. It is
-not a replacement for the shared API contract.
+contract and checks required to consume a live five-minute feed. It is not a
+replacement for the shared API contract.
 
 ## Delivered By Market Data
 
 - Polymarket public market WebSocket for the YES and NO assets on one socket.
-- Deterministic `btc-updown-5m-{roundStart}` discovery and `roundId` handling.
+- Parameterized `{asset}-updown-5m-{roundStart}` discovery and `roundId` handling; BTC remains the backward-compatible default.
 - L2 book replication with best bid/ask and top-five bids/asks.
 - `book`, `bookStatus`, `tickSize`, and public trade feed events.
 - Connection Promise reuse, reconnect backoff with jitter, watchdogs, and stop cancellation.
 - Source timestamp watermarks across reconnects and same-frame wire ordering.
 - Invalid-frame rejection, empty quote tombstones, source freshness, and expiry handling.
 
-The implementation is committed on `codex/market-data` at `1366549`.
+The implementation is committed on `codex/market-data` at `1366549`; the
+parameterized discovery follow-up is committed after that baseline.
+
+## Asset Parameter
+
+`findMarket(now, allowCollectorFallback, directOnly, signal, asset)` keeps the
+existing BTC call shape and accepts an optional lowercase platform symbol as
+the fifth argument. New integrations may use the clearer equivalent:
+
+```ts
+findFiveMinuteMarket("eth", {
+  now,
+  allowCollectorFallback: false,
+  directOnly: true,
+  signal,
+});
+```
+
+The discovery layer validates symbols to letters and digits, accepts only
+five-minute Unix boundaries, and filters Gamma and collector results against
+the requested asset. It returns `Market.asset` alongside `marketId`,
+`roundId`, and the two outcome tokens. The feed itself remains token-based and
+can consume any valid binary market returned by discovery.
 
 ## Internal Snapshot
 
@@ -82,14 +104,24 @@ runPolymarketFeed(
 );
 ```
 
-The server-owned market pool selects the current and next BTC five-minute
-round. At a boundary, the old round stops producing strategy triggers only
-after its orders are assigned to the old `roundId`; the next round becomes
-eligible only after a fresh bilateral snapshot passes the checks above.
+The server-owned market pool selects the current and next five-minute round
+for each enabled asset. At a boundary, the old round stops producing strategy
+triggers only after its orders are assigned to the old `roundId`; the next
+round becomes eligible only after a fresh bilateral snapshot passes the checks
+above.
 
 Runtime commands are asynchronous. The command response only acknowledges
 receipt and includes `requestId`; the runtime stream is authoritative for
 `starting`, `running`, `paused`, `stopping`, `stopped`, and `error`.
+
+The read-only feed probe accepts `--asset` and defaults to BTC:
+
+```bash
+node dist/live/feeds/verify.mjs --asset eth --duration-sec 25 --disconnect-after-sec 8
+```
+
+This validates discovery and public quotes for the requested asset only. It
+does not enable a strategy or place an order.
 
 ## Verification Order
 
@@ -103,6 +135,7 @@ receipt and includes `requestId`; the runtime stream is authoritative for
 
 - The current server worktree is not the integrated branch. A server checkout or deployment of `codex/integration` is required before testing runtime APIs or order execution.
 - The existing shared contract is still partly documentation. Until typed DTO validation exists, a field rename can silently break one consumer.
-- `codex/trading-runtime` must still wire the snapshot gate to the strategy and gateway. Market data tests do not prove strategy or order correctness.
+- `codex/trading-runtime` must still wire the snapshot gate to the selected strategy and gateway. Parameterized discovery does not make the existing BTC strategy valid for every asset.
+- Each asset needs an explicit strategy/reference-feed mapping before automatic trading is enabled. Discovering an ETH or SOL market alone is not evidence that its oracle, outcome order, fee rules, or liquidity are compatible.
 - This work has not placed a real order and does not verify fills, cancellation, reconciliation, settlement, or ledger projection.
 - Polymarket event formats, venue clocks, Gamma availability, or server network conditions can change. The read-only probe must remain part of deployment verification.

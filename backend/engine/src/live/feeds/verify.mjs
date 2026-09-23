@@ -1,10 +1,11 @@
 import WebSocket from "ws";
 import { parseArgs } from "node:util";
-import { findMarket } from "../../../dist/live/discovery.js";
+import { findFiveMinuteMarket } from "../../../dist/live/discovery.js";
 import { runPolymarketFeed } from "../../../dist/live/feeds/polymarket.js";
 
 // Public market data only. No account, strategy, or order client is imported.
 const { values } = parseArgs({ options: {
+  asset: { type: "string", default: "btc" },
   "duration-sec": { type: "string", default: "25" },
   "disconnect-after-sec": { type: "string", default: "0" },
 } });
@@ -22,7 +23,11 @@ WebSocket.prototype.send = function (...args) {
   return send.apply(this, args);
 };
 
-const market = await findMarket(Date.now() / 1000, false, true);
+const market = await findFiveMinuteMarket(values.asset, {
+  now: Date.now() / 1000,
+  allowCollectorFallback: false,
+  directOnly: true,
+});
 console.log("DISCOVERY", JSON.stringify(market));
 if (!market) process.exit(2);
 
