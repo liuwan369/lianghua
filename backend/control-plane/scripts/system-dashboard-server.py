@@ -61,6 +61,7 @@ _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 _account_report: dict | None = None
+_account_check_error: str | None = None
 _account_data: AccountData | None = None
 _account_data_lock = threading.Lock()
 _read_model: ReadModel | None = None
@@ -436,10 +437,35 @@ def account_config_status() -> dict:
     builder = all(present(name) for name in (
         "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"
     ))
+    report = _account_report if isinstance(_account_report, dict) else None
+    report_wallet = report.get("wallet") if report else None
+    report_matches = bool(wallet_valid and isinstance(report_wallet, str)
+                          and report_wallet.lower() == wallet_clean.lower())
+    checked_at = _epoch(report.get("checked_at")) if report else None
+    check_fresh = bool(checked_at is not None and 0 <= time.time() - checked_at <= 15 * 60)
+    account_check_ready = bool(report_matches and check_fresh
+                               and report.get("account_ready") is True
+                               and report.get("signer_matches") is True
+                               and report.get("approvals_ready") is True
+                               and report.get("compromised") is not True)
+    if _account_check_error:
+        check_state = "failed"
+    elif account_check_ready:
+        check_state = "ready"
+    elif report is None or not report_matches:
+        check_state = "unknown"
+    else:
+        check_state = "stale"
     return {
         "wallet": wallet_clean if wallet_valid else "",
         "config_error": config_error,
-        "last_check": _account_report,
+        "last_check": report,
+        "last_check_error": _account_check_error,
+        "last_check_at": checked_at,
+        "account_check_state": check_state,
+        "account_check_ready": account_check_ready,
+        "accountCheckState": check_state,
+        "accountCheckReady": account_check_ready,
         "wallet_configured": wallet_valid,
         "owner_signer_configured": owner_signer,
         "session_signer_configured": session_signer,
@@ -448,6 +474,20 @@ def account_config_status() -> dict:
         # The current execution adapter uses the Owner signer. Session Key is
         # an optional delegated signer and is not required for this route.
         "execution_credentials_ready": wallet_valid and owner_signer,
+        "live_start_ready": wallet_valid and owner_signer and account_check_ready,
+        "executionCredentialsReady": wallet_valid and owner_signer,
+        "liveStartReady": wallet_valid and owner_signer and account_check_ready,
+        "wallet_kind": report.get("wallet_kind") if report else None,
+        "signature_type": report.get("signature_type") if report else None,
+        "settlement_credentials_ready": (report.get("settlement_credentials_ready")
+                                          if report and isinstance(report.get("settlement_credentials_ready"), bool)
+                                          else None),
+        "settlement_reason": report.get("settlement_reason") if report else None,
+        "walletKind": report.get("wallet_kind") if report else None,
+        "signatureType": report.get("signature_type") if report else None,
+        "settlementCredentialsReady": (report.get("settlement_credentials_ready")
+                                        if report and isinstance(report.get("settlement_credentials_ready"), bool)
+                                        else None),
         "read_only_only": wallet_valid and not owner_signer and not session_signer,
     }
 
@@ -463,7 +503,7 @@ def account_action(payload: dict, save: bool = False) -> dict:
 
 
 def _checked_account_action(payload: dict, save: bool = False) -> dict:
-    global _account_report
+    global _account_report, _account_check_error
     # Serialise account changes with start/stop, including the chain check.
     with _trading_lock:
         if trading_status(include_stats=False)["running"]:
@@ -480,7 +520,13 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
             values = account_store.candidate_profile(payload, previous)
         if not values.get("POLYMARKET_WALLET_ADDRESS"):
             raise ValueError("请先填写资金钱包地址")
-        report = account_store.check_account(TRADING_ROOT, values)
+        try:
+            report = account_store.check_account(TRADING_ROOT, values)
+        except account_store.AccountCheckError as exc:
+            # Keep the last successful snapshot for read-only display, but do
+            # not let a failed refresh authorize a live start.
+            _account_check_error = exc.code
+            raise
         if save:
             if values.get("POLYMARKET_OWNER_PRIVATE_KEY") and not report.get("signer_matches"):
                 raise ValueError("签名私钥与资金账户不匹配，未保存")
@@ -492,6 +538,7 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
         # Candidate checks are not reported as checks of the saved account.
         if save or not payload:
             _account_report = report
+            _account_check_error = None
         return report
 
 
@@ -731,7 +778,8 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
             continue
         quote_at = min(pair[2] for pair in paired)
         rows.append({"slug": str(market.get("id")), "name": str(market.get("name", market.get("id"))),
-                     "condition_id": market.get("id"), "round_id": market.get("name"), "stale_after_ms": 2000,
+                     "condition_id": market.get("id"), "round_id": market.get("roundId") or market.get("round_id"),
+                     "legacy_round_id": market.get("name"), "stale_after_ms": 2000,
                      "start": start, "end": end, "up_token": str(up.get("tokenId")),
                      "down_token": str(down.get("tokenId")), "up_bid": paired[0][0], "up_ask": paired[0][1],
                      "down_bid": paired[1][0], "down_ask": paired[1][1], "ask_sum": paired[0][1] + paired[1][1],
@@ -822,7 +870,9 @@ def trading_status(include_stats: bool = True) -> dict:
             "live_unlocked": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
             # A present .env is not enough: report configured only when the key
             # exists and is non-empty after dotenv loading by the child process.
-            "account_configured": account["execution_credentials_ready"],
+            "account_configured": account["live_start_ready"],
+            "service_state": "running" if running else ("failed" if _trading_exit_code not in (None, 0) else "stopped"),
+            "command_status": "executing" if running else ("failed" if _trading_exit_code not in (None, 0) else "confirmed"),
             "account": account,
             "log": str(_trading_log).replace("\\", "/") if _trading_log else None,
             "run_id": _trading_run_id,
@@ -850,6 +900,16 @@ def trading_status(include_stats: bool = True) -> dict:
             runtime["stale"] = True
             stats = {**stats, "runtime": runtime}
         status["stats"] = stats
+        runtime = stats.get("runtime")
+        if running:
+            strategy_runtime = runtime.get("strategy_runtime") if isinstance(runtime, dict) else None
+            if isinstance(strategy_runtime, dict) and strategy_runtime.get("paused") is True:
+                status["service_state"] = "paused"
+            elif isinstance(runtime, dict) and runtime.get("status") == "running":
+                status["service_state"] = "running"
+            else:
+                status["service_state"] = "starting"
+            status["command_status"] = "executing"
     return status
 
 
@@ -970,7 +1030,8 @@ def strategy_control(payload: dict) -> dict:
             temporary = control.with_suffix(".next")
             temporary.write_text(json.dumps({"paused": action == "pause"}), encoding="utf-8")
             temporary.replace(control)
-            return {**status, "control_requested": action, "control_pending": True}
+            return {**status, "control_requested": action, "control_pending": True,
+                    "command_status": "accepted", "requested_state": "paused" if action == "pause" else "running"}
     if action != "start":
         raise ValueError("操作必须为start、pause、resume或stop")
     if type(payload.get("revision")) is not int:
@@ -1013,8 +1074,11 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
             raise PermissionError("实盘必须明确确认")
         if os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1":
             raise PermissionError("服务器未开启实盘解锁")
-        if not private_key_configured():
+        account_status = account_config_status()
+        if not account_status["execution_credentials_ready"]:
             raise PermissionError("未配置交易账户")
+        if not account_status["account_check_ready"]:
+            raise PermissionError("账户尚未通过最近一次钱包、签名、授权和余额检查")
     # 运行时间允许填 0，表示不按时间自动停止，直到用户手动停止。
     duration_raw = payload.get("duration_min", 15)
     if type(duration_raw) not in {int, float}:
@@ -1034,12 +1098,11 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         if _trading_process is not None and _trading_process.poll() is None:
             raise RuntimeError("已有交易进程运行中")
         if mode == "live":
-            if os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1" or not private_key_configured():
+            account_status = account_config_status()
+            if (os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1"
+                    or not account_status["execution_credentials_ready"]
+                    or not account_status["account_check_ready"]):
                 raise PermissionError("账户配置或实盘授权已变化，请重新检查")
-            # The engine performs the authoritative current-account read when
-            # it connects. Running the full dashboard chain/RPC check here
-            # duplicated that work and blocked startup on historical finance
-            # scans; a failed engine bootstrap is reported by its own status.
         log_dir = TRADING_ROOT / "results" / "live"
         log_dir.mkdir(parents=True, exist_ok=True)
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
@@ -1113,6 +1176,11 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
 def _trading_environment() -> dict:
     env = os.environ.copy()
     env.update(_account_values())
+    # Control-plane and diagnostic credentials/configuration belong to the
+    # parent process. Do not leak them into a trading child environment.
+    for name in ("PM_DASHBOARD_CONTROL_TOKEN", "PM_ACCOUNT_PROFILE", "PM_ACCOUNT_RPC_URL",
+                 "PM_ACCOUNT_RPC_FALLBACK_URL", "PM_TRADING_LIVE_UNLOCK"):
+        env.pop(name, None)
     # Pin the exact checked wallet; blank also prevents dotenv restoring overrides.
     env["POLY_FUNDER"] = env.get("POLYMARKET_WALLET_ADDRESS") or env.get("POLY_FUNDER", "")
     env["POLY_SIGNATURE_TYPE"] = ""
@@ -1138,6 +1206,7 @@ def stop_trading() -> dict:
             _trading_stop_result = {
                 "confirmed": False,
                 "process_stopped": True,
+                "remote_orders_state": "unconfirmed",
                 "message": "当前没有正在运行的交易任务。",
             }
             _persist_trading_state()
@@ -1192,7 +1261,8 @@ def stop_trading() -> dict:
             message = "已请求停止，正在等待撤单及成交对账完成；后台进程保留，请稍后核对。"
         else:
             message = "进程已停止；实盘挂单尚未通过账户查询确认。"
-        _trading_stop_result = {"confirmed": confirmed, "process_stopped": stopped, "message": message}
+        _trading_stop_result = {"confirmed": confirmed, "process_stopped": stopped,
+                                "remote_orders_state": "unconfirmed", "message": message}
         if stop_requested:
             _trading_stop_result["requested_pid"] = candidate_pid
         if stopped:
@@ -1225,7 +1295,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         end is not None and quote_at is not None and stale_after is not None and 0 < stale_after <= 15000) else None
     market_id = row.get("condition_id") or row.get("conditionId") or row.get("marketId")
     market_id = market_id if isinstance(market_id, str) and market_id else None
-    round_id = row.get("round_id") or row.get("roundId") or slug
+    round_id = row.get("round_id") or row.get("roundId")
     round_id = round_id if isinstance(round_id, str) and round_id else None
     return {
         "assetId": "btc",
@@ -1295,13 +1365,18 @@ def _modern_runtime(status: dict) -> dict:
         state = "failed" if status.get("exit_code") not in (None, 0) else "stopped"
     stale = bool(status.get("running") and (not runtime or projection.get("stale") or runtime.get("stale")
                  or projection.get("state") in {"incomplete", "catching_up", "waiting", "unavailable"}))
+    stop_result = status.get("stop_result") if isinstance(status.get("stop_result"), dict) else {}
     return {"schemaVersion": 1, "status": state, "state": state,
+            "serviceState": status.get("service_state") or state,
+            "commandStatus": status.get("command_status") or ("executing" if status.get("running") else "confirmed"),
+            "remoteOrdersState": stop_result.get("remote_orders_state"),
             "source": "platform-runtime" if runtime else "control-plane",
             "asOf": runtime.get("source_at") or projection.get("as_of"),
             "stale": stale, "runId": status.get("run_id"),
             "strategyId": status.get("strategy_id") or "btc-reversal",
             "execution": status.get("execution"), "markets": [
-                {**item, "marketId": item.get("id"), "roundId": item.get("name")}
+                {**item, "marketId": item.get("id"),
+                 "roundId": item.get("roundId") or item.get("round_id")}
                 for item in runtime.get("markets", [])],
             "error": runtime.get("error") or ("runtime_snapshot_stale" if stale else None)
                 or ((status.get("stop_result") or {}).get("message") if state == "failed" else None),
@@ -1338,8 +1413,7 @@ def _event_dto(event: dict) -> dict:
     market = event.get("market")
     market_id = (event.get("marketId") or event.get("market_id") or
                  (market if isinstance(market, str) and market.startswith("0x") else None))
-    round_id = (event.get("roundId") or event.get("round_id") or
-                (market if market and market != market_id else None))
+    round_id = event.get("roundId") or event.get("round_id")
     severity = "error" if kind == "error" else "warning" if kind == "unresolved" else "info"
     result = {**event, "kind": kind, "marketId": market_id, "roundId": round_id,
             "time": _epoch(event.get("time")), "severity": severity,
@@ -1357,8 +1431,7 @@ def _order_dto(order: dict) -> dict:
     market = order.get("market")
     market_id = order.get("marketId") or order.get("market_id") or (
         market if isinstance(market, str) and market.startswith("0x") else None)
-    round_id = order.get("roundId") or order.get("round_id") or (
-        market if market and market != market_id else None)
+    round_id = order.get("roundId") or order.get("round_id")
     result.update({"clientOrderId": order.get("client_order_id"), "orderId": order.get("order_id"),
                    "marketId": market_id, "roundId": round_id,
                    "filledShares": order.get("filled_shares"), "updatedAt": _epoch(order.get("updated_at") or order.get("time")),
@@ -1616,6 +1689,12 @@ def make_handler(root: Path):
                     # that drove the strategy. The collector remains the
                     # fallback when the engine has no complete fresh pair.
                     market_status = _running_engine_market_status()
+                    if isinstance(market_status, dict) and isinstance(market_status.get("current_markets"), list):
+                        # Preserve the old slug-shaped field only in the v1
+                        # compatibility response. Modern DTOs stay strict.
+                        market_status = {**market_status, "current_markets": [
+                            {**row, "round_id": row.get("round_id") or row.get("legacy_round_id") or row.get("name")}
+                            for row in market_status["current_markets"] if isinstance(row, dict)]}
                     value = {"schemaVersion": 1, "asOf": time.time(), **(market_status or cached_live_status())}
                 elif path == "/api/v1/account-data":
                     value = account_data().snapshot()
@@ -1774,7 +1853,11 @@ def make_handler(root: Path):
                     if action == "start" and translated["revision"] is None:
                         translated["revision"] = payload.get("expectedRevision")
                     result = strategy_control(translated)
+                    stop_result = result.get("stop_result") if isinstance(result.get("stop_result"), dict) else {}
                     self._send_json(json.dumps({"accepted": True, "status": result,
+                        "commandStatus": result.get("command_status") or "accepted",
+                        "serviceState": result.get("service_state"),
+                        "remoteOrdersState": stop_result.get("remote_orders_state"),
                         "source": "control-plane", "asOf": time.time(), "stale": False},
                         ensure_ascii=False, allow_nan=False).encode("utf-8"))
                     return

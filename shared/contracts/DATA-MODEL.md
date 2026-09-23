@@ -2,7 +2,9 @@
 
 页面消费统一 ViewModel，后端原始 DTO 由 adapter 转换。
 
-当前只支持 `assetId="btc"` 和 `cycle="5m"`。`marketId` 为 Polymarket conditionId，未知时是 `null`，不能填场次 slug；`roundId` 为 BTC 五分钟场次 slug。现代 DTO 的所有规范时间字段统一为 UTC Unix 秒数或 `null`，旧接口及原始兼容字段保留原格式。
+当前只支持 `assetId="btc"` 和 `cycle="5m"`。`marketId` 为 Polymarket conditionId，未知时是 `null`，不能填场次 slug；`roundId` 为运行时明确提供的 BTC 五分钟场次起始 Unix 边界字符串，未知时是 `null`，不能从 slug 或当前时间推导。现代 DTO 的所有规范时间字段统一为 UTC Unix 秒数或 `null`，旧接口及原始兼容字段保留原格式。
+
+交易运行时是市场身份的唯一来源。账本投影按 `platform_status.runtime.markets` 保存 `marketId -> roundId` 映射，并把它应用到缺少身份字段的 `order`、`fill` 和 `platform_settlement` 事件。`roundId` 必须由运行时明确提供；`market.name`/`market_slug` 只作显示和兼容别名，不能代替 roundId。映射缺失时保留 `null`，不按时间戳推断轮次；事件到达顺序改变时，后到的运行状态可以回填之前的投影。重启后的成交汇总以账户范围内的 `trade_id + order_id` 作为经济成交身份，不能只依赖单次运行的 `event_id`，不同账户始终隔离。
 
 ## 核心模型
 
@@ -44,7 +46,7 @@
 
 ### SystemHealthViewModel / AccountViewModel / ActivityEventViewModel
 
-系统健康包含行情节点、控制台、采集、交易、账本投影、CPU、内存、磁盘和负载。账户只返回钱包摘要、配置状态和最近检查结果，不返回私钥。事件必须有 id、time、kind、marketId、roundId、severity 和 message。
+系统健康包含行情节点、控制台、采集、交易、账本投影、CPU、内存、磁盘和负载。账户只返回钱包摘要、配置状态和最近检查结果，不返回私钥；账户检查结果必须绑定当前钱包并有新鲜度，结算凭据未被运行时明确验证时保持 `null`。事件必须有 id、time、kind、marketId、roundId、severity 和 message。
 
 诊断同时检查行情新鲜度、交易运行时、账本投影和资源快照；其中任何必需来源异常都不能报告全局 `ok`。有意停止的交易进程不等于故障，进程存活也不等于运行快照有效。事件 `kind` 对应账本事件类型，`severity` 使用 `info/warning/error`，未知标识和时间使用 `null`；原始 journal 字段可保留以兼容旧调用方。
 
@@ -53,6 +55,8 @@
 现代成功和错误响应必须带 `schemaVersion`、`source`、`asOf`、`stale`、`error`。账本投影进程负责从运行日志生成订单、成交、结算、持仓和统计；HTTP 请求只读 SQLite/原子快照和已有缓存，不解析日志、不触碰实时下单链路。`stale` 或 `error` 时保留上一次有效字段及原始来源时间，不用请求时间刷新快照；从未成功取得数据时 `asOf=null`，未知金额和盈亏使用 `null`。
 
 `/api/fills` 分页返回成交 journal 状态记录，同一经济成交可能有后续修订，前端不能直接按记录求和。`/api/settlements` 分页返回每场最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`。只有 `platform_settlement.state="confirmed"` 且 `payout_verified=true` 的结算计入确认统计；完整的已确认成交、实际手续费、核实到账及可核对成交成本的平台持仓快照缺一时，结算净盈亏为 `null`，并说明尚未核实的原因。
+
+资金投影要区分可用余额、预留资金、持仓成本、估算手续费和已确认手续费。撤单请求或进程停止不是资金已释放的证明；结算必须同时有 `payout_verified`、交易回执和到账金额才能进入确认盈亏。未决订单、未确认结算或费用缺失不能进入最终胜率。
 
 统计区分 `settled_wins/settled_losses/settled_draws/pending_settlements`；`abs(pnl) <= 1e-9` 为平局，胜率仅计算 `wins / (wins + losses)`，分母为零时为 `null`。`range=run` 为当前运行；`today/all` 汇总同一账户已投影的实盘运行，账户标识未知时仅统计当前运行，`today` 按 UTC 当日事件时间过滤。汇总不能宣称为账户完整历史。
 

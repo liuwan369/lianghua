@@ -93,7 +93,7 @@ class ApiTests(unittest.TestCase):
 
     def test_market_identity_time_and_last_success(self):
         now = time.time()
-        row = {"slug": "btc-updown-5m-1", "condition_id": "0xcondition", "start": now - 5,
+        row = {"slug": "btc-updown-5m-1", "condition_id": "0xcondition", "round_id": "1800000000", "start": now - 5,
                "end": now + 295, "quote_at": now, "stale_after_ms": 2000,
                "up_bid": .4, "up_ask": .5, "down_bid": .5, "down_ask": .6}
         raw = {"collector_online": True, "source": "platform-runtime", "current_markets": [row]}
@@ -104,7 +104,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(code, 200)
         market = first["items"][0]
         self.assertEqual(market["marketId"], "0xcondition")
-        self.assertEqual(market["roundId"], row["slug"])
+        self.assertEqual(market["roundId"], row["round_id"])
         self.assertIsNone(market["volume"])
         self.assertIsInstance(market["quoteAt"], float)
         with patch.object(server_module, "_running_engine_market_status", return_value=None), \
@@ -128,10 +128,10 @@ class ApiTests(unittest.TestCase):
 
     def test_event_mapping_and_query_errors(self):
         mapped = server_module._event_dto({"id": 2, "event": "fill", "market": "btc-updown-5m-1",
-                                           "market_id": "0xcondition", "time": 12.})
+                                           "market_id": "0xcondition", "round_id": "1800000000", "time": 12.})
         self.assertTrue({"id", "time", "kind", "marketId", "roundId", "severity", "message"} <= set(mapped))
         self.assertEqual(mapped["marketId"], "0xcondition")
-        self.assertEqual(mapped["roundId"], "btc-updown-5m-1")
+        self.assertEqual(mapped["roundId"], "1800000000")
         with patch.object(server_module, "_api_run_id", return_value="run"):
             code, error = self.request("/api/events?cursor=invalid")
         self.assertEqual(code, 400)
@@ -148,7 +148,7 @@ class ApiTests(unittest.TestCase):
         ledger = Mock()
         ledger.settlements_page.return_value = {"settlements": [{
             "id": 4, "event": "settlement", "market": "btc-updown-5m-1",
-            "market_id": "0xcondition", "time": 12., "state": "confirmed",
+            "market_id": "0xcondition", "round_id": "1800000000", "time": 12., "state": "confirmed",
             "payout_verified": True, "pnl": 1.5, "accounting_state": "confirmed",
             "pnl_error": None}], "next_before_id": None}
         with patch.object(server_module, "_api_run_id", return_value="run"), \
@@ -157,7 +157,7 @@ class ApiTests(unittest.TestCase):
             code, body = self.request("/api/settlements")
         self.assertEqual(code, 200)
         self.assertEqual(body["items"][0]["marketId"], "0xcondition")
-        self.assertEqual(body["items"][0]["roundId"], "btc-updown-5m-1")
+        self.assertEqual(body["items"][0]["roundId"], "1800000000")
         self.assertEqual(body["items"][0]["pnl"], 1.5)
         self.assertEqual(body["items"][0]["accountingState"], "confirmed")
 
@@ -202,7 +202,7 @@ class SnapshotTests(unittest.TestCase):
         now = time.time()
         books = [{"tokenId": token, "bid": .4, "ask": .5, "receivedAt": now - 3,
                   "received_age_ms": 0} for token in ("yes", "no")]
-        market = {"id": "0xcondition", "name": "btc-updown-5m-1", "startsAt": now - 5, "endsAt": now + 295,
+        market = {"id": "0xcondition", "name": "btc-updown-5m-1", "roundId": "1800000000", "startsAt": now - 5, "endsAt": now + 295,
                   "instruments": [{"outcome": "UP", "tokenId": "yes"}, {"outcome": "DOWN", "tokenId": "no"}]}
         status = {"running": True, "stats": {"runtime": {"engine": "platform", "status": "running",
                   "stale": False, "markets": [market], "books": books}}}
@@ -211,7 +211,7 @@ class SnapshotTests(unittest.TestCase):
             book["receivedAt"] = time.time()
         row = server_module._running_engine_market_status(status)["current_markets"][0]
         self.assertEqual(row["condition_id"], "0xcondition")
-        self.assertEqual(row["round_id"], "btc-updown-5m-1")
+        self.assertEqual(row["round_id"], "1800000000")
 
     def test_incomplete_projection_never_fresh(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -45,15 +45,21 @@
 | 成交记录 | GET | `/api/fills?runId=...&cursor=...&limit=50` | 同一账本的成交 journal 记录 |
 | 结算记录 | GET | `/api/settlements?runId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏 |
 
-账本统计响应提供 `fills`、`fill_notional`、`fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
+账本统计响应提供 `fills`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
 
 `platform_settlement` 只有 `state=confirmed` 且 `payout_verified=true` 才计入已确认结算，同一结算重复记录不重复计数。`pnl` 是已确认结算净盈亏，不是钱包现金对账；只有完整的已确认成交、实际手续费及已核实结算款齐全，且平台持仓快照可核对成交成本时才给数值，否则为 `null`。`abs(pnl) <= 1e-9` 为平局，不计失败；胜率分母仅包含盈亏已确定的胜局与负局，无结果或平局不进入分母，分母为零时 `win_rate=null`。
+
+账本从交易运行时 `platform_status.runtime.markets` 取得身份映射：`marketId` 是 conditionId，`roundId` 是运行时明确提供的 BTC 五分钟边界标识。`market.name`/`market_slug` 只是兼容显示字段，不能在缺少 `roundId` 时代填。`order`/`fill` 事件即使只带 `market_slug`，也会在映射到达后补齐两个字段；结算事件即使只带 `market_id`，也会补齐 `round_id`。映射尚未发布时标识保持 `null`，不得用事件时间或当前场次猜测旧订单所属轮次。运行重启后同一账户的成交汇总按 `trade_id + order_id` 的经济身份去重，账户之间不合并；单次 journal 的 `event_id` 只用于事件记录去重，不能作为跨运行成交身份。
 
 `pending_settlements` 表示结算尚未确认到账的场次数；`settled_pnl_pending` 表示已确认到账但成本或费用不完整、暂时无法确定盈亏的场次数，两者都不能被统计成失败或零盈亏。
 
 订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。`/api/fills` 返回成交 journal 修订记录，不能将各页记录直接累加为成交金额；汇总以投影去重结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；`accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。
 
-市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是 BTC 五分钟场次 slug。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+
+旧 `/api/v1/markets` 保留原始 `round_id` slug 字段供旧调用方读取；该兼容字段不代表现代 `roundId` 身份，也不会参与账本归属或结算统计。
+
+运行时 journal 至少应发送 `order`、`fill`、`platform_settlement`、`platform_status`、`platform_stopped` 和错误事件。`platform_status.runtime.markets[]` 及策略 `currentRound/rounds[]` 必须带 `marketId` 和 `roundId`；`order`/`fill` 应带 `market_id/round_id`，账本会在状态映射晚到时回填。启动、暂停、恢复、停止命令的 HTTP 回执只表示 `accepted` 或 `executing`，最终状态必须由运行时状态事件确认。
 
 事件 `items` 必须含 `id/time/kind/marketId/roundId/severity/message`，保留原始 `event/market/side` 等字段供旧调用方使用；标识与时间未知时为 `null`。分页响应含下一页 `cursor`，无后续记录时为 `null`。运行时市场快照优先于采集器缓存，过期报价不能被标为新鲜。
 
@@ -78,7 +84,11 @@
 }
 ```
 
-控制命令、草稿保存和策略激活使用服务器现有控制认证。响应只代表命令处理状态；最终结果由运行状态和事件查询确认。服务状态使用 `stopped/starting/running/paused/failed` 等运行时实际状态，不能用进程存在推断所有交易动作已完成。
+控制命令、草稿保存和策略激活使用服务器现有控制认证。响应只代表命令处理状态；最终结果由运行状态和事件查询确认。服务状态使用 `stopped/starting/running/paused/failed` 等运行时实际状态，不能用进程存在推断所有交易动作已完成。控制响应还返回 `commandStatus=accepted|executing|confirmed|failed`；暂停最终以 `strategyRuntime.paused=true` 确认，停止后的远端订单以 `remoteOrdersState=unconfirmed` 表示尚未通过账户查询确认。
+
+账户状态只返回 `wallet` 摘要、`accountCheckState`、`accountCheckReady`、`executionCredentialsReady`、`liveStartReady`、`walletKind`、`signatureType` 和 `settlementCredentialsReady` 等非秘密诊断字段。最近检查必须匹配当前钱包且未过期；链上余额检查与异步 CLOB 可用余额分开，未知时为 `null`。Builder/Relayer 凭据是否可用于结算只在运行时明确返回时标记为布尔值，否则为 `null`。
+
+资金投影分开返回可用余额、已预留资金、持仓成本、估算手续费和已确认手续费；撤单请求或进程停止都不表示交易所已经释放资金。结算 `confirmed` 只有在 `payout_verified`、交易回执和到账金额同时核实时才可进入已确认盈亏；未决订单、未确认结算和费用缺失保持 `null`，不计入最终胜率。
 
 策略激活使用 `expectedRevision` 检查版本，并以 `draftId` 指定已保存草稿，成功后原子发布新版本。`activationScope=future_uncreated_round` 表示仅影响引擎尚未创建的未来场次：当前及已预热场次配置已冻结。任意非空 `effectiveRoundId` 暂不支持，返回 501，不伪造指定场次已排期。旧 `PUT /api/strategy-config` 保留保存即发布行为，不能当作现代“只保存草稿”的等价回退。
 

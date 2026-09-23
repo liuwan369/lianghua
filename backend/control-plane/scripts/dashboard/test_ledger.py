@@ -18,6 +18,7 @@ class LedgerRegressionTests(unittest.TestCase):
         self.ledger = Ledger(self.root / "ledger.sqlite")
         self.now = time.time() - 1
         self.slug = "btc-updown-5m-1800000000"
+        self.round_id = "1800000000"
         self.market_id = "0x" + "a" * 64
         self.event_number = 0
 
@@ -31,14 +32,15 @@ class LedgerRegressionTests(unittest.TestCase):
         self.ledger.ingest(run)
 
     def runtime(self, shares=10, cost=4.1, **extra):
-        current = {"marketId": self.market_id, "name": self.slug, "upTokenId": "yes", "downTokenId": "no",
+        current = {"marketId": self.market_id, "name": self.slug, "roundId": self.round_id,
+                   "upTokenId": "yes", "downTokenId": "no",
                    "nextStage": 2, "confirmationCount": 1, "upShares": shares, "downShares": 0,
                    "costUsd": cost, "feesVerified": True, "netIfUpUsd": shares - cost, "netIfDownUsd": -cost}
         return {"event": "platform_status", "runtime": {
             "schemaVersion": 1, "engine": "platform", "execution": "strategy", "status": "running", "mode": "live",
             "strategy_id": "btc-reversal", "positions_count": 1,
             "positions": [{"tokenId": "yes", "shares": shares, "costUsd": cost, "realizedPnlUsd": 0}],
-            "markets": [{"id": self.market_id, "name": self.slug}],
+            "markets": [{"id": self.market_id, "name": self.slug, "roundId": self.round_id}],
             "strategy_runtime": {"strategyId": "btc-reversal", "currentRound": current, "rounds": [current]}, **extra}}
 
     def fill(self, **extra):
@@ -69,7 +71,10 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertEqual(summary["settled_markets"], 1)
         self.assertEqual(summary["settled_pnl_pending"], 1)
         self.assertIsNone(summary["settled_pnl"])
-        self.write("run-a", [self.fill()])
+        self.assertAlmostEqual(summary["estimated_fees"], .1)
+        self.write("run-a", [{"event": "fill", "trade_id": "trade-a", "order_id": "order-a",
+                              "fee": .1, "fee_source": "reported", "trade_status": "CONFIRMED",
+                              "engine_ts": self.now + 1}])
         self.assertAlmostEqual(self.ledger.summary("run-a")["settled_pnl"], 5.9)
         self.write("run-b", [self.settlement()])
         self.assertIsNone(self.ledger.summary("run-b")["settled_pnl"])
@@ -99,9 +104,9 @@ class LedgerRegressionTests(unittest.TestCase):
 
     def test_position_aliases_staleness_missing_and_unread_journal(self):
         self.write("run-a", [self.runtime()])
-        for identity in (None, self.market_id, self.slug):
+        for identity in (None, self.market_id, self.round_id):
             view = self.ledger.position("run-a", identity)
-            self.assertEqual(view["roundId"], self.slug)
+            self.assertEqual(view["roundId"], self.round_id)
             self.assertEqual(view["marketId"], self.market_id)
             self.assertEqual(view["yesShares"], 10)
             self.assertFalse(view["stale"])
@@ -110,7 +115,7 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertIsNone(missing["yesShares"])
         with (self.root / "run-a.jsonl").open("a", encoding="utf-8") as stream:
             stream.write('{}\n')
-        stale = self.ledger.position("run-a", self.slug)
+        stale = self.ledger.position("run-a", self.round_id)
         self.assertTrue(stale["stale"])
         self.assertEqual(stale["yesShares"], 10)
         self.write("old", [{**self.runtime(), "recv_ts": self.now - 30}])
@@ -129,6 +134,36 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertEqual(current["orders"][0]["status"], "FILLED")
         self.assertAlmostEqual(current["orders"][0]["fee"], .1)
 
+    def test_runtime_mapping_backfills_late_market_and_round_identity(self):
+        # Runtime status is allowed to arrive after journal business events.
+        # The ledger must use that observed mapping, never infer a round from
+        # the event timestamp.
+        order = {"event": "order", "client_order_id": "client-late", "order_id": "order-late",
+                 "status": "OPEN", "market_slug": self.slug, "updated_at": self.now,
+                 "shares": 10, "price": .4, "filled_shares": 0}
+        settlement = {"event": "platform_settlement", "market_id": self.market_id,
+                      "state": "pending", "payout_verified": False}
+        runtime = self.runtime()
+        runtime["runtime"]["markets"][0]["roundId"] = self.round_id
+        runtime["runtime"]["strategy_runtime"]["currentRound"]["roundId"] = self.round_id
+        runtime["runtime"]["strategy_runtime"]["rounds"][0]["roundId"] = self.round_id
+        self.write("run-a", [order, self.fill(trade_id="late-trade"), settlement, runtime])
+        events = self.ledger.events("run-a", kinds={"order", "fill", "settlement"})["events"]
+        by_event = {item["event"]: item for item in events}
+        for item in by_event.values():
+            self.assertEqual(item["marketId"] if "marketId" in item else item["market_id"], self.market_id)
+            self.assertEqual(item["roundId"] if "roundId" in item else item["round_id"], self.round_id)
+        page = self.ledger.settlements_page("run-a")["settlements"]
+        self.assertEqual(page[0]["market_id"], self.market_id)
+        self.assertEqual(page[0]["round_id"], self.round_id)
+
+    def test_unknown_round_identity_is_not_guessed(self):
+        fill = self.fill(market_slug="unknown-old-slug", trade_id="unknown-round")
+        self.write("run-a", [fill])
+        item = self.ledger.events("run-a", kinds={"fill"})["events"][0]
+        self.assertIsNone(item["market_id"])
+        self.assertIsNone(item["round_id"])
+
     def test_range_is_utc_account_scoped_and_restart_deduplicated(self):
         self.write("run-a", [self.fill(), self.runtime(), self.settlement()])
         self.write("run-b", [self.fill(), self.runtime(), self.settlement()])
@@ -143,6 +178,33 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertEqual(self.ledger.summary("run-a", range="all")["fill_count"], 2)
         with self.assertRaises(ValueError):
             self.ledger.summary("run-a", range="unsupported")
+
+    def test_same_economic_fill_across_restart_counts_once(self):
+        self.write("run-a", [self.fill(trade_id="same-trade", order_id="same-order")])
+        self.write("run-b", [self.fill(trade_id="same-trade", order_id="same-order")])
+        summary = self.ledger.summary("run-a", range="all")
+        self.assertEqual(summary["run_count"], 2)
+        self.assertEqual(summary["fill_count"], 1)
+        self.assertAlmostEqual(summary["fill_notional"], 4.0)
+
+    def test_failed_fill_can_be_repaired_only_by_newer_confirmation(self):
+        self.write("run-a", [self.fill(trade_id="repair-trade", order_id="repair-order",
+                                        trade_status="FAILED", fee_source="estimate", engine_ts=self.now + 2)])
+        self.assertEqual(self.ledger.summary("run-a")["estimated_fees"], 0)
+        self.write("run-b", [self.fill(trade_id="repair-trade", order_id="repair-order",
+                                        trade_status="CONFIRMED", engine_ts=self.now + 1)])
+        self.assertEqual(self.ledger.summary("run-a", range="all")["fill_count"], 0)
+        self.write("run-c", [self.fill(trade_id="repair-trade", order_id="repair-order",
+                                        trade_status="CONFIRMED", engine_ts=self.now + 3)])
+        self.assertEqual(self.ledger.summary("run-a", range="all")["fill_count"], 1)
+
+    def test_confirmed_fill_is_terminal_against_later_failure(self):
+        self.write("run-a", [self.fill(trade_id="terminal-trade", order_id="terminal-order")])
+        self.write("run-b", [self.fill(trade_id="terminal-trade", order_id="terminal-order",
+                                        trade_status="FAILED", engine_ts=self.now + 1)])
+        summary = self.ledger.summary("run-a", range="all")
+        self.assertEqual(summary["fill_count"], 1)
+        self.assertAlmostEqual(summary["fill_notional"], 4.0)
 
 
 if __name__ == "__main__":
