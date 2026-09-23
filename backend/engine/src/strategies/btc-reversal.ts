@@ -182,6 +182,18 @@ export class BtcReversalStrategy implements StrategyPlugin {
     if (!Number.isFinite(context.now)) return [];
     this.latestNow = context.now;
     let changed = this.discover(context);
+    // A durable stage intent can outlive the five-minute market if the
+    // process dies after persisting the strategy state but before the order
+    // request reaches the execution layer. It can no longer be submitted.
+    for (const [clientOrderId, stage] of this.createdStages) {
+      const indexed = this.stagesByClient.get(clientOrderId);
+      if (!indexed || context.now < indexed.round.endsAt) continue;
+      stage.status = "ABANDONED";
+      stage.error ??= "场次已结束，未提交的阶段意图已放弃";
+      this.replayIntents.delete(stage.clientOrderId);
+      this.createdStages.delete(stage.clientOrderId);
+      changed = true;
+    }
     if (event.kind === "order") changed = this.recordOrder(event.order) || changed;
     // Context recovery may already contain an order before its first callback reaches the plugin.
     const knownClients = new Set<string>();
@@ -269,6 +281,15 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const threshold = round.config.triggerPrice;
       const confirming = this.uniqueDirection(pair.upAsk >= round.config.confirmationPrice,
         pair.downAsk >= round.config.confirmationPrice);
+      if (first) {
+        // The first complete pair is only a baseline. Without a prior
+        // below-trigger observation there is no real crossing to trade.
+        round.reference = pair;
+        round.reason = "已建立行情基线，等待跨价";
+        if (confirming) round.lastConfirmedDirection = confirming;
+        changed = true;
+        continue;
+      }
       if (round.rebuildingReference) {
         round.reference = pair; round.rebuildingReference = false; round.referenceFloor = undefined;
         round.pendingAmbiguity = false;
@@ -277,7 +298,17 @@ export class BtcReversalStrategy implements StrategyPlugin {
         changed = true;
         continue;
       }
-      if (pair.upAsk >= threshold && pair.downAsk >= threshold) {
+      // Both asks above the trigger are ambiguous only when there is no
+      // directional baseline. If one side was already above the trigger and
+      // the other side newly crosses it, that is a clear reversal and must
+      // produce the opposite stage immediately.
+      const bothAbove = pair.upAsk >= threshold && pair.downAsk >= threshold;
+      const previousBothBelow = previous !== undefined
+        && previous.upAsk < threshold && previous.downAsk < threshold;
+      const previousBothAbove = previous !== undefined
+        && previous.upAsk >= threshold && previous.downAsk >= threshold;
+      const baselineAlsoBothAbove = previousBothBelow || previousBothAbove;
+      if (bothAbove && baselineAlsoBothAbove) {
         round.pendingAmbiguity = true;
         round.reference = pair;
         round.reason = "双边价格冲突，等待明确方向"; changed = true; continue;
@@ -286,13 +317,12 @@ export class BtcReversalStrategy implements StrategyPlugin {
         if (round.lastConfirmedDirection) round.confirmationCount += 1;
         round.lastConfirmedDirection = confirming; changed = true;
       }
-      const initial = first && round.stages.length === 0;
       const resolvingAmbiguity = round.pendingAmbiguity === true;
       if (resolvingAmbiguity) { round.pendingAmbiguity = false; changed = true; }
-      const upCross = resolvingAmbiguity ? pair.upAsk >= threshold : previous ? previous.upAsk < threshold && pair.upAsk >= threshold
-        : initial && pair.upAsk >= threshold && pair.upAsk <= round.config.maxBuyPrice;
-      const downCross = resolvingAmbiguity ? pair.downAsk >= threshold : previous ? previous.downAsk < threshold && pair.downAsk >= threshold
-        : initial && pair.downAsk >= threshold && pair.downAsk <= round.config.maxBuyPrice;
+      const upCross = resolvingAmbiguity ? pair.upAsk >= threshold
+        : previous !== undefined && previous.upAsk < threshold && pair.upAsk >= threshold;
+      const downCross = resolvingAmbiguity ? pair.downAsk >= threshold
+        : previous !== undefined && previous.downAsk < threshold && pair.downAsk >= threshold;
       round.reference = pair;
       const direction = this.uniqueDirection(upCross, downCross);
       if (round.stages.length >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
@@ -312,7 +342,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const candidate: ReversalStage = { stage: round.stages.length + 1, direction, tokenId,
         clientOrderId: `${this.state.instanceId}:${round.marketId}:${round.stages.length + 1}`,
         price: round.config.maxBuyPrice, shares, createdAt: context.now,
-        trigger: initial ? "initial_band_entry" : "crossing", status: "CREATED", filledShares: 0 };
+        trigger: "crossing", status: "CREATED", filledShares: 0 };
       let feeReserve: number;
       try { feeReserve = context.estimateFee?.(this.orderIntent(candidate, round.config)) ?? 0; }
       catch { round.reason = "当前交易费用暂不可用"; continue; }

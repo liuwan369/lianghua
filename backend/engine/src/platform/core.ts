@@ -83,10 +83,18 @@ export class TradingCore {
       this.fillIndexByKey.set(key, index);
     });
     for (const order of this.state.orders) {
-      if (["SUBMITTING", "UNKNOWN"].includes(order.status) && order.identityProtocol === "signed-before-post" && !order.prepared) {
+      if (order.status !== "SUBMITTING") continue;
+      if (order.identityProtocol === "signed-before-post" && !order.prepared) {
         // In this protocol HTTP cannot begin until the signed identity commit.
         order.status = "REJECTED"; order.error = "process interrupted before signed submission";
         order.reservedUsd = 0; order.reservedShares = 0; order.reconciliationPending = false;
+      } else {
+        // A restored process has no in-memory submission promise to await. A
+        // durable order identity means the POST may already have reached the
+        // venue, so continue through UNKNOWN/reconciliation instead of leaving
+        // stop() stuck on an ACK that can never arrive in this process.
+        order.status = "UNKNOWN";
+        order.error ??= "process interrupted before order acknowledgement";
       }
     }
     // Restored in-flight requests must be reconciled with the venue before another submission.
@@ -304,17 +312,22 @@ export class TradingCore {
     const unmapped = this.hasUnmappedReconciliation();
     this.state.risk.blockedMarketIds = blockedMarketIds;
     this.state.risk.reconciliationRequired = this.state.orders.some(candidate =>
-      candidate.status === "UNKNOWN" || candidate.reconciliationPending === true);
+      ["SUBMITTING", "UNKNOWN"].includes(candidate.status) || candidate.reconciliationPending === true);
     // An unresolved order reserves only its own market's capital.  Do not
     // turn a delayed venue response for one five-minute round into a global
     // strategy halt that suppresses the next round.
     if (unmapped && (!this.state.risk.reason || this.isScopedReconciliationReason(this.state.risk.reason))) {
       this.state.risk.halted = true;
       this.state.risk.reason = "unknown order requires reconciliation";
+    } else if (this.state.orders.some(candidate => candidate.status === "SUBMITTING")
+      && (!this.state.risk.reason || this.isScopedReconciliationReason(this.state.risk.reason))) {
+      this.state.risk.halted = true;
+      this.state.risk.reason = "restored orders require reconciliation";
     } else if (blockedMarketIds.length > 0 && this.isScopedReconciliationReason(this.state.risk.reason)) {
       this.state.risk.halted = false;
       delete this.state.risk.reason;
-    } else if (blockedMarketIds.length === 0 && !unmapped && this.state.risk.reason?.includes("reconciliation")) {
+    } else if (blockedMarketIds.length === 0 && !unmapped && this.state.risk.reason?.includes("reconciliation")
+      && !(this.state.risk.reason === "restored orders require reconciliation" && this.state.orders.some(active))) {
       this.state.risk.halted = false;
       delete this.state.risk.reason;
     }
@@ -836,10 +849,18 @@ export class TradingCore {
     if (!order) throw new Error("order not found");
     if (!active(order)) return copy(order);
     if (order.status === "SUBMITTING") {
-      await Promise.resolve();
-      await this.submissions.get(order.clientOrderId);
-      if (order.status === "SUBMITTING") throw new Error("order ACK pending");
-      return this.cancelOrder(id);
+      const pending = this.submissions.get(order.clientOrderId);
+      if (pending) {
+        await pending;
+        if (order.status === "SUBMITTING") throw new Error("order ACK pending");
+        return this.cancelOrder(id);
+      }
+      // After a restart the in-memory submission map is empty. A persisted
+      // order identity proves the POST may have reached the venue, so cancel
+      // it through the normal UNKNOWN/reconciliation path instead of waiting
+      // forever for an ACK that belongs to the previous process.
+      if (!order.orderId) throw new Error("unidentified submission requires reconciliation");
+      order.status = "UNKNOWN";
     }
     if (!order.orderId) throw new Error("unidentified order requires reconciliation");
     const cancelRequestedAt = this.clock();
@@ -1172,22 +1193,32 @@ export class TradingCore {
       order.orderId != null && this.isOrderQuarantined(order.orderId);
     const ownedActive = () => this.state.orders.filter(o =>
       active(o) && o.strategyId !== "external" && !isQuarantined(o));
-    const result = await Promise.allSettled(ownedActive().map(o => this.cancel(o.orderId ?? o.clientOrderId)));
-    if (result.some(item => item.status === "rejected")) throw new Error("stop left unresolved orders");
-    this.options.adapters.beforeFinalReconcile?.();
-    let unresolved = this.state.orders.some(o =>
-      reservationPending(o) && o.strategyId !== "external" && !isQuarantined(o));
-    if (unresolved && this.options.adapters.readAccount) {
-      try {
-        this.reconcile(await this.options.adapters.readAccount());
-      } catch {
-        // Keep the fail-closed state when the final ordinary account read
-        // cannot prove every cancellation and fill outcome.
-      }
-      unresolved = this.state.orders.some(o =>
+    let failure: unknown;
+    try {
+      const result = await Promise.allSettled(ownedActive().map(o => this.cancel(o.orderId ?? o.clientOrderId)));
+      if (result.some(item => item.status === "rejected")) throw new Error("stop left unresolved orders");
+      this.options.adapters.beforeFinalReconcile?.();
+      let unresolved = this.state.orders.some(o =>
         reservationPending(o) && o.strategyId !== "external" && !isQuarantined(o));
+      if (unresolved && this.options.adapters.readAccount) {
+        try {
+          this.reconcile(await this.options.adapters.readAccount());
+        } catch {
+          // Keep the fail-closed state when the final ordinary account read
+          // cannot prove every cancellation and fill outcome.
+        }
+        unresolved = this.state.orders.some(o =>
+          reservationPending(o) && o.strategyId !== "external" && !isQuarantined(o));
+      }
+      if (unresolved) throw new Error("stop left unresolved orders");
+    } catch (error) {
+      failure = error;
     }
-    if (unresolved) throw new Error("stop left unresolved orders");
-    this.persist(true); this.emit({ kind: "stopped", reason });
+    // Operators and the control plane need a terminal event even when a
+    // venue timeout leaves an order unresolved. The risk state remains closed
+    // and the original error is still returned to the caller.
+    try { this.persist(true); } catch (error) { failure ??= error; }
+    this.emit({ kind: "stopped", reason: failure ? `${reason}: unresolved orders` : reason });
+    if (failure) throw failure instanceof Error ? failure : new Error("stop failed");
   }
 }

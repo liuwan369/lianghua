@@ -377,8 +377,14 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
             allowRecoveryAfterEvidence(userEvent.orderId);
           }
         } else {
-          if (!userEvent.orderId || !userEvent.tradeId || !userEvent.tokenId || !userEvent.direction
-            || !platform.orders.get(userEvent.orderId)) throw new Error("account trade requires order ownership reconciliation");
+          if (!userEvent.orderId || !userEvent.tradeId || !userEvent.tokenId || !userEvent.direction) {
+            throw new Error("account trade requires order ownership reconciliation");
+          }
+          // Maker trade rows can include another service's order from the
+          // same wallet. Do not take the authenticated feed offline for an
+          // order this runtime does not own; only owned orders enter the
+          // execution ledger.
+          if (!platform.orders.get(userEvent.orderId)) return;
           const f = userEvent.fill;
           if (userEvent.reportLatencyMs != null) platform.ingest({ kind: "latency", metric: "authenticated_trade_report",
             durationMs: userEvent.reportLatencyMs, ts: Date.now() / 1000, marketId: market.id,
@@ -504,8 +510,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       // it as a missing old order.
       const currentBeforeReconcile = platform.account.current();
       const hasPostReadOrder = currentBeforeReconcile.orders.some(order =>
-        !initialOrderIds.has(order.clientOrderId) && (order.status === "SUBMITTING" || order.status === "OPEN"
-          || order.status === "PARTIAL" || order.status === "UNKNOWN" || order.reconciliationPending));
+        (!initialOrderIds.has(order.clientOrderId) && order.status !== "REJECTED")
+        || order.updatedAt > account.at + 1e-8);
       if (hasPostReadOrder) {
         // This account cut predates a live order from another market. Do not
         // apply it: `reconcile()` would otherwise call that fresh order
