@@ -1,0 +1,109 @@
+# Market Data Integration Handoff
+
+This document records the handoff from `codex/market-data` to the integration,
+trading-runtime, ledger-api, and frontend workstreams. It describes the
+contract and checks required to consume the live BTC five-minute feed. It is
+not a replacement for the shared API contract.
+
+## Delivered By Market Data
+
+- Polymarket public market WebSocket for the YES and NO assets on one socket.
+- Deterministic `btc-updown-5m-{roundStart}` discovery and `roundId` handling.
+- L2 book replication with best bid/ask and top-five bids/asks.
+- `book`, `bookStatus`, `tickSize`, and public trade feed events.
+- Connection Promise reuse, reconnect backoff with jitter, watchdogs, and stop cancellation.
+- Source timestamp watermarks across reconnects and same-frame wire ordering.
+- Invalid-frame rejection, empty quote tombstones, source freshness, and expiry handling.
+
+The implementation is committed on `codex/market-data` at `1366549`.
+
+## Internal Snapshot
+
+The feed emits `FeedEvent` with `kind: "book"` and a `BookSnapshot` containing
+these fields:
+
+```text
+marketId       venue condition id
+roundId        five-minute Unix start boundary as a string
+sequence       local monotonic sequence for accepted paired snapshots
+sourceAt       newest venue timestamp represented by the pair
+expiresAt      earliest of round end and source freshness deadline
+YES / NO       normalized asset snapshots
+```
+
+Each asset snapshot contains `assetId`, `bid`, `ask`, optional best sizes,
+optional sorted five-level `bids` and `asks`, its own `sourceAt`, `expiresAt`,
+and the paired `sequence`. Compatibility `up*` and `down*` fields remain in
+`BookSnapshot` for the existing platform adapter.
+
+Consumers must use `YES` and `NO` for new code. The frontend adapter may map
+them to lowercase `yes` and `no`; it must not create a second quote source.
+
+## Required Integration Checks
+
+Before a snapshot reaches strategy execution, the integration adapter must:
+
+1. Match `snapshot.marketId` and `snapshot.roundId` with the active market.
+2. Require `snapshot.sequence` to be greater than the last accepted sequence for that market and round.
+3. Require `snapshot.expiresAt > now` and both YES and NO best prices to be valid.
+4. Reject a source timestamp regression on either asset.
+5. Treat `bookStatus.healthy === false`, `stale_book`, and `transport_disconnected` as execution gate failures.
+6. Publish the accepted snapshot object to both strategy input and the market stream.
+
+`tsUnix` and local receive time do not make an expired source quote fresh.
+`sourceAt`, `expiresAt`, and the two per-asset source timestamps are the
+freshness fields.
+
+## Ownership
+
+| Workstream | Owns | Required action |
+| --- | --- | --- |
+| `codex/market-data` | WebSocket, discovery, order book, quote freshness | Complete. Do not add strategy or API logic here. |
+| `codex/trading-runtime` | Strategy input, execution gate, order lifecycle | Consume the accepted snapshot, block stale/mismatched rounds, and preserve order idempotency and recovery. |
+| `codex/ledger-api` | Shared DTOs, runtime API, ledger projections | Turn the documented DTOs into typed contracts and expose market pool, runtime status, commands, orders, and events. |
+| `codex/integration` | Cross-module wiring and deployment | Merge the module branches, add adapters/startup order, and run server end-to-end checks. |
+| `codex/frontend-console` | Store and view adapters | Consume market/runtime streams and preserve the last valid snapshot when a source becomes stale. |
+
+The shared contract should live under `shared/contracts`. This handoff file is
+kept beside the feed so the integration owner can verify the source behavior
+without changing the market-data ownership boundary.
+
+## Integration Wiring
+
+The platform connector should pass market identity when starting the feed:
+
+```ts
+runPolymarketFeed(
+  sink(market),
+  up.tokenId,
+  down.tokenId,
+  Math.min(feedDeadline, market.endsAt),
+  { marketId: market.id, roundId: String(market.startsAt) },
+);
+```
+
+The server-owned market pool selects the current and next BTC five-minute
+round. At a boundary, the old round stops producing strategy triggers only
+after its orders are assigned to the old `roundId`; the next round becomes
+eligible only after a fresh bilateral snapshot passes the checks above.
+
+Runtime commands are asynchronous. The command response only acknowledges
+receipt and includes `requestId`; the runtime stream is authoritative for
+`starting`, `running`, `paused`, `stopping`, `stopped`, and `error`.
+
+## Verification Order
+
+1. Build the merged integration branch and run the existing engine tests.
+2. Run the read-only `market-snapshot` process on the server. Confirm market discovery, WebSocket data, five-level depth, sequence monotonicity, expiry, and round switching.
+3. Run the platform in observation mode with no strategy configuration. Confirm that it consumes the snapshot but submits no order.
+4. Verify market stream and runtime stream use the same `marketId`, `roundId`, `sequence`, `sourceAt`, and `expiresAt` values.
+5. Only after the previous checks pass, schedule a separately approved real-order validation.
+
+## Remaining Risks
+
+- The current server worktree is not the integrated branch. A server checkout or deployment of `codex/integration` is required before testing runtime APIs or order execution.
+- The existing shared contract is still partly documentation. Until typed DTO validation exists, a field rename can silently break one consumer.
+- `codex/trading-runtime` must still wire the snapshot gate to the strategy and gateway. Market data tests do not prove strategy or order correctness.
+- This work has not placed a real order and does not verify fills, cancellation, reconciliation, settlement, or ledger projection.
+- Polymarket event formats, venue clocks, Gamma availability, or server network conditions can change. The read-only probe must remain part of deployment verification.
+
