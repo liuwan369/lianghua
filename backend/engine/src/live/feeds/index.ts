@@ -112,7 +112,7 @@ export type FeedEvent =
   | { kind: "user"; event: UserFeedEvent; receivedAtMonoMs?: number }
   | { kind: "userStatus"; healthy: boolean; tsUnix: number }
   | { kind: "bookStatus"; healthy: boolean; connected?: boolean;
-      reason?: "connected_waiting_book" | "complete_book" | "incomplete_book" | "transport_disconnected"; tsUnix: number };
+      reason?: "connected_waiting_book" | "complete_book" | "incomplete_book" | "stale_book" | "transport_disconnected"; tsUnix: number };
 
 export function nowUnix(): number {
   return Date.now() / 1000;

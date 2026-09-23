@@ -1,12 +1,11 @@
 import WebSocket from "ws";
+import { setTimeout as delay } from "node:timers/promises";
 import { OrderBook } from "../orderbook.js";
 import {
   type BookSnapshot,
   type FeedSink,
   type MarketAssetSnapshot,
   nowUnix,
-  num,
-  sleep,
 } from "./index.js";
 
 const PM_WS = "wss://ws-subscriptions-clob.polymarket.com/ws/market";
@@ -27,15 +26,24 @@ export const PM_WS_RECONNECT_BASE_MS = 250;
 export const PM_WS_RECONNECT_MAX_MS = 30_000;
 const PM_WS_MAX_CLOCK_SKEW_MS = 1_000;
 const PM_WS_WATCHDOG_INTERVAL_MS = 1_000;
+const PM_WS_RECONNECT_STABLE_MS = 30_000;
 
 export interface AppliedBookTimes {
   upMs: number;
   downMs: number;
+  upInitialized?: boolean;
+  downInitialized?: boolean;
 }
 
 export interface MarketFeedIdentity {
   marketId?: string;
   roundId?: string;
+}
+
+function num(value: unknown): number | undefined {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function exchangeTimeMs(event: Record<string, unknown>): number | undefined {
@@ -72,15 +80,16 @@ function sideOf(
   return undefined;
 }
 
-function levelList(v: unknown): [number, number][] {
-  if (!Array.isArray(v)) return [];
+function levelList(v: unknown): [number, number][] | undefined {
+  if (!Array.isArray(v)) return undefined;
   const out: [number, number][] = [];
   for (const lv of v) {
-    if (!lv || typeof lv !== "object") continue;
+    if (!lv || typeof lv !== "object") return undefined;
     const o = lv as Record<string, unknown>;
     const p = num(o.price);
-    if (p == null) continue;
-    out.push([p, num(o.size) ?? 0]);
+    const size = num(o.size);
+    if (p == null || p <= 0 || p >= 1 || size == null || size <= 0) return undefined;
+    out.push([p, size]);
   }
   return out;
 }
@@ -101,7 +110,7 @@ function applyMessage(
   let frameUpMs: number | undefined;
   let frameDownMs: number | undefined;
   const acceptsTimestamp = (side: boolean, eventMs: number | undefined): boolean => {
-    if (eventMs == null) return true;
+    if (eventMs == null) return false;
     const lastMs = side ? applied.upMs : applied.downMs;
     const frameMs = side ? frameUpMs : frameDownMs;
     if (eventMs < lastMs) return false;
@@ -117,7 +126,10 @@ function applyMessage(
   for (const [eventOrder, raw] of events.entries()) {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
+    const eventType = String(e.event_type ?? "").toLowerCase();
+    if (eventType !== "book" && eventType !== "price_change") continue;
     const eventMs = exchangeTimeMs(e);
+    if (eventMs == null) continue;
     const topTok =
       typeof e.asset_id === "string"
         ? e.asset_id
@@ -130,10 +142,17 @@ function applyMessage(
       if (side != null) {
         const bids = levelList(e.bids ?? e.buys);
         const asks = levelList(e.asks ?? e.sells);
-        const isSnapshot = Array.isArray(e.bids ?? e.buys) && Array.isArray(e.asks ?? e.sells);
-        if (isSnapshot && acceptsTimestamp(side, eventMs)) {
+        const initialized = side ? applied.upInitialized : applied.downInitialized;
+        const lastMs = side ? applied.upMs : applied.downMs;
+        // Equal-time reconnect snapshots rebuild depth without refreshing
+        // liveness or publishing an old quote as a new observation.
+        const bootstrap = initialized === false && eventMs === lastMs;
+        if (bids && asks && (bootstrap || acceptsTimestamp(side, eventMs))) {
           const ob = side ? up : dn;
           ob.applySnapshot(bids, asks);
+          if (side) applied.upInitialized = true;
+          else applied.downInitialized = true;
+          if (bootstrap) continue;
           if (side) {
             upUpdated = true;
             upOrder = eventOrder;
@@ -159,13 +178,12 @@ function applyMessage(
               ? c.token_id
               : topTok;
         if (typeof tok !== "string") continue;
-        const side =
-          sideOf(tok, upToken, downToken) ??
-          (topTok ? sideOf(topTok, upToken, downToken) : undefined);
+        const side = sideOf(tok, upToken, downToken);
         if (side == null) continue;
+        if ((side ? applied.upInitialized : applied.downInitialized) === false) continue;
         const price = num(c.price);
-        if (price == null) continue;
-        const size = num(c.size) ?? 0;
+        const size = num(c.size);
+        if (price == null || price <= 0 || price >= 1 || size == null || size < 0) continue;
         const dside = String(c.side ?? "").toUpperCase();
         const isBuy = dside === "BUY" || dside === "BID";
         const isSell = dside === "SELL" || dside === "ASK";
@@ -250,7 +268,7 @@ function bestBidAskChanges(
       const bid = num(quote.best_bid), ask = num(quote.best_ask);
       const emptyBid = quote.best_bid == null || quote.best_bid === "";
       const emptyAsk = quote.best_ask == null || quote.best_ask === "";
-      const candidateOrder = eventType === "best_bid_ask" ? order : order + (index + 1) / 1000;
+      const candidateOrder = eventType === "best_bid_ask" ? order : order + (index + 1) / (candidateCount + 1);
       if (bid == null || ask == null) {
         if ((bid == null && !emptyBid) || (ask == null && !emptyAsk)) continue;
         // A timestamp is the only venue ordering key available on this
@@ -293,7 +311,7 @@ function tickSizeChanges(v: unknown): Array<{ token: string; tickSize: number; t
     const token = typeof e.asset_id === "string" ? e.asset_id : undefined;
     const tickSize = num(e.new_tick_size ?? e.tick_size);
     const atMs = exchangeTimeMs(e);
-    if (token && tickSize != null && tickSize > 0) out.push({ token, tickSize, ...(atMs != null ? {tsUnix:atMs / 1000} : {}) });
+    if (token && tickSize != null && tickSize > 0 && atMs != null) out.push({ token, tickSize, tsUnix: atMs / 1000 });
   }
   return out;
 }
@@ -337,21 +355,37 @@ function marketTrades(v: unknown): Array<{
   return out;
 }
 
-function connectWs(url: string, timeoutMs = 10_000): Promise<WebSocket> {
+function connectWs(url: string, signal: AbortSignal, timeoutMs = 10_000): Promise<WebSocket> {
+  signal.throwIfAborted();
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
+    const abort = () => {
+      ws.terminate();
+      cleanup();
+      reject(new Error("websocket connect cancelled"));
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+    };
     const timer = setTimeout(() => {
       ws.terminate();
+      cleanup();
       reject(new Error(`websocket connect timeout after ${timeoutMs}ms`));
     }, timeoutMs);
     ws.once("open", () => {
-      clearTimeout(timer);
+      cleanup();
       resolve(ws);
     });
     ws.once("error", (error) => {
-      clearTimeout(timer);
+      cleanup();
       reject(error);
     });
+    ws.once("close", () => {
+      cleanup();
+      reject(new Error("websocket closed before open"));
+    });
+    signal.addEventListener("abort", abort, { once: true });
   });
 }
 
@@ -364,6 +398,7 @@ export function runPolymarketFeed(
   identity: MarketFeedIdentity = {},
 ): { stop: () => void; isHealthy: (maxStaleMs?: number) => boolean } {
   let alive = true;
+  const stopSignal = new AbortController();
   let activeWs: WebSocket | undefined;
   let connected = false;
   let hasCompleteBook = false;
@@ -391,7 +426,7 @@ export function runPolymarketFeed(
 
   const connect = (): Promise<WebSocket> => {
     if (connectingWs) return connectingWs;
-    const task = connectWs(PM_WS);
+    const task = connectWs(PM_WS, stopSignal.signal);
     connectingWs = task;
     // Keep one in-flight connection attempt per feed. This also prevents a
     // stop/reconnect race from opening a second socket before the first settles.
@@ -411,7 +446,6 @@ export function runPolymarketFeed(
           break;
         }
         activeWs = ws;
-        reconnectAttempt = 0;
         setConnected(true);
         hasCompleteBook = false;
         lastUpAtMs = 0;
@@ -432,6 +466,8 @@ export function runPolymarketFeed(
         const applied: AppliedBookTimes = {
           upMs: acceptedUpSourceMs,
           downMs: acceptedDownSourceMs,
+          upInitialized: false,
+          downInitialized: false,
         };
         const tickSizes: { up?: number; down?: number } = {};
         const fastApplied: AppliedBookTimes = {
@@ -455,6 +491,12 @@ export function runPolymarketFeed(
         let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
         let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
         let upProcessedAtMonoMs = 0, downProcessedAtMonoMs = 0;
+        let reportedHealthy: boolean | undefined;
+        const reportHealth = (healthy: boolean, reason: "complete_book" | "incomplete_book" | "stale_book") => {
+          if (reportedHealthy === healthy) return;
+          reportedHealthy = healthy;
+          sink({ kind: "bookStatus", healthy, connected: true, reason, tsUnix: nowUnix() });
+        };
         const trace = process.env.PM_TRACE != null;
 
         const ping = setInterval(() => {
@@ -474,6 +516,9 @@ export function runPolymarketFeed(
         const watchdog = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
           const nowMs = Date.now();
+          if (reportedHealthy && nowMs - lastFreshBilateralAtMs > PM_WS_SOURCE_FRESH_MAX_MS) {
+            reportHealth(false, "stale_book");
+          }
           const silent = nowMs - lastAnyMessageAtMs >= PM_WS_MESSAGE_TIMEOUT_MS;
           const quoteStalled = nowMs - (lastBilateralActivityAtMs || connectedAtMs)
             >= PM_WS_BILATERAL_QUOTE_TIMEOUT_MS;
@@ -490,6 +535,7 @@ export function runPolymarketFeed(
 
         await new Promise<void>((resolve) => {
           ws.on("message", (data) => {
+            if (!alive || !connected || activeWs !== ws || nowUnix() >= deadline) return;
             const receivedAtUnix = nowUnix();
             const receivedAtMonoMs = performance.now();
             lastAnyMessageAtMs = Date.now();
@@ -510,7 +556,8 @@ export function runPolymarketFeed(
                 if (!raw || typeof raw !== "object") continue;
                 const e = raw as Record<string, unknown>;
                 const id = e.market_id ?? e.market ?? e.condition_id;
-                if (typeof id === "string" && id) resolvedMarketId = id;
+                const knownAsset = e.asset_id === upToken || e.asset_id === downToken;
+                if (!resolvedMarketId && knownAsset && typeof id === "string" && id) resolvedMarketId = id;
               }
               for (const change of tickSizeChanges(v)) {
                 const tsUnix = change.tsUnix ?? nowUnix();
@@ -538,13 +585,13 @@ export function runPolymarketFeed(
               const atMs = Date.now();
               if (changed.upUpdated) {
                 lastUpAtMs = atMs; upReceivedAtUnix = receivedAtUnix; upReceivedAtMonoMs = receivedAtMonoMs;
-                if (fastUp && applied.upMs >= fastUp.exchangeMs) fastUp = undefined;
-                if (upFastClearedAtMs > 0 && applied.upMs >= upFastClearedAtMs) upFastClearedAtMs = 0;
+                if (fastUp && applied.upMs > fastUp.exchangeMs) fastUp = undefined;
+                if (upFastClearedAtMs > 0 && applied.upMs > upFastClearedAtMs) upFastClearedAtMs = 0;
               }
               if (changed.downUpdated) {
                 lastDownAtMs = atMs; downReceivedAtUnix = receivedAtUnix; downReceivedAtMonoMs = receivedAtMonoMs;
-                if (fastDown && applied.downMs >= fastDown.exchangeMs) fastDown = undefined;
-                if (downFastClearedAtMs > 0 && applied.downMs >= downFastClearedAtMs) downFastClearedAtMs = 0;
+                if (fastDown && applied.downMs > fastDown.exchangeMs) fastDown = undefined;
+                if (downFastClearedAtMs > 0 && applied.downMs > downFastClearedAtMs) downFastClearedAtMs = 0;
               }
               if (changed.upUpdated) {
                 upDepth = up.levels(5);
@@ -554,10 +601,7 @@ export function runPolymarketFeed(
                 downDepth = dn.levels(5);
                 downDepthAtMs = applied.downMs;
               }
-              const fastChanges = bestBidAskChanges(v, upToken, downToken, {
-                upMs: fastWatermark.upMs,
-                downMs: fastWatermark.downMs,
-              });
+              const fastChanges = bestBidAskChanges(v, upToken, downToken, fastWatermark);
               for (const change of fastChanges) {
                 if (change.side === "up") {
                   if (changed.upUpdated && (change.exchangeMs < applied.upMs
@@ -601,13 +645,10 @@ export function runPolymarketFeed(
               const hasUpTop = upTop != null || (ub != null && ua != null);
               const hasDownTop = downTop != null || (db != null && da != null);
               if (!hasUpTop || !hasDownTop) {
-                if (hasCompleteBook) sink({ kind: "bookStatus", healthy: false, connected: true,
-                  reason: "incomplete_book", tsUnix: nowUnix() });
+                reportHealth(false, "incomplete_book");
                 hasCompleteBook = false;
                 return;
               }
-              if (!hasCompleteBook) sink({ kind: "bookStatus", healthy: true, connected: true,
-                reason: "complete_book", tsUnix: nowUnix() });
               hasCompleteBook = true;
               const upBid = upTop?.bid ?? ub![0];
               const upAsk = upTop?.ask ?? ua![0];
@@ -643,26 +684,30 @@ export function runPolymarketFeed(
               const upMarketAgeMs = upExchangeMs > 0 ? selectedUpReceivedAtUnix * 1000 - upExchangeMs : undefined;
               const downMarketAgeMs = downExchangeMs > 0 ? selectedDownReceivedAtUnix * 1000 - downExchangeMs : undefined;
               const sourceFresh = upMarketAgeMs != null && downMarketAgeMs != null
-                && [upMarketAgeMs, downMarketAgeMs].every(age =>
+                && [atMs - upExchangeMs, atMs - downExchangeMs].every(age =>
                   age >= -PM_WS_MAX_CLOCK_SKEW_MS && age <= PM_WS_SOURCE_FRESH_MAX_MS);
               const sourceBothStale = upMarketAgeMs != null && downMarketAgeMs != null
                 && upMarketAgeMs > PM_WS_SOURCE_FRESH_MAX_MS && downMarketAgeMs > PM_WS_SOURCE_FRESH_MAX_MS;
               if (sourceFresh) {
-                lastFreshBilateralAtMs = atMs;
+                if (atMs - connectedAtMs >= PM_WS_RECONNECT_STABLE_MS) reconnectAttempt = 0;
+                lastFreshBilateralAtMs = Math.min(atMs, upExchangeMs, downExchangeMs);
                 lastBothStaleAtMs = 0;
               } else if (sourceBothStale && lastBothStaleAtMs === 0) {
                 lastBothStaleAtMs = atMs;
               } else if (!sourceBothStale) {
                 lastBothStaleAtMs = 0;
               }
+              if (!sourceFresh) lastFreshBilateralAtMs = 0;
+              const healthChanged = reportedHealthy !== sourceFresh;
+              reportHealth(sourceFresh, sourceFresh ? "complete_book" : "stale_book");
               const sourceAtMs = Math.max(upExchangeMs, downExchangeMs);
               const topChanged = publishedUpBid !== upBid || publishedUpAsk !== upAsk
                 || publishedDownBid !== downBid || publishedDownAsk !== downAsk;
-              const depthChanged = changed.upUpdated || changed.downUpdated;
-              const depthRefreshDue = depthChanged && atMs - publishedAtMs >= PM_WS_DEPTH_REFRESH_MS;
-              if (!topChanged && !depthRefreshDue) return;
+              const refreshDue = atMs - publishedAtMs >= PM_WS_DEPTH_REFRESH_MS;
+              if (!topChanged && !refreshDue && !healthChanged) return;
               const snapshotSequence = ++sequence;
-              const expiresAt = Number.isFinite(deadline) ? deadline : undefined;
+              const expiresAt = Math.min(deadline,
+                (Math.min(upExchangeMs, downExchangeMs) + PM_WS_SOURCE_FRESH_MAX_MS) / 1000);
               const yes: MarketAssetSnapshot = {
                 assetId: upToken,
                 bid: upBid,
@@ -671,7 +716,7 @@ export function runPolymarketFeed(
                 askSize: upAskSz,
                 bids: outputUpDepth?.bids,
                 asks: outputUpDepth?.asks,
-                sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
+                sourceAt: upExchangeMs / 1000,
                 expiresAt,
                 sequence: snapshotSequence,
               };
@@ -683,7 +728,7 @@ export function runPolymarketFeed(
                 askSize: downAskSz,
                 bids: outputDownDepth?.bids,
                 asks: outputDownDepth?.asks,
-                sourceAt: sourceAtMs > 0 ? sourceAtMs / 1000 : receivedAtUnix,
+                sourceAt: downExchangeMs / 1000,
                 expiresAt,
                 sequence: snapshotSequence,
               };
@@ -767,13 +812,18 @@ export function runPolymarketFeed(
         if (activeWs === ws) activeWs = undefined;
       } catch (e) {
         setConnected(false);
-        console.warn(`polymarket connect failed: ${e}`);
+        if (alive) console.warn(`polymarket connect failed: ${e}`);
       }
 
       if (alive && nowUnix() < deadline) {
         const delayMs = reconnectDelayMs(reconnectAttempt++);
         console.warn(`polymarket feed dropped, reconnecting in ${Math.round(delayMs)}ms`);
-        await sleep(delayMs);
+        try {
+          await delay(Math.min(delayMs, Math.max(0, (deadline - nowUnix()) * 1000)),
+            undefined, { signal: stopSignal.signal });
+        } catch {
+          if (!alive) break;
+        }
       }
     }
   };
@@ -782,12 +832,13 @@ export function runPolymarketFeed(
   return {
     stop: () => {
       alive = false;
+      stopSignal.abort();
       setConnected(false);
       activeWs?.terminate();
       activeWs = undefined;
     },
     isHealthy: (maxStaleMs = 2_000) =>
-      bookFeedHealthy(
+      alive && nowUnix() < deadline && bookFeedHealthy(
         connected,
         hasCompleteBook,
         lastUpAtMs,
