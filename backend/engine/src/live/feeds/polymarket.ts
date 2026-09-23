@@ -23,6 +23,8 @@ export const PM_WS_SOURCE_FRESH_MAX_MS = 2_000;
 // watchdog only bounds how long a bad socket can keep that gate closed.
 export const PM_WS_SOURCE_AGE_TIMEOUT_MS = 5_000;
 export const PM_WS_DEPTH_REFRESH_MS = 250;
+export const PM_WS_RECONNECT_BASE_MS = 250;
+export const PM_WS_RECONNECT_MAX_MS = 30_000;
 const PM_WS_MAX_CLOCK_SKEW_MS = 1_000;
 const PM_WS_WATCHDOG_INTERVAL_MS = 1_000;
 
@@ -189,10 +191,11 @@ function applyMessage(
 
 export interface BestBidAskChange {
   side: "up" | "down";
-  bid: number;
-  ask: number;
+  bid?: number;
+  ask?: number;
   exchangeMs: number;
   order: number;
+  clear?: boolean;
   receivedAtUnix?: number;
   receivedAtMonoMs?: number;
   processedAtMonoMs?: number;
@@ -207,25 +210,77 @@ function bestBidAskChanges(
 ): BestBidAskChange[] {
   const changes: BestBidAskChange[] = [];
   const accepted = { ...applied };
-  for (const [order, raw] of (Array.isArray(v) ? v : [v]).entries()) {
+  let frameUpMs: number | undefined;
+  let frameDownMs: number | undefined;
+  const acceptsTimestamp = (side: boolean, exchangeMs: number): boolean => {
+    const lastMs = side ? accepted.upMs : accepted.downMs;
+    const frameMs = side ? frameUpMs : frameDownMs;
+    if (exchangeMs < lastMs) return false;
+    // Equal timestamps are duplicates across frames, but multiple ordered
+    // events in one venue frame may legitimately share a timestamp.
+    if (exchangeMs === lastMs && frameMs !== exchangeMs) return false;
+    if (exchangeMs > lastMs) {
+      if (side) frameUpMs = exchangeMs;
+      else frameDownMs = exchangeMs;
+    }
+    return true;
+  };
+  const events = Array.isArray(v) ? v : [v];
+  for (let order = 0; order < events.length; order += 1) {
+    const raw = events[order];
     if (!raw || typeof raw !== "object") continue;
     const event = raw as Record<string, unknown>;
-    if (String(event.event_type ?? "").toLowerCase() !== "best_bid_ask") continue;
-    const token = typeof event.asset_id === "string" ? event.asset_id : undefined;
-    const side = token ? sideOf(token, upToken, downToken) : undefined;
-    const bid = num(event.best_bid), ask = num(event.best_ask), exchangeMs = exchangeTimeMs(event);
-    if (side == null || bid == null || ask == null || exchangeMs == null || !(bid > 0 && bid < 1)
-      || !(ask > 0 && ask < 1) || bid > ask) continue;
-    const lastMs = side ? accepted.upMs : accepted.downMs;
-    // A timestamp is the only venue ordering key available on this channel.
-    // Treat equal timestamps as already applied so a delayed duplicate cannot
-    // replace a newer top-of-book frame.
-    if (exchangeMs <= lastMs) continue;
-    changes.push({ side: side ? "up" : "down", bid, ask, exchangeMs, order });
-    if (side) accepted.upMs = Math.max(accepted.upMs, exchangeMs);
-    else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
+    const eventType = String(event.event_type ?? "").toLowerCase();
+    const exchangeMs = exchangeTimeMs(event);
+    if (exchangeMs == null) continue;
+    const priceChanges = eventType === "price_change" && Array.isArray(event.price_changes)
+      ? event.price_changes
+      : undefined;
+    const candidateCount = eventType === "best_bid_ask" ? 1 : priceChanges?.length ?? 0;
+    for (let index = 0; index < candidateCount; index += 1) {
+      const candidate = eventType === "best_bid_ask" ? event : priceChanges![index];
+      if (!candidate || typeof candidate !== "object") continue;
+      const quote = candidate as Record<string, unknown>;
+      const token = typeof quote.asset_id === "string" ? quote.asset_id : undefined;
+      const side = token ? sideOf(token, upToken, downToken) : undefined;
+      if (side == null) continue;
+      const hasBid = Object.prototype.hasOwnProperty.call(quote, "best_bid");
+      const hasAsk = Object.prototype.hasOwnProperty.call(quote, "best_ask");
+      if (!hasBid || !hasAsk) continue;
+      const bid = num(quote.best_bid), ask = num(quote.best_ask);
+      const emptyBid = quote.best_bid == null || quote.best_bid === "";
+      const emptyAsk = quote.best_ask == null || quote.best_ask === "";
+      const candidateOrder = eventType === "best_bid_ask" ? order : order + (index + 1) / 1000;
+      if (bid == null || ask == null) {
+        if ((bid == null && !emptyBid) || (ask == null && !emptyAsk)) continue;
+        // A timestamp is the only venue ordering key available on this
+        // channel. Empty quotes are valid tombstones and still advance it.
+        if (!acceptsTimestamp(side, exchangeMs)) continue;
+        // Empty best quotes are venue tombstones, not malformed data. Advance
+        // the timestamp watermark so an older quote cannot be restored.
+        changes.push({ side: side ? "up" : "down", exchangeMs, order: candidateOrder, clear: true });
+        if (side) accepted.upMs = Math.max(accepted.upMs, exchangeMs);
+        else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
+        continue;
+      }
+      if (!(bid > 0 && bid < 1) || !(ask > 0 && ask < 1) || bid > ask) continue;
+      // Equal timestamps are ordered only within this frame so a delayed
+      // duplicate from a later frame cannot replace a newer top-of-book frame.
+      if (!acceptsTimestamp(side, exchangeMs)) continue;
+      // Preserve order inside a frame so same-timestamp L2 and top updates
+      // are resolved in venue frame order without allocating mapped objects.
+      changes.push({ side: side ? "up" : "down", bid, ask, exchangeMs, order: candidateOrder });
+      if (side) accepted.upMs = Math.max(accepted.upMs, exchangeMs);
+      else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
+    }
   }
   return changes;
+}
+
+export function reconnectDelayMs(attempt: number, random = Math.random()): number {
+  const boundedAttempt = Math.max(0, Math.min(20, Math.floor(attempt)));
+  const cap = Math.min(PM_WS_RECONNECT_BASE_MS * 2 ** boundedAttempt, PM_WS_RECONNECT_MAX_MS);
+  return Math.max(0, Math.min(1, random)) * cap;
 }
 
 function tickSizeChanges(v: unknown): Array<{ token: string; tickSize: number; tsUnix?: number }> {
@@ -317,6 +372,12 @@ export function runPolymarketFeed(
   let lastFreshBilateralAtMs = 0;
   let lastBothStaleAtMs = 0;
   let sequence = 0;
+  let reconnectAttempt = 0;
+  let connectingWs: Promise<WebSocket> | undefined;
+  // Keep venue watermarks across reconnects so a replayed frame from the
+  // previous socket cannot publish a newer local sequence with an older book.
+  let acceptedUpSourceMs = 0;
+  let acceptedDownSourceMs = 0;
   let resolvedMarketId = identity.marketId;
   const inferredRoundId = identity.roundId ?? (Number.isFinite(deadline) && deadline % 300 === 0
     ? String(deadline - 300) : undefined);
@@ -328,15 +389,29 @@ export function runPolymarketFeed(
       reason: value ? "connected_waiting_book" : "transport_disconnected", tsUnix: nowUnix() });
   };
 
+  const connect = (): Promise<WebSocket> => {
+    if (connectingWs) return connectingWs;
+    const task = connectWs(PM_WS);
+    connectingWs = task;
+    // Keep one in-flight connection attempt per feed. This also prevents a
+    // stop/reconnect race from opening a second socket before the first settles.
+    void task.then(
+      () => { if (connectingWs === task) connectingWs = undefined; },
+      () => { if (connectingWs === task) connectingWs = undefined; },
+    );
+    return task;
+  };
+
   const loop = async () => {
     while (alive && nowUnix() < deadline) {
       try {
-        const ws = await connectWs(PM_WS);
+        const ws = await connect();
         if (!alive || nowUnix() >= deadline) {
           ws.terminate();
           break;
         }
         activeWs = ws;
+        reconnectAttempt = 0;
         setConnected(true);
         hasCompleteBook = false;
         lastUpAtMs = 0;
@@ -354,9 +429,15 @@ export function runPolymarketFeed(
 
         const up = new OrderBook();
         const dn = new OrderBook();
-        const applied: AppliedBookTimes = { upMs: 0, downMs: 0 };
+        const applied: AppliedBookTimes = {
+          upMs: acceptedUpSourceMs,
+          downMs: acceptedDownSourceMs,
+        };
         const tickSizes: { up?: number; down?: number } = {};
-        const fastApplied: AppliedBookTimes = { upMs: 0, downMs: 0 };
+        const fastApplied: AppliedBookTimes = {
+          upMs: acceptedUpSourceMs,
+          downMs: acceptedDownSourceMs,
+        };
         let fastUp: BestBidAskChange | undefined;
         let fastDown: BestBidAskChange | undefined;
         let publishedUpBid: number | undefined;
@@ -368,6 +449,8 @@ export function runPolymarketFeed(
         let downDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
         let upDepthAtMs = 0;
         let downDepthAtMs = 0;
+        let upFastClearedAtMs = 0;
+        let downFastClearedAtMs = 0;
         const tickSizeAt: { up?: number; down?: number } = {};
         let upReceivedAtUnix = 0, downReceivedAtUnix = 0;
         let upReceivedAtMonoMs = 0, downReceivedAtMonoMs = 0;
@@ -443,15 +526,25 @@ export function runPolymarketFeed(
               }
               // Apply the full frame before producing one paired snapshot. The
               // fast top is authoritative until a newer L2 update catches up.
+              // Keep the watermark from before this frame so same-timestamp
+              // embedded fast quotes are accepted and resolved by frame order.
+              const fastWatermark: AppliedBookTimes = {
+                upMs: Math.max(applied.upMs, fastApplied.upMs),
+                downMs: Math.max(applied.downMs, fastApplied.downMs),
+              };
               const changed = applyMessage(v, upToken, downToken, up, dn, applied);
+              acceptedUpSourceMs = Math.max(acceptedUpSourceMs, applied.upMs);
+              acceptedDownSourceMs = Math.max(acceptedDownSourceMs, applied.downMs);
               const atMs = Date.now();
               if (changed.upUpdated) {
                 lastUpAtMs = atMs; upReceivedAtUnix = receivedAtUnix; upReceivedAtMonoMs = receivedAtMonoMs;
                 if (fastUp && applied.upMs >= fastUp.exchangeMs) fastUp = undefined;
+                if (upFastClearedAtMs > 0 && applied.upMs >= upFastClearedAtMs) upFastClearedAtMs = 0;
               }
               if (changed.downUpdated) {
                 lastDownAtMs = atMs; downReceivedAtUnix = receivedAtUnix; downReceivedAtMonoMs = receivedAtMonoMs;
                 if (fastDown && applied.downMs >= fastDown.exchangeMs) fastDown = undefined;
+                if (downFastClearedAtMs > 0 && applied.downMs >= downFastClearedAtMs) downFastClearedAtMs = 0;
               }
               if (changed.upUpdated) {
                 upDepth = up.levels(5);
@@ -462,30 +555,42 @@ export function runPolymarketFeed(
                 downDepthAtMs = applied.downMs;
               }
               const fastChanges = bestBidAskChanges(v, upToken, downToken, {
-                upMs: Math.max(applied.upMs, fastApplied.upMs),
-                downMs: Math.max(applied.downMs, fastApplied.downMs),
+                upMs: fastWatermark.upMs,
+                downMs: fastWatermark.downMs,
               });
               for (const change of fastChanges) {
                 if (change.side === "up") {
-                  if (changed.upUpdated && change.order < changed.upOrder && change.exchangeMs <= applied.upMs) continue;
-                  fastUp = { ...change, receivedAtUnix, receivedAtMonoMs };
+                  if (changed.upUpdated && (change.exchangeMs < applied.upMs
+                    || (change.exchangeMs === applied.upMs && change.order < changed.upOrder))) continue;
+                  fastUp = change.clear ? undefined : { ...change, receivedAtUnix, receivedAtMonoMs };
                   lastUpAtMs = atMs;
                   fastApplied.upMs = Math.max(fastApplied.upMs, change.exchangeMs);
+                  acceptedUpSourceMs = Math.max(acceptedUpSourceMs, fastApplied.upMs);
+                  if (change.clear) upFastClearedAtMs = Math.max(upFastClearedAtMs, change.exchangeMs);
+                  else upFastClearedAtMs = 0;
                 } else {
-                  if (changed.downUpdated && change.order < changed.downOrder && change.exchangeMs <= applied.downMs) continue;
-                  fastDown = { ...change, receivedAtUnix, receivedAtMonoMs };
+                  if (changed.downUpdated && (change.exchangeMs < applied.downMs
+                    || (change.exchangeMs === applied.downMs && change.order < changed.downOrder))) continue;
+                  fastDown = change.clear ? undefined : { ...change, receivedAtUnix, receivedAtMonoMs };
                   lastDownAtMs = atMs;
                   fastApplied.downMs = Math.max(fastApplied.downMs, change.exchangeMs);
+                  acceptedDownSourceMs = Math.max(acceptedDownSourceMs, fastApplied.downMs);
+                  if (change.clear) downFastClearedAtMs = Math.max(downFastClearedAtMs, change.exchangeMs);
+                  else downFastClearedAtMs = 0;
                 }
               }
               if (!changed.upUpdated && !changed.downUpdated && !fastChanges.length) return;
               if (lastUpAtMs > 0 && lastDownAtMs > 0) {
                 lastBilateralActivityAtMs = Math.min(lastUpAtMs, lastDownAtMs);
               }
-              const ub = up.bestBid();
-              const ua = up.bestAsk();
-              const db = dn.bestBid();
-              const da = dn.bestAsk();
+              const ub = upFastClearedAtMs === 0 || applied.upMs > upFastClearedAtMs
+                ? up.bestBid() : undefined;
+              const ua = upFastClearedAtMs === 0 || applied.upMs > upFastClearedAtMs
+                ? up.bestAsk() : undefined;
+              const db = downFastClearedAtMs === 0 || applied.downMs > downFastClearedAtMs
+                ? dn.bestBid() : undefined;
+              const da = downFastClearedAtMs === 0 || applied.downMs > downFastClearedAtMs
+                ? dn.bestAsk() : undefined;
               // `best_bid_ask` is the venue's fastest top-of-book channel.
               // A depth snapshot can temporarily lag or be incomplete while
               // the top remains valid. Do not discard that bilateral frame:
@@ -509,9 +614,11 @@ export function runPolymarketFeed(
               const downBid = downTop?.bid ?? db![0];
               const downAsk = downTop?.ask ?? da![0];
               const upDepthMatches = upDepth != null
+                && (upFastClearedAtMs === 0 || upDepthAtMs > upFastClearedAtMs)
                 && (upTop == null || (upDepthAtMs >= upTop.exchangeMs
                   && upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk));
               const downDepthMatches = downDepth != null
+                && (downFastClearedAtMs === 0 || downDepthAtMs > downFastClearedAtMs)
                 && (downTop == null || (downDepthAtMs >= downTop.exchangeMs
                   && downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk));
               const outputUpDepth = upDepthMatches ? upDepth : undefined;
@@ -664,8 +771,9 @@ export function runPolymarketFeed(
       }
 
       if (alive && nowUnix() < deadline) {
-        console.warn("polymarket feed dropped, reconnecting in 1s");
-        await sleep(1000);
+        const delayMs = reconnectDelayMs(reconnectAttempt++);
+        console.warn(`polymarket feed dropped, reconnecting in ${Math.round(delayMs)}ms`);
+        await sleep(delayMs);
       }
     }
   };
