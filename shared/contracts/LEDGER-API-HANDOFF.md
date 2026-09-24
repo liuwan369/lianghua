@@ -8,7 +8,7 @@
 
 - 账本、控制面和共享契约：`ae1820c`
 - 结算凭据三态回归测试：`2c3d9fd`
-- 当前交接审查修复：本次提交（包含 roundId 订单过滤、错误事件、结算覆盖隔离和启动门控）
+- 当前交接审查修复：`b56ef6c`（accepted snapshot、market-pool 持久化、bootstrap 来源时间和旧行情回退语义）
 - 当前分支：`codex/ledger-api`
 - 当前工作区已验证无未提交修改。
 
