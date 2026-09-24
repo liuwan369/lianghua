@@ -10,7 +10,10 @@ from pathlib import Path
 
 FIELDS = {
     "wallet": "POLYMARKET_WALLET_ADDRESS",
+    "funder": "POLY_FUNDER",
+    "signature_type": "POLY_SIGNATURE_TYPE",
     "owner_key": "POLYMARKET_OWNER_PRIVATE_KEY",
+    "session_private_key": "POLYMARKET_SESSION_PRIVATE_KEY",
     "relayer_key": "RELAYER_API_KEY",
     "relayer_address": "RELAYER_API_KEY_ADDRESS",
     "builder_api_key": "POLY_BUILDER_API_KEY",
@@ -119,6 +122,11 @@ def check_account(engine: Path, values: dict) -> dict:
     # Never pass the dashboard control password to the read-only account
     # checker or to the trading engine's account environment.
     env.update({name: values.get(name, "") for name in ACCOUNT_ENV_FIELDS})
+    # Older deployments used POLYMARKET_PRIVATE_KEY. Keep that input
+    # compatible by mapping it only inside the short-lived checker process;
+    # it is never returned or persisted under a new name here.
+    if not env.get("POLYMARKET_OWNER_PRIVATE_KEY") and values.get("POLYMARKET_PRIVATE_KEY"):
+        env["POLYMARKET_OWNER_PRIVATE_KEY"] = values["POLYMARKET_PRIVATE_KEY"]
     # Reuse compiled modules, never account results or submitted credentials.
     # Keep this performance setting scoped to the read-only checker process.
     compile_cache = os.environ.get("PM_ACCOUNT_NODE_COMPILE_CACHE", "").strip()
@@ -160,7 +168,9 @@ def check_account(engine: Path, values: dict) -> dict:
                     raise AccountCheckError(code)
                 failure = AccountCheckError("account_rpc_failed" if code == "account_rpc_failed" else "account_check_failed")
             else:
-                allowed = {"wallet", "owner", "signer_matches", "compromised", "balance", "approvals_ready", "account_ready", "checks", "checked_at", "read_only"}
+                allowed = {"wallet", "owner", "signer_matches", "compromised", "balance", "approvals_ready", "account_ready", "checks", "checked_at", "read_only",
+                           "wallet_kind", "signature_type", "settlement_credentials_ready", "settlement_reason",
+                           "clob_balance", "clob_balance_status"}
                 if not isinstance(report, dict) or set(report) - allowed or not isinstance(report.get("checks"), list):
                     raise AccountCheckError("account_response_invalid")
                 if report.get("approvals_ready", False) is None:

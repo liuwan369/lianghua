@@ -7,7 +7,6 @@ interface Quote {
   bidSz: number;
   askSz: number;
 }
-
 function micro(q: Quote): number {
   if (q.bidSz > 0 && q.askSz > 0) {
     return (q.bid * q.askSz + q.ask * q.bidSz) / (q.bidSz + q.askSz);
@@ -15,7 +14,7 @@ function micro(q: Quote): number {
   return (q.bid + q.ask) / 2;
 }
 
-export function venueName(i: number): string {
+function venueName(i: number): string {
   return (
     ["binance-spot", "binance-perp", "coinbase", "okx", "bybit-perp"][i] ?? "?"
   );
@@ -28,6 +27,96 @@ interface VenueSpec {
   pingSec?: number;
   pingPayload?: string;
   parse: (v: Record<string, unknown>) => Quote | undefined;
+}
+
+export interface ReferenceFeedCapability {
+  asset: string;
+  supported: boolean;
+  reason?: "invalid_asset" | "unsupported_asset" | "disabled_by_configuration";
+}
+
+interface ReferenceAssetSpec {
+  binance: string;
+  coinbase: string;
+  okx: string;
+  bybit: string;
+}
+
+export interface ReferenceVenueProducts {
+  binance: string;
+  coinbase: string;
+  okx: string;
+  bybit: string;
+}
+
+const REFERENCE_ASSETS: Readonly<Record<string, ReferenceAssetSpec>> = Object.freeze({
+  btc: { binance: "btcusdt", coinbase: "BTC-USD", okx: "BTC-USDT", bybit: "BTCUSDT" },
+  eth: { binance: "ethusdt", coinbase: "ETH-USD", okx: "ETH-USDT", bybit: "ETHUSDT" },
+  sol: { binance: "solusdt", coinbase: "SOL-USD", okx: "SOL-USDT", bybit: "SOLUSDT" },
+});
+
+function normalizeReferenceAsset(asset = "btc"): string {
+  const normalized = asset.trim().toLowerCase();
+  if (!/^[a-z0-9]+$/.test(normalized)) throw new Error("reference asset must contain only letters and digits");
+  return normalized;
+}
+
+function configuredReferenceAssets(): Set<string> | undefined {
+  const raw = process.env.PM_REFERENCE_ASSETS?.trim();
+  if (!raw) return undefined;
+  return new Set(raw.split(",").map(value => value.trim().toLowerCase()).filter(Boolean));
+}
+
+/** Reports whether this process has a real venue mapping for an asset. */
+export function referenceFeedCapability(asset = "btc"): ReferenceFeedCapability {
+  let normalized: string;
+  try { normalized = normalizeReferenceAsset(asset); }
+  catch { return { asset: String(asset), supported: false, reason: "invalid_asset" }; }
+  if (!REFERENCE_ASSETS[normalized]) return { asset: normalized, supported: false, reason: "unsupported_asset" };
+  const configured = configuredReferenceAssets();
+  if (configured && !configured.has(normalized)) {
+    return { asset: normalized, supported: false, reason: "disabled_by_configuration" };
+  }
+  return { asset: normalized, supported: true };
+}
+
+/** Returns the exact public venue products used for the requested asset. */
+export function referenceVenueProducts(asset = "btc"): ReferenceVenueProducts {
+  const capability = referenceFeedCapability(asset);
+  if (!capability.supported) throw new ReferenceFeedUnsupportedError(capability);
+  return { ...REFERENCE_ASSETS[capability.asset]! };
+}
+
+export class ReferenceFeedUnsupportedError extends Error {
+  readonly code = "reference_feed_unsupported";
+  readonly capability: ReferenceFeedCapability;
+
+  constructor(capability: ReferenceFeedCapability) {
+    super(`${capability.asset}: ${capability.reason ?? "reference_feed_unsupported"}`);
+    this.name = "ReferenceFeedUnsupportedError";
+    this.capability = capability;
+  }
+}
+
+export class ReferenceFeedInvalidEventError extends Error {
+  readonly code = "reference_event_invalid";
+
+  constructor() {
+    super("reference event timestamp and price must be finite positive numbers");
+    this.name = "ReferenceFeedInvalidEventError";
+  }
+}
+
+/** Namespaces a reference price without allowing a non-BTC symbol to become a BTC event. */
+export function referenceEvent(asset: string, tsUnix: number, price: number): Extract<FeedEvent, { kind: "btc" | "oracle" }> {
+  const capability = referenceFeedCapability(asset);
+  if (!capability.supported) throw new ReferenceFeedUnsupportedError(capability);
+  if (!Number.isFinite(tsUnix) || tsUnix <= 0 || !Number.isFinite(price) || price <= 0) {
+    throw new ReferenceFeedInvalidEventError();
+  }
+  return capability.asset === "btc"
+    ? { kind: "btc", asset: "btc", tsUnix, price }
+    : { kind: "oracle", asset: capability.asset, tsUnix, price };
 }
 
 function parseBinance(v: Record<string, unknown>): Quote | undefined {
@@ -100,16 +189,17 @@ function parseBybit(v: Record<string, unknown>): Quote | undefined {
   return { bid: p, ask: p, bidSz: 0, askSz: 0 };
 }
 
-function venues(): VenueSpec[] {
+function venues(asset: string): VenueSpec[] {
+  const reference = referenceVenueProducts(asset);
   return [
     {
       name: "binance-spot",
-      url: "wss://stream.binance.com:9443/ws/btcusdt@bookTicker",
+      url: `wss://stream.binance.com:9443/ws/${reference.binance}@bookTicker`,
       parse: parseBinance,
     },
     {
       name: "binance-perp",
-      url: "wss://fstream.binance.com/ws/btcusdt@bookTicker",
+      url: `wss://fstream.binance.com/ws/${reference.binance}@bookTicker`,
       parse: parseBinance,
     },
     {
@@ -117,7 +207,7 @@ function venues(): VenueSpec[] {
       url: "wss://ws-feed.exchange.coinbase.com",
       sub: JSON.stringify({
         type: "subscribe",
-        product_ids: ["BTC-USD"],
+        product_ids: [reference.coinbase],
         channels: ["ticker"],
       }),
       parse: parseCoinbase,
@@ -127,7 +217,7 @@ function venues(): VenueSpec[] {
       url: "wss://ws.okx.com:8443/ws/v5/public",
       sub: JSON.stringify({
         op: "subscribe",
-        args: [{ channel: "tickers", instId: "BTC-USDT" }],
+        args: [{ channel: "tickers", instId: reference.okx }],
       }),
       pingSec: 20,
       pingPayload: "ping",
@@ -138,7 +228,7 @@ function venues(): VenueSpec[] {
       url: "wss://stream.bybit.com/v5/public/linear",
       sub: JSON.stringify({
         op: "subscribe",
-        args: ["tickers.BTCUSDT"],
+        args: [`tickers.${reference.bybit}`],
       }),
       pingSec: 20,
       pingPayload: JSON.stringify({ op: "ping" }),
@@ -173,6 +263,7 @@ function connectWs(url: string, timeoutMs = 10_000): Promise<WebSocket> {
 async function venueLoop(
   idx: number,
   spec: VenueSpec,
+  asset: string,
   onQuote: (idx: number, q: Quote, ts: number) => void,
   running: () => boolean,
   sockets: Set<WebSocket>,
@@ -180,9 +271,13 @@ async function venueLoop(
   while (running()) {
     try {
       const ws = await connectWs(spec.url);
+      if (!running()) {
+        ws.terminate();
+        break;
+      }
       sockets.add(ws);
       if (spec.sub) ws.send(spec.sub);
-      console.info(`BTC venue '${spec.name}' connected`);
+      console.info(`${asset.toUpperCase()} venue '${spec.name}' connected`);
 
       let pingTimer: ReturnType<typeof setInterval> | undefined;
       if (spec.pingSec && spec.pingPayload) {
@@ -211,23 +306,33 @@ async function venueLoop(
       ws.terminate();
       sockets.delete(ws);
     } catch (e) {
-      console.warn(`BTC venue '${spec.name}' connect failed: ${e}`);
+      console.warn(`${asset.toUpperCase()} venue '${spec.name}' connect failed: ${e}`);
     }
     if (running()) {
-      console.warn(`BTC venue '${spec.name}' dropped, reconnecting in 2s`);
+      console.warn(`${asset.toUpperCase()} venue '${spec.name}' dropped, reconnecting in 2s`);
       await sleep(2000);
     }
   }
 }
 
-/** Multi-venue BTC microprice aggregator. */
-export function runBtcFeed(sink: FeedSink): { stop: () => void } {
-  const specs = venues();
+/** Multi-venue reference microprice aggregator for one explicitly supported asset. */
+export function runReferenceFeed(
+  sink: FeedSink,
+  asset = "btc",
+  options: { allowedAssets?: readonly string[] } = {},
+): { stop: () => void } {
+  const capability = referenceFeedCapability(asset);
+  if (!capability.supported) throw new ReferenceFeedUnsupportedError(capability);
+  const allowed = options.allowedAssets?.map(value => normalizeReferenceAsset(value));
+  if (allowed && !allowed.includes(capability.asset)) {
+    throw new ReferenceFeedUnsupportedError({ ...capability, supported: false, reason: "disabled_by_configuration" });
+  }
+  const specs = venues(capability.asset);
   const n = specs.length;
   let alive = true;
   const last = Array.from({ length: n }, () => Number.NaN);
   const lastTs = Array.from({ length: n }, () => 0);
-  const trace = process.env.BTC_TRACE != null;
+  const trace = process.env.BTC_TRACE != null || process.env.REFERENCE_TRACE != null;
   const sockets = new Set<WebSocket>();
 
   const onQuote = (i: number, q: Quote, ts: number) => {
@@ -239,6 +344,7 @@ export function runBtcFeed(sink: FeedSink): { stop: () => void } {
     if (!Number.isFinite(prev) || Math.abs(microPx - prev) >= 0.001) {
       sink({
         kind: "venue",
+        asset: capability.asset,
         venue: i,
         tsUnix: ts,
         bid: q.bid,
@@ -267,15 +373,17 @@ export function runBtcFeed(sink: FeedSink): { stop: () => void } {
 
     if (trace) {
       console.info(
-        `BTC_AGG live=${kept.length}/${n} mean=$${price.toFixed(2)} (moved ${venueName(i)})`,
+        `${capability.asset.toUpperCase()}_AGG live=${kept.length}/${n} mean=$${price.toFixed(2)} (moved ${venueName(i)})`,
       );
     }
 
-    sink({ kind: "btc", tsUnix: ts, price });
+    sink(capability.asset === "btc"
+      ? { kind: "btc", asset: "btc", tsUnix: ts, price }
+      : { kind: "oracle", asset: capability.asset, tsUnix: ts, price });
   };
 
   for (let i = 0; i < specs.length; i++) {
-    void venueLoop(i, specs[i]!, onQuote, () => alive, sockets);
+    void venueLoop(i, specs[i]!, capability.asset, onQuote, () => alive, sockets);
   }
 
   return { stop: () => {
@@ -285,4 +393,7 @@ export function runBtcFeed(sink: FeedSink): { stop: () => void } {
   } };
 }
 
-export type { FeedEvent };
+/** Backward-compatible BTC reference producer used by the existing platform adapter. */
+export function runBtcFeed(sink: FeedSink): { stop: () => void } {
+  return runReferenceFeed(sink, "btc");
+}

@@ -43,7 +43,6 @@ export interface UserFeedOptions {
     receivedAtUnix?: number;
   }) => void;
 }
-
 export type UserFeedEvent =
   | { kind: "exchangeFill"; fill: Fill & { status?: TradeStatus; feeRateBps?: number; feeUsd?: number }; reportLatencyMs?: number; orderId?: string; tradeId?: string;
       tokenId?: string; direction?: "BUY" | "SELL" }
@@ -821,5 +820,3 @@ export function runUserFeed(
     isContinuous: () => !discontinuity && (opts.ledger?.status().continuous ?? true),
   };
 }
-
-export { candidateOrderIds };

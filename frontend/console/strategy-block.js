@@ -26,7 +26,7 @@
     <main class="preview-main strategy-main">
       <header class="preview-header strategy-header">
         <div class="hero-copy"><p class="eyebrow">STRATEGY CONFIGURATION</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip">CRYPTO \xB7 5m</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
-        <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>\u8BBE\u8BA1\u7A3F \xB7 \u672A\u8FDE\u63A5</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>reversal-5m</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>\u4E0B\u4E00\u573A\u6B21</strong></article></div></div>
+        <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>\u8BBE\u8BA1\u7A3F \xB7 \u672A\u8FDE\u63A5</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>btc-reversal</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>\u4E0B\u4E00\u573A\u6B21</strong></article></div></div>
       </header>
 
       <section class="strategy-identity-panel">
@@ -65,7 +65,7 @@
             </div></div><div class="runtime-note"><span class="info-dot">i</span><span>\u6682\u505C\u65B0\u589E\u4F1A\u4FDD\u7559\u73B0\u6709\u8BA2\u5355\uFF1B\u505C\u6B62\u4F1A\u64A4\u9500\u4F59\u91CF\uFF0C\u5DF2\u6210\u4EA4\u6301\u4ED3\u4FDD\u7559\u3002\u8FD0\u884C\u65F6\u957F\u5728\u4E0B\u6B21\u542F\u52A8\u65F6\u751F\u6548\u3002</span></div>
           </div>
 
-          <div class="strategy-savebar"><span class="save-state" data-save-state>\u5F53\u524D\u6CA1\u6709\u672A\u4FDD\u5B58\u4FEE\u6539</span><div><button type="button" class="secondary-button" data-reset>\u64A4\u9500\u4FEE\u6539</button><button type="button" class="save-button" data-save>\u4FDD\u5B58\u7B56\u7565</button></div></div>
+          <div class="strategy-savebar"><span class="save-state" data-save-state>\u5F53\u524D\u6CA1\u6709\u672A\u4FDD\u5B58\u4FEE\u6539</span><div><button type="button" class="secondary-button" data-reset>\u64A4\u9500\u4FEE\u6539</button><button type="button" class="save-button" data-save>\u4FDD\u5B58\u7B56\u7565\u8349\u7A3F</button></div></div>
         </div>
 
         <aside class="strategy-aside">
@@ -134,6 +134,37 @@
     }).join("");
     container.querySelectorAll("[data-stage]").forEach((input) => input.addEventListener("input", updatePreview));
     updatePreview();
+  };
+  var cents = (value, fallback) => {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return fallback;
+    return String(Math.round((number <= 1 ? number * 100 : number) * 100) / 100).replace(/\.00$/, "");
+  };
+  var hydrateStrategy = (resource) => {
+    const config = resource?.data?.config || resource?.data;
+    if (!config || typeof config !== "object") return;
+    const values = { trigger: config.triggerPrice, confirm: config.confirmationPrice, maxPrice: config.maxBuyPrice };
+    Object.entries(values).forEach(([key, value]) => {
+      const input = field(key);
+      if (input && value != null) input.value = cents(value, input.value);
+    });
+    const stages = Array.isArray(config.stageShares) ? config.stageShares : [];
+    const countInput = document.querySelector("[data-stage-count]");
+    if (stages.length && countInput) {
+      countInput.value = String(Math.min(8, stages.length));
+      syncStageCount();
+      stages.slice(0, 8).forEach((value, index) => {
+        const input = document.querySelector(`[data-stage="${index + 1}"]`);
+        if (input) input.value = String(value);
+      });
+    }
+    const runtimeValues = { roundBudget: config.roundBudgetUsd, totalBudget: config.totalBudgetUsd, lossLimit: config.dailyLossUsd, duration: config.durationMinutes };
+    Object.entries(runtimeValues).forEach(([key, value]) => {
+      const input = document.querySelector(`[data-runtime-field="${key}"]`);
+      if (input && value != null) input.value = String(value);
+    });
+    updatePreview();
+    if (resource.status === "ready") text("[data-save-state]", "已加载服务器策略配置");
   };
   document.querySelector("[data-stage-count]")?.addEventListener("input", syncStageCount);
   document.querySelectorAll("[data-field], [data-stage], [data-runtime-field]").forEach((input) => input.addEventListener("input", updatePreview));
@@ -237,13 +268,16 @@
         durationMinutes: runtimeValue("duration") || 0,
         mode: "live"
       });
-      text("[data-save-state]", result.message || (result.accepted ? "策略草稿已保存，等待下一场生效" : "设计稿演示：校验通过，保存接口尚未连接"));
+      text("[data-save-state]", result.message || (result.savedRevision ? "策略草稿已保存，等待下一场启动读取" : result.accepted ? "策略草稿已保存" : "设计稿演示：校验通过，保存接口尚未连接"));
     } catch (error) { text("[data-save-state]", error.message || "策略保存失败"); }
     finally { button.disabled = false; }
   });
   store.subscribe("strategy", (resource) => {
     const revision = resource?.revision;
     text("[data-strategy-revision]", revision == null ? "--" : `REV-${revision}`);
+    hydrateStrategy(resource);
+    if (resource?.status === "stale") text("[data-save-state]", "策略接口断开，保留上次成功配置");
+    if (resource?.status === "unavailable") text("[data-save-state]", "策略配置待接入");
   });
   void adapter.loadStrategy();
 })();

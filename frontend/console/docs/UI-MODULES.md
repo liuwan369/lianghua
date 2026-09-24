@@ -22,7 +22,7 @@ RuntimeControls、MarketSelector、OrderBook、RoundPosition、OrderTable、Runt
 
 ## 策略
 
-StrategyEditor、PresetList、ActivationNotice。阶段数应真实增删，价格和资金边界先做前端提示，再由服务器二次校验。保存草稿不启动交易，激活指定下一场生效。
+StrategyEditor、PresetList、ActivationNotice。阶段数应真实增删，价格和资金边界先做前端提示，再由服务器二次校验。当前页面只保存策略草稿，不启动交易；激活是独立的服务端动作，必须带 `effectiveRoundId`，并等待 runtime 状态确认后才显示生效。
 
 ## 设置
 
