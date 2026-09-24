@@ -1,7 +1,7 @@
 /** Public, read-only market quote projection for the dashboard. */
 import { mkdirSync, openSync, closeSync, renameSync, writeFileSync, fsyncSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
-import type { BookSnapshot } from "../live/feeds/index.js";
+import type { BookSnapshot, MarketAssetSnapshot } from "../live/feeds/index.js";
 
 export const DEFAULT_STALE_AFTER_MS = 2_000;
 const MAX_CLOCK_SKEW_MS = 1_000;
@@ -11,12 +11,23 @@ export interface MarketProjectionConfig {
   downToken: string;
   slug?: string;
   conditionId?: string;
+  roundId?: string;
   start?: number;
   end?: number;
   staleAfterMs?: number;
 }
 
 export interface MarketProjectionRow {
+  paired_snapshot?: {
+    marketId: string;
+    roundId: string;
+    sequence: number;
+    sourceAt: number;
+    expiresAt: number;
+    YES: MarketAssetSnapshot;
+    NO: MarketAssetSnapshot;
+  };
+  healthy: boolean;
   slug: string;
   condition_id: string;
   up_token: string;
@@ -74,12 +85,12 @@ export class ClobMarketProjection {
   readonly downToken: string;
   readonly slug: string;
   readonly conditionId: string;
+  readonly roundId: string;
   readonly start: number | null;
   readonly end: number | null;
   readonly staleAfterMs: number;
   private connected = false;
-  private up: BookSnapshot | undefined;
-  private down: BookSnapshot | undefined;
+  private accepted: BookSnapshot | undefined;
   private upReceivedAt = 0;
   private downReceivedAt = 0;
 
@@ -89,13 +100,13 @@ export class ClobMarketProjection {
     if (!Number.isFinite(stale) || stale < 0) throw new Error("staleAfterMs must be non-negative");
     this.upToken = config.upToken; this.downToken = config.downToken;
     this.slug = config.slug ?? ""; this.conditionId = config.conditionId ?? "";
+    this.roundId = config.roundId ?? "";
     this.start = config.start ?? null; this.end = config.end ?? null; this.staleAfterMs = stale;
   }
 
   markConnected(value = true): void { this.connected = value; }
   invalidateBook(): void {
-    this.up = undefined;
-    this.down = undefined;
+    this.accepted = undefined;
     this.upReceivedAt = 0;
     this.downReceivedAt = 0;
   }
@@ -111,13 +122,25 @@ export class ClobMarketProjection {
   applySnapshot(snapshot: BookSnapshot, receivedAt = snapshot.receivedAtUnix ?? snapshot.tsUnix): boolean {
     if (snapshot.source !== "polymarket-ws") return false;
     if (!Number.isFinite(receivedAt)) return false;
-    const prices = [snapshot.upBid, snapshot.upAsk, snapshot.downBid, snapshot.downAsk];
+    const yes = snapshot.YES;
+    const no = snapshot.NO;
+    if (!yes || !no || !snapshot.marketId || !snapshot.roundId
+      || (this.conditionId && snapshot.marketId !== this.conditionId)
+      || (this.roundId && snapshot.roundId !== this.roundId)
+      || yes.assetId !== this.upToken || no.assetId !== this.downToken
+      || !Number.isSafeInteger(snapshot.sequence) || snapshot.sequence! < 0
+      || !Number.isFinite(snapshot.sourceAt) || !Number.isFinite(snapshot.expiresAt)
+      || (this.end != null && snapshot.expiresAt! > this.end)) return false;
+    const prices = [yes.bid, yes.ask, no.bid, no.ask];
     const upAt = snapshot.upReceivedAtUnix ?? receivedAt;
     const downAt = snapshot.downReceivedAtUnix ?? receivedAt;
-    const clocks = [upAt, downAt, snapshot.upExchangeTsUnix, snapshot.downExchangeTsUnix];
+    const yesAt = yes.sourceAt ?? snapshot.sourceAt!;
+    const noAt = no.sourceAt ?? snapshot.sourceAt!;
+    const clocks = [upAt, downAt, yesAt, noAt];
     if (prices.some(price => price == null || !Number.isFinite(price) || price <= 0 || price >= 1)
       || clocks.some(clock => clock == null || !Number.isFinite(clock) || clock <= 0)
-      || snapshot.upBid! > snapshot.upAsk! || snapshot.downBid! > snapshot.downAsk!) {
+      || yes.bid! > yes.ask! || no.bid! > no.ask!
+      || snapshot.expiresAt! <= Math.min(yesAt, noAt)) {
       this.disconnect();
       return false;
     }
@@ -127,45 +150,64 @@ export class ClobMarketProjection {
       this.disconnect();
       return false;
     }
-    if ((this.up?.upExchangeTsUnix ?? 0) > snapshot.upExchangeTsUnix!
-      || (this.down?.downExchangeTsUnix ?? 0) > snapshot.downExchangeTsUnix!) return false;
+    const previousYesAt = this.accepted?.YES?.sourceAt ?? 0;
+    const previousNoAt = this.accepted?.NO?.sourceAt ?? 0;
+    if (this.accepted && (snapshot.sequence! <= this.accepted.sequence!
+      || yesAt < previousYesAt || noAt < previousNoAt)) return false;
     this.connected = true;
-    // The feed has already applied the entire frame. Store its paired state
-    // together, rather than merging independently observed half-books.
-    this.up = this.down = copy(snapshot);
+    this.accepted = copy(snapshot);
     this.upReceivedAt = upAt;
     this.downReceivedAt = downAt;
     return true;
   }
 
   private row(now: number): MarketProjectionRow {
-    const up = this.up; const down = this.down;
-    const upReceiveAge = up && this.upReceivedAt ? (now - this.upReceivedAt) * 1000 : null;
-    const downReceiveAge = down && this.downReceivedAt ? (now - this.downReceivedAt) * 1000 : null;
-    const upExchangeAge = up?.upExchangeTsUnix != null ? (now - up.upExchangeTsUnix) * 1000 : null;
-    const downExchangeAge = down?.downExchangeTsUnix != null ? (now - down.downExchangeTsUnix) * 1000 : null;
+    const accepted = this.accepted;
+    const yes = accepted?.YES;
+    const no = accepted?.NO;
+    const upReceiveAge = accepted && this.upReceivedAt ? (now - this.upReceivedAt) * 1000 : null;
+    const downReceiveAge = accepted && this.downReceivedAt ? (now - this.downReceivedAt) * 1000 : null;
+    const upExchangeAge = yes?.sourceAt != null ? (now - yes.sourceAt) * 1000 : null;
+    const downExchangeAge = no?.sourceAt != null ? (now - no.sourceAt) * 1000 : null;
     // Both clocks participate in freshness.  A delayed old frame cannot extend
     // the quote merely because it was received moments ago.
     const upAge = upReceiveAge != null ? Math.max(0, upReceiveAge, upExchangeAge ?? 0) : null;
     const downAge = downReceiveAge != null ? Math.max(0, downReceiveAge, downExchangeAge ?? 0) : null;
-    const ready = up?.upBid != null && up.upAsk != null && down?.downBid != null && down.downAsk != null;
+    const ready = yes?.bid != null && yes.ask != null && no?.bid != null && no.ask != null
+      && accepted?.marketId != null && accepted.roundId != null && accepted.sequence != null
+      && accepted.sourceAt != null && accepted.expiresAt != null;
     const ages = [upReceiveAge, downReceiveAge, upExchangeAge, downExchangeAge];
-    const fresh = ready && ages.every(age => age != null && age >= -MAX_CLOCK_SKEW_MS && age <= this.staleAfterMs);
-    const quoteAt = ready && up?.upExchangeTsUnix != null && down?.downExchangeTsUnix != null
-      ? Math.min(up.upExchangeTsUnix, down.downExchangeTsUnix) : 0;
+    const fresh = ready && accepted!.expiresAt! > now
+      && accepted!.sourceAt! * 1_000 <= now * 1_000 + MAX_CLOCK_SKEW_MS
+      && ages.every(age => age != null && age >= -MAX_CLOCK_SKEW_MS && age <= this.staleAfterMs);
+    const quoteAt = yes?.sourceAt != null && no?.sourceAt != null
+      ? Math.min(yes.sourceAt, no.sourceAt) : 0;
+    const pairedSnapshot = accepted && {
+      marketId: accepted.marketId!, roundId: accepted.roundId!, sequence: accepted.sequence!,
+      sourceAt: accepted.sourceAt!, expiresAt: accepted.expiresAt!,
+      YES: copy(yes!), NO: copy(no!),
+    };
+    const upBidLevels = yes?.bids ? copy(yes.bids) : null;
+    const upAskLevels = yes?.asks ? copy(yes.asks) : null;
+    const downBidLevels = no?.bids ? copy(no.bids) : null;
+    const downAskLevels = no?.asks ? copy(no.asks) : null;
     return {
+      paired_snapshot: pairedSnapshot,
+      healthy: Boolean(this.connected && fresh),
       slug: this.slug, condition_id: this.conditionId, up_token: this.upToken, down_token: this.downToken,
       start: this.start, end: this.end,
-      up_bid: finite(up?.upBid), up_ask: finite(up?.upAsk), down_bid: finite(down?.downBid), down_ask: finite(down?.downAsk),
-      up_bid_size: finite(up?.upBidSz), up_ask_size: finite(up?.upAskSz), down_bid_size: finite(down?.downBidSz), down_ask_size: finite(down?.downAskSz),
-      up_bid_levels: up?.upBidLevels ? copy(up.upBidLevels) : null, up_ask_levels: up?.upAskLevels ? copy(up.upAskLevels) : null,
-      down_bid_levels: down?.downBidLevels ? copy(down.downBidLevels) : null, down_ask_levels: down?.downAskLevels ? copy(down.downAskLevels) : null,
-      tick_size: finite(up?.tickSize ?? down?.tickSize), up_tick_size: finite(up?.upTickSize), down_tick_size: finite(down?.downTickSize),
-      ask_sum: up?.upAsk != null && down?.downAsk != null ? up.upAsk + down.downAsk : null,
+      up_bid: finite(yes?.bid), up_ask: finite(yes?.ask), down_bid: finite(no?.bid), down_ask: finite(no?.ask),
+      up_bid_size: finite(yes?.bidSize), up_ask_size: finite(yes?.askSize), down_bid_size: finite(no?.bidSize), down_ask_size: finite(no?.askSize),
+      up_bid_levels: upBidLevels, up_ask_levels: upAskLevels,
+      down_bid_levels: downBidLevels, down_ask_levels: downAskLevels,
+      tick_size: finite(accepted?.tickSize), up_tick_size: finite(accepted?.upTickSize), down_tick_size: finite(accepted?.downTickSize),
+      ask_sum: yes?.ask != null && no?.ask != null ? yes.ask + no.ask : null,
       quote_at: quoteAt ? iso(quoteAt) : null,
-      up_exchange_at: up?.upExchangeTsUnix ? iso(up.upExchangeTsUnix) : null,
-      down_exchange_at: down?.downExchangeTsUnix ? iso(down.downExchangeTsUnix) : null,
-      up_quote_age_ms: upAge, down_quote_age_ms: downAge, book_depth_ready: Boolean(up?.upBidLevels && up?.upAskLevels && down?.downBidLevels && down?.downAskLevels),
+      up_exchange_at: yes?.sourceAt ? iso(yes.sourceAt) : null,
+      down_exchange_at: no?.sourceAt ? iso(no.sourceAt) : null,
+      up_quote_age_ms: upAge, down_quote_age_ms: downAge,
+      book_depth_ready: Boolean(upBidLevels?.length === 5 && upAskLevels?.length === 5
+        && downBidLevels?.length === 5 && downAskLevels?.length === 5),
       quote_fresh: fresh, source: "polymarket-ws",
     };
   }
@@ -180,7 +222,7 @@ export class ClobMarketProjection {
     };
     if (!this.connected) result.stale_reason = "CLOB Market WebSocket 未连接";
     else if (!inWindow) result.stale_reason = "当前市场窗口已结束";
-    else if (!row.quote_fresh) result.stale_reason = row.quote_at ? "CLOB Market WebSocket 行情过期" : "等待完整 UP/DOWN 双边盘口";
+    else if (!row.quote_fresh) result.stale_reason = row.quote_at ? "CLOB Market WebSocket 行情过期" : "等待完整 YES/NO 双边盘口";
     return copy(result);
   }
 }

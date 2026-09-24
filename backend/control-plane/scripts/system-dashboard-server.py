@@ -858,7 +858,8 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
         rows.append({"slug": market.get("name") or market_id, "name": market.get("name") or market_id,
                      "condition_id": market_id, "round_id": round_id,
                      "start": _epoch(market.get("startsAt")), "end": _epoch(market.get("endsAt")),
-                     "paired_snapshot": snapshot, "source": "platform-runtime"})
+                     "paired_snapshot": snapshot, "healthy": runtime.get("stale") is not True,
+                     "source": "platform-runtime"})
     if not rows:
         return None
     return {"collector_online": status.get("running") is True and runtime.get("status") == "running",
@@ -1367,6 +1368,9 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
     snapshot = row.get("paired_snapshot") if isinstance(row, dict) else None
+    if (not isinstance(snapshot, dict) and isinstance(row, dict)
+            and isinstance(row.get("YES"), dict) and isinstance(row.get("NO"), dict)):
+        snapshot = row
     slug = str(row.get("slug") or "")
     start, end = _epoch(row.get("start")), _epoch(row.get("end"))
     if not isinstance(snapshot, dict):
@@ -1413,7 +1417,8 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                 and isinstance(yes.get("assetId"), str) and isinstance(no.get("assetId"), str)
                 and type(sequence) is int and sequence >= 0 and source_at is not None and expires_at is not None)
     expired = expires_at is None or expires_at <= now
-    stale = not complete or expired or source_at is None or source_at > now + 1
+    stale = (not complete or expired or source_at is None or source_at > now + 1
+             or row.get("healthy") is False)
     quote_times = [_epoch(value.get("sourceAt")) for value in (yes, no) if value]
     quote_times = [value for value in quote_times if value is not None]
     quote_at = min(quote_times, default=source_at)
@@ -1447,7 +1452,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "expiresAt": expires_at,
         "sequence": sequence if type(sequence) is int else None,
         "depthAvailable": depth_available,
-        "strategyEligible": complete and not stale,
+        "strategyEligible": complete and not stale and row.get("source") == "platform-runtime",
         "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
                       "sequence": sequence if type(sequence) is int else None,
                       "sourceAt": source_at, "expiresAt": expires_at, "stale": stale},

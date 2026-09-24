@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { findMarket, type Market } from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
-import type { FeedSink } from "../live/feeds/index.js";
+import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
 
 const MARKET_WINDOW_SEC = 300;
@@ -52,7 +52,8 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
 export interface MarketSnapshotDependencies {
   now: () => number;
   discover: (at: number, directOnly?: boolean, signal?: AbortSignal) => Promise<Market | undefined>;
-  feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number) => { stop: () => void };
+  feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number,
+    identity?: FeedMarketIdentity) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
 }
 
@@ -124,7 +125,10 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
             else if (event.connected) { projection.markConnected(true); projection.invalidateBook(); }
             else projection.disconnect();
           }
-        }, market.upToken, market.downToken, market.end);
+        }, market.upToken, market.downToken, market.end, {
+          marketId: market.conditionId, roundId: market.roundId,
+          yesAssetId: market.upToken, noAssetId: market.downToken,
+        });
         active.set(market.slug, { market, projection, stop: control.stop });
       }
       safePublish();
