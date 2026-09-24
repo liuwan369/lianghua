@@ -361,7 +361,7 @@
     if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
     syncMarketContext();
     var context = currentContext();
-    var contextKey = `${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
+    var contextKey = `${String(context.assetId || "")}\u0000${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
     var configKey = streamConfigKey();
     if (activeStreamContextKey === contextKey && activeStreamConfigKey === configKey) {
       if (!streamUrl("markets")) markStreamPending();
