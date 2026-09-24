@@ -7,7 +7,7 @@
   const demoMode = () => core.config.mode === "local-preview";
   const errorText = (error) => error?.message || "接口暂时不可用，页面保留上次成功数据";
   const resourceStatus = (raw, fallback = "ready") => {
-    if (raw?.stale === true || raw?.collector_online === false) return "stale";
+    if (raw?.stale === true || raw?.collector_online === false || raw?.depthUnavailable === true || raw?.depth_unavailable === true) return "stale";
     if (raw?.available === false) return "unavailable";
     return fallback;
   };

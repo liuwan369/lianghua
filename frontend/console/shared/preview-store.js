@@ -7,8 +7,11 @@
   const poolKey = "polymarket-design-market-pool-v1";
   const demoItems = demo.markets.map((item) => vm.market(item));
   const saved = core.config.mode === "local-preview" ? core.storage.read(poolKey, demo.marketPool) : demo.marketPool;
+  const initialCatalog = core.config.mode === "local-preview"
+    ? { status: "demo", items: demoItems, selectedId: "btc", source: "local-preview", stale: false, error: null, receivedAt: Date.now() }
+    : { status: "unavailable", items: [], selectedId: null, source: "backend", stale: true, error: "行情目录尚未接入", receivedAt: 0 };
   const state = {
-    marketCatalog: { status: "demo", items: demoItems, selectedId: "btc", source: "local-preview", stale: false, error: null, receivedAt: Date.now() },
+    marketCatalog: initialCatalog,
     marketPool: core.config.mode === "local-preview"
       ? { ...vm.pool(saved, demoItems), status: "demo", stale: false }
       : { desiredIds: [], currentIds: [], nextRoundIds: [], effectiveRoundId: null, source: "backend", status: "unavailable", stale: true, error: "运行池尚未接入" },
@@ -37,9 +40,13 @@
   };
   const setMarketCatalog = (value) => {
     const next = vm.catalog(value);
-    const items = next.items.length || !next.stale ? next.items : state.marketCatalog.items;
+    const hasPrevious = state.marketCatalog.source !== "local-preview" && state.marketCatalog.items.length > 0;
+    const keepPrevious = hasPrevious && (next.stale || next.error || next.items.length === 0);
+    const items = keepPrevious ? state.marketCatalog.items : next.stale || next.error || next.items.length === 0 ? [] : next.items;
     const selected = items.some((item) => item.assetId === state.marketCatalog.selectedId) ? state.marketCatalog.selectedId : items[0]?.assetId || null;
-    const result = { ...next, items, status: next.error ? "error" : next.stale ? "stale" : "ready", selectedId: selected, receivedAt: Date.now() };
+    const status = next.stale ? (hasPrevious ? "stale" : "unavailable") : next.error ? (hasPrevious ? "error" : "unavailable") : next.items.length === 0 ? (hasPrevious ? "stale" : "unavailable") : "ready";
+    const error = next.error || (next.items.length === 0 && !hasPrevious ? "市场目录暂无有效快照" : null);
+    const result = { ...next, items, status, error, selectedId: selected, receivedAt: Date.now() };
     update("marketCatalog", result);
     update("marketPool", { ...vm.pool(state.marketPool, items), status: state.marketPool.status, stale: state.marketPool.stale, error: state.marketPool.error || null });
     return result;

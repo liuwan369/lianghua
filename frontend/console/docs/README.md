@@ -6,6 +6,8 @@
 
 当前真实联调状态：后端必须提供带 `marketId + roundId` 的市场目录、运行池和市场快照；旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价，不查询持仓和订单。实时流只有在配置 `streams.markets`、`streams.runtime`、`streams.orders` 地址后才建立，未配置时保留最近成功快照并显示待接入。真实账户和交易环境尚未接入，账户页只保留服务器状态对接边界。
 
+市场页在 backend 模式且页面可见时使用有界 REST 刷新：上一请求完成后约 1 秒再排下一次；页面隐藏时暂停，恢复可见立即刷新。请求失败、空响应或 `stale` 响应不会把初始演示数据当成真实数据；已有 backend 快照会保留并标记 stale，没有成功快照则显示 unavailable。
+
 后端接入先阅读：
 
 1. `FRONTEND-ARCHITECTURE.md`

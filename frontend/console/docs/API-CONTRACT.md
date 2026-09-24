@@ -144,7 +144,7 @@ legacy 模式实际使用的 DTO 边界如下：
 | 用途 | 方法 | 路径 | 频率/说明 |
 |---|---|---|---|
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
-| 加密货币五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 15 秒或手动刷新 |
+| 加密货币五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 可见市场页约 1 秒一次；单请求完成后才排下一次，页面隐藏时暂停；手动刷新复用同一请求 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
 | 运行池 | GET/PUT | `/api/runtime/market-pool` | desired enabled + effectiveRoundId |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |

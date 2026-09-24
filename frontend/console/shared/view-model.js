@@ -46,12 +46,13 @@
   const catalog = (payload = {}) => {
     payload = payloadOf(payload) || {};
     const list = Array.isArray(payload) ? payload : first(payload.items, payload.markets, payload.current_markets, []);
+    const items = list.map((item, index) => market(item, index)).filter(isBtc);
     return {
-      items: list.map((item, index) => market(item, index)).filter(isBtc),
+      items,
       source: String(first(payload.source, payload.node_label, "backend")),
       asOf: first(payload.asOf, payload.as_of, null),
-      stale: payload.stale === true || payload.collector_online === false,
-      error: payload.error || null
+      stale: payload.stale === true || payload.collector_online === false || payload.depthUnavailable === true || payload.depth_unavailable === true || items.some((item) => item.stale || item.depthUnavailable),
+      error: payload.error || payload.error_code || null
     };
   };
   const pool = (payload = {}, catalogItems = []) => {
