@@ -209,7 +209,16 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
                 nginx_before[target_name]={'type': 'file', 'mode': target.stat().st_mode & 0o777}
             else:
                 nginx_before[target_name]={'type': 'absent'}
-        nginx_before['link']=os.readlink(nginx_public_link) if nginx_public_link.is_symlink() else None
+        if nginx_public_link.is_symlink():
+            nginx_before['link']={'type': 'symlink', 'target': os.readlink(nginx_public_link)}
+        elif nginx_public_link.is_file():
+            saved=nginx_backup/'enabled-public-file'
+            saved.write_bytes(nginx_public_link.read_bytes())
+            nginx_before['link']={'type': 'file', 'mode': nginx_public_link.stat().st_mode & 0o777}
+        elif nginx_public_link.exists():
+            raise RuntimeError('Expected nginx enabled-site path to be a file or symlink')
+        else:
+            nginx_before['link']={'type': 'absent'}
         (release/'nginx-state-before.json').write_text(json.dumps(nginx_before))
     with tarfile.open(release/'before.tar.gz','w:gz') as backup:
         for name in backup_names:
@@ -315,11 +324,17 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
                     target.symlink_to(state['target'])
                 elif state['type'] == 'absent':
                     target.unlink(missing_ok=True)
-            link_before=nginx_before.get('link')
-            if link_before is None:
+            link_before=nginx_before.get('link', {'type': 'absent'})
+            if link_before['type'] == 'absent':
                 nginx_public_link.unlink(missing_ok=True)
-            else:
-                subprocess.run(['ln','-sfn',link_before,str(nginx_public_link)],check=False)
+            elif link_before['type'] == 'symlink':
+                nginx_public_link.unlink(missing_ok=True)
+                nginx_public_link.symlink_to(link_before['target'])
+            elif link_before['type'] == 'file':
+                saved=release/'nginx-before'/'enabled-public-file'
+                nginx_public_link.unlink(missing_ok=True)
+                nginx_public_link.write_bytes(saved.read_bytes())
+                nginx_public_link.chmod(link_before['mode'])
             subprocess.run(['nginx','-t'],check=False)
             subprocess.run(['systemctl','reload','nginx'],check=False)
         if changed_units or removed_units:
