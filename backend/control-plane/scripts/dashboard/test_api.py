@@ -196,6 +196,27 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["summary"]["settled_pnl"], 2.)
 
+    def test_settlement_credentials_are_displayed_as_runtime_tristate(self):
+        wallet = "0x" + "a" * 40
+        values = {"POLYMARKET_WALLET_ADDRESS": wallet,
+                  "POLYMARKET_OWNER_PRIVATE_KEY": "0x" + "b" * 64}
+        base_report = {"wallet": wallet, "account_ready": True, "signer_matches": True,
+                       "approvals_ready": True, "compromised": False,
+                       "checked_at": time.time(), "checks": [],
+                       "wallet_kind": "eoa", "signature_type": "eoa"}
+        with patch.object(server_module, "_account_values", return_value=values), \
+                patch.object(server_module, "_account_check_error", None):
+            for supplied, expected in ((True, True), (False, False), ("unknown", None), (None, None)):
+                report = {**base_report}
+                if supplied is not None:
+                    report["settlement_credentials_ready"] = supplied
+                with patch.object(server_module, "_account_report", report):
+                    status = server_module.account_config_status()
+                self.assertIs(status["settlement_credentials_ready"], expected)
+                self.assertIs(status["settlementCredentialsReady"], expected)
+                self.assertNotIn("POLY_BUILDER_SECRET", status)
+                self.assertNotIn("POLY_BUILDER_PASSPHRASE", status)
+
 
 class SnapshotTests(unittest.TestCase):
     def test_engine_frame_is_rechecked_at_read_time(self):
