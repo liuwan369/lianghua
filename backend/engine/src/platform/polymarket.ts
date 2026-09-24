@@ -30,12 +30,11 @@ type FiveMinuteDiscovery = {
   start: number;
   end: number;
   slug?: string;
-  referenceProducer?: string;
 };
 type DiscoveryModule = typeof marketDiscovery & {
   findFiveMinuteMarket?: (asset: string, options: { now: number; allowCollectorFallback: boolean; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
 };
-type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string };
+type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string; __runtimeAssetId?: AssetId };
 type RuntimeFeedStarter = (
   sink: (event: FeedEvent) => void,
   upToken: string,
@@ -50,6 +49,18 @@ export function binaryMarketSides(market: MarketInfo): { up: Instrument; down: I
   const down = market.instruments.find(item => ["DOWN", "NO"].includes(item.outcome.toUpperCase()));
   if (!up || !down || up.tokenId === down.tokenId || up.marketId !== market.id || down.marketId !== market.id) return undefined;
   return { up, down };
+}
+
+/** Runtime-local producer label; market-data remains authoritative for actual feed availability. */
+export function referenceProducerForAsset(assetId: AssetId): string {
+  return `${assetId}-reference`;
+}
+
+/** Market-data currently names the reference asset `asset`; accept the temporary
+ * runtime alias too, but never derive an asset from a price or local receive time. */
+export function referenceAssetFromFeedPayload(payload: Record<string, unknown>, fallback?: AssetId): AssetId | undefined {
+  const value = payload.asset ?? payload.assetId ?? fallback;
+  return typeof value === "string" && /^[a-z0-9_-]{1,32}$/i.test(value) ? value.toLowerCase() : undefined;
 }
 
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
@@ -101,7 +112,10 @@ export async function discoverMarket(
   if (market.roundId !== String(start)) throw new Error("market round id does not match discovery start");
   const discoveredAsset = String(market.asset ?? asset).toLowerCase();
   if (discoveredAsset !== asset) throw new Error("market discovery asset identity mismatch");
-  return [{ id: marketId, assetId: asset, referenceProducer: market.referenceProducer ?? `${asset}-reference`, roundId: market.roundId,
+  // The market-data discovery contract identifies the asset and market only.
+  // Reference producer availability is checked by ConnectOptions.referenceFeeds
+  // at startup; do not invent a discovery field that the producer does not own.
+  return [{ id: marketId, assetId: asset, referenceProducer: referenceProducerForAsset(asset), roundId: market.roundId,
     name: String(market.slug ?? `${asset}-updown-5m-${start}`), startsAt: start, endsAt: end, instruments }];
 }
 
@@ -432,7 +446,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     const eventMarketId = typeof payload.marketId === "string" ? payload.marketId : snapshot?.marketId;
     const byIdentity = options.markets.find(market => market.id === (eventMarketId ?? event.__runtimeMarketId));
     if (byIdentity) return byIdentity;
-    const eventAsset = typeof payload.assetId === "string" ? payload.assetId : undefined;
+    const eventAsset = referenceAssetFromFeedPayload(payload);
     return eventAsset ? options.markets.find(market => market.assetId === eventAsset) : undefined;
   };
   const rejectSnapshot = (market: MarketInfo, reason: SnapshotRejectReason): void => {
@@ -523,11 +537,18 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     }
     if (event.kind === "marketTrade") return;
     if (event.kind === "btc" || event.kind === "oracle") {
-      const eventAsset = typeof payload.assetId === "string" ? payload.assetId : "btc";
+      const runtimeAsset = typeof payload.__runtimeAssetId === "string" ? payload.__runtimeAssetId : undefined;
+      const declaredAsset = typeof payload.asset === "string" ? payload.asset
+        : typeof payload.assetId === "string" ? payload.assetId : undefined;
+      // Legacy BTC feed events have no asset field. They are accepted only
+      // from the BTC runtime binding; an unlabelled ETH event is rejected.
+      if (runtimeAsset !== undefined && declaredAsset !== undefined && declaredAsset.toLowerCase() !== runtimeAsset) return;
+      if (runtimeAsset !== undefined && declaredAsset === undefined && runtimeAsset !== "btc") return;
+      const eventAsset = referenceAssetFromFeedPayload(payload, runtimeAsset ?? "btc");
       const marketForAsset = options.markets.find(item => (item.assetId ?? "btc") === eventAsset);
       if (!marketForAsset || eventAsset !== (marketForAsset.assetId ?? "btc")) return;
-      const producer = typeof payload.producer === "string" ? payload.producer : event.kind === "btc" ? "btc-reference" : "btc-oracle";
-      if (marketForAsset.referenceProducer && marketForAsset.referenceProducer !== producer) return;
+      const producer = typeof payload.producer === "string" ? payload.producer : undefined;
+      if (producer && marketForAsset.referenceProducer && marketForAsset.referenceProducer !== producer) return;
       platform.ingest({ kind: "reference", assetId: eventAsset, symbol: event.kind === "btc" ? eventAsset.toUpperCase() : `${eventAsset.toUpperCase()}_ORACLE`, price: event.price, ts: event.tsUnix });
       return;
     }
@@ -564,7 +585,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     // record listeners, account reads and HTTP work run in the consumer.
     const queue = feedQueues.get(market.id);
     if (!queue) return;
-    queue.push({ ...event, __runtimeMarketId: market.id } as RoutedFeedEvent as FeedEvent);
+    queue.push({ ...event, __runtimeMarketId: market.id, __runtimeAssetId: market.assetId ?? "btc" } as RoutedFeedEvent as FeedEvent);
   };
   const startFeedConsumer = (): void => {
     if (feedConsumer) return;
