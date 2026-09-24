@@ -160,9 +160,10 @@ class StrategyConfigStore(ConfigStore):
     def save_draft(self, config: dict, expected_revision: int) -> dict:
         if type(expected_revision) is not int or expected_revision < 0:
             raise ConfigValidationError("配置版本必须为非负整数")
-        validated = validate_config(config)
         with self._lock:
             current = self._read()
+            validated = validate_config({"assetId": current["config"]["assetId"], **config}
+                                        if isinstance(config, dict) else config)
             if current["savedRevision"] != expected_revision:
                 raise ConfigConflictError(current["savedRevision"])
             data = {"schemaVersion": 1, "strategyId": STRATEGY_ID,
@@ -209,9 +210,10 @@ class StrategyConfigStore(ConfigStore):
     def save(self, config: dict, expected_revision: int) -> dict:
         if type(expected_revision) is not int or expected_revision < 0:
             raise ConfigValidationError("配置版本必须为非负整数")
-        validated = validate_config(config)
         with self._lock:
             current = self._read()
+            validated = validate_config({"assetId": current["config"]["assetId"], **config}
+                                        if isinstance(config, dict) else config)
             if current["savedRevision"] != expected_revision:
                 raise ConfigConflictError(current["savedRevision"])
             data = {"schemaVersion": 1, "strategyId": STRATEGY_ID,
