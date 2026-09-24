@@ -20,6 +20,7 @@ export class TradingCore {
   private preparationTail: Promise<void> = Promise.resolve();
   private fillByKey = new Map<string, TradeFill>();
   private fillIndexByKey = new Map<string, number>();
+  private fillOrderByTradeId = new Map<string, string>();
   private clock: () => number;
   private stopped = false;
   private recovering = false;
@@ -78,15 +79,27 @@ export class TradingCore {
     this.validateCashFlowTracking(this.state.cashFlowTracking);
     if (!options.restored) this.applyCashFlowEvidence(this.state, initial);
     this.state.fills.forEach((fill, index) => {
+      if (!fill.tradeId || !fill.orderId) throw new Error("invalid persisted fill identity");
+      const existingOrderId = this.fillOrderByTradeId.get(fill.tradeId);
+      if (existingOrderId && existingOrderId !== fill.orderId) throw new Error("duplicate persisted trade identity");
+      this.fillOrderByTradeId.set(fill.tradeId, fill.orderId);
       const key = this.fillKey(fill);
       this.fillByKey.set(key, fill);
       this.fillIndexByKey.set(key, index);
     });
     for (const order of this.state.orders) {
-      if (["SUBMITTING", "UNKNOWN"].includes(order.status) && order.identityProtocol === "signed-before-post" && !order.prepared) {
+      if (order.status !== "SUBMITTING") continue;
+      if (order.identityProtocol === "signed-before-post" && !order.prepared) {
         // In this protocol HTTP cannot begin until the signed identity commit.
         order.status = "REJECTED"; order.error = "process interrupted before signed submission";
         order.reservedUsd = 0; order.reservedShares = 0; order.reconciliationPending = false;
+      } else {
+        // A restored process has no in-memory submission promise to await. A
+        // durable order identity means the POST may already have reached the
+        // venue, so continue through UNKNOWN/reconciliation instead of leaving
+        // stop() stuck on an ACK that can never arrive in this process.
+        order.status = "UNKNOWN";
+        order.error ??= "process interrupted before order acknowledgement";
       }
     }
     // Restored in-flight requests must be reconciled with the venue before another submission.
@@ -304,17 +317,22 @@ export class TradingCore {
     const unmapped = this.hasUnmappedReconciliation();
     this.state.risk.blockedMarketIds = blockedMarketIds;
     this.state.risk.reconciliationRequired = this.state.orders.some(candidate =>
-      candidate.status === "UNKNOWN" || candidate.reconciliationPending === true);
+      ["SUBMITTING", "UNKNOWN"].includes(candidate.status) || candidate.reconciliationPending === true);
     // An unresolved order reserves only its own market's capital.  Do not
     // turn a delayed venue response for one five-minute round into a global
     // strategy halt that suppresses the next round.
     if (unmapped && (!this.state.risk.reason || this.isScopedReconciliationReason(this.state.risk.reason))) {
       this.state.risk.halted = true;
       this.state.risk.reason = "unknown order requires reconciliation";
+    } else if (this.state.orders.some(candidate => candidate.status === "SUBMITTING")
+      && (!this.state.risk.reason || this.isScopedReconciliationReason(this.state.risk.reason))) {
+      this.state.risk.halted = true;
+      this.state.risk.reason = "restored orders require reconciliation";
     } else if (blockedMarketIds.length > 0 && this.isScopedReconciliationReason(this.state.risk.reason)) {
       this.state.risk.halted = false;
       delete this.state.risk.reason;
-    } else if (blockedMarketIds.length === 0 && !unmapped && this.state.risk.reason?.includes("reconciliation")) {
+    } else if (blockedMarketIds.length === 0 && !unmapped && this.state.risk.reason?.includes("reconciliation")
+      && !(this.state.risk.reason === "restored orders require reconciliation" && this.state.orders.some(active))) {
       this.state.risk.halted = false;
       delete this.state.risk.reason;
     }
@@ -431,11 +449,74 @@ export class TradingCore {
     this.persist();
   }
   rememberMarket(market: MarketInfo): void {
+    if (!market.id || !/^\d+$/.test(market.roundId) || market.roundId !== String(market.startsAt)
+      || !Number.isFinite(market.startsAt) || market.endsAt - market.startsAt !== 300) {
+      throw new Error("market round identity is required");
+    }
+    const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
+    for (const order of this.state.orders) {
+      if (tokens.has(order.tokenId)
+        && ((order.marketId !== undefined && order.marketId !== market.id)
+          || (order.roundId !== undefined && order.roundId !== market.roundId))) {
+        throw new Error("order market identity changed");
+      }
+    }
+    for (const fill of this.state.fills) {
+      if (tokens.has(fill.tokenId)
+        && ((fill.marketId !== undefined && fill.marketId !== market.id)
+          || (fill.roundId !== undefined && fill.roundId !== market.roundId))) {
+        throw new Error("fill market identity changed");
+      }
+    }
     this.state.markets ??= [];
     const index = this.state.markets.findIndex(item => item.id === market.id);
+    if (index >= 0) {
+      // States written before round identity was added have the market, start,
+      // end and token set but no roundId. The next discovery supplies the
+      // authoritative identity. Backfill only after those durable anchors
+      // match; never infer a round from a slug or from the current clock.
+      const persisted = this.state.markets[index] as unknown as {
+        roundId?: unknown;
+        startsAt?: unknown;
+        endsAt?: unknown;
+        instruments?: unknown;
+      };
+      if (persisted.roundId !== undefined
+        && (typeof persisted.roundId !== "string" || persisted.roundId !== market.roundId)) {
+        throw new Error("market round identity changed");
+      }
+      if (persisted.startsAt !== market.startsAt || persisted.endsAt !== market.endsAt
+        || !Array.isArray(persisted.instruments)) {
+        throw new Error("market identity changed");
+      }
+      const persistedTokens = persisted.instruments.map(item =>
+        item && typeof item === "object" && "tokenId" in item && typeof item.tokenId === "string"
+          ? item.tokenId : undefined);
+      if (persistedTokens.some(token => token === undefined)
+        || new Set(persistedTokens).size !== tokens.size
+        || persistedTokens.some(token => !tokens.has(token!))) {
+        throw new Error("market token identity changed");
+      }
+    }
     if (index >= 0) this.state.markets[index] = copy(market);
     else this.state.markets.push(copy(market));
+    for (const order of this.state.orders) {
+      if (tokens.has(order.tokenId)) {
+        order.marketId ??= market.id;
+        order.roundId ??= market.roundId;
+      }
+    }
+    for (const fill of this.state.fills) {
+      if (tokens.has(fill.tokenId)) {
+        fill.marketId ??= market.id;
+        fill.roundId ??= market.roundId;
+      }
+    }
     this.persist();
+  }
+
+  private roundIdForMarket(marketId: string): string | undefined {
+    return this.state.markets?.find(market => market.id === marketId)?.roundId;
   }
   contextSnapshot(): Omit<CoreState, "fills"> {
     this.updateRisk();
@@ -580,9 +661,15 @@ export class TradingCore {
     try { this.options.adapters.record?.(copy(event)); } catch { /* Observability is outside execution. */ }
     this.options.onEvent?.(copy(event));
   }
+  private emitOrder(order: OrderRecord): void {
+    this.emit({ kind: "order", order: copy(order), marketId: order.marketId, roundId: order.roundId });
+  }
+  private emitFill(fill: TradeFill): void {
+    this.emit({ kind: "fill", fill: copy(fill), marketId: fill.marketId, roundId: fill.roundId });
+  }
   private notify(order: OrderRecord, critical = false): OrderRecord {
     order.updatedAt = Math.max(order.updatedAt, this.clock());
-    this.persist(critical); this.emit({ kind: "order", order: copy(order) });
+    this.persist(critical); this.emitOrder(order);
     return copy(order);
   }
   private track<T>(job: Promise<T>): Promise<T> {
@@ -603,7 +690,7 @@ export class TradingCore {
     if (pending) {
       const original = this.submissionRequests.get(request.clientOrderId)
         ?? this.state.orders.find(order => order.clientOrderId === request.clientOrderId);
-      if (original && ["strategyId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"]
+      if (original && ["strategyId", "marketId", "roundId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"]
         .some(field => original[field as keyof OrderRequest] !== request[field as keyof OrderRequest])) {
         return Promise.reject(new Error("clientOrderId reused for a different order"));
       }
@@ -624,7 +711,7 @@ export class TradingCore {
   private async submitOrder(request: OrderRequest, timing?: ExecutionTiming): Promise<OrderRecord> {
     const previous = this.state.orders.find(o => o.clientOrderId === request.clientOrderId);
     if (previous) {
-      for (const field of ["strategyId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"] as const) {
+      for (const field of ["strategyId", "marketId", "roundId", "tokenId", "direction", "price", "shares", "timeInForce", "postOnly", "roundBudgetUsd"] as const) {
         if (previous[field] !== request[field]) throw new Error("clientOrderId reused for a different order");
       }
       return copy(previous);
@@ -647,6 +734,9 @@ export class TradingCore {
       || request.shares < instrument.minOrderSize - EPS
       || Math.abs(request.price / instrument.tickSize - Math.round(request.price / instrument.tickSize)) > 1e-6) {
       throw new Error("invalid order or instrument rules");
+    }
+    if (request.marketId !== undefined && request.marketId !== instrument.marketId) {
+      throw new Error("order market identity mismatch");
     }
     const amount = request.price * request.shares;
     const fee = this.options.adapters.estimateFee?.(request) ?? 0;
@@ -705,7 +795,13 @@ export class TradingCore {
       releasePreparation?.();
       throw error;
     }
-    const order: OrderRecord = { ...request, status: "SUBMITTING", filledShares: 0,
+    const roundId = this.roundIdForMarket(instrument.marketId);
+    if (!roundId) throw new Error("market round identity unavailable");
+    if (request.roundId !== undefined && request.roundId !== roundId) {
+      throw new Error("order round identity mismatch");
+    }
+    const order: OrderRecord = { ...request, marketId: instrument.marketId, roundId,
+      status: "SUBMITTING", filledShares: 0,
       identityProtocol: this.options.adapters.gateway.durableIdentity ? "signed-before-post" : undefined,
       reservedUsd: request.direction === "BUY" ? amount + fee : fee,
       reservedShares: request.direction === "SELL" ? request.shares : 0,
@@ -722,13 +818,14 @@ export class TradingCore {
       releasePreparation?.();
       order.status = "REJECTED"; order.error = "reservation persistence failed before submission";
       order.reservedUsd = 0; order.reservedShares = 0;
-      this.emit({ kind: "order", order: copy(order) });
+      this.emitOrder(order);
       throw error;
     }
-    this.emit({ kind: "order", order: copy(order) });
+    this.emitOrder(order);
     let ackOutcome: GatewayAck["status"] | undefined;
     try {
-      const ack = await this.options.adapters.gateway.submit(request, copy(instrument), prepared => {
+      const scopedRequest: OrderRequest = { ...request, marketId: order.marketId, roundId: order.roundId };
+      const ack = await this.options.adapters.gateway.submit(scopedRequest, copy(instrument), prepared => {
         if (!prepared.orderHash || !prepared.signedPayload) throw new Error("signed order identity missing");
         if (this.state.orders.some(existing => existing !== order
           && (existing.orderId === prepared.orderHash || existing.clientOrderId === prepared.orderHash))) {
@@ -746,7 +843,7 @@ export class TradingCore {
         }
         releasePreparation?.();
         order.durableCommitLatencyMs = Math.max(0, performance.now() - started);
-        this.emit({ kind: "order", order: copy(order) });
+        this.emitOrder(order);
         queueMicrotask(() => this.emitLatency("durable_commit", order.durableCommitLatencyMs, order));
       }, timing);
       ackOutcome = ack.status;
@@ -836,10 +933,18 @@ export class TradingCore {
     if (!order) throw new Error("order not found");
     if (!active(order)) return copy(order);
     if (order.status === "SUBMITTING") {
-      await Promise.resolve();
-      await this.submissions.get(order.clientOrderId);
-      if (order.status === "SUBMITTING") throw new Error("order ACK pending");
-      return this.cancelOrder(id);
+      const pending = this.submissions.get(order.clientOrderId);
+      if (pending) {
+        await pending;
+        if (order.status === "SUBMITTING") throw new Error("order ACK pending");
+        return this.cancelOrder(id);
+      }
+      // After a restart the in-memory submission map is empty. A persisted
+      // order identity proves the POST may have reached the venue, so cancel
+      // it through the normal UNKNOWN/reconciliation path instead of waiting
+      // forever for an ACK that belongs to the previous process.
+      if (!order.orderId) throw new Error("unidentified submission requires reconciliation");
+      order.status = "UNKNOWN";
     }
     if (!order.orderId) throw new Error("unidentified order requires reconciliation");
     const cancelRequestedAt = this.clock();
@@ -926,29 +1031,44 @@ export class TradingCore {
     this.notify(order, true);
   }
   applyFill(fill: TradeFill): boolean {
+    if (!fill.tradeId || !fill.orderId) throw new Error("invalid trade identity");
+    const existingOrderId = this.fillOrderByTradeId.get(fill.tradeId);
+    if (existingOrderId && existingOrderId !== fill.orderId) {
+      throw new Error("trade identity collision requires reconciliation");
+    }
     const key = this.fillKey(fill);
     const previous = this.fillByKey.get(key);
     if (previous) return this.updateFill(previous, fill);
+    const order = this.find(fill.orderId);
     if (fill.status === "FAILED") {
-      const order = this.find(fill.orderId);
       if (!order || order.tokenId !== fill.tokenId || order.direction !== fill.direction || !fill.tradeId) {
         throw new Error("invalid or unowned failed trade");
       }
+      if (fill.marketId !== undefined && fill.marketId !== order.marketId
+        || fill.roundId !== undefined && fill.roundId !== order.roundId) {
+        throw new Error("trade market identity changed");
+      }
+      fill = { ...fill, marketId: order.marketId, roundId: order.roundId };
       order.status = "UNKNOWN"; order.reconciliationPending = true;
       this.state.risk.halted = true; this.state.risk.reason = "failed trade requires reconciliation";
       const saved = copy(fill), failedKey = this.fillKey(saved);
       this.fillIndexByKey.set(failedKey, this.state.fills.length);
       this.fillByKey.set(failedKey, saved);
+      this.fillOrderByTradeId.set(saved.tradeId, saved.orderId);
       this.state.fills.push(saved);
-      this.notify(order, true); this.emit({ kind: "fill", fill: copy(fill) }); return true;
+      this.notify(order, true); this.emitFill(fill); return true;
     }
-    const order = this.find(fill.orderId);
     if (!order || order.tokenId !== fill.tokenId || order.direction !== fill.direction
       || order.status === "FILLED" || (order.status === "CANCELLED" && !order.reconciliationPending)
       || !fill.tradeId || ![fill.shares, fill.price, fill.feeUsd, fill.ts].every(finite)
       || fill.shares <= 0 || fill.price <= 0 || fill.price >= 1 || fill.feeUsd < 0
       || (fill.direction === "BUY" ? fill.price > order.price + EPS : fill.price < order.price - EPS)
       || order.filledShares + fill.shares > order.shares + EPS) throw new Error("invalid or unowned fill");
+    if (fill.marketId !== undefined && fill.marketId !== order.marketId
+      || fill.roundId !== undefined && fill.roundId !== order.roundId) {
+      throw new Error("trade market identity changed");
+    }
+    fill = { ...fill, marketId: order.marketId, roundId: order.roundId };
     this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
     order.reconciliationPending = order.status === "CANCELLED";
     const position = this.position(fill.tokenId);
@@ -980,15 +1100,20 @@ export class TradingCore {
     const saved = copy(fill), savedKey = this.fillKey(saved);
     this.fillIndexByKey.set(savedKey, this.state.fills.length);
     this.fillByKey.set(savedKey, saved);
+    this.fillOrderByTradeId.set(saved.tradeId, saved.orderId);
     this.state.fills.push(saved);
     this.persist(true);
     // Inventory is authoritative in the event context before the strategy sees the fill.
-    this.emit({ kind: "fill", fill: copy(fill) });
-    this.emit({ kind: "order", order: copy(order) });
+    this.emitFill(fill);
+    this.emitOrder(order);
     return true;
   }
 
   private updateFill(previous: TradeFill, incoming: TradeFill): boolean {
+    if ((incoming.marketId !== undefined && incoming.marketId !== previous.marketId)
+      || (incoming.roundId !== undefined && incoming.roundId !== previous.roundId)) {
+      throw new Error("trade market identity changed");
+    }
     const oldStatus = previous.status ?? "CONFIRMED", nextStatus = incoming.status ?? "CONFIRMED";
     const improvesFee = incoming.feeSource === "reported" && previous.feeSource !== "reported" && nextStatus !== "FAILED";
     if (oldStatus === "FAILED" || (oldStatus === "CONFIRMED" && (nextStatus !== "CONFIRMED" || !improvesFee))
@@ -1023,7 +1148,7 @@ export class TradingCore {
         previous.feeUsd = incoming.feeUsd; previous.feeSource = "reported";
       }
       previous.status = nextStatus;
-      this.persist(true); this.emit({ kind: "fill", fill: copy(previous) }); return true;
+      this.persist(true); this.emitFill(previous); return true;
     }
     const order = this.find(previous.orderId);
     if (!order) throw new Error("failed trade has no owned order");
@@ -1051,7 +1176,7 @@ export class TradingCore {
       + (this.options.adapters.estimateFee?.({ ...order, shares: remaining }) ?? 0);
     order.reservedShares = order.direction === "SELL" ? remaining : 0;
     this.state.risk.halted = true; this.state.risk.reason = "failed trade requires reconciliation";
-    this.notify(order, true); this.emit({ kind: "fill", fill: copy(previous) });
+    this.notify(order, true); this.emitFill(previous);
     return true;
   }
 
@@ -1172,22 +1297,32 @@ export class TradingCore {
       order.orderId != null && this.isOrderQuarantined(order.orderId);
     const ownedActive = () => this.state.orders.filter(o =>
       active(o) && o.strategyId !== "external" && !isQuarantined(o));
-    const result = await Promise.allSettled(ownedActive().map(o => this.cancel(o.orderId ?? o.clientOrderId)));
-    if (result.some(item => item.status === "rejected")) throw new Error("stop left unresolved orders");
-    this.options.adapters.beforeFinalReconcile?.();
-    let unresolved = this.state.orders.some(o =>
-      reservationPending(o) && o.strategyId !== "external" && !isQuarantined(o));
-    if (unresolved && this.options.adapters.readAccount) {
-      try {
-        this.reconcile(await this.options.adapters.readAccount());
-      } catch {
-        // Keep the fail-closed state when the final ordinary account read
-        // cannot prove every cancellation and fill outcome.
-      }
-      unresolved = this.state.orders.some(o =>
+    let failure: unknown;
+    try {
+      const result = await Promise.allSettled(ownedActive().map(o => this.cancel(o.orderId ?? o.clientOrderId)));
+      if (result.some(item => item.status === "rejected")) throw new Error("stop left unresolved orders");
+      this.options.adapters.beforeFinalReconcile?.();
+      let unresolved = this.state.orders.some(o =>
         reservationPending(o) && o.strategyId !== "external" && !isQuarantined(o));
+      if (unresolved && this.options.adapters.readAccount) {
+        try {
+          this.reconcile(await this.options.adapters.readAccount());
+        } catch {
+          // Keep the fail-closed state when the final ordinary account read
+          // cannot prove every cancellation and fill outcome.
+        }
+        unresolved = this.state.orders.some(o =>
+          reservationPending(o) && o.strategyId !== "external" && !isQuarantined(o));
+      }
+      if (unresolved) throw new Error("stop left unresolved orders");
+    } catch (error) {
+      failure = error;
     }
-    if (unresolved) throw new Error("stop left unresolved orders");
-    this.persist(true); this.emit({ kind: "stopped", reason });
+    // Operators and the control plane need a terminal event even when a
+    // venue timeout leaves an order unresolved. The risk state remains closed
+    // and the original error is still returned to the caller.
+    try { this.persist(true); } catch (error) { failure ??= error; }
+    this.emit({ kind: "stopped", reason: failure ? `${reason}: unresolved orders` : reason });
+    if (failure) throw failure instanceof Error ? failure : new Error("stop failed");
   }
 }

@@ -1,4 +1,4 @@
-import type { Book, Instrument, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
+import type { Instrument, MarketBookSnapshot, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
   StrategyContext, StrategyPlugin, TradingEvent } from "../platform/contracts.js";
 
 export type ReversalDirection = "UP" | "DOWN";
@@ -42,6 +42,8 @@ interface QuoteReference {
 }
 export interface ReversalRound {
   marketId: string;
+  /** Five-minute Unix start identity carried by paired market snapshots. */
+  roundId: string;
   name: string;
   startsAt: number;
   endsAt: number;
@@ -182,6 +184,18 @@ export class BtcReversalStrategy implements StrategyPlugin {
     if (!Number.isFinite(context.now)) return [];
     this.latestNow = context.now;
     let changed = this.discover(context);
+    // A durable stage intent can outlive the five-minute market if the
+    // process dies after persisting the strategy state but before the order
+    // request reaches the execution layer. It can no longer be submitted.
+    for (const [clientOrderId, stage] of this.createdStages) {
+      const indexed = this.stagesByClient.get(clientOrderId);
+      if (!indexed || context.now < indexed.round.endsAt) continue;
+      stage.status = "ABANDONED";
+      stage.error ??= "场次已结束，未提交的阶段意图已放弃";
+      this.replayIntents.delete(stage.clientOrderId);
+      this.createdStages.delete(stage.clientOrderId);
+      changed = true;
+    }
     if (event.kind === "order") changed = this.recordOrder(event.order) || changed;
     // Context recovery may already contain an order before its first callback reaches the plugin.
     const knownClients = new Set<string>();
@@ -207,7 +221,13 @@ export class BtcReversalStrategy implements StrategyPlugin {
         this.createdStages.delete(stage.clientOrderId); changed = true;
       }
     }
-    if (event.kind === "error" && (event.message === "market_feed_disconnected" || event.message === "account_recovery_started")) {
+    const quoteGateBlocked = event.kind === "error" && (event.code === "market_feed_unhealthy" || event.code === "feed_processing_failed"
+      || event.code === "market_snapshot_rejected"
+      || event.message === "market_feed_disconnected"
+      || event.message === "market_feed_unhealthy"
+      || event.message.startsWith("market_feed_unhealthy:")
+      || event.message === "account_recovery_started");
+    if (quoteGateBlocked) {
       this.resetQuoteReference(event.marketId);
     }
     if (event.kind === "stopped") this.resetQuoteReference();
@@ -247,17 +267,27 @@ export class BtcReversalStrategy implements StrategyPlugin {
         this.invalidateReference(round);
         continue;
       }
-      for (const stage of round.stages) {
-        if (!this.replayIntents.delete(stage.clientOrderId) || stage.status !== "CREATED") continue;
-        actions.push({ kind: "submit", order: this.orderIntent(stage, round.config) });
-      }
-      const pair = this.pair(round, context);
+      // Only a gated paired book can update the reversal reference. Latency,
+      // order, fill, timer and other lifecycle events must not look like a
+      // missing quote and erase a baseline that was just accepted.
+      if (event.kind !== "book") continue;
+      const snapshot = event.snapshot;
+      if (!snapshot || snapshot.marketId !== round.marketId
+        || snapshot.roundId !== round.roundId) continue;
+      const snapshotForRound = snapshot;
+      const pair = this.pairFromSnapshot(round, snapshotForRound, context.now);
       if (!pair) {
         if (round.reference) this.invalidateReference(round);
         round.reason = "等待新鲜双边行情";
         continue;
       }
-      if (event.kind !== "book" || ![round.upTokenId, round.downTokenId].includes(event.book.tokenId)) continue;
+      // A restored CREATED intent is also held until this round has supplied
+      // a fresh, identity-matched paired snapshot. Account/order events and
+      // another round's book can never replay it into the venue.
+      if (!quoteGateBlocked) for (const stage of round.stages) {
+        if (!this.replayIntents.delete(stage.clientOrderId) || stage.status !== "CREATED") continue;
+        actions.push({ kind: "submit", order: this.orderIntent(round, stage, round.config) });
+      }
       const previous = round.reference;
       if (previous && pair.upTs === previous.upTs && pair.downTs === previous.downTs
         && pair.upAsk === previous.upAsk && pair.downAsk === previous.downAsk) continue;
@@ -269,6 +299,15 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const threshold = round.config.triggerPrice;
       const confirming = this.uniqueDirection(pair.upAsk >= round.config.confirmationPrice,
         pair.downAsk >= round.config.confirmationPrice);
+      if (first) {
+        // The first complete pair is only a baseline. Without a prior
+        // below-trigger observation there is no real crossing to trade.
+        round.reference = pair;
+        round.reason = "已建立行情基线，等待跨价";
+        if (confirming) round.lastConfirmedDirection = confirming;
+        changed = true;
+        continue;
+      }
       if (round.rebuildingReference) {
         round.reference = pair; round.rebuildingReference = false; round.referenceFloor = undefined;
         round.pendingAmbiguity = false;
@@ -277,7 +316,17 @@ export class BtcReversalStrategy implements StrategyPlugin {
         changed = true;
         continue;
       }
-      if (pair.upAsk >= threshold && pair.downAsk >= threshold) {
+      // Both asks above the trigger are ambiguous only when there is no
+      // directional baseline. If one side was already above the trigger and
+      // the other side newly crosses it, that is a clear reversal and must
+      // produce the opposite stage immediately.
+      const bothAbove = pair.upAsk >= threshold && pair.downAsk >= threshold;
+      const previousBothBelow = previous !== undefined
+        && previous.upAsk < threshold && previous.downAsk < threshold;
+      const previousBothAbove = previous !== undefined
+        && previous.upAsk >= threshold && previous.downAsk >= threshold;
+      const baselineAlsoBothAbove = previousBothBelow || previousBothAbove;
+      if (bothAbove && baselineAlsoBothAbove) {
         round.pendingAmbiguity = true;
         round.reference = pair;
         round.reason = "双边价格冲突，等待明确方向"; changed = true; continue;
@@ -286,13 +335,12 @@ export class BtcReversalStrategy implements StrategyPlugin {
         if (round.lastConfirmedDirection) round.confirmationCount += 1;
         round.lastConfirmedDirection = confirming; changed = true;
       }
-      const initial = first && round.stages.length === 0;
       const resolvingAmbiguity = round.pendingAmbiguity === true;
       if (resolvingAmbiguity) { round.pendingAmbiguity = false; changed = true; }
-      const upCross = resolvingAmbiguity ? pair.upAsk >= threshold : previous ? previous.upAsk < threshold && pair.upAsk >= threshold
-        : initial && pair.upAsk >= threshold && pair.upAsk <= round.config.maxBuyPrice;
-      const downCross = resolvingAmbiguity ? pair.downAsk >= threshold : previous ? previous.downAsk < threshold && pair.downAsk >= threshold
-        : initial && pair.downAsk >= threshold && pair.downAsk <= round.config.maxBuyPrice;
+      const upCross = resolvingAmbiguity ? pair.upAsk >= threshold
+        : previous !== undefined && previous.upAsk < threshold && pair.upAsk >= threshold;
+      const downCross = resolvingAmbiguity ? pair.downAsk >= threshold
+        : previous !== undefined && previous.downAsk < threshold && pair.downAsk >= threshold;
       round.reference = pair;
       const direction = this.uniqueDirection(upCross, downCross);
       if (round.stages.length >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
@@ -312,9 +360,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const candidate: ReversalStage = { stage: round.stages.length + 1, direction, tokenId,
         clientOrderId: `${this.state.instanceId}:${round.marketId}:${round.stages.length + 1}`,
         price: round.config.maxBuyPrice, shares, createdAt: context.now,
-        trigger: initial ? "initial_band_entry" : "crossing", status: "CREATED", filledShares: 0 };
+        trigger: "crossing", status: "CREATED", filledShares: 0 };
       let feeReserve: number;
-      try { feeReserve = context.estimateFee?.(this.orderIntent(candidate, round.config)) ?? 0; }
+      try { feeReserve = context.estimateFee?.(this.orderIntent(round, candidate, round.config)) ?? 0; }
       catch { round.reason = "当前交易费用暂不可用"; continue; }
       if (!Number.isFinite(feeReserve) || feeReserve < 0) { round.reason = "当前交易费用暂不可用"; continue; }
       candidate.feeReserveUsd = feeReserve;
@@ -341,7 +389,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       round.stages.push(candidate); round.lastStageDirection = direction; round.reason = "已触发，等待真实订单回报";
       this.indexStage(round, candidate);
       changed = true;
-      actions.push({ kind: "submit", order: this.orderIntent(candidate, round.config) });
+      actions.push({ kind: "submit", order: this.orderIntent(round, candidate, round.config) });
     }
     // Write the economic stage key before returning an action to the execution layer.
     if (changed) this.save();
@@ -355,7 +403,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const instruments = this.marketInstruments(market);
       if (!instruments) continue;
       const eligible = context.now <= market.startsAt;
-      const round: ReversalRound = { marketId: market.id, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
+      const round: ReversalRound = { marketId: market.id, roundId: market.roundId, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
         upTokenId: instruments.UP.tokenId, downTokenId: instruments.DOWN.tokenId, config: clone(this.state.config),
         status: eligible ? "waiting_start" : "waiting_next_round", firstSampleSeen: false, rebuildingReference: false,
         pendingAmbiguity: false, confirmationCount: 0, stages: [], reason: eligible ? "等待本场开始" : "中途启动，等待下一场" };
@@ -376,44 +424,27 @@ export class BtcReversalStrategy implements StrategyPlugin {
     return { UP: up, DOWN: down };
   }
 
-  private pair(round: ReversalRound, context: StrategyContext): QuoteReference | undefined {
-    const up = context.books.find(book => book.tokenId === round.upTokenId);
-    const down = context.books.find(book => book.tokenId === round.downTokenId);
-    if (!up || !down || !this.fresh(up, context.now, round) || !this.fresh(down, context.now, round)) return undefined;
-    const upTs = up.exchangeTs ?? up.ts, downTs = down.exchangeTs ?? down.ts;
+  private pairFromSnapshot(round: ReversalRound, snapshot: MarketBookSnapshot, now: number): QuoteReference | undefined {
+    if (snapshot.marketId !== round.marketId || snapshot.roundId !== round.roundId
+      || snapshot.expiresAt == null || snapshot.expiresAt <= now
+      || snapshot.marketAgeMs != null && snapshot.marketAgeMs > round.config.maxQuoteAgeSeconds * 1000) return undefined;
+    const yes = snapshot.YES, no = snapshot.NO;
+    if (!yes || !no || yes.assetId !== round.upTokenId || no.assetId !== round.downTokenId
+      || !positive(yes.ask) || yes.ask >= 1 || !positive(no.ask) || no.ask >= 1
+      || yes.sourceAt == null || no.sourceAt == null) return undefined;
+    const upTs = yes.sourceAt, downTs = no.sourceAt;
     if (Math.abs(upTs - downTs) > round.config.maxQuoteSkewSeconds) return undefined;
     if (round.reference && (upTs < round.reference.upTs || downTs < round.reference.downTs)) return undefined;
     if (round.referenceFloor && (upTs <= round.referenceFloor.upTs || downTs <= round.referenceFloor.downTs)) return undefined;
-    return { upAsk: up.ask!, downAsk: down.ask!, upTs, downTs };
-  }
-
-  private fresh(book: Book, now: number, round: ReversalRound): boolean {
-    const sourceTs = book.exchangeTs ?? book.ts;
-    const received = book.receivedAt ?? book.ts;
-    // `exchangeTs` is an ordering timestamp from the venue. It is not a
-    // reliable wall clock for the local process: an event can spend time in
-    // the WebSocket/event-loop queue, and the venue clock can have an offset.
-    // Use the feed's measured source age for venue freshness and the local
-    // receive timestamp for queue/process freshness. Comparing `now` directly
-    // with `exchangeTs` made fresh quotes look several seconds old.
-    const sourceAge = book.sourceAgeMs == null ? undefined : book.sourceAgeMs / 1000;
-    const derivedSourceAge = sourceAge == null && book.exchangeTs != null
-      ? received - book.exchangeTs : sourceAge;
-    const receiveAge = now - received;
-    return positive(book.ask) && book.ask < 1 && Number.isFinite(sourceTs) && Number.isFinite(received)
-      && (derivedSourceAge == null || (derivedSourceAge >= -round.config.maxQuoteSkewSeconds
-        && derivedSourceAge <= round.config.maxQuoteAgeSeconds))
-      && sourceTs >= round.startsAt && received >= round.startsAt
-      && received <= now + round.config.maxQuoteSkewSeconds
-      && receiveAge >= -round.config.maxQuoteSkewSeconds
-      && receiveAge <= round.config.maxQuoteAgeSeconds;
+    return { upAsk: yes.ask, downAsk: no.ask, upTs, downTs };
   }
 
   private uniqueDirection(up: boolean, down: boolean): ReversalDirection | undefined {
     return up === down ? undefined : up ? "UP" : "DOWN";
   }
-  private orderIntent(stage: ReversalStage, config: BtcReversalConfig): Omit<OrderRequest, "strategyId"> {
-    return { clientOrderId: stage.clientOrderId, tokenId: stage.tokenId, direction: "BUY", price: stage.price,
+  private orderIntent(round: ReversalRound, stage: ReversalStage, config: BtcReversalConfig): Omit<OrderRequest, "strategyId"> {
+    return { clientOrderId: stage.clientOrderId, marketId: round.marketId, roundId: round.roundId,
+      tokenId: stage.tokenId, direction: "BUY", price: stage.price,
       shares: stage.shares, timeInForce: "GTC", postOnly: false,
       ...(config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: config.roundBudgetUsd }) };
   }
@@ -464,6 +495,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       round.config = normalizeBtcReversalConfig(round.config);
       if (!round.marketId || markets.has(round.marketId) || round.config.instanceId !== state.instanceId
         || !Number.isFinite(round.startsAt) || round.endsAt - round.startsAt !== 300
+        || typeof round.roundId !== "string" || !round.roundId.trim()
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
         || !Array.isArray(round.stages) || round.stages.length > round.config.maxStages
         || !Number.isSafeInteger(round.confirmationCount) || round.confirmationCount < 0

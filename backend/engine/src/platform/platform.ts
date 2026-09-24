@@ -1,4 +1,4 @@
-import type { AccountSnapshot, Book, CoreOptions, CoreState, ExecutionTiming, MarketInfo, OrderRequest,
+import type { AccountSnapshot, Book, CoreOptions, CoreState, ExecutionTiming, MarketBookSnapshot, MarketInfo, OrderRequest,
   SettlementRequest, StrategyAction, StrategyContext, StrategyPlugin, TradingEvent } from "./contracts.js";
 import { TradingCore } from "./core.js";
 
@@ -16,6 +16,7 @@ export class TradingPlatform {
   readonly core: TradingCore;
   private markets = new Map<string, MarketInfo>();
   private books = new Map<string, Book>();
+  private snapshots = new Map<string, MarketBookSnapshot>();
   private listeners = new Set<(event: TradingEvent) => void>();
   private plugins = new Map<string, StrategyPlugin>();
   private records: TradingEvent[] = [];
@@ -40,6 +41,7 @@ export class TradingPlatform {
     list: (): MarketInfo[] => clone([...this.markets.values()]),
     books: (): Book[] => clone([...this.books.values()]),
     book: (tokenId: string): Book | undefined => clone(this.books.get(tokenId)),
+    snapshots: (): MarketBookSnapshot[] => clone([...this.snapshots.values()]),
     depth: (tokenId: string, levels = 5): Book | undefined => {
       if (!Number.isSafeInteger(levels) || levels <= 0) throw new Error("depth levels must be a positive integer");
       const book = this.books.get(tokenId);
@@ -85,12 +87,29 @@ export class TradingPlatform {
   };
   readonly settlement = {
     redeem: async (request: SettlementRequest) => {
+      const market = this.markets.get(request.marketId);
+      const roundId = request.roundId ?? market?.roundId;
+      if (!market || !roundId || roundId !== market.roundId) {
+        const result = { marketId: request.marketId, roundId, state: "unsupported" as const,
+          reason: "settlement market round identity unavailable or mismatched" };
+        this.publish({ kind: "settlement", result });
+        return clone(result);
+      }
+      const scopedRequest = { ...clone(request), roundId };
       const result = this.options.adapters.settle
-        ? await this.options.adapters.settle(clone(request))
-        : { marketId: request.marketId, state: "unsupported" as const, reason: "no settlement adapter for this wallet" };
+        ? await this.options.adapters.settle(scopedRequest)
+        : { marketId: scopedRequest.marketId, roundId: scopedRequest.roundId, state: "unsupported" as const,
+          reason: "no settlement adapter for this wallet" };
+      if (result.marketId !== request.marketId || (result.roundId !== undefined && result.roundId !== roundId)) {
+        const invalid = { marketId: request.marketId, roundId, state: "unsupported" as const,
+          reason: "settlement adapter returned mismatched market identity" };
+        this.publish({ kind: "settlement", result: invalid });
+        return clone(invalid);
+      }
+      const scopedResult = { ...result, roundId: result.roundId ?? roundId };
       // A broadcast receipt is not a cash credit; the account service reconciles actual proceeds.
-      this.publish({ kind: "settlement", result });
-      return clone(result);
+      this.publish({ kind: "settlement", result: scopedResult });
+      return clone(scopedResult);
     },
   };
 
@@ -116,14 +135,25 @@ export class TradingPlatform {
     };
   }
   ingest(event: TradingEvent): void {
-    if (event.kind === "fill") { this.core.applyFill(event.fill); return; }
+    if (event.kind === "fill") {
+      this.core.applyFill({ ...event.fill, marketId: event.fill.marketId ?? event.marketId,
+        roundId: event.fill.roundId ?? event.roundId });
+      return;
+    }
     if (event.kind === "order" || event.kind === "account") throw new Error("use authenticated order/account service methods");
     if (event.kind === "market") {
-      this.core.register(event.market.instruments);
+      if (!/^\d+$/.test(event.market.roundId) || event.market.roundId !== String(event.market.startsAt)
+        || !Number.isFinite(event.market.startsAt) || event.market.endsAt - event.market.startsAt !== 300) {
+        throw new Error("market round identity is required");
+      }
       this.core.rememberMarket(event.market);
+      this.core.register(event.market.instruments);
       this.markets.set(event.market.id, clone(event.market));
     }
-    if (event.kind === "book") { this.ingestBooks([event.book]); return; }
+    if (event.kind === "book") {
+      if (event.snapshot) { this.ingestSnapshot(event.snapshot, event.marketId, event.roundId); return; }
+      this.ingestBooks([event.book]); return;
+    }
     try { this.options.adapters.record?.(clone(event)); } catch { /* Background logging is not an order gate. */ }
     this.publish(event);
   }
@@ -150,6 +180,59 @@ export class TradingPlatform {
       this.publish({ kind: "latency", metric: "market_age", durationMs: book.sourceAgeMs, ts, marketId,
         tokenId: book.tokenId });
     }
+  }
+  /** Apply one already-gated paired snapshot and publish that same shape to observers and strategies. */
+  ingestSnapshot(snapshot: MarketBookSnapshot, marketId = snapshot.marketId, roundId = snapshot.roundId): boolean {
+    if (!marketId || !roundId || snapshot.marketId !== marketId || snapshot.roundId !== roundId) return false;
+    const market = this.markets.get(marketId);
+    // Keep the platform boundary closed even when a caller bypasses the feed
+    // snapshot gate. A condition ID can be reused by an adapter bug while the
+    // registered five-minute round has already advanced.
+    if (!market || market.roundId !== roundId) return false;
+    const yes = snapshot.YES;
+    const no = snapshot.NO;
+    const yesInstrument = market?.instruments.find(item => item.outcome.toUpperCase() === "UP");
+    const noInstrument = market?.instruments.find(item => item.outcome.toUpperCase() === "DOWN");
+    if (!yes || !no || market.instruments.length !== 2 || !yesInstrument || !noInstrument
+      || yes.assetId !== yesInstrument.tokenId || no.assetId !== noInstrument.tokenId) return false;
+    const toBook = (asset: typeof yes): Book => ({
+      tokenId: asset.assetId,
+      ts: asset.sourceAt ?? snapshot.sourceAt ?? snapshot.tsUnix,
+      exchangeTs: asset.sourceAt ?? snapshot.sourceAt,
+      receivedAt: snapshot.receivedAtUnix,
+      receivedAtMonoMs: snapshot.receivedAtMonoMs,
+      processedAtMonoMs: snapshot.processedAtMonoMs,
+      processingLatencyMs: snapshot.receivedAtMonoMs != null && snapshot.processedAtMonoMs != null
+        ? Math.max(0, snapshot.processedAtMonoMs - snapshot.receivedAtMonoMs) : undefined,
+      sourceAgeMs: snapshot.marketAgeMs,
+      source: snapshot.source,
+      bid: asset.bid,
+      ask: asset.ask,
+      bidSize: asset.bidSize,
+      askSize: asset.askSize,
+      bids: asset.bids,
+      asks: asset.asks,
+    });
+    const books = [toBook(yes), toBook(no)];
+    const appliedAt = performance.now();
+    if (!this.core.markBatch(books)) return false;
+    for (const book of books) this.books.set(book.tokenId, clone(book));
+    const key = JSON.stringify([marketId, roundId]);
+    this.snapshots.set(key, clone(snapshot));
+    const recordEvent: TradingEvent = { kind: "book", snapshot: clone(snapshot), marketId, roundId };
+    queueMicrotask(() => {
+      try { this.options.adapters.record?.(recordEvent); }
+      catch { /* Background logging is outside the decision gate. */ }
+    });
+    const completedAt = performance.now();
+    this.publish({ kind: "book", snapshot: clone(snapshot), marketId, roundId });
+    const ts = this.options.now?.() ?? Date.now() / 1000;
+    this.publish({ kind: "latency", metric: "book_batch_apply", durationMs: completedAt - appliedAt, ts, marketId });
+    if (snapshot.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "book_processing",
+      durationMs: Math.max(0, completedAt - snapshot.receivedAtMonoMs), ts, marketId });
+    if (snapshot.marketAgeMs != null && snapshot.marketAgeMs >= 0) this.publish({ kind: "latency", metric: "market_age",
+      durationMs: snapshot.marketAgeMs, ts, marketId });
+    return true;
   }
   private context(): StrategyContext {
     return freeze({ mode: this.options.adapters.gateway.mode, now: this.options.now?.() ?? Date.now() / 1000,
@@ -192,18 +275,23 @@ export class TradingPlatform {
             const actions = strategy.onEvent(freeze(clone(current)), this.context());
             const decisionAtMonoMs = performance.now();
             if (!Array.isArray(actions)) throw new Error("strategy callbacks must be synchronous action arrays");
+            const currentBook = current.kind === "book" && current.book !== undefined ? current.book : undefined;
+            const currentSnapshot = current.kind === "book" && current.snapshot !== undefined ? current.snapshot : undefined;
             const timing: ExecutionTiming | undefined = current.kind === "book" ? {
-              triggerReceivedAtMonoMs: current.book.receivedAtMonoMs,
+              triggerReceivedAtMonoMs: currentSnapshot?.receivedAtMonoMs ?? currentBook?.receivedAtMonoMs,
               decisionAtMonoMs,
             } : undefined;
             for (const action of actions) this.dispatch(strategy.id, action, timing);
             if (current.kind === "book") {
-              const marketId = this.core.instrument(current.book.tokenId)?.marketId;
+              const marketId = currentSnapshot?.marketId ?? (currentBook ? this.core.instrument(currentBook.tokenId)?.marketId : undefined);
               this.publish({ kind: "latency", metric: "strategy_decision", durationMs: decisionAtMonoMs - decisionStarted,
-                ts: this.options.now?.() ?? Date.now() / 1000, marketId, tokenId: current.book.tokenId, strategyId: strategy.id });
-              if (current.book.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "ws_receive_to_decision",
-                durationMs: Math.max(0, decisionAtMonoMs - current.book.receivedAtMonoMs),
-                ts: this.options.now?.() ?? Date.now() / 1000, marketId, tokenId: current.book.tokenId, strategyId: strategy.id });
+                ts: this.options.now?.() ?? Date.now() / 1000, marketId,
+                tokenId: currentSnapshot?.YES?.assetId ?? currentBook?.tokenId, strategyId: strategy.id });
+              const receivedAtMonoMs = currentSnapshot?.receivedAtMonoMs ?? currentBook?.receivedAtMonoMs;
+              if (receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "ws_receive_to_decision",
+                durationMs: Math.max(0, decisionAtMonoMs - receivedAtMonoMs),
+                ts: this.options.now?.() ?? Date.now() / 1000, marketId,
+                tokenId: currentSnapshot?.YES?.assetId ?? currentBook?.tokenId, strategyId: strategy.id });
             }
           } catch (error) {
             const message = error instanceof Error ? error.message : "failed";

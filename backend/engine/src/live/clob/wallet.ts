@@ -141,6 +141,41 @@ export interface PublicWalletInspection {
   walletKind: "EOA" | "DEPOSIT_WALLET" | "CONTRACT_UNKNOWN";
 }
 
+export type SettlementCredentialRoute = "eoa" | "builder" | "relayer" | "unsupported";
+
+export interface SettlementCredentialCheck {
+  ready: boolean;
+  route: SettlementCredentialRoute;
+  reason: string;
+}
+
+/**
+ * Check only the non-secret facts needed before a live process can promise
+ * that a redeemed position can be submitted. The function never receives or
+ * returns private keys, API keys, secrets, or passphrases.
+ */
+export function checkSettlementCredentials(input: {
+  walletKind: PublicWalletInspection["walletKind"];
+  ownerSignerPresent: boolean;
+  ownerMatchesSigner: boolean | null;
+  builderCredentialsPresent: boolean;
+  relayerCredentialsPresent: boolean;
+}): SettlementCredentialCheck {
+  if (input.walletKind === "EOA") {
+    if (!input.ownerSignerPresent) return { ready: false, route: "eoa", reason: "owner_signer_missing" };
+    if (input.ownerMatchesSigner !== true) return { ready: false, route: "eoa", reason: "wallet_owner_mismatch" };
+    return { ready: true, route: "eoa", reason: "direct_eoa_submission_ready" };
+  }
+  if (input.walletKind === "DEPOSIT_WALLET") {
+    if (!input.ownerSignerPresent) return { ready: false, route: "unsupported", reason: "owner_signer_missing" };
+    if (input.ownerMatchesSigner !== true) return { ready: false, route: "unsupported", reason: "wallet_owner_mismatch" };
+    if (input.builderCredentialsPresent) return { ready: true, route: "builder", reason: "builder_credentials_ready" };
+    if (input.relayerCredentialsPresent) return { ready: true, route: "relayer", reason: "relayer_credentials_ready" };
+    return { ready: false, route: "unsupported", reason: "builder_or_relayer_credentials_missing" };
+  }
+  return { ready: false, route: "unsupported", reason: "settlement_wallet_type_unsupported" };
+}
+
 /** Inspect a funder without assuming that the funder itself is the signer. */
 export async function inspectWalletAddress(
   address: Address,

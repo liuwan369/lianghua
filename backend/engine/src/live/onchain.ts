@@ -112,6 +112,7 @@ export interface PreflightReport {
   missingErc20Approvals: number;
   missingErc1155Approvals: number;
   approvalsError: string | null;
+  settlementCredentialsReady: boolean;
   otherApprovalsMissing?: number;
   configErrors: string[];
   clobUsd: number | null;
@@ -130,7 +131,7 @@ export async function preflight(
   printPreflight(report);
   if (opts?.strict && !report.ready) {
     throw new Error(
-      "账户预检未通过：需核对 Owner/Session 签名、资金和当前 CLOB V2 交易授权",
+      "账户预检未通过：需核对 Owner/Session 签名、资金、CLOB V2 授权和结算凭据",
     );
   }
   return report.ready;
@@ -243,7 +244,8 @@ export async function preflightReport(
     : sigType === SignatureTypeV2.POLY_1271
       ? ownerMatchesSigner === true
       : false;
-  const ready = hasFunds && polOk && allowanceOk && signerOk && accountConfig.errors.length === 0;
+  const ready = hasFunds && polOk && allowanceOk && signerOk
+    && publicCheck.settlementCredentialsReady === true && accountConfig.errors.length === 0;
 
   return {
     ready,
@@ -258,6 +260,7 @@ export async function preflightReport(
     missingErc20Approvals: publicCheck.missingErc20Approvals,
     missingErc1155Approvals: publicCheck.missingErc1155Approvals,
     approvalsError: publicCheck.approvalsError ?? null,
+    settlementCredentialsReady: publicCheck.settlementCredentialsReady,
     otherApprovalsMissing: publicCheck.otherApprovalsMissing,
     configErrors: accountConfig.errors,
     clobUsd,
