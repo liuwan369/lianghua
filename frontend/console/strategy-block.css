@@ -1570,6 +1570,7 @@ button {
 }
 .strategy-savebar > div {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .save-state {
@@ -1933,3 +1934,5 @@ button {
     width: 100%;
   }
 }
+
+[data-draft-state] { overflow-wrap: anywhere; }

@@ -44,7 +44,7 @@
         <div class="market-header-side"><div class="header-status-grid"><article class="header-status"><span>支持币种</span><strong data-market-count>6 个</strong></article><article class="header-status"><span>已启用</span><strong class="status-good" data-enabled-count>2 个</strong></article><article class="header-status"><span>当前运行</span><strong data-running-count>1 个</strong></article><article class="header-status"><span>市场周期</span><strong class="status-good">固定 5 分钟</strong></article></div></div>
       </header>
 
-      <section class="pool-toolbar"><div><p class="eyebrow">SUPPORTED ASSETS</p><h2>平台支持的币种</h2><p>选择币种查看当前场次；启用后会同步到自动交易的运行池。</p></div><div class="pool-toolbar-actions"><label class="search-box"><span>⌕</span><input type="search" placeholder="搜索 BTC、以太坊…" data-coin-search></label><span class="pool-sort"><i></i>按交易量排序</span></div></section>
+      <section class="pool-toolbar"><div><p class="eyebrow">SUPPORTED ASSETS</p><h2>平台支持的币种</h2><p>选择币种查看当前场次；单实例启用一个币种，切换将替换待运行配置。</p></div><div class="pool-toolbar-actions"><label class="search-box"><span>⌕</span><input type="search" placeholder="搜索币种名称或代码…" data-coin-search></label><span class="pool-sort"><i></i>按目录顺序</span></div></section>
 
       <section class="market-layout crypto-market-layout">
         <div class="coin-pool-panel">
@@ -56,10 +56,10 @@
         <aside class="coin-detail-panel" aria-labelledby="coin-detail-title">
           <div class="detail-heading"><div><p class="eyebrow">SELECTED ASSET</p><h2 id="coin-detail-title" data-detail-title>等待选择市场</h2></div><span class="detail-state disabled" data-detail-state>待选择</span></div>
           <div class="coin-detail-identity"><span class="detail-coin-icon" data-detail-icon>?</span><div><strong data-detail-name>等待后端目录</strong><small data-detail-english>assetId · marketId · roundId</small></div><span class="detail-cycle">5M</span></div>
-          <div class="detail-quote-grid"><div class="detail-quote yes-quote"><div><span class="outcome-dot"></span><span>YES</span></div><strong data-detail-yes>0.486</strong><small>买入价 · 48.6%</small></div><div class="detail-quote no-quote"><div><span class="outcome-dot"></span><span>NO</span></div><strong data-detail-no>0.514</strong><small>买入价 · 51.4%</small></div></div>
+          <div class="detail-quote-grid"><div class="detail-quote yes-quote"><div><span class="outcome-dot"></span><span>YES</span></div><strong data-detail-yes>--</strong><small data-detail-yes-caption>买一 · --</small></div><div class="detail-quote no-quote"><div><span class="outcome-dot"></span><span>NO</span></div><strong data-detail-no>--</strong><small data-detail-no-caption>买一 · --</small></div></div>
           <div class="detail-stats"><div><span>本场结束</span><strong data-detail-close>14:10:00</strong></div><div><span>剩余时间</span><strong data-detail-remaining>02:18</strong></div><div><span>交易量</span><strong data-detail-volume>$284.6K</strong></div><div><span>流动性</span><strong data-detail-liquidity>$68.4K</strong></div></div>
 
-          <section class="market-readiness"><div class="readiness-heading"><span>运行条件</span><small>平台已支持</small></div><ul><li class="passed"><i>✓</i><span>加密货币市场</span><b>通过</b></li><li class="passed"><i>✓</i><span>五分钟 YES / NO 场次</span><b>通过</b></li><li class="passed"><i>✓</i><span>行情和流动性可用</span><b>通过</b></li></ul></section>
+          <section class="market-readiness"><div class="readiness-heading"><span>运行条件</span><small>以服务端确认为准</small></div><ul><li data-readiness="support"><i>·</i><span>运行时支持</span><b>待确认</b></li><li data-readiness="identity"><i>·</i><span>五分钟 YES / NO 场次</span><b>待确认</b></li><li data-readiness="quote"><i>·</i><span>当前报价</span><b>待确认</b></li></ul></section>
 
           <section class="trade-link-card"><div class="trade-link-heading"><span class="link-icon">↗</span><div><p class="eyebrow">AUTO TRADE LINK</p><h3>自动交易关联</h3></div><span class="link-state" data-link-state>运行中</span></div><p data-link-copy>该币种已在自动交易运行池中，当前场次正在执行。</p><button class="enable-coin-button" type="button" data-detail-enable>停用并移出运行池</button><small data-link-note>停用只影响后续场次，不撤销当前场次订单。</small></section>
         </aside>
@@ -70,7 +70,8 @@
 
   let selectedId = store.getState().marketCatalog.selectedId || null;
   let search = "";
-  const text = (selector, value) => { const node = document.querySelector(selector); if (node) node.textContent = value; };
+  let poolSaving = false;
+  const text = (selector, value) => { const node = document.querySelector(selector); if (node && node.textContent !== String(value)) node.textContent = value; };
   const money = (value) => Number.isFinite(value) ? value >= 1e3 ? `$${(value / 1e3).toFixed(1)}K` : `$${value.toFixed(0)}` : "--";
   const selectedCoin = () => coins.find((coin) => coin.id === selectedId) || null;
   const escape = (value) => window.PolyPreview.format.escape(value);
@@ -84,7 +85,7 @@
     <button class="coin-select" type="button" data-select-coin="${escape(coin.id)}"><span class="coin-logo ${escape(coin.tone)}">${escape(coin.icon)}</span><span class="coin-main"><strong>${escape(coin.symbol)}<small>${escape(coin.name)} · ${escape(coin.english)}</small></strong><span class="coin-market-meta"><b>5 分钟</b><span>结束 ${escape(coin.close)}</span></span></span></button>
     <div class="coin-quotes"><span><small>YES</small><b>${Number.isFinite(coin.yes) ? coin.yes.toFixed(3) : "--"}</b></span><span><small>NO</small><b>${Number.isFinite(coin.no) ? coin.no.toFixed(3) : "--"}</b></span></div>
     <div class="coin-volume"><strong>${money(coin.volume)}</strong><small>交易量</small></div>
-    <button class="coin-enable${coin.enabled ? " enabled" : ""}" type="button" data-enable-coin="${escape(coin.id)}" aria-pressed="${coin.enabled}" ${!coin.enabled && !coin.canEnable ? "disabled title=\"服务器尚未确认该币种支持运行池\"" : ""}><i></i><span>${coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用"}</span></button>
+    <button class="coin-enable${coin.enabled ? " enabled" : ""}" type="button" data-enable-coin="${escape(coin.id)}" aria-pressed="${coin.enabled}"><i></i><span>${coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用"}</span></button>
   </article>`;
 
   const renderCounts = () => {
@@ -98,22 +99,56 @@
     if (!list) return;
     const query = search.trim().toLowerCase();
     const filtered = coins.filter((coin) => !query || `${coin.symbol} ${coin.name} ${coin.english}`.toLowerCase().includes(query));
-    list.innerHTML = filtered.length ? filtered.map(coinRow).join("") : '<div class="market-empty"><span>⌕</span><strong>没有匹配的加密货币</strong><small>换一个币种名称或代码再试。</small></div>';
+    const rows = new Map([...list.querySelectorAll("[data-coin-row]")].map((row) => [row.dataset.coinRow, row]));
+    const visible = new Set(filtered.map((coin) => coin.id));
+    for (const [id, row] of rows) if (!visible.has(id)) row.remove();
+    list.querySelector(".market-empty")?.remove();
+    let previous = null;
+    filtered.forEach((coin) => {
+      let row = rows.get(coin.id);
+      const identity = JSON.stringify([coin.symbol, coin.name, coin.english, coin.icon, coin.tone]);
+      if (!row || row.dataset.identity !== identity) {
+        const template = document.createElement("template");
+        template.innerHTML = coinRow(coin);
+        const next = template.content.firstElementChild;
+        next.dataset.identity = identity;
+        if (row) row.replaceWith(next);
+        row = next;
+      }
+      const before = previous ? previous.nextElementSibling : list.firstElementChild;
+      if (before !== row) list.insertBefore(row, before);
+      previous = row;
+      row.classList.toggle("selected", coin.id === selectedId);
+      const set = (selector, value) => { const node = row.querySelector(selector); if (node && node.textContent !== value) node.textContent = value; };
+      const quotes = row.querySelectorAll(".coin-quotes b");
+      [coin.yes, coin.no].forEach((value, index) => { const rendered = Number.isFinite(value) ? value.toFixed(3) : "--"; if (quotes[index].textContent !== rendered) quotes[index].textContent = rendered; });
+      set(".coin-volume strong", money(coin.volume));
+      set(".coin-market-meta span", `结束 ${coin.close}`);
+      const button = row.querySelector("[data-enable-coin]");
+      const waiting = poolSaving || Boolean(store.getState().marketPool.pendingDesiredIds);
+      button.disabled = waiting || !coin.enabled && !coin.canEnable;
+      button.title = waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
+      button.classList.toggle("enabled", coin.enabled);
+      button.setAttribute("aria-pressed", String(coin.enabled));
+      set("[data-enable-coin] span", waiting ? "等待确认" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
+    });
+    if (!filtered.length) list.innerHTML = '<div class="market-empty"><span>⌕</span><strong>没有匹配的加密货币</strong><small>换一个币种名称或代码再试。</small></div>';
     text("[data-pool-caption]", query ? `匹配 ${filtered.length} 个币种` : `${coins.length} 个支持币种`);
-    list.querySelectorAll("[data-select-coin]").forEach((button) => button.addEventListener("click", () => {
-      selectedId = button.dataset.selectCoin;
-      store.setSelectedMarket(selectedId);
-      renderList();
-      renderDetail();
-    }));
-    list.querySelectorAll("[data-enable-coin]").forEach((button) => button.addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleEnabled(button.dataset.enableCoin);
-    }));
   };
+  document.querySelector("[data-coin-list]")?.addEventListener("click", (event) => {
+    const selection = event.target.closest("[data-select-coin]");
+    if (selection) { store.setSelectedMarket(selection.dataset.selectCoin); return; }
+    const enable = event.target.closest("[data-enable-coin]");
+    if (enable && !enable.disabled) void toggleEnabled(enable.dataset.enableCoin);
+  });
 
   const renderDetail = () => {
     const coin = selectedCoin();
+    const checks = { support: coin?.canEnable === true, identity: Boolean(coin?.marketId && coin?.roundId && coin.cycle === "5m"), quote: Boolean(coin && !coin.stale && !store.getState().marketCatalog.stale && Number.isFinite(coin.yes) && Number.isFinite(coin.no)) };
+    Object.entries(checks).forEach(([name, passed]) => {
+      const node = document.querySelector(`[data-readiness="${name}"]`);
+      if (node) { node.classList.toggle("passed", passed); node.querySelector("i").textContent = passed ? "✓" : "·"; node.querySelector("b").textContent = passed ? "已确认" : "待确认"; }
+    });
     if (!coin) {
       ["[data-detail-title]", "[data-detail-name]", "[data-detail-english]", "[data-detail-yes]", "[data-detail-no]", "[data-detail-close]", "[data-detail-remaining]", "[data-detail-volume]", "[data-detail-liquidity]"].forEach((selector) => text(selector, "--"));
       const detailState = document.querySelector("[data-detail-state]");
@@ -125,6 +160,7 @@
       text("[data-link-copy]", "后端返回有效市场目录后，这里才会显示运行池关联状态。");
       text("[data-link-note]", "没有有效目录时不会修改运行池。");
       text("[data-selection-note]", "暂无可用加密货币市场");
+      text("[data-detail-yes-caption]", "买一 · --"); text("[data-detail-no-caption]", "买一 · --");
       return;
     }
     text("[data-detail-title]", `${coin.name} · ${coin.symbol}`);
@@ -132,6 +168,8 @@
     text("[data-detail-english]", `${coin.english} · ${coin.symbol}`);
     text("[data-detail-yes]", Number.isFinite(coin.yes) ? coin.yes.toFixed(3) : "--");
     text("[data-detail-no]", Number.isFinite(coin.no) ? coin.no.toFixed(3) : "--");
+    text("[data-detail-yes-caption]", Number.isFinite(coin.yes) ? `买一 · ${(coin.yes * 100).toFixed(1)}%` : "买一 · --");
+    text("[data-detail-no-caption]", Number.isFinite(coin.no) ? `买一 · ${(coin.no * 100).toFixed(1)}%` : "买一 · --");
     text("[data-detail-close]", coin.close);
     text("[data-detail-remaining]", coin.remaining);
     text("[data-detail-volume]", money(coin.volume));
@@ -145,7 +183,7 @@
     text("[data-link-copy]", coin.running && !coin.enabled ? "该币种本场继续执行，停用将在本场结束后生效。" : coin.running ? "该币种已在自动交易运行池中，当前场次正在执行。" : coin.enabled ? "该币种已启用，自动交易将在下一个可用五分钟场次加入。" : "启用后，该币种会加入自动交易的下一场候选运行池。");
     text("[data-link-note]", coin.running ? "停用只影响后续场次，不撤销当前场次订单。" : "启用或停用只影响后续场次，不改变当前已运行订单。");
     const action = document.querySelector("[data-detail-enable]");
-    if (action) { action.disabled = !coin.enabled && !coin.canEnable; action.textContent = coin.enabled ? "停用（下一场生效）" : coin.canEnable ? "启用并关联自动交易" : "服务器未确认可运行"; action.classList.toggle("selected", coin.enabled); }
+    if (action) { action.disabled = poolSaving || Boolean(store.getState().marketPool.pendingDesiredIds) || !coin.enabled && !coin.canEnable; action.textContent = poolSaving ? "提交中…" : store.getState().marketPool.pendingDesiredIds ? "等待服务器确认" : coin.enabled ? "停用（下一场生效）" : coin.canEnable ? "启用此币种（替换待运行配置）" : "服务器未确认可运行"; action.classList.toggle("selected", coin.enabled); }
     text("[data-selection-note]", !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
   const renderCatalogStatus = (resource) => {
@@ -160,6 +198,7 @@
   };
 
   async function toggleEnabled(id) {
+    if (poolSaving || store.getState().marketPool.pendingDesiredIds) return;
     const coin = coins.find((item) => item.id === id);
     if (!coin) return;
     if (!coin.enabled && !coin.canEnable) {
@@ -167,26 +206,24 @@
       return;
     }
     const state = store.getState();
-    const desiredIds = state.marketPool.desiredIds.filter((value) => value !== id);
-    if (!coin.enabled) desiredIds.push(id);
-    const controls = [...document.querySelectorAll(`[data-enable-coin="${id}"], [data-detail-enable]`)];
-    controls.forEach((control) => { control.disabled = true; });
+    const desiredIds = coin.enabled ? state.marketPool.desiredIds.filter((value) => value !== id) : [id];
+    let resultMessage = null;
+    poolSaving = true;
+    renderList(); renderDetail();
     text("[data-selection-note]", `${coin.symbol} 运行池更新中…`);
     try {
       // The current round is server-owned. Only desiredIds is changed here;
       // the backend decides when currentIds/nextRoundIds roll over.
       await adapter.saveMarketPool({ desiredIds, effectiveRoundId: state.marketPool.effectiveRoundId });
-      syncCoins();
-      renderCounts();
-      renderList();
-      renderDetail();
       const pool = store.getState().marketPool;
       text("[data-market-refresh-note]", pool.pendingDesiredIds ? "已提交 · 等待服务器确认运行池" : `运行池已确认 · ${window.PolyPreview.format.clock()}`);
-      if (pool.pendingDesiredIds) text("[data-selection-note]", "服务器已接收变更请求，生效状态仍以确认后的运行池为准。");
+      if (pool.pendingDesiredIds) resultMessage = "服务器已接收变更请求，生效状态仍以确认后的运行池为准。";
     } catch (error) {
-      text("[data-selection-note]", error.message || "运行池更新失败，保留当前状态");
+      resultMessage = error.message || "运行池更新失败，保留当前状态";
     } finally {
-      controls.forEach((control) => { control.disabled = false; });
+      poolSaving = false;
+      renderList(); renderDetail();
+      if (resultMessage) text("[data-selection-note]", resultMessage);
     }
   }
 

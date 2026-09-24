@@ -33,7 +33,7 @@
 
 页面脚本只负责视图和交互；真实接入时把数据源替换为 adapter，不把 fetch、WebSocket 和业务状态散落到每个页面。
 
-页面接入顺序固定为：`preview-core` → `demo-data` → `view-model` → `preview-store` → `ws-client` → `api-adapter` → 页面脚本。生产挂载时只需把 `window.__POLY_PREVIEW_CONFIG__` 放在这些脚本之前，例如 `{ mode: "backend", apiBase: "", apiFlavor: "contract", strategyId: "btc-reversal", streams: { markets: { url }, runtime: { url }, orders: { url } } }`。三个流地址分别对应行情、运行状态和订单事件；任一地址缺失时，前端不会创建该连接，也不会用演示数据冒充实时数据。
+页面接入顺序固定为：`preview-core` → `demo-data` → `view-model` → `preview-store` → `ws-client` → `api-adapter` → 页面脚本。HTTP(S) 默认是 `backend`；只有明确指定 `mode: "local-preview"` 或直接打开 `file:` 才使用演示数据。三个流地址分别对应行情、运行状态和订单事件；任一地址缺失时，前端使用对应 REST 快照/轮询，不创建该连接，也不会用演示数据冒充实时数据。
 
 ## 数据流
 

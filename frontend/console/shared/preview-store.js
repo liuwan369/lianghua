@@ -18,9 +18,10 @@
     runtime: { status: "unavailable", source: core.config.mode === "local-preview" ? "local-preview" : "backend", stale: true, asOf: null, markets: [], error: "后端尚未接入" },
     strategy: { status: core.config.mode === "local-preview" ? "demo" : "unavailable", revision: null, data: null, error: core.config.mode === "local-preview" ? null : "策略配置尚未接入" },
     account: { status: "unavailable", data: null, error: "后端尚未接入" },
+    accountStatus: { status: "unavailable", data: null, error: "账户配置状态尚未接入" },
     diagnostics: { status: "unavailable", data: null, error: "后端尚未接入" },
     metrics: { status: "unavailable", data: null, error: "后端尚未接入" },
-    events: { status: "demo", items: [], cursor: null, error: null }
+    events: { status: core.config.demo ? "demo" : "unavailable", items: [], cursor: null, error: null }
   };
   const subscribers = new Map();
   const notify = (slice) => (subscribers.get(slice) || []).forEach((listener) => listener(state[slice], state));
@@ -42,14 +43,13 @@
     const next = vm.catalog(value);
     const hasPrevious = state.marketCatalog.source !== "local-preview" && state.marketCatalog.items.length > 0;
     const keepPrevious = hasPrevious && (next.stale || next.error || next.items.length === 0);
-    const items = keepPrevious ? state.marketCatalog.items : next.stale || next.error || next.items.length === 0 ? [] : next.items;
-    const requested = core.config.selectedAssetId || state.marketCatalog.selectedId;
+    const items = keepPrevious ? state.marketCatalog.items : next.items;
+    const requested = state.marketCatalog.selectedId || core.config.selectedAssetId;
     const selected = items.some((item) => item.assetId === requested) ? requested : requested ? null : items[0]?.assetId || null;
     const status = next.stale ? (hasPrevious ? "stale" : "unavailable") : next.error ? (hasPrevious ? "error" : "unavailable") : next.items.length === 0 ? (hasPrevious ? "stale" : "unavailable") : "ready";
     const error = next.error || (next.items.length === 0 && !hasPrevious ? "市场目录暂无有效快照" : null);
     const result = { ...next, items, status, error, selectedId: selected, receivedAt: Date.now() };
     update("marketCatalog", result);
-    update("marketPool", { ...vm.pool(state.marketPool, items), status: state.marketPool.status, stale: state.marketPool.stale, error: state.marketPool.error || null, pendingDesiredIds: state.marketPool.pendingDesiredIds || null });
     return result;
   };
   const setSelectedMarket = (assetId) => {
