@@ -526,9 +526,6 @@ export class TradingCore {
     this.persist();
   }
 
-  private roundIdForMarket(marketId: string): string | undefined {
-    return this.state.markets?.find(market => market.id === marketId)?.roundId;
-  }
   contextSnapshot(): Omit<CoreState, "fills"> {
     this.updateRisk();
     return copy({ schemaVersion: this.state.schemaVersion, accountId: this.state.accountId,
@@ -697,6 +694,10 @@ export class TradingCore {
     return () => { if (!released) { released = true; release(); } };
   }
   submit(request: OrderRequest, timing?: ExecutionTiming): Promise<OrderRecord> {
+    // Identity assertions are optional at the API boundary. Compare the same
+    // registered identity for both in-flight and durable idempotency checks.
+    try { request = this.normalizeOrderIdentity(request); }
+    catch (error) { return Promise.reject(error); }
     const pending = this.submissions.get(request.clientOrderId);
     if (pending) {
       const original = this.submissionRequests.get(request.clientOrderId)
@@ -718,6 +719,22 @@ export class TradingCore {
     };
     void job.then(release, release);
     return this.track(job);
+  }
+  private normalizeOrderIdentity(request: OrderRequest): OrderRequest {
+    const instrument = this.instruments.get(request.tokenId);
+    if (!instrument) throw new Error("invalid order or instrument rules");
+    if (request.marketId !== undefined && request.marketId !== instrument.marketId) {
+      throw new Error("order market identity mismatch");
+    }
+    const market = this.state.markets?.find(item => item.id === instrument.marketId);
+    if (!market?.roundId) throw new Error("market round identity unavailable");
+    if (request.roundId !== undefined && request.roundId !== market.roundId) {
+      throw new Error("order round identity mismatch");
+    }
+    if (request.assetId !== undefined && request.assetId !== market.assetId) {
+      throw new Error("order asset identity mismatch");
+    }
+    return { ...request, marketId: instrument.marketId, roundId: market.roundId, assetId: market.assetId };
   }
   private async submitOrder(request: OrderRequest, timing?: ExecutionTiming): Promise<OrderRecord> {
     const previous = this.state.orders.find(o => o.clientOrderId === request.clientOrderId);
@@ -745,9 +762,6 @@ export class TradingCore {
       || request.shares < instrument.minOrderSize - EPS
       || Math.abs(request.price / instrument.tickSize - Math.round(request.price / instrument.tickSize)) > 1e-6) {
       throw new Error("invalid order or instrument rules");
-    }
-    if (request.marketId !== undefined && request.marketId !== instrument.marketId) {
-      throw new Error("order market identity mismatch");
     }
     const amount = request.price * request.shares;
     const fee = this.options.adapters.estimateFee?.(request) ?? 0;
@@ -806,16 +820,7 @@ export class TradingCore {
       releasePreparation?.();
       throw error;
     }
-    const roundId = this.roundIdForMarket(instrument.marketId);
-    if (!roundId) throw new Error("market round identity unavailable");
-    if (request.roundId !== undefined && request.roundId !== roundId) {
-      throw new Error("order round identity mismatch");
-    }
-    const market = this.state.markets?.find(item => item.id === instrument.marketId);
-    if (request.assetId !== undefined && request.assetId !== market?.assetId) {
-      throw new Error("order asset identity mismatch");
-    }
-    const order: OrderRecord = { ...request, marketId: instrument.marketId, roundId, assetId: market?.assetId,
+    const order: OrderRecord = { ...request,
       status: "SUBMITTING", filledShares: 0,
       identityProtocol: this.options.adapters.gateway.durableIdentity ? "signed-before-post" : undefined,
       reservedUsd: request.direction === "BUY" ? amount + fee : fee,
@@ -836,11 +841,10 @@ export class TradingCore {
       this.emitOrder(order);
       throw error;
     }
-    this.emitOrder(order);
     let ackOutcome: GatewayAck["status"] | undefined;
     try {
-      const scopedRequest: OrderRequest = { ...request, marketId: order.marketId, roundId: order.roundId };
-      const ack = await this.options.adapters.gateway.submit(scopedRequest, copy(instrument), prepared => {
+      this.emitOrder(order);
+      const ack = await this.options.adapters.gateway.submit(request, copy(instrument), prepared => {
         if (!prepared.orderHash || !prepared.signedPayload) throw new Error("signed order identity missing");
         if (this.state.orders.some(existing => existing !== order
           && (existing.orderId === prepared.orderHash || existing.clientOrderId === prepared.orderHash))) {
@@ -916,6 +920,10 @@ export class TradingCore {
         order.status = "UNKNOWN"; this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
       }
       order.error = error instanceof Error ? error.message : "submission failed";
+    } finally {
+      // Every completion releases preparation, including early ACK returns or
+      // a gateway which fails before invoking the prepared callback.
+      releasePreparation?.();
     }
     for (const [metric, duration] of [
       ["order_risk_metadata", order.riskMetadataLatencyMs],
@@ -928,7 +936,6 @@ export class TradingCore {
       this.emitLatency("order_http_ack", order.ackLatencyMs, order, ackOutcome);
       this.emitLatency("reaction", order.reactionLatencyMs, order, ackOutcome);
     }
-    releasePreparation?.();
     return this.notify(order, order.status === "REJECTED" || !order.prepared);
   }
 

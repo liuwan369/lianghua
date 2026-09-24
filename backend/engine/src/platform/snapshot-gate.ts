@@ -58,6 +58,15 @@ function validAsset(asset: RuntimeMarketAssetSnapshot | undefined, assetId: stri
     && asset.expiresAt! > now;
 }
 
+function validDepth(asset: RuntimeMarketAssetSnapshot | undefined, now: number): boolean {
+  if (!asset || (asset.depthSourceAt === undefined && asset.depthExpiresAt === undefined)) return true;
+  return Number.isFinite(asset.depthSourceAt) && Number.isFinite(asset.depthExpiresAt)
+    && asset.depthSourceAt! >= 0 && asset.depthExpiresAt! > now
+    && asset.depthSourceAt! <= asset.depthExpiresAt!
+    && Array.isArray(asset.bids) && asset.bids.length > 0
+    && Array.isArray(asset.asks) && asset.asks.length > 0;
+}
+
 /** Validate a paired snapshot without mutating runtime state. */
 export function validateMarketSnapshot(
   snapshot: MarketBookSnapshot,
@@ -68,7 +77,10 @@ export function validateMarketSnapshot(
 ): SnapshotGateResult {
   if (snapshot.marketId !== identity.marketId) return { ok: false, reason: "market_id_mismatch" };
   if (snapshot.roundId !== identity.roundId) return { ok: false, reason: "round_id_mismatch" };
-  if (identity.assetId !== undefined && snapshot.assetId !== identity.assetId) return { ok: false, reason: "asset_id_mismatch" };
+  // Feed assetIds name outcome tokens. The optional underlying symbol is a
+  // runtime annotation; absent symbols are bound from the registered market
+  // only after the complete market/round/token identity has passed validation.
+  if (snapshot.assetId !== undefined && snapshot.assetId !== identity.assetId) return { ok: false, reason: "asset_id_mismatch" };
   if (now >= identity.endsAt) return { ok: false, reason: "round_ended" };
   if (!healthy) return { ok: false, reason: "book_unhealthy" };
   if (!Number.isSafeInteger(snapshot.sequence) || snapshot.sequence! < 0) {
@@ -85,6 +97,9 @@ export function validateMarketSnapshot(
   const no = snapshot.NO;
   if (!validAsset(yes, identity.yesAssetId, now)) return { ok: false, reason: "invalid_yes_quote" };
   if (!validAsset(no, identity.noAssetId, now)) return { ok: false, reason: "invalid_no_quote" };
+  // Never derive L2 freshness from a faster top-of-book timestamp.
+  if (!validDepth(yes, now)) return { ok: false, reason: "invalid_yes_quote" };
+  if (!validDepth(no, now)) return { ok: false, reason: "invalid_no_quote" };
   if (yes!.sequence !== snapshot.sequence || no!.sequence !== snapshot.sequence) {
     return { ok: false, reason: "sequence_invalid" };
   }

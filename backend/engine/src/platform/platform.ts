@@ -45,7 +45,12 @@ export class TradingPlatform {
     depth: (tokenId: string, levels = 5): Book | undefined => {
       if (!Number.isSafeInteger(levels) || levels <= 0) throw new Error("depth levels must be a positive integer");
       const book = this.books.get(tokenId);
-      return book ? clone({ ...book, bids: book.bids?.slice(0, levels), asks: book.asks?.slice(0, levels) }) : undefined;
+      const now = this.options.now?.() ?? Date.now() / 1000;
+      if (!book || !Number.isFinite(book.depthSourceAt) || !Number.isFinite(book.depthExpiresAt)
+        || book.depthSourceAt! < 0 || book.depthExpiresAt! <= now
+        || book.depthSourceAt! > book.depthExpiresAt!
+        || !book.bids?.length || !book.asks?.length) return undefined;
+      return clone({ ...book, bids: book.bids.slice(0, levels), asks: book.asks.slice(0, levels) });
     },
     discover: async (): Promise<MarketInfo[]> => {
       if (!this.options.adapters.discoverMarkets) throw new Error("market discovery unavailable");
@@ -91,9 +96,12 @@ export class TradingPlatform {
       const roundId = request.roundId ?? market?.roundId;
       const assetId = request.assetId ?? market?.assetId;
       if (!market || !roundId || roundId !== market.roundId
-        || request.assetId !== undefined && request.assetId !== market.assetId) {
+        || request.assetId !== undefined && request.assetId !== market.assetId
+        || request.tokenIds.length !== market.instruments.length
+        || new Set(request.tokenIds).size !== request.tokenIds.length
+        || request.tokenIds.some(token => !market.instruments.some(instrument => instrument.tokenId === token))) {
         const result = { marketId: request.marketId, roundId, assetId, state: "unsupported" as const,
-          reason: "settlement market round identity unavailable or mismatched" };
+          reason: "settlement market round or token identity unavailable or mismatched" };
         this.publish({ kind: "settlement", result });
         return clone(result);
       }
@@ -102,7 +110,8 @@ export class TradingPlatform {
         ? await this.options.adapters.settle(scopedRequest)
         : { marketId: scopedRequest.marketId, roundId: scopedRequest.roundId, assetId: market.assetId, state: "unsupported" as const,
           reason: "no settlement adapter for this wallet" };
-      if (result.marketId !== request.marketId || (result.roundId !== undefined && result.roundId !== roundId)) {
+      if (result.marketId !== request.marketId || (result.roundId !== undefined && result.roundId !== roundId)
+        || (result.assetId !== undefined && result.assetId !== market.assetId)) {
         const invalid = { marketId: request.marketId, roundId, assetId: market.assetId, state: "unsupported" as const,
           reason: "settlement adapter returned mismatched market identity" };
         this.publish({ kind: "settlement", result: invalid });
@@ -138,8 +147,13 @@ export class TradingPlatform {
   }
   ingest(event: TradingEvent): void {
     if (event.kind === "fill") {
+      for (const field of ["marketId", "roundId", "assetId"] as const) {
+        if (event[field] !== undefined && event.fill[field] !== undefined && event[field] !== event.fill[field]) {
+          throw new Error("fill event market identity mismatch");
+        }
+      }
       this.core.applyFill({ ...event.fill, marketId: event.fill.marketId ?? event.marketId,
-        roundId: event.fill.roundId ?? event.roundId });
+        roundId: event.fill.roundId ?? event.roundId, assetId: event.fill.assetId ?? event.assetId });
       return;
     }
     if (event.kind === "order" || event.kind === "account") throw new Error("use authenticated order/account service methods");
@@ -218,10 +232,15 @@ export class TradingPlatform {
       askSize: asset.askSize,
       bids: asset.bids,
       asks: asset.asks,
+      depthSourceAt: asset.depthSourceAt,
+      depthExpiresAt: asset.depthExpiresAt,
     });
     const books = [toBook(yes), toBook(no)];
     const appliedAt = performance.now();
     if (!this.core.markBatch(books)) return false;
+    // Preserve venue identity and timestamps; enrich only the runtime symbol
+    // from the registered market whose outcome tokens were checked above.
+    snapshot = { ...snapshot, assetId: market.assetId };
     for (const book of books) this.books.set(book.tokenId, clone(book));
     const key = JSON.stringify([marketId, roundId]);
     this.snapshots.set(key, clone(snapshot));
