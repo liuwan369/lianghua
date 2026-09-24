@@ -35,6 +35,7 @@ export interface PreparedSettlementTransaction {
 }
 export interface LiveSettlementRecord {
   marketId: string;
+  roundId: string;
   tokenIds: string[];
   status: "prepared" | "submitted" | "confirmed" | "failed";
   operation: "approval" | "redeem";
@@ -102,7 +103,10 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     ? JSON.parse(readFileSync(stateFile, "utf8")) as LiveSettlementState
     : { schemaVersion: 1, wallet: backend.wallet, records: {} });
   if (state.schemaVersion !== 1 || state.wallet.toLowerCase() !== backend.wallet.toLowerCase()
-    || !state.records || typeof state.records !== "object") throw new Error("settlement state wallet/schema mismatch");
+    || !state.records || typeof state.records !== "object"
+    || Object.values(state.records).some(record => !record || typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId))) {
+    throw new Error("settlement state wallet/schema mismatch");
+  }
   const save = async () => {
     if (options.persist) return options.persist(structuredClone(state));
     mkdirSync(dirname(stateFile), { recursive: true });
@@ -110,6 +114,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
     renameSync(tmp, stateFile);
   };
+  const recordKey = (request: SettlementRequest): string => JSON.stringify([request.marketId, request.roundId]);
   const result = (request: SettlementRequest, status: SettlementResult["state"], reason: string, record?: LiveSettlementRecord): SettlementResult => {
     const usd = (raw: string | undefined): number | undefined => {
       if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
@@ -118,7 +123,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const verified = status === "confirmed" && record?.status === "confirmed" && record.operation === "redeem"
       && hashPattern.test(record.transactionHash ?? "") && usd(record.creditedPusd) !== undefined;
-    return { marketId: request.marketId, state: status, reason,
+    return { marketId: request.marketId, roundId: request.roundId, state: status, reason,
       transactionId: record?.transactionHash ?? record?.relayerId,
       payoutVerified: verified,
       ...(verified ? { creditedUsd: usd(record!.creditedPusd), expectedPayoutUsd: usd(record!.expectedPayout),
@@ -137,7 +142,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       if (!recovering && error instanceof RetryableSettlement) {
         // A definite rejection did not consume the nonce. Re-read balance and
         // nonce next time, rather than keeping an unsent request forever.
-        delete state.records[record.marketId];
+        delete state.records[JSON.stringify([record.marketId, record.roundId])];
         record.reason = "settlement_relayer_busy_retrying";
       } else if (!recovering && error instanceof UnsupportedSettlement) {
         record.status = "failed";
@@ -147,10 +152,14 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     await save();
   }
   async function run(request: SettlementRequest): Promise<SettlementResult> {
+    if (!request.roundId || !/^\d+$/.test(request.roundId)) {
+      return result(request, "unsupported", "settlement_round_identity_missing");
+    }
     redemptionPlan(request); // Validate identity before any IO.
     if (request.tokenIds.some(id => !/^\d+$/.test(id))) return result(request, "unsupported", "settlement_invalid_token_id");
-    let record: LiveSettlementRecord | undefined = state.records[request.marketId];
-    if (record && (record.tokenIds.length !== request.tokenIds.length
+    const key = recordKey(request);
+    let record: LiveSettlementRecord | undefined = state.records[key];
+    if (record && (record.roundId !== request.roundId || record.tokenIds.length !== request.tokenIds.length
       || request.tokenIds.some(id => !record!.tokenIds.includes(id)))) {
       return result(request, "unsupported", "settlement_token_identity_changed", record);
     }
@@ -171,7 +180,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       // This can never create a second economic redemption with a fresh nonce.
       if (!receipt) {
         if (await backend.expired?.(record)) {
-          delete state.records[request.marketId];
+          delete state.records[key];
           await save();
           return result(request, "pending", "原赎回签名已过期，下一次按实际持仓重新提交");
         }
@@ -189,7 +198,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       }
       if (record.operation === "approval") {
         if (!await backend.approved()) return result(request, "pending", "等待授权生效", record);
-        delete state.records[request.marketId];
+        delete state.records[key];
         await save();
         record = undefined;
       } else {
@@ -231,13 +240,13 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const prepared = await backend.prepare(call);
     record = {
-      marketId: request.marketId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
+      marketId: request.marketId, roundId: request.roundId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
       prepared, fromBlock: before.block.toString(), balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(),
       expectedPayout: expectedPayout.toString(), transactionHash: prepared.transactionHash,
     };
-    state.records[request.marketId] = record;
+    state.records[key] = record;
     // A failed pre-send persistence must not leave an in-memory phantom request.
-    try { await save(); } catch (error) { delete state.records[request.marketId]; throw error; }
+    try { await save(); } catch (error) { delete state.records[key]; throw error; }
     await submitRecord(record, false);
     return result(request, record.status === "failed" ? "unsupported" : "pending",
       record.reason ?? (approved ? "赎回已提交，等待链上到账" : "授权已提交，确认后自动赎回"), record);
@@ -251,7 +260,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       catch (error) {
         if (error instanceof UnsupportedSettlement) return result(request, "unsupported", error.message);
         // RPC errors can contain credential-bearing URLs. Do not echo them.
-        return result(request, "pending", "结算查询暂时失败，稍后自动重试", state.records[request.marketId]);
+        return result(request, "pending", "结算查询暂时失败，稍后自动重试", state.records[recordKey(request)]);
       }
     });
     lane = work.catch(() => undefined);

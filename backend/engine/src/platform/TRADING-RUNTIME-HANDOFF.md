@@ -22,6 +22,7 @@ codex/market-data
 行情底座必须提供以下能力：
 
 - `findFiveMinuteMarket("btc", { now, allowCollectorFallback: false, directOnly: true, signal })`。
+- 返回的 `MarketInfo` 必须原样保留 `marketId` 和明确的 `roundId`；当前 BTC 五分钟 roundId 是发现结果中的 Unix 起始时间字符串，例如 `"1800000000"`。运行时不从当前时间或 slug 猜轮次。
 - `runPolymarketFeed(sink, upToken, downToken, market.end, { marketId, roundId })`。
 - `FeedEvent.kind === "book"` 中的 `snapshot`，字段为 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt`、`YES`、`NO`。
 - YES/NO 的 `assetId`、`bid`、`ask`、`bidSize`、`askSize`、`bids`、`asks`、`sourceAt`、`expiresAt`、`sequence`。
@@ -38,6 +39,8 @@ codex/market-data
 - User WebSocket 成交、重复成交和 `tradeId` 冲突保护。
 - 持久化订单/成交/策略状态，重启恢复和场次切换隔离。
 - 场次结束后的结算触发和结算状态持久化。
+
+运行时事件也携带身份：订单和成交包含 `marketId/roundId`，结算请求和结果包含 `marketId/roundId`。账本/API 应原样保存这些字段；缺少身份时保持空值或拒绝需要身份的操作，不能根据 slug 或接收时间回填。
 
 策略参数保存在 `BtcReversalConfig`，前端或控制面应传入配置文件；不要在前端复制一套阈值或阶段计算。
 

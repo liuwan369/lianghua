@@ -43,7 +43,7 @@ interface QuoteReference {
 export interface ReversalRound {
   marketId: string;
   /** Five-minute Unix start identity carried by paired market snapshots. */
-  roundId?: string;
+  roundId: string;
   name: string;
   startsAt: number;
   endsAt: number;
@@ -273,7 +273,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       if (event.kind !== "book") continue;
       const snapshot = event.snapshot;
       if (!snapshot || snapshot.marketId !== round.marketId
-        || snapshot.roundId !== (round.roundId ?? String(round.startsAt))) continue;
+        || snapshot.roundId !== round.roundId) continue;
       const snapshotForRound = snapshot;
       const pair = this.pairFromSnapshot(round, snapshotForRound, context.now);
       if (!pair) {
@@ -286,7 +286,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       // another round's book can never replay it into the venue.
       if (!quoteGateBlocked) for (const stage of round.stages) {
         if (!this.replayIntents.delete(stage.clientOrderId) || stage.status !== "CREATED") continue;
-        actions.push({ kind: "submit", order: this.orderIntent(stage, round.config) });
+        actions.push({ kind: "submit", order: this.orderIntent(round, stage, round.config) });
       }
       const previous = round.reference;
       if (previous && pair.upTs === previous.upTs && pair.downTs === previous.downTs
@@ -362,7 +362,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
         price: round.config.maxBuyPrice, shares, createdAt: context.now,
         trigger: "crossing", status: "CREATED", filledShares: 0 };
       let feeReserve: number;
-      try { feeReserve = context.estimateFee?.(this.orderIntent(candidate, round.config)) ?? 0; }
+      try { feeReserve = context.estimateFee?.(this.orderIntent(round, candidate, round.config)) ?? 0; }
       catch { round.reason = "当前交易费用暂不可用"; continue; }
       if (!Number.isFinite(feeReserve) || feeReserve < 0) { round.reason = "当前交易费用暂不可用"; continue; }
       candidate.feeReserveUsd = feeReserve;
@@ -389,7 +389,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       round.stages.push(candidate); round.lastStageDirection = direction; round.reason = "已触发，等待真实订单回报";
       this.indexStage(round, candidate);
       changed = true;
-      actions.push({ kind: "submit", order: this.orderIntent(candidate, round.config) });
+      actions.push({ kind: "submit", order: this.orderIntent(round, candidate, round.config) });
     }
     // Write the economic stage key before returning an action to the execution layer.
     if (changed) this.save();
@@ -403,7 +403,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const instruments = this.marketInstruments(market);
       if (!instruments) continue;
       const eligible = context.now <= market.startsAt;
-      const round: ReversalRound = { marketId: market.id, roundId: String(market.startsAt), name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
+      const round: ReversalRound = { marketId: market.id, roundId: market.roundId, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
         upTokenId: instruments.UP.tokenId, downTokenId: instruments.DOWN.tokenId, config: clone(this.state.config),
         status: eligible ? "waiting_start" : "waiting_next_round", firstSampleSeen: false, rebuildingReference: false,
         pendingAmbiguity: false, confirmationCount: 0, stages: [], reason: eligible ? "等待本场开始" : "中途启动，等待下一场" };
@@ -425,7 +425,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
   }
 
   private pairFromSnapshot(round: ReversalRound, snapshot: MarketBookSnapshot, now: number): QuoteReference | undefined {
-    if (snapshot.marketId !== round.marketId || snapshot.roundId !== (round.roundId ?? String(round.startsAt))
+    if (snapshot.marketId !== round.marketId || snapshot.roundId !== round.roundId
       || snapshot.expiresAt == null || snapshot.expiresAt <= now
       || snapshot.marketAgeMs != null && snapshot.marketAgeMs > round.config.maxQuoteAgeSeconds * 1000) return undefined;
     const yes = snapshot.YES, no = snapshot.NO;
@@ -442,8 +442,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
   private uniqueDirection(up: boolean, down: boolean): ReversalDirection | undefined {
     return up === down ? undefined : up ? "UP" : "DOWN";
   }
-  private orderIntent(stage: ReversalStage, config: BtcReversalConfig): Omit<OrderRequest, "strategyId"> {
-    return { clientOrderId: stage.clientOrderId, tokenId: stage.tokenId, direction: "BUY", price: stage.price,
+  private orderIntent(round: ReversalRound, stage: ReversalStage, config: BtcReversalConfig): Omit<OrderRequest, "strategyId"> {
+    return { clientOrderId: stage.clientOrderId, marketId: round.marketId, roundId: round.roundId,
+      tokenId: stage.tokenId, direction: "BUY", price: stage.price,
       shares: stage.shares, timeInForce: "GTC", postOnly: false,
       ...(config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: config.roundBudgetUsd }) };
   }
@@ -491,11 +492,10 @@ export class BtcReversalStrategy implements StrategyPlugin {
     if (state.instanceId !== state.config.instanceId) throw new Error("invalid reversal state identity");
     const markets = new Set<string>(), clients = new Set<string>();
     for (const round of state.rounds) {
-      round.roundId ??= String(round.startsAt);
       round.config = normalizeBtcReversalConfig(round.config);
       if (!round.marketId || markets.has(round.marketId) || round.config.instanceId !== state.instanceId
         || !Number.isFinite(round.startsAt) || round.endsAt - round.startsAt !== 300
-        || round.roundId !== String(round.startsAt)
+        || typeof round.roundId !== "string" || !round.roundId.trim()
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
         || !Array.isArray(round.stages) || round.stages.length > round.config.maxStages
         || !Number.isSafeInteger(round.confirmationCount) || round.confirmationCount < 0

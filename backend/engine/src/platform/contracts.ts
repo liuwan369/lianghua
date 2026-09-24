@@ -15,6 +15,8 @@ export interface Instrument {
 }
 export interface MarketInfo {
   id: string;
+  /** Explicit five-minute execution identity from market discovery. */
+  roundId: string;
   name: string;
   startsAt: number;
   endsAt: number;
@@ -95,6 +97,9 @@ export interface MarketBookSnapshot {
 export interface OrderRequest {
   clientOrderId: string;
   strategyId: string;
+  /** Optional caller assertion; the platform fills it from the registered market. */
+  marketId?: string;
+  roundId?: string;
   tokenId: string;
   direction: Direction;
   price: number;
@@ -165,6 +170,9 @@ export type TradeStatus = "MATCHED" | "MATCHED_NOT_BROADCASTED" | "MINED" | "RET
 export interface TradeFill {
   tradeId: string;
   orderId: string;
+  /** Market identity carried through authenticated fills. */
+  marketId?: string;
+  roundId?: string;
   tokenId: string;
   direction: Direction;
   price: number;
@@ -313,10 +321,14 @@ export interface OrderGateway {
 }
 export interface SettlementRequest {
   marketId: string;
+  /** Explicit market round when the caller already has it. */
+  roundId?: string;
   tokenIds: string[];
 }
 export interface SettlementResult {
   marketId: string;
+  /** Resolved only from the registered market identity, never from time or slug. */
+  roundId?: string;
   state: "confirmed" | "pending" | "unsupported";
   transactionId?: string;
   reason?: string;
@@ -349,8 +361,8 @@ export type TradingEvent =
   | { kind: "book"; book: Book; snapshot?: undefined }
   | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; book?: undefined }
   | { kind: "reference"; symbol: string; price: number; ts: number }
-  | { kind: "fill"; fill: TradeFill }
-  | { kind: "order"; order: OrderRecord }
+  | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string }
+  | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string }
   | { kind: "account"; snapshot: AccountSnapshot }
   | { kind: "settlement"; result: SettlementResult }
   | { kind: "timer"; ts: number }

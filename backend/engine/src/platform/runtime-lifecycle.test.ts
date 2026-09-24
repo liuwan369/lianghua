@@ -7,7 +7,7 @@ import type { AccountSnapshot, GatewayAck, Instrument, MarketBookSnapshot, Marke
 const marketId = "0x" + "1".repeat(64);
 const yes: Instrument = { tokenId: "yes-1", marketId, outcome: "UP", tickSize: 0.01, minOrderSize: 1 };
 const no: Instrument = { tokenId: "no-1", marketId, outcome: "DOWN", tickSize: 0.01, minOrderSize: 1 };
-const market: MarketInfo = { id: marketId, name: "btc-updown-5m-1000", startsAt: 1000, endsAt: 1300, instruments: [yes, no] };
+const market: MarketInfo = { id: marketId, roundId: "1000", name: "btc-updown-5m-1000", startsAt: 1000, endsAt: 1300, instruments: [yes, no] };
 
 function snapshot(sequence: number, at: number, yesAsk: number, noAsk: number): MarketBookSnapshot {
   return {
@@ -53,7 +53,13 @@ const lifecycle = async () => {
   const platform = createPlatform(() => now, gateway, undefined, async () => ({ accountId: "runtime-lifecycle", at: 1005,
     cashUsd: 99.3, positions: [{ tokenId: yes.tokenId, shares: 1, costUsd: 0.7, realizedPnlUsd: 0 }], openOrders: [], complete: true }));
   const events: string[] = [];
-  platform.subscribe(event => events.push(event.kind));
+  platform.subscribe(event => {
+    events.push(event.kind);
+    if (event.kind === "order" && event.order.clientOrderId === "btc-reversal:0x1111111111111111111111111111111111111111111111111111111111111111:1") {
+      assert.equal(event.roundId, "1000");
+      assert.equal(event.order.roundId, "1000");
+    }
+  });
   platform.ingest({ kind: "market", market });
   const strategy = createBtcReversalStrategy({ triggerPrice: 0.6, confirmationPrice: 0.65,
     maxBuyPrice: 0.7, stageShares: [1], maxStages: 1, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 });
@@ -73,7 +79,11 @@ const lifecycle = async () => {
   platform.ingestSnapshot(crossing);
   await platform.idle();
   assert.equal(gateway.submissions.length, 1, "one crossing creates one venue submission");
+  assert.equal(gateway.submissions[0]?.marketId, marketId);
+  assert.equal(gateway.submissions[0]?.roundId, "1000");
   const order = platform.orders.list()[0]!;
+  assert.equal(order.marketId, marketId);
+  assert.equal(order.roundId, "1000");
   assert.equal(order.status, "OPEN");
   assert.equal(platform.risk.current().occupiedUsd, 0.7, "BUY reserve is held before fill");
 
@@ -90,6 +100,10 @@ const lifecycle = async () => {
   platform.ingest({ kind: "fill", fill });
   platform.ingest({ kind: "fill", fill });
   assert.equal(platform.portfolio.fills().length, 1, "duplicate trade event is ignored");
+  assert.equal(platform.portfolio.fills()[0]?.marketId, marketId);
+  assert.equal(platform.portfolio.fills()[0]?.roundId, "1000");
+  assert.throws(() => platform.ingest({ kind: "fill", fill: { ...fill, status: "MINED", roundId: "1100" } }),
+    /trade market identity changed/, "a duplicate trade status update cannot cross rounds");
   assert.throws(() => platform.ingest({ kind: "fill", fill: { ...fill, orderId: "foreign-order" } }),
     /trade identity collision/, "one venue trade cannot be attached to two orders");
   assert.equal(platform.orders.get(order.orderId!)?.status, "FILLED");
@@ -127,9 +141,11 @@ const lifecycle = async () => {
 
   const settlementEvents: string[] = [];
   const settlementPlatform = createPlatform(() => now, new FakeGateway());
+  settlementPlatform.ingest({ kind: "market", market });
   settlementPlatform.subscribe(event => { if (event.kind === "settlement") settlementEvents.push(event.result.state); });
   const result = await settlementPlatform.settlement.redeem({ marketId, tokenIds: [yes.tokenId, no.tokenId] });
   assert.equal(result.state, "unsupported");
+  assert.equal(result.roundId, "1000");
   assert.deepEqual(settlementEvents, ["unsupported"]);
 
   const stopOpen = await platform.orders.submit({ clientOrderId: "stop-open", strategyId: "btc-reversal", tokenId: no.tokenId,

@@ -5,7 +5,7 @@ import type { Instrument, MarketBookSnapshot, MarketInfo } from "./contracts.js"
 
 const yes: Instrument = { tokenId: "yes-1", marketId: "market-1", outcome: "UP", tickSize: 0.01, minOrderSize: 1 };
 const no: Instrument = { tokenId: "no-1", marketId: "market-1", outcome: "DOWN", tickSize: 0.01, minOrderSize: 1 };
-const market: MarketInfo = { id: "market-1", name: "btc-updown-5m-1000", startsAt: 1000, endsAt: 1300,
+const market: MarketInfo = { id: "market-1", roundId: "1000", name: "btc-updown-5m-1000", startsAt: 1000, endsAt: 1300,
   instruments: [no, yes] };
 
 function createPlatform(now: () => number): TradingPlatform {
@@ -33,6 +33,8 @@ function paired(sequence: number, at: number, yesAsk: number, noAsk: number): Ma
   let observed: MarketBookSnapshot | undefined;
   let strategyObserved: MarketBookSnapshot | undefined;
   platform.subscribe(event => { if (event.kind === "book" && event.snapshot) observed = event.snapshot; });
+  const strategy = createBtcReversalStrategy({}, { persist: () => undefined });
+  platform.attach(strategy);
   platform.attach({ id: "snapshot-observer", onEvent: event => {
     if (event.kind === "book" && event.snapshot) strategyObserved = event.snapshot;
     return [];
@@ -41,10 +43,15 @@ function paired(sequence: number, at: number, yesAsk: number, noAsk: number): Ma
   assert.equal(platform.ingestSnapshot(first), true);
   assert.deepEqual(observed, first, "listeners receive the paired snapshot");
   assert.deepEqual(strategyObserved, first, "strategy receives the same paired shape");
+  const status = strategy.getStatus();
+  assert.equal(status.rounds[0]?.roundId, "1000", "strategy status exposes the explicit round identity");
+  assert.equal(status.currentRound?.roundId, "1000", "strategy status exposes the current round identity");
   assert.equal(platform.market.book("yes-1")?.ask, 0.5);
   assert.equal(platform.market.book("no-1")?.ask, 0.5);
   assert.equal(platform.ingestSnapshot({ ...first, sequence: 2,
     YES: { ...first.YES!, assetId: "wrong" }, }), false, "wrong token identity is rejected");
+  assert.throws(() => platform.ingest({ kind: "market", market: { ...market, roundId: "1100" } }),
+    /market round identity is required/, "market round identity must match the five-minute start");
 }
 
 {

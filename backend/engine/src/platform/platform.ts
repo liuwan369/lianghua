@@ -87,12 +87,29 @@ export class TradingPlatform {
   };
   readonly settlement = {
     redeem: async (request: SettlementRequest) => {
+      const market = this.markets.get(request.marketId);
+      const roundId = request.roundId ?? market?.roundId;
+      if (!market || !roundId || roundId !== market.roundId) {
+        const result = { marketId: request.marketId, roundId, state: "unsupported" as const,
+          reason: "settlement market round identity unavailable or mismatched" };
+        this.publish({ kind: "settlement", result });
+        return clone(result);
+      }
+      const scopedRequest = { ...clone(request), roundId };
       const result = this.options.adapters.settle
-        ? await this.options.adapters.settle(clone(request))
-        : { marketId: request.marketId, state: "unsupported" as const, reason: "no settlement adapter for this wallet" };
+        ? await this.options.adapters.settle(scopedRequest)
+        : { marketId: scopedRequest.marketId, roundId: scopedRequest.roundId, state: "unsupported" as const,
+          reason: "no settlement adapter for this wallet" };
+      if (result.marketId !== request.marketId || (result.roundId !== undefined && result.roundId !== roundId)) {
+        const invalid = { marketId: request.marketId, roundId, state: "unsupported" as const,
+          reason: "settlement adapter returned mismatched market identity" };
+        this.publish({ kind: "settlement", result: invalid });
+        return clone(invalid);
+      }
+      const scopedResult = { ...result, roundId: result.roundId ?? roundId };
       // A broadcast receipt is not a cash credit; the account service reconciles actual proceeds.
-      this.publish({ kind: "settlement", result });
-      return clone(result);
+      this.publish({ kind: "settlement", result: scopedResult });
+      return clone(scopedResult);
     },
   };
 
@@ -118,11 +135,19 @@ export class TradingPlatform {
     };
   }
   ingest(event: TradingEvent): void {
-    if (event.kind === "fill") { this.core.applyFill(event.fill); return; }
+    if (event.kind === "fill") {
+      this.core.applyFill({ ...event.fill, marketId: event.fill.marketId ?? event.marketId,
+        roundId: event.fill.roundId ?? event.roundId });
+      return;
+    }
     if (event.kind === "order" || event.kind === "account") throw new Error("use authenticated order/account service methods");
     if (event.kind === "market") {
-      this.core.register(event.market.instruments);
+      if (!/^\d+$/.test(event.market.roundId) || event.market.roundId !== String(event.market.startsAt)
+        || !Number.isFinite(event.market.startsAt) || event.market.endsAt - event.market.startsAt !== 300) {
+        throw new Error("market round identity is required");
+      }
       this.core.rememberMarket(event.market);
+      this.core.register(event.market.instruments);
       this.markets.set(event.market.id, clone(event.market));
     }
     if (event.kind === "book") {
