@@ -520,20 +520,23 @@
       const action = button.dataset.action;
       button.disabled = true;
       try {
-        const result = await adapter.commandRuntime({ action, marketIds: marketIdsForCommand(), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` });
-        text("[data-live-status]", result.message || (result.accepted ? "指令已接收，等待运行状态确认" : "设计稿操作 · 后端未接入"));
-        text("[data-strategy-status]", result.accepted ? "等待状态确认" : "待接入");
-      } catch (error) { text("[data-live-status]", error.message || "控制请求失败"); }
+        const command = { action, marketIds: marketIdsForCommand(), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
+        if (action === "start") command.assetId = currentContext().assetId;
+        const result = await adapter.commandRuntime(command);
+        const accepted = result?.accepted === true;
+        text("[data-live-status]", result.message || (accepted ? "指令已接收，等待运行状态确认" : "指令未接受，运行状态未改变"));
+        text("[data-strategy-status]", accepted ? "等待状态确认" : "指令未接受，未改变运行状态");
+      } catch (error) {
+        text("[data-live-status]", error.message || "控制请求失败，运行状态未改变");
+        text("[data-strategy-status]", "控制失败，未改变运行状态");
+      }
       finally { button.disabled = false; }
     });
   });
   document.querySelectorAll("[data-preview-nav]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.dataset.previewTarget;
-      if (target) {
-        window.location.href = target;
-        return;
-      }
+      if (target) { window.PolyPreview.navigate(target); return; }
       document.querySelectorAll("[data-preview-nav]").forEach((item) => {
         item.classList.toggle("active", item === button);
         if (item === button) item.setAttribute("aria-current", "page");
