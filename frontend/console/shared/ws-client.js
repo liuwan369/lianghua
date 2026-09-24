@@ -21,7 +21,7 @@
       reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connect(); }, delay);
     };
     const connect = () => {
-      if (closed || !endpoint() || window.PolyPreview?.config.mode === "local-preview" || typeof WebSocket === "undefined") return false;
+      if (closed || !endpoint() || typeof WebSocket === "undefined") return false;
       if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return true;
       try { socket = new WebSocket(endpoint()); }
       catch (error) { options.onError?.(error); scheduleReconnect(); return false; }

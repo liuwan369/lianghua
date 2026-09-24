@@ -3,7 +3,6 @@
   const core = window.PolyPreview;
   const vm = window.PolyPreviewViewModel;
   if (!core || !vm) throw new Error("preview shared modules must load before preview-store.js");
-  const poolKey = "polymarket-design-market-pool-v1";
   const initialCatalog = { status: "unavailable", items: [], selectedId: null, source: "backend", stale: true, error: "行情目录尚未接入", receivedAt: 0 };
   const state = {
     marketCatalog: initialCatalog,
@@ -28,8 +27,9 @@
   };
   const setMarketPool = (value) => {
     const next = vm.pool(value, state.marketCatalog.items);
-    update("marketPool", { ...next, status: "ready", stale: false, error: null, pendingDesiredIds: null });
-    return next;
+    const result = { ...next, status: "ready", stale: false, error: null, pendingDesiredIds: null, receivedAt: Date.now() };
+    update("marketPool", result);
+    return result;
   };
   const setMarketCatalog = (value) => {
     const next = vm.catalog(value);
@@ -40,7 +40,16 @@
     const selected = items.some((item) => item.assetId === requested) ? requested : requested ? null : items[0]?.assetId || null;
     const status = next.stale ? (hasPrevious ? "stale" : "unavailable") : next.error ? (hasPrevious ? "error" : "unavailable") : next.items.length === 0 ? (hasPrevious ? "stale" : "unavailable") : "ready";
     const error = next.error || (next.items.length === 0 && !hasPrevious ? "市场目录暂无有效快照" : null);
-    const result = { ...next, items, status, error, selectedId: selected, receivedAt: Date.now() };
+    const result = {
+      ...next,
+      items,
+      source: keepPrevious ? state.marketCatalog.source : next.source,
+      asOf: keepPrevious ? state.marketCatalog.asOf : next.asOf,
+      status,
+      error,
+      selectedId: selected,
+      receivedAt: keepPrevious ? state.marketCatalog.receivedAt : Date.now()
+    };
     update("marketCatalog", result);
     return result;
   };
@@ -50,5 +59,5 @@
     return update("marketCatalog", { selectedId });
   };
   const setSlice = (slice, value) => update(slice, value);
-  window.PolyPreviewStore = Object.freeze({ poolKey, getState: () => state, subscribe, update, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket });
+  window.PolyPreviewStore = Object.freeze({ getState: () => state, subscribe, update, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket });
 })();

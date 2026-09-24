@@ -33,7 +33,7 @@
       </div>
       <p class="sidebar-copy">\u9762\u5411 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u5B9E\u65F6\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
       <nav aria-label="\u81EA\u52A8\u4EA4\u6613\u9884\u89C8\u5BFC\u822A">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span data-sidebar-state>\u539F\u578B\u9884\u89C8</span><small data-sidebar-detail>\u6570\u636E\u5F85\u63A5\u5165</small></div>
+      <div class="sidebar-status"><i></i><span data-sidebar-state>服务器数据</span><small data-sidebar-detail>等待后端连接</small></div>
     </aside>
 
     <main class="preview-main auto-trade-main">
@@ -49,10 +49,10 @@
           </div>
         </div>
         <div class="trade-header-side">
-          <span class="live-chip"><i></i><b data-live-status>\u8BBE\u8BA1\u7A3F \xB7 \u5F85\u63A5\u5165</b><small data-live-clock>--:--:--</small></span>
+           <span class="live-chip"><i></i><b data-live-status>后端未连接</b><small data-live-clock>--:--:--</small></span>
           <div class="header-status-grid">
             <article class="header-status"><span>\u5F53\u524D\u5E02\u573A</span><strong data-active-market>当前选中市场 / 5m YES-NO</strong></article>
-            <article class="header-status"><span>\u6570\u636E\u8FDE\u63A5</span><strong class="status-warning" data-connection-status>\u6F14\u793A\u6570\u636E \xB7 \u5F85\u63A5\u5165</strong></article>
+             <article class="header-status"><span>\u6570\u636E\u8FDE\u63A5</span><strong class="status-warning" data-connection-status>后端未连接 · 等待快照</strong></article>
             <article class="header-status"><span>\u4EA4\u6613\u6A21\u5F0F</span><strong>\u5B9E\u76D8 \xB7 \u5355\u7B56\u7565</strong></article>
             <article class="header-status"><span>\u8D26\u6237\u4F59\u989D</span><strong>-- USDC</strong></article>
           </div>
@@ -87,7 +87,7 @@
         <article class="summary-card"><div class="summary-icon blue-icon">\u25F7</div><div><span>\u5F53\u524D\u573A\u6B21</span><strong data-round>待接入 · 当前场次</strong><small data-countdown>\u5F85\u63A5\u5165</small></div></article>
         <article class="summary-card"><div class="summary-icon violet-icon">\u21AF</div><div><span>\u5F53\u524D\u9636\u6BB5</span><strong data-stage>\u5F85\u63A5\u5165</strong><small>\u786E\u8BA4\u53CD\u8F6C <b data-confirmations>--</b> / -- \u6B21</small></div></article>
         <article class="summary-card"><div class="summary-icon amber-icon">\u2192</div><div><span>\u4E0B\u4E00\u7B14</span><strong data-next>\u7B49\u5F85\u4FE1\u53F7</strong><small>\u53C2\u6570\u7248\u672C REV-001</small></div></article>
-        <article class="summary-card"><div class="summary-icon green-icon">\u2713</div><div><span>\u7B56\u7565\u72B6\u6001</span><strong data-strategy-status>\u8BBE\u8BA1\u7A3F \xB7 \u5F85\u63A5\u5165</strong><small>\u66F4\u65B0\u65F6\u95F4 <b data-status-age>--</b></small></div></article>
+           <article class="summary-card"><div class="summary-icon green-icon">\u2713</div><div><span>\u7B56\u7565\u72B6\u6001</span><strong data-strategy-status>策略配置待接入</strong><small>\u66F4\u65B0\u65F6\u95F4 <b data-status-age>--</b></small></div></article>
       </section>
 
       <section class="trade-main-grid">
@@ -299,8 +299,8 @@
     var payload = payloadOf(frame);
     var marketId = payload.marketId || payload.market_id || frame?.marketId || frame?.market_id;
     var roundId = payload.roundId || payload.round_id || frame?.roundId || frame?.round_id;
-    if (!marketId && !requireRound) return false;
     var assetId = payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id;
+    if (!requireRound && !marketId && !roundId && !assetId) return true;
     if (!context.assetId || !context.marketId || !context.roundId || !marketId || !roundId || !assetId) return false;
     return String(assetId) === String(context.assetId) && marketId === context.marketId && roundId === context.roundId;
   };
@@ -405,7 +405,7 @@
   };
   var stopStreams = function() { streams.splice(0).forEach(function(stream) { stream.close(); }); };
   var startStreams = function() {
-    if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
+    if (!window.PolyPreviewStreams?.createStream) return;
     syncMarketContext();
     var context = currentContext();
     var contextKey = identityKey(context);
@@ -452,15 +452,21 @@
         text("[data-book-live-state]", "连接中断 · 保留快照");
       }
     });
-    make("orders", true, function(frame) { if (!currentLifecycle()) return; scheduleRoundRefresh(0); }, function() {});
-    make("runtime", false, function(frame) { if (!currentLifecycle()) return; scheduleRuntimeRefresh(0); }, function(state) {
+     make("orders", true, function(frame) { if (!currentLifecycle()) return; scheduleRoundRefresh(0); }, function() {});
+     make("runtime", false, function(frame) {
+       if (!currentLifecycle()) return;
+       var payload = payloadOf(frame);
+       var hasIdentity = Boolean(payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id);
+       if (hasIdentity) renderRuntime(vm.runtime(payload));
+       else text("[data-connection-status]", "运行流已连接 · 等待所选市场状态");
+       scheduleRuntimeRefresh(0);
+     }, function(state) {
       if (!currentLifecycle()) return;
       if (state === "connected") return;
       text("[data-connection-status]", "运行流中断 · REST 独立刷新");
     });
   };
   var loadCurrentMarket = async function() {
-    if (window.PolyPreview.config.mode === "local-preview") return null;
     syncMarketContext();
     var context = currentContext();
     if (!context.assetId || !context.marketId || !context.roundId) { markSnapshotStale("所选市场身份待接入"); return null; }
@@ -474,7 +480,7 @@
     return contextKey;
   };
   var scheduleSnapshotRefresh = function(delay = 1000) {
-    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (document.hidden) return;
     if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
     snapshotRefreshTimer = window.setTimeout(function() {
       snapshotRefreshTimer = null;
@@ -491,7 +497,7 @@
     return snapshotRefreshInFlight;
   };
   var scheduleRoundRefresh = function(delay = 3000) {
-    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (document.hidden) return;
     if (roundRefreshTimer) window.clearTimeout(roundRefreshTimer);
     roundRefreshTimer = window.setTimeout(function() { roundRefreshTimer = null; void refreshRoundData(); }, delay);
   };
@@ -525,7 +531,9 @@
     var running = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused"].includes(selectedRuntime.state || selectedRuntime.status);
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
-      var reason = commandPending ? "控制指令处理中" : window.PolyPreview.config.mode === "local-preview" ? "演示模式不提交交易命令" : !context.marketId || !context.roundId ? "所选市场身份待后端提供" : "";
+      var strategy = store.getState().strategy;
+      var reason = commandPending ? "控制指令处理中" : !context.marketId || !context.roundId ? "所选市场身份待后端提供" : "";
+      if (!reason && action === "start" && (strategy.status !== "ready" || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
       if (!reason && action === "start" && (!asset?.canEnable || asset?.strategyEligible !== true || asset?.stale === true || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = asset?.strategyEligible !== true ? "服务器尚未确认该市场符合策略条件" : asset?.stale === true ? "行情已过期，暂不允许启动" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && running) reason = "所选市场正在运行";
       if (!reason && action !== "start" && !running) reason = "所选市场运行状态尚未确认";
@@ -549,7 +557,7 @@
     updateControls();
   };
   var scheduleRuntimeRefresh = function(delay = 2000) {
-    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (document.hidden) return;
     if (runtimeRefreshTimer) window.clearTimeout(runtimeRefreshTimer);
     runtimeRefreshTimer = window.setTimeout(function() { runtimeRefreshTimer = null; void refreshRuntime(); }, delay);
   };
@@ -567,7 +575,7 @@
     return runtimeRefreshInFlight;
   };
   var scheduleMarketContextRefresh = function(delay = 10000) {
-    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (document.hidden) return;
     if (marketContextRefreshTimer) window.clearTimeout(marketContextRefreshTimer);
     marketContextRefreshTimer = window.setTimeout(function() {
       marketContextRefreshTimer = null;
@@ -659,11 +667,9 @@
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
   });
-  if (window.PolyPreview.config.mode !== "local-preview") {
-    Promise.resolve(adapter.loadMarkets()).then(function() { return adapter.loadMarketPool(); }).finally(function() {
-      streamLifecycleReady = true;
-      scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); startStreams();
-    }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
-  }
+  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy()]).then(function() {
+    streamLifecycleReady = true;
+    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); startStreams();
+  }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
 })();
 

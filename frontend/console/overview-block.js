@@ -25,8 +25,8 @@
         <strong>Polymarket</strong>
       </div>
       <p class="sidebar-copy">\u9762\u5411 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u4EA4\u6613\u63A7\u5236\u53F0\u603B\u89C8\u3002</p>
-      <nav aria-label="\u603B\u89C8\u8BBE\u8BA1\u7A3F\u5BFC\u822A">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span>\u539F\u578B\u9884\u89C8</span><small>\u6570\u636E\u5F85\u63A5\u5165</small></div>
+      <nav aria-label="\u603B\u89C8\u5BFC\u822A">${navMarkup}</nav>
+      <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待后端连接</small></div>
     </aside>
 
     <main class="preview-main">
@@ -38,7 +38,7 @@
           <div class="hero-actions"><button class="hero-button primary-action" type="button" data-overview-action="start">\u4E00\u952E\u542F\u52A8\u81EA\u52A8\u5316\u4EA4\u6613</button><button class="hero-button" type="button" data-overview-action="strategy">\u4FDD\u5B58\u914D\u7F6E</button><button class="hero-button" type="button" data-overview-action="refresh">\u5237\u65B0\u72B6\u6001</button><button class="hero-button exit-action" type="button" data-overview-action="exit">\u9000\u51FA\u7A0B\u5E8F</button></div>
         </div>
         <div class="header-tools"><div class="header-status-grid">
-          <article class="header-status"><span>\u5F53\u524D\u54C1\u79CD</span><strong>\u5F53\u524D\u9009\u4E2D\u5E02\u573A 5 \u5206\u949F YES / NO</strong></article>
+          <article class="header-status"><span>\u5F53\u524D\u54C1\u79CD</span><strong>等待市场目录</strong></article>
           <article class="header-status"><span>\u81EA\u52A8\u5316\u72B6\u6001</span><strong data-overview-runtime>\u672A\u542F\u52A8</strong></article>
           <article class="header-status"><span>\u8D26\u6237\u603B\u8D44\u4EA7</span><strong data-account-total>--</strong></article>
           <article class="header-status"><span>\u53EF\u7528\u4F59\u989D</span><strong data-account-available>--</strong></article>
@@ -59,13 +59,13 @@
       <section class="server-panel" aria-labelledby="server-title">
         <div class="panel-heading"><div><h2 id="server-title">\u670D\u52A1\u5668\u72B6\u6001</h2></div><span class="panel-meta server-expired">\u670D\u52A1\u5668\u72B6\u6001\u5F85\u63A5\u5165</span></div>
         <div class="server-metrics"><div><span>CPU</span><strong data-server="cpu">--</strong></div><div><span>\u5185\u5B58</span><strong data-server="memory">--</strong></div><div><span>\u78C1\u76D8</span><strong data-server="disk">--</strong></div><div><span>\u8D1F\u8F7D 1 / 5 / 15 \u5206\u949F</span><strong data-server="load">-- / -- / --</strong></div></div>
-        <div class="server-services" data-server-services><div><span>\u63A7\u5236\u53F0</span><strong class="service-good">\u8BBE\u8BA1\u7A3F\u8FD0\u884C\u4E2D</strong><small>\u6570\u636E\u5F85\u63A5\u5165</small></div><div><span>\u884C\u60C5\u91C7\u96C6</span><strong>\u5F85\u63A5\u5165</strong><small>--</small></div><div><span>\u4EA4\u6613\u8FDB\u7A0B</span><strong>\u672A\u542F\u52A8</strong><small>--</small></div><div><span>\u8D26\u672C\u6295\u5F71</span><strong>\u5F85\u63A5\u5165</strong><small>--</small></div></div>
+        <div class="server-services" data-server-services><div><span>\u63A7\u5236\u53F0</span><strong>\u5F85\u540E\u7AEF\u786E\u8BA4</strong><small>--</small></div><div><span>\u884C\u60C5\u91C7\u96C6</span><strong>\u5F85\u63A5\u5165</strong><small>--</small></div><div><span>\u4EA4\u6613\u8FDB\u7A0B</span><strong>\u5F85\u540E\u7AEF\u786E\u8BA4</strong><small>--</small></div><div><span>\u8D26\u672C\u6295\u5F71</span><strong>\u5F85\u63A5\u5165</strong><small>--</small></div></div>
       </section>
 
       <section class="log-panel" aria-labelledby="log-title">
-        <div class="panel-heading"><div><p class="eyebrow">SERVICE ACTIVITY</p><h2 id="log-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><div class="log-state"><span class="state-dot"></span><span data-events-state>\u8BBE\u8BA1\u7A3F\u9884\u89C8</span><small>\u672C\u5730\u793A\u4F8B</small></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">SERVICE ACTIVITY</p><h2 id="log-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><div class="log-state"><span class="state-dot"></span><span data-events-state>\u4E8B\u4EF6\u5F85\u63A5\u5165</span><small>\u670D\u52A1\u5668\u6570\u636E</small></div></div>
         <ol class="log-list" data-overview-log-list aria-live="polite">
-          <li class="log-entry"><time>--</time><span class="log-icon neutral-icon">\u2022</span><div><strong>\u8FD0\u884C\u4E8B\u4EF6\u7B49\u5F85\u540E\u7AEF</strong><p>\u539F\u578B\u9884\u89C8\u4E0D\u4EE3\u8868\u5B9E\u65F6\u884C\u60C5\u3001\u8D26\u6237\u6216\u4EA4\u6613\u5DF2\u8FDE\u63A5</p></div><span class="log-status muted-text">\u5F85\u63A5\u5165</span></li>
+          <li class="log-entry"><time>--</time><span class="log-icon neutral-icon">\u2022</span><div><strong>\u8FD0\u884C\u4E8B\u4EF6\u5F85\u540E\u7AEF\u8FD4\u56DE</strong><p>\u672A\u6536\u5230\u670D\u52A1\u5668\u4E8B\u4EF6\uFF0C\u6CA1\u6709\u5047\u6570\u636E\u5C55\u793A</p></div><span class="log-status muted-text">\u5F85\u63A5\u5165</span></li>
         </ol>
         <div class="log-footer"><span><i class="tiny-dot"></i>\u53EA\u663E\u793A\u5F53\u524D\u8FD0\u884C\u76F8\u5173\u4E8B\u4EF6</span><span>\u5386\u53F2\u4E8B\u4EF6\u653E\u5728\u8BA2\u5355\u4E0E\u8FD0\u884C\u8BB0\u5F55\u4E2D</span></div>
       </section>
@@ -84,12 +84,12 @@
       const state = store.getState();
       const assetId = state.marketPool.desiredIds[0];
       const item = state.marketCatalog.items.find((item) => item.assetId === assetId);
-      if (action === "start" && (!item?.marketId || !item.roundId || state.marketPool.stale)) { text("[data-overview-runtime]", "请先在市场页面启用币种，并等待运行池与轮次确认"); return; }
+      if (action === "start" && (!item?.marketId || !item.roundId || item.canEnable !== true || item.strategyEligible !== true || item.stale === true || state.marketCatalog.stale || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId))) { text("[data-overview-runtime]", "请先在市场页面确认币种资格、启用运行池，并等待行情与轮次确认"); return; }
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
       const marketIds = item?.marketId ? [item.marketId] : [];
       if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
       adapter.commandRuntime({ action: action === "start" ? "start" : "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
-        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "服务器未确认")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
+      .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "运行控制待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
         .finally(() => { document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = false; }); void adapter.loadRuntime(); });
       return;
@@ -134,7 +134,12 @@
   const renderMetrics = (resource) => {
     const data = resource?.data;
     text("[data-metrics-state]", resource?.status === "stale" ? "部分统计未更新，保留上次结果。" : resource?.status === "unavailable" ? "统计数据待接入。" : "主值为当前运行；今日按 UTC 统计。当前接口不提供月度统计，显示 --。");
-    if (!data) return;
+    if (!data) {
+      const list = document.querySelector("[data-server-services]");
+      if (list) list.innerHTML = '<div><span>控制台</span><strong>待服务器确认</strong><small>--</small></div><div><span>行情采集</span><strong>待接入</strong><small>--</small></div><div><span>交易进程</span><strong>待服务器确认</strong><small>--</small></div><div><span>账本投影</span><strong>待接入</strong><small>--</small></div>';
+      text(".server-expired", resource?.status === "stale" ? "连接中断 · 等待新采样" : "后端未连接");
+      return;
+    }
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);
     ["current", "today", "month"].forEach((period) => {
       const suffix = period === "current" ? "current" : period;
@@ -178,7 +183,7 @@
     document.querySelectorAll("[data-account-total], [data-account-available]").forEach((node) => { node.title = resource.stale ? "数据过期，保留最近账户快照" : "服务器账户快照；缺少可用余额时显示 --"; });
   };
   const renderEvents = (resource) => {
-    text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : "等待服务器事件");
+    text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : "事件待接入");
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
     const list = document.querySelector("[data-overview-log-list]");
@@ -209,7 +214,13 @@
   text(".sidebar-status small", "各模块独立更新");
   text(".log-state small", "当前运行");
   document.querySelector("[data-account-total]").previousElementSibling.textContent = "账户资产 / 抵押余额";
-  if (window.PolyPreview.config.mode !== "local-preview") {
+  const currentMarket = store.getState().marketCatalog.items.find((item) => item.assetId === store.getState().marketCatalog.selectedId);
+  text(".header-status strong", currentMarket ? `${currentMarket.symbol} · 5 分钟 YES / NO` : "等待市场目录");
+  store.subscribe("marketCatalog", (catalog) => {
+    const market = catalog.items.find((item) => item.assetId === catalog.selectedId);
+    text(".header-status strong", market ? `${market.symbol} · 5 分钟 YES / NO` : "等待市场目录");
+  });
+  {
     void adapter.loadMarkets();
     void adapter.loadMarketPool();
     void adapter.loadRuntime();

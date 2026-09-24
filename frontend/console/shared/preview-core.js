@@ -154,8 +154,8 @@
     legacyStrategyConfig: () => request("/api/strategy-config")
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  const config = { apiBase: "", mode: "backend", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, ...runtimeConfig };
-  config.mode = "backend";
-  config.demo = false;
+  // Backend is the default. Preserve an explicitly supplied mode for hosts
+  // that use it as metadata, while keeping local/demo data disabled.
+  const config = { apiBase: "", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, mode: "backend", ...runtimeConfig, demo: false };
   window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, setSelectedAssetUrl, on, emit });
 })();
