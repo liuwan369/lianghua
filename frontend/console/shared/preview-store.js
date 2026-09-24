@@ -34,7 +34,7 @@
   };
   const setMarketPool = (value) => {
     const next = vm.pool(value, state.marketCatalog.items);
-    update("marketPool", { ...next, status: "ready", stale: false, error: null });
+    update("marketPool", { ...next, status: "ready", stale: false, error: null, pendingDesiredIds: null });
     if (core.config.mode === "local-preview") core.storage.write(poolKey, { enabledIds: next.desiredIds, runningIds: next.currentIds, desiredIds: next.desiredIds, currentIds: next.currentIds, nextRoundIds: next.nextRoundIds });
     return next;
   };
@@ -43,15 +43,20 @@
     const hasPrevious = state.marketCatalog.source !== "local-preview" && state.marketCatalog.items.length > 0;
     const keepPrevious = hasPrevious && (next.stale || next.error || next.items.length === 0);
     const items = keepPrevious ? state.marketCatalog.items : next.stale || next.error || next.items.length === 0 ? [] : next.items;
-    const selected = items.some((item) => item.assetId === state.marketCatalog.selectedId) ? state.marketCatalog.selectedId : items[0]?.assetId || null;
+    const requested = core.config.selectedAssetId || state.marketCatalog.selectedId;
+    const selected = items.some((item) => item.assetId === requested) ? requested : requested ? null : items[0]?.assetId || null;
     const status = next.stale ? (hasPrevious ? "stale" : "unavailable") : next.error ? (hasPrevious ? "error" : "unavailable") : next.items.length === 0 ? (hasPrevious ? "stale" : "unavailable") : "ready";
     const error = next.error || (next.items.length === 0 && !hasPrevious ? "市场目录暂无有效快照" : null);
     const result = { ...next, items, status, error, selectedId: selected, receivedAt: Date.now() };
     update("marketCatalog", result);
-    update("marketPool", { ...vm.pool(state.marketPool, items), status: state.marketPool.status, stale: state.marketPool.stale, error: state.marketPool.error || null });
+    update("marketPool", { ...vm.pool(state.marketPool, items), status: state.marketPool.status, stale: state.marketPool.stale, error: state.marketPool.error || null, pendingDesiredIds: state.marketPool.pendingDesiredIds || null });
     return result;
   };
-  const setSelectedMarket = (assetId) => update("marketCatalog", { selectedId: state.marketCatalog.items.some((item) => item.assetId === assetId) ? assetId : state.marketCatalog.selectedId });
+  const setSelectedMarket = (assetId) => {
+    const selectedId = state.marketCatalog.items.some((item) => item.assetId === assetId) ? assetId : null;
+    core.setSelectedAssetUrl(selectedId);
+    return update("marketCatalog", { selectedId });
+  };
   const setSlice = (slice, value) => update(slice, value);
   core.on(`storage:${poolKey}`, (value) => { if (value) update("marketPool", vm.pool(value, state.marketCatalog.items)); });
   window.PolyPreviewStore = Object.freeze({ poolKey, getState: () => state, subscribe, update, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket });
