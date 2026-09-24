@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/root/pm-system/backend/engine
-ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000
+ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000
 Restart=always
 RestartSec=1
 Environment=NODE_ENV=production

@@ -42,8 +42,10 @@ from dashboard.system_metrics import SystemMetrics
 
 
 _REPO_ENGINE = Path(__file__).resolve().parents[2] / "engine"
+_DEPLOYED_ENGINE = Path(__file__).resolve().parents[1] / "backend" / "engine"
 _EXTERNAL_ENGINE = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
-TRADING_ROOT = _EXTERNAL_ENGINE if _EXTERNAL_ENGINE.is_dir() else _REPO_ENGINE
+TRADING_ROOT = next((path for path in (_REPO_ENGINE, _DEPLOYED_ENGINE, _EXTERNAL_ENGINE)
+                     if (path / "package.json").is_file()), _REPO_ENGINE)
 DEPLOYMENT_LOCK_PATH = TRADING_ROOT.parents[1] / "data" / "dashboard" / "deployment.lock"
 _trading_lock = threading.RLock()
 _account_check_lock = threading.Lock()
@@ -1951,6 +1953,12 @@ def make_handler(root: Path):
                 return
             body = candidate.read_bytes()
             content_type = _static_content_type(candidate)
+            if candidate.suffix == ".html":
+                # This server is the production entry point, including every
+                # bookmarked console page. Configure it before shared scripts
+                # load so no operation can silently use preview data.
+                config = b'<script>window.__POLY_PREVIEW_CONFIG__={mode:"backend",demo:false,apiBase:"",apiFlavor:"contract"};</script>'
+                body = body.replace(b"<head>", b"<head>" + config, 1)
             self.send_response(200)
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
