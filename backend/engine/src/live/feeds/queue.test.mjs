@@ -184,6 +184,26 @@ test("invalid reference events cannot replace a valid asset signal", t => {
   assert.deepEqual(drain(queue), [valid]);
 });
 
+test("reference watermarks survive consumption and stale signals expire while queued", t => {
+  const advance = clock(t);
+  const queue = new FeedQueue();
+  const valid = { kind: "oracle", asset: "eth", tsUnix: ROUND + 100, price: 3000 };
+  queue.push(valid);
+  assert.deepEqual(drain(queue), [valid]);
+  queue.push({ ...valid, tsUnix: ROUND + 99, price: 2900 });
+  queue.push({ ...valid, tsUnix: ROUND + 102, price: 2900 });
+  queue.push({ ...valid, kind: "btc" });
+  queue.push({ ...valid, asset: "" });
+  assert.deepEqual(drain(queue), []);
+  queue.push({ ...valid, tsUnix: ROUND + 100.5, sourceAt: ROUND + 99, expiresAt: ROUND + 101 });
+  advance(ROUND + 101);
+  assert.deepEqual(drain(queue), []);
+  queue.push({ ...valid, tsUnix: ROUND + 90 });
+  assert.deepEqual(drain(queue), []);
+  queue.push({ ...valid, tsUnix: ROUND + 101 });
+  assert.equal(queue.tryPop()?.price, 3000);
+});
+
 test("user events stay lossless, tick sizes precede books, and trade telemetry is bounded", t => {
   clock(t);
   const queue = new FeedQueue();
