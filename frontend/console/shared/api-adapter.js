@@ -240,7 +240,7 @@
     async saveMarketPool(payload) {
       const next = vm.pool(payload, store.getState().marketCatalog.items);
       const current = store.getState().marketPool;
-      if (current.status !== "ready") throw new Error("运行池最近确认状态不可用，恢复服务器连接后再修改");
+      if (current.status !== "ready" || current.stale === true) throw new Error("运行池最近确认状态不可用，恢复服务器连接后再修改");
       const catalog = new Map(store.getState().marketCatalog.items.map((item) => [item.assetId, item]));
       for (const id of next.desiredIds) {
         const item = catalog.get(id);
