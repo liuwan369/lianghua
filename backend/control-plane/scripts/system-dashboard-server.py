@@ -518,9 +518,15 @@ def account_config_status() -> dict:
         # The current execution adapter uses the Owner signer. Session Key is
         # an optional delegated signer and is not required for this route.
         "execution_credentials_ready": wallet_valid and owner_signer,
-        "live_start_ready": wallet_valid and owner_signer and account_check_ready,
+        # Trading runtime requires an explicit settlement readiness result.
+        # Missing/unknown is deliberately not enough for live start: an EOA
+        # or Deposit Wallet may otherwise discover redeem credentials only
+        # after a real position has been traded.
+        "live_start_ready": bool(wallet_valid and owner_signer and account_check_ready
+                                  and report and report.get("settlement_credentials_ready") is True),
         "executionCredentialsReady": wallet_valid and owner_signer,
-        "liveStartReady": wallet_valid and owner_signer and account_check_ready,
+        "liveStartReady": bool(wallet_valid and owner_signer and account_check_ready
+                                and report and report.get("settlement_credentials_ready") is True),
         "wallet_kind": report.get("wallet_kind") if report else None,
         "signature_type": report.get("signature_type") if report else None,
         "settlement_credentials_ready": (report.get("settlement_credentials_ready")
@@ -1121,7 +1127,8 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         account_status = account_config_status()
         if not account_status["execution_credentials_ready"]:
             raise PermissionError("未配置交易账户")
-        if not account_status["account_check_ready"]:
+        if (not account_status["account_check_ready"]
+                or account_status["settlement_credentials_ready"] is not True):
             raise PermissionError("账户尚未通过最近一次钱包、签名、授权和余额检查")
     # 运行时间允许填 0，表示不按时间自动停止，直到用户手动停止。
     duration_raw = payload.get("duration_min", 15)
@@ -1145,7 +1152,8 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
             account_status = account_config_status()
             if (os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1"
                     or not account_status["execution_credentials_ready"]
-                    or not account_status["account_check_ready"]):
+                    or not account_status["account_check_ready"]
+                    or account_status["settlement_credentials_ready"] is not True):
                 raise PermissionError("账户配置或实盘授权已变化，请重新检查")
         log_dir = TRADING_ROOT / "results" / "live"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -1153,7 +1161,10 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
         candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
         candidate_state = log_dir / f"dashboard-{run_id}.platform-state.json"
-        account_id = (account_config_status().get("wallet") or None) if mode == "live" else None
+        account_wallet = account_config_status().get("wallet") if mode == "live" else None
+        # Account aggregation and restart deduplication are case-insensitive
+        # for Ethereum addresses; keep the internal account key canonical.
+        account_id = account_wallet.lower() if isinstance(account_wallet, str) and account_wallet else None
         if strategy_config:
             identity = hashlib.sha256((account_id or "live").lower().encode()).hexdigest()[:20]
             candidate_state = log_dir / f"btc-reversal-{identity}.platform-state.json"
@@ -1440,14 +1451,16 @@ def _api_ledger() -> Ledger:
 def _ledger_metadata(run_id: str | None) -> dict:
     view = _projection_snapshot()
     current = run_id is not None and view.get("run_id") == run_id
-    if current and view.get("as_of") is not None:
-        damaged = view.get("state") != "ready" or bool(view.get("stale"))
-        return {"source": "ledger", "asOf": view.get("as_of"),
-                "stale": damaged,
-                "error": "ledger_projection_unavailable" if damaged else None}
     try:
-        return _api_ledger().metadata(run_id) if run_id else {
+        metadata = _api_ledger().metadata(run_id) if run_id else {
             "source": "ledger", "asOf": None, "stale": True, "error": "ledger_projection_unavailable"}
+        # snapshot/heartbeat clocks describe projection liveness, not business
+        # source time. Keep API asOf tied to runtime/event source_at while
+        # still propagating a stale or damaged worker state.
+        if current and (view.get("state") != "ready" or view.get("stale")):
+            metadata = {**metadata, "stale": True,
+                        "error": metadata.get("error") or "ledger_projection_unavailable"}
+        return metadata
     except (KeyError, OSError, sqlite3.Error, RuntimeError):
         return {"source": "ledger", "asOf": None, "stale": True, "error": "ledger_projection_unavailable"}
 
