@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(run_id),
- byte_offset INTEGER NOT NULL, kind TEXT NOT NULL, stable_id TEXT, payload TEXT NOT NULL,
+ byte_offset INTEGER NOT NULL, kind TEXT NOT NULL, stable_id TEXT, asset_id TEXT NOT NULL DEFAULT 'btc', payload TEXT NOT NULL,
  UNIQUE(run_id, byte_offset)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS stable_event ON events(run_id, kind, stable_id)
@@ -41,7 +41,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS stable_event ON events(run_id, kind, stable_id
 CREATE INDEX IF NOT EXISTS event_page ON events(run_id, id);
 CREATE INDEX IF NOT EXISTS order_event_page ON events(run_id, kind, id);
 CREATE TABLE IF NOT EXISTS markets (
- run_id TEXT NOT NULL REFERENCES runs(run_id), market TEXT NOT NULL, round_id TEXT,
+ run_id TEXT NOT NULL REFERENCES runs(run_id), market TEXT NOT NULL, asset_id TEXT NOT NULL DEFAULT 'btc', round_id TEXT,
  fills INTEGER NOT NULL DEFAULT 0, settled INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(run_id, market)
 );
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS kind_counts (
  PRIMARY KEY(run_id,kind)
 );
 CREATE TABLE IF NOT EXISTS market_details (
- run_id TEXT NOT NULL REFERENCES runs(run_id), market TEXT NOT NULL, round_id TEXT,
+ run_id TEXT NOT NULL REFERENCES runs(run_id), market TEXT NOT NULL, asset_id TEXT NOT NULL DEFAULT 'btc', round_id TEXT,
  turnover REAL NOT NULL DEFAULT 0, pnl REAL, status TEXT NOT NULL DEFAULT '运行中',
  last_time REAL NOT NULL DEFAULT 0, PRIMARY KEY(run_id,market)
 );
@@ -65,21 +65,21 @@ CREATE TABLE IF NOT EXISTS platform_runtime (
  run_id TEXT PRIMARY KEY REFERENCES runs(run_id), source_at REAL NOT NULL, payload TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS order_details (
- run_id TEXT NOT NULL REFERENCES runs(run_id), client_order_id TEXT NOT NULL,
+ run_id TEXT NOT NULL REFERENCES runs(run_id), client_order_id TEXT NOT NULL, asset_id TEXT NOT NULL DEFAULT 'btc',
  accepted INTEGER NOT NULL DEFAULT 0, cancelled INTEGER NOT NULL DEFAULT 0,
  updated_at REAL NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id,client_order_id)
 );
 CREATE TABLE IF NOT EXISTS trade_details (
- run_id TEXT NOT NULL REFERENCES runs(run_id), trade_id TEXT NOT NULL, order_id TEXT NOT NULL,
+ run_id TEXT NOT NULL REFERENCES runs(run_id), trade_id TEXT NOT NULL, order_id TEXT NOT NULL, asset_id TEXT NOT NULL DEFAULT 'btc',
  payload TEXT NOT NULL, PRIMARY KEY(run_id,trade_id,order_id)
 );
 CREATE TABLE IF NOT EXISTS market_aliases (
- run_id TEXT NOT NULL, market_id TEXT NOT NULL, market TEXT NOT NULL, round_id TEXT,
+ run_id TEXT NOT NULL, market_id TEXT NOT NULL, market TEXT NOT NULL, asset_id TEXT NOT NULL DEFAULT 'btc', round_id TEXT,
  PRIMARY KEY(run_id,market_id)
 );
 CREATE INDEX IF NOT EXISTS market_alias_slug ON market_aliases(run_id,market);
 CREATE TABLE IF NOT EXISTS settlement_details (
- run_id TEXT NOT NULL, market TEXT NOT NULL, market_id TEXT, round_id TEXT,
+ run_id TEXT NOT NULL, market TEXT NOT NULL, market_id TEXT, asset_id TEXT NOT NULL DEFAULT 'btc', round_id TEXT,
  source_at REAL NOT NULL, verified INTEGER NOT NULL DEFAULT 0, pnl REAL, payload TEXT NOT NULL,
  PRIMARY KEY(run_id,market)
 );
@@ -106,6 +106,36 @@ LATENCY_METRICS = frozenset({
 LATENCY_LIMIT = 5000
 RUNTIME_MAX_AGE = 10
 ORDER_STATUSES = frozenset({"SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN"})
+ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
+
+
+def _asset_id(value, *, default="btc"):
+    """Return a bounded canonical asset id; legacy journals are BTC."""
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if ASSET_ID_RE.fullmatch(value):
+            return value
+    return default
+
+
+def _asset_from(value):
+    if not isinstance(value, dict):
+        return "btc"
+    return _asset_id(value.get("asset_id") or value.get("assetId") or value.get("asset"))
+
+
+def _identity_key(asset, value):
+    """Namespace legacy SQLite keys so equal ids cannot cross assets."""
+    if not isinstance(value, str) or not value:
+        return value
+    return value if asset in (None, "btc") else f"{asset}::{value}"
+
+
+def _identity_value(asset, value):
+    if not isinstance(value, str):
+        return value
+    prefix = f"{asset}::"
+    return value[len(prefix):] if asset not in (None, "btc") and value.startswith(prefix) else value
 
 
 def _number(value):
@@ -181,6 +211,7 @@ def _strategy_projection(value):
         result = {key: _text(source.get(key)) for key in (
             "marketId", "roundId", "round_id", "name", "upTokenId", "downTokenId", "status", "reason", "lastStageDirection",
             "lastConfirmedDirection", "nextDirection", "resultScope", "resultReason")}
+        result["assetId"] = _asset_id(source.get("assetId") or source.get("asset_id"))
         result["marketId"] = result.get("marketId") or _text(source.get("market_id"))
         result["name"] = result.get("name") or _text(source.get("market_slug"))
         # `name` is retained as a display/compatibility field. It is not a
@@ -200,7 +231,7 @@ def _strategy_projection(value):
             for stage in stages[:100] if isinstance(stage, dict)]
         return result
     rounds = value.get("rounds") if isinstance(value.get("rounds"), list) else []
-    result = {"strategyId": "btc-reversal", "schemaVersion": 1,
+    result = {"strategyId": _text(value.get("strategyId")) or "btc-reversal", "schemaVersion": 1,
               "instanceId": _text(value.get("instanceId")), "paused": value.get("paused") is True,
               "savedRevision": _text(str(value["savedRevision"])) if value.get("savedRevision") is not None else None,
               "config": config(value.get("config")),
@@ -268,6 +299,7 @@ def _runtime_projection(value, mode):
         if not isinstance(market, dict):
             continue
         item = {key: _text(market.get(key)) for key in ("id", "name", "roundId", "round_id")}
+        item["assetId"] = _asset_id(market.get("assetId") or market.get("asset_id"))
         item["id"] = item.get("id") or _text(market.get("marketId") or market.get("market_id"))
         item["name"] = item.get("name") or _text(market.get("marketSlug") or market.get("market_slug"))
         item["roundId"] = item.get("roundId") or item.get("round_id")
@@ -302,7 +334,9 @@ def _runtime_projection(value, mode):
 
 def _projection(record):
     """Only these typed business fields leave the journal; no raw messages/config."""
-    result = {"event": record["event"], "market": _text(record.get("market_slug")) or _text(record.get("market_id")),
+    asset_id = _asset_from(record)
+    result = {"event": record["event"], "asset_id": asset_id, "assetId": asset_id,
+              "market": _text(record.get("market_slug")) or _text(record.get("market_id")),
               "side": record.get("side") if record.get("side") in ("UP", "DOWN", "up", "down") else None,
               "winner": record.get("winner") if record.get("winner") in ("UP", "DOWN", "up", "down") else None}
     result["message"] = _text(record.get("message"), 500)
@@ -366,13 +400,24 @@ class Ledger:
                 # Keep existing projection databases readable while adding the
                 # runtime-owned round identity.  The journal remains the source
                 # of truth; these columns are only indexed projection fields.
-                for table, column in (("markets", "round_id"),
+                for table, column in (("events", "asset_id"),
+                                      ("markets", "asset_id"), ("markets", "round_id"),
+                                      ("market_details", "asset_id"),
                                       ("market_details", "round_id"),
+                                      ("order_details", "asset_id"),
+                                      ("trade_details", "asset_id"),
+                                      ("market_aliases", "asset_id"),
                                       ("market_aliases", "round_id"),
+                                      ("settlement_details", "asset_id"),
                                       ("settlement_details", "round_id")):
                     columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
                     if column not in columns:
-                        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+                        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT 'btc'" if column == "asset_id"
+                                   else f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+                db.execute("CREATE INDEX IF NOT EXISTS market_asset ON markets(run_id,asset_id,market)")
+                db.execute("CREATE INDEX IF NOT EXISTS market_detail_asset ON market_details(run_id,asset_id,market)")
+                db.execute("CREATE INDEX IF NOT EXISTS alias_asset ON market_aliases(run_id,asset_id,market_id,market,round_id)")
+                db.execute("CREATE INDEX IF NOT EXISTS settlement_asset ON settlement_details(run_id,asset_id,market)")
                 # Older projections did not have round identity. Keep those
                 # rows unknown until a runtime snapshot supplies roundId.
                 db.execute("UPDATE markets SET round_id=(SELECT a.round_id FROM market_aliases a "
@@ -475,39 +520,42 @@ class Ledger:
         the runtime has not published a mapping yet, the unknown fields remain
         null; wall-clock time is never used to infer an old round.
         """
+        asset_id = _asset_from(event)
         market_id = event.get("market_id")
         market = event.get("market")
         round_id = event.get("round_id")
+        stored_market_id = _identity_key(asset_id, market_id)
+        stored_market = _identity_key(asset_id, market)
         row = None
         if market_id:
             row = db.execute("SELECT market_id,market,round_id FROM market_aliases "
-                             "WHERE run_id=? AND market_id=?", (run_id, market_id)).fetchone()
+                             "WHERE run_id=? AND asset_id=? AND market_id=?", (run_id, asset_id, stored_market_id)).fetchone()
         if row is None and market:
             rows = db.execute("SELECT market_id,market,round_id FROM market_aliases "
-                              "WHERE run_id=? AND market=? LIMIT 2", (run_id, market)).fetchall()
+                              "WHERE run_id=? AND asset_id=? AND market=? LIMIT 2", (run_id, asset_id, stored_market)).fetchall()
             if len(rows) == 1:
                 row = rows[0]
         if row is None and round_id:
             rows = db.execute("SELECT market_id,market,round_id FROM market_aliases "
-                              "WHERE run_id=? AND round_id=? LIMIT 2", (run_id, round_id)).fetchall()
+                              "WHERE run_id=? AND asset_id=? AND round_id=? LIMIT 2", (run_id, asset_id, round_id)).fetchall()
             if len(rows) == 1:
                 row = rows[0]
         if row is None:
             return event
-        event["market_id"] = event.get("market_id") or row["market_id"]
+        event["market_id"] = event.get("market_id") or _identity_value(asset_id, row["market_id"])
         # The observed runtime map is authoritative when a legacy slug and a
         # condition id disagree; never preserve a mixed identity pair.
-        event["market"] = row["market"]
+        event["market"] = _identity_value(asset_id, row["market"])
         # The runtime mapping is authoritative. Never keep a conflicting
         # event round paired with the mapped market condition.
         event["round_id"] = row["round_id"] or event.get("round_id")
         return event
 
     @staticmethod
-    def _backfill_identity(db, run_id, market_id):
+    def _backfill_identity(db, run_id, market_id, asset_id="btc"):
         """Backfill events emitted before the first platform_status snapshot."""
         aliases = db.execute("SELECT market_id,market,round_id FROM market_aliases "
-                             "WHERE run_id=? AND market_id=?", (run_id, market_id)).fetchone()
+                             "WHERE run_id=? AND asset_id=? AND market_id=?", (run_id, asset_id, market_id)).fetchone()
         if aliases is None:
             return
 
@@ -517,36 +565,36 @@ class Ledger:
             # condition-id bucket before the runtime map arrived. Merge that
             # bucket into the canonical slug instead of splitting fills or
             # making the later settlement look untraded.
-            old_market = db.execute("SELECT * FROM markets WHERE run_id=? AND market=?",
-                                    (run_id, old_key)).fetchone()
-            new_market = db.execute("SELECT * FROM markets WHERE run_id=? AND market=?",
-                                    (run_id, canonical)).fetchone()
+            old_market = db.execute("SELECT * FROM markets WHERE run_id=? AND asset_id=? AND market=?",
+                                    (run_id, asset_id, old_key)).fetchone()
+            new_market = db.execute("SELECT * FROM markets WHERE run_id=? AND asset_id=? AND market=?",
+                                    (run_id, asset_id, canonical)).fetchone()
             if old_market and new_market:
                 db.execute("UPDATE markets SET fills=fills+?,settled=MAX(settled,?),round_id=COALESCE(round_id,?) "
-                           "WHERE run_id=? AND market=?",
-                           (old_market["fills"], old_market["settled"], round_id, run_id, canonical))
-                db.execute("DELETE FROM markets WHERE run_id=? AND market=?", (run_id, old_key))
+                           "WHERE run_id=? AND asset_id=? AND market=?",
+                           (old_market["fills"], old_market["settled"], round_id, run_id, asset_id, canonical))
+                db.execute("DELETE FROM markets WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, old_key))
             elif old_market:
-                db.execute("UPDATE markets SET market=?,round_id=? WHERE run_id=? AND market=?",
-                           (canonical, round_id, run_id, old_key))
-            old_detail = db.execute("SELECT * FROM market_details WHERE run_id=? AND market=?",
-                                    (run_id, old_key)).fetchone()
-            new_detail = db.execute("SELECT * FROM market_details WHERE run_id=? AND market=?",
-                                    (run_id, canonical)).fetchone()
+                db.execute("UPDATE markets SET market=?,round_id=? WHERE run_id=? AND asset_id=? AND market=?",
+                           (canonical, round_id, run_id, asset_id, old_key))
+            old_detail = db.execute("SELECT * FROM market_details WHERE run_id=? AND asset_id=? AND market=?",
+                                    (run_id, asset_id, old_key)).fetchone()
+            new_detail = db.execute("SELECT * FROM market_details WHERE run_id=? AND asset_id=? AND market=?",
+                                    (run_id, asset_id, canonical)).fetchone()
             if old_detail and new_detail:
                 db.execute("UPDATE market_details SET turnover=turnover+?,pnl=COALESCE(pnl,?),"
                            "round_id=COALESCE(round_id,?),last_time=MAX(last_time,?) "
-                           "WHERE run_id=? AND market=?",
+                           "WHERE run_id=? AND asset_id=? AND market=?",
                            (old_detail["turnover"], old_detail["pnl"], round_id,
-                            old_detail["last_time"], run_id, canonical))
-                db.execute("DELETE FROM market_details WHERE run_id=? AND market=?", (run_id, old_key))
+                            old_detail["last_time"], run_id, asset_id, canonical))
+                db.execute("DELETE FROM market_details WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, old_key))
             elif old_detail:
-                db.execute("UPDATE market_details SET market=?,round_id=? WHERE run_id=? AND market=?",
-                           (canonical, round_id, run_id, old_key))
-        db.execute("UPDATE markets SET round_id=COALESCE(round_id,?) WHERE run_id=? AND market=?",
-                   (round_id, run_id, canonical))
-        db.execute("UPDATE market_details SET round_id=COALESCE(round_id,?) WHERE run_id=? AND market=?",
-                   (round_id, run_id, canonical))
+                db.execute("UPDATE market_details SET market=?,round_id=? WHERE run_id=? AND asset_id=? AND market=?",
+                           (canonical, round_id, run_id, asset_id, old_key))
+        db.execute("UPDATE markets SET round_id=COALESCE(round_id,?) WHERE run_id=? AND asset_id=? AND market=?",
+                   (round_id, run_id, asset_id, canonical))
+        db.execute("UPDATE market_details SET round_id=COALESCE(round_id,?) WHERE run_id=? AND asset_id=? AND market=?",
+                   (round_id, run_id, asset_id, canonical))
 
         def update_payload(payload):
             try:
@@ -573,24 +621,24 @@ class Ledger:
         # keyed by condition id. Move it to the canonical slug without losing
         # the already projected status or payout evidence.
         for row in db.execute("SELECT market,payload FROM settlement_details "
-                              "WHERE run_id=? AND (market_id=? OR market=?)",
-                              (run_id, market_id, canonical)).fetchall():
+                              "WHERE run_id=? AND asset_id=? AND (market_id=? OR market=?)",
+                              (run_id, asset_id, market_id, canonical)).fetchall():
             payload, changed = update_payload(row["payload"])
             event = json.loads(payload)
             if event.get("market") and event["market"] != row["market"]:
-                conflict = db.execute("SELECT 1 FROM settlement_details WHERE run_id=? AND market=?",
-                                      (run_id, event["market"])).fetchone()
+                conflict = db.execute("SELECT 1 FROM settlement_details WHERE run_id=? AND asset_id=? AND market=?",
+                                      (run_id, asset_id, _identity_key(asset_id, event["market"]))).fetchone()
                 if conflict is None:
                     db.execute("UPDATE settlement_details SET market=?,market_id=?,round_id=?,payload=? "
-                               "WHERE run_id=? AND market=?",
-                               (event["market"], event.get("market_id"), event.get("round_id"), payload,
-                                run_id, row["market"]))
+                               "WHERE run_id=? AND asset_id=? AND market=?",
+                               (_identity_key(asset_id, event["market"]), event.get("market_id"), event.get("round_id"), payload,
+                                run_id, asset_id, row["market"]))
                 else:
-                    db.execute("DELETE FROM settlement_details WHERE run_id=? AND market=?",
-                               (run_id, row["market"]))
+                    db.execute("DELETE FROM settlement_details WHERE run_id=? AND asset_id=? AND market=?",
+                               (run_id, asset_id, row["market"]))
             elif changed:
-                db.execute("UPDATE settlement_details SET market_id=?,round_id=?,payload=? WHERE run_id=? AND market=?",
-                           (event.get("market_id"), event.get("round_id"), payload, run_id, row["market"]))
+                db.execute("UPDATE settlement_details SET market_id=?,round_id=?,payload=? WHERE run_id=? AND asset_id=? AND market=?",
+                           (event.get("market_id"), event.get("round_id"), payload, run_id, asset_id, row["market"]))
 
     def list_runs(self, *, limit=100):
         limit = max(1, min(int(limit), 200))
@@ -693,8 +741,11 @@ class Ledger:
                         if isinstance(candidate, (str, int)) and not isinstance(candidate, bool) and str(candidate):
                             stable_id = f"{key}:{candidate}"
                             break
-                    inserted = db.execute("INSERT OR IGNORE INTO events(run_id,byte_offset,kind,stable_id,payload) VALUES(?,?,?,?,?)",
-                                          (run_id, record_offset, kind, stable_id, json.dumps(projected, allow_nan=False))).rowcount
+                    asset_id = projected.get("asset_id") or "btc"
+                    if stable_id:
+                        stable_id = f"{asset_id}:{stable_id}"
+                    inserted = db.execute("INSERT OR IGNORE INTO events(run_id,byte_offset,kind,stable_id,asset_id,payload) VALUES(?,?,?,?,?,?)",
+                                          (run_id, record_offset, kind, stable_id, asset_id, json.dumps(projected, allow_nan=False))).rowcount
                     if not inserted:
                         db.execute("UPDATE runs SET duplicate_records=duplicate_records+1 WHERE run_id=?", (run_id,))
                         continue
@@ -723,21 +774,24 @@ class Ledger:
                                 or identity_row.get("market_slug") or identity_id
                             identity_round = identity_row.get("roundId") or identity_row.get("round_id")
                             if identity_id and identity_name:
+                                asset_id = _asset_id(identity_row.get("assetId") or identity_row.get("asset_id") or runtime.get("assetId"))
+                                stored_id = _identity_key(asset_id, identity_id)
+                                stored_name = _identity_key(asset_id, identity_name)
                                 prior_alias = db.execute(
-                                    "SELECT market,round_id FROM market_aliases WHERE run_id=? AND market_id=?",
-                                    (run_id, identity_id)).fetchone()
-                                db.execute("INSERT INTO market_aliases(run_id,market_id,market,round_id) VALUES(?,?,?,?) "
+                                    "SELECT market,round_id FROM market_aliases WHERE run_id=? AND asset_id=? AND market_id=?",
+                                    (run_id, asset_id, stored_id)).fetchone()
+                                db.execute("INSERT INTO market_aliases(run_id,market_id,market,asset_id,round_id) VALUES(?,?,?,?,?) "
                                            "ON CONFLICT(run_id,market_id) DO UPDATE SET market=excluded.market,"
-                                           "round_id=COALESCE(excluded.round_id,market_aliases.round_id)",
-                                           (run_id, identity_id, identity_name, identity_round))
+                                           "asset_id=excluded.asset_id,round_id=COALESCE(excluded.round_id,market_aliases.round_id)",
+                                           (run_id, stored_id, stored_name, asset_id, identity_round))
                                 if (prior_alias is None or prior_alias["market"] != identity_name
                                         or (identity_round is not None and prior_alias["round_id"] != identity_round)):
-                                    changed_identity_ids.add(identity_id)
+                                    changed_identity_ids.add((stored_id, asset_id))
                         # platform_status is frequent. Only scan historical
                         # projection rows when an observed identity actually
                         # adds or changes a market/round mapping.
-                        for identity_id in changed_identity_ids:
-                            self._backfill_identity(db, run_id, identity_id)
+                        for identity_id, identity_asset in changed_identity_ids:
+                            self._backfill_identity(db, run_id, identity_id, identity_asset)
                         # Settlement can be journaled just before the final account
                         # snapshot. Recompute once the authoritative cost coverage arrives.
                         if self._has_table(db, "settlement_details"):
@@ -816,6 +870,8 @@ class Ledger:
     @staticmethod
     def _accumulate(db, run_id, event):
         kind, market = event["event"], event["market"]
+        asset_id = _asset_from(event)
+        market_key = _identity_key(asset_id, market)
         if kind == "fill" and event.get("trade_status") and event.get("trade_id") and event.get("order_id"):
             Ledger._accumulate_trade(db, run_id, event)
             return
@@ -823,8 +879,9 @@ class Ledger:
         if kind == "fill" and event["is_maker"] is False:
             db.execute("INSERT INTO kind_counts VALUES(?,'taker_fill',1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id,))
         if kind == "order" and event["client_order_id"] and event["status"]:
+            order_key = _identity_key(asset_id, event["client_order_id"])
             prior = db.execute("SELECT * FROM order_details WHERE run_id=? AND client_order_id=?",
-                               (run_id, event["client_order_id"])).fetchone()
+                               (run_id, order_key)).fetchone()
             accepted = bool(event["order_id"] and event["status"] in ("OPEN", "PARTIAL", "FILLED"))
             cancelled = event["status"] == "CANCELLED"
             for name, seen, existing in (("quote", accepted, prior["accepted"] if prior else False),
@@ -836,48 +893,52 @@ class Ledger:
             payload = json.dumps(event, allow_nan=False)
             if prior and updated_at < prior["updated_at"]:
                 updated_at, payload = prior["updated_at"], prior["payload"]
-            db.execute("""INSERT INTO order_details VALUES(?,?,?,?,?,?) ON CONFLICT(run_id,client_order_id)
+            db.execute("""INSERT INTO order_details
+                (run_id,client_order_id,asset_id,accepted,cancelled,updated_at,payload) VALUES(?,?,?,?,?,?,?) ON CONFLICT(run_id,client_order_id)
                 DO UPDATE SET accepted=excluded.accepted,cancelled=excluded.cancelled,
                 updated_at=excluded.updated_at,payload=excluded.payload""",
-                       (run_id, event["client_order_id"], int(accepted or bool(prior and prior["accepted"])),
+                       (run_id, order_key, asset_id, int(accepted or bool(prior and prior["accepted"])),
                         int(cancelled or bool(prior and prior["cancelled"])), updated_at, payload))
         if market:
-            db.execute("INSERT OR IGNORE INTO markets(run_id,market,round_id) VALUES(?,?,?)",
-                       (run_id, market, event.get("round_id")))
-            db.execute("UPDATE markets SET round_id=COALESCE(round_id,?) WHERE run_id=? AND market=?",
-                       (event.get("round_id"), run_id, market))
-            db.execute("INSERT INTO market_details(run_id,market,round_id,last_time) VALUES(?,?,?,?) "
+            db.execute("INSERT OR IGNORE INTO markets(run_id,market,asset_id,round_id) VALUES(?,?,?,?)",
+                       (run_id, market_key, asset_id, event.get("round_id")))
+            db.execute("UPDATE markets SET round_id=COALESCE(round_id,?) WHERE run_id=? AND asset_id=? AND market=?",
+                       (event.get("round_id"), run_id, asset_id, market_key))
+            db.execute("INSERT INTO market_details(run_id,market,asset_id,round_id,last_time) VALUES(?,?,?,?,?) "
                        "ON CONFLICT(run_id,market) DO UPDATE SET round_id=COALESCE(excluded.round_id,market_details.round_id),"
-                       "last_time=MAX(last_time,excluded.last_time)",
-                       (run_id, market, event.get("round_id"), event["time"] or 0))
+                       "asset_id=excluded.asset_id,last_time=MAX(last_time,excluded.last_time)",
+                       (run_id, market_key, asset_id, event.get("round_id"), event["time"] or 0))
         if kind == "fill":
             db.execute("""UPDATE runs SET fill_count=fill_count+1,fill_notional=fill_notional+?,
                 missing_notional=missing_notional+?,known_fees=known_fees+?,missing_fees=missing_fees+? WHERE run_id=?""",
                        (event["amount"] or 0, int(event["amount"] is None), event["fee"] or 0, int(event["fee"] is None), run_id))
             if market:
-                db.execute("UPDATE markets SET fills=fills+1 WHERE run_id=? AND market=?", (run_id, market))
-                db.execute("UPDATE market_details SET turnover=turnover+? WHERE run_id=? AND market=?", (event["amount"] or 0, run_id, market))
+                db.execute("UPDATE markets SET fills=fills+1 WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
+                db.execute("UPDATE market_details SET turnover=turnover+? WHERE run_id=? AND asset_id=? AND market=?", (event["amount"] or 0, run_id, asset_id, market_key))
         elif kind == "resolved" and market:
             # A resolved market with no observed fills is not a trading settlement.
-            row = db.execute("SELECT fills,settled FROM markets WHERE run_id=? AND market=?", (run_id, market)).fetchone()
+            row = db.execute("SELECT fills,settled FROM markets WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key)).fetchone()
             if row["fills"] and not row["settled"]:
-                db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND market=?", (run_id, market))
-                db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND market=?", (event["pnl"], run_id, market))
+                db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
+                db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND asset_id=? AND market=?", (event["pnl"], run_id, asset_id, market_key))
                 db.execute("""UPDATE runs SET settled_markets=settled_markets+1,
                     known_settled_pnl=known_settled_pnl+?,missing_pnl=missing_pnl+? WHERE run_id=?""",
                            (event["pnl"] or 0, int(event["pnl"] is None), run_id))
             elif not row["fills"]:
-                db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND market=?", (run_id, market))
+                db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
         elif kind == "settlement" and market:
             Ledger._record_settlement(db, run_id, event)
         elif kind in {"stopped", "unresolved"} and market:
-            db.execute("UPDATE market_details SET status='未结算（已停止）' WHERE run_id=? AND market=? AND pnl IS NULL", (run_id, market))
+            db.execute("UPDATE market_details SET status='未结算（已停止）' WHERE run_id=? AND asset_id=? AND market=? AND pnl IS NULL", (run_id, asset_id, market_key))
 
     @staticmethod
     def _accumulate_trade(db, run_id, event):
         """A trade's status changes its contribution, never creates a second fill."""
+        asset_id = _asset_from(event)
+        trade_key = _identity_key(asset_id, event["trade_id"])
+        order_key = _identity_key(asset_id, event["order_id"])
         row = db.execute("SELECT payload FROM trade_details WHERE run_id=? AND trade_id=? AND order_id=?",
-                         (run_id, event["trade_id"], event["order_id"])).fetchone()
+                         (run_id, trade_key, order_key)).fetchone()
         prior = json.loads(row[0]) if row else None
         event = _trade_revision(prior, event)
         if event is None:
@@ -893,25 +954,28 @@ class Ledger:
                 db.execute("INSERT INTO kind_counts VALUES(?,?,?) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+excluded.count",
                            (run_id, kind, sign))
             if market:
-                db.execute("INSERT OR IGNORE INTO markets(run_id,market,round_id) VALUES(?,?,?)",
-                           (run_id, market, item.get("round_id")))
-                db.execute("UPDATE markets SET round_id=COALESCE(round_id,?) WHERE run_id=? AND market=?",
-                           (item.get("round_id"), run_id, market))
-                db.execute("UPDATE markets SET fills=fills+? WHERE run_id=? AND market=?", (sign, run_id, market))
-                db.execute("INSERT OR IGNORE INTO market_details(run_id,market,round_id,last_time) VALUES(?,?,?,?)",
-                           (run_id, market, item.get("round_id"), item.get("time") or 0))
+                market_key = _identity_key(asset_id, market)
+                db.execute("INSERT OR IGNORE INTO markets(run_id,market,asset_id,round_id) VALUES(?,?,?,?)",
+                           (run_id, market_key, asset_id, item.get("round_id")))
+                db.execute("UPDATE markets SET round_id=COALESCE(round_id,?) WHERE run_id=? AND asset_id=? AND market=?",
+                           (item.get("round_id"), run_id, asset_id, market_key))
+                db.execute("UPDATE markets SET fills=fills+? WHERE run_id=? AND asset_id=? AND market=?", (sign, run_id, asset_id, market_key))
+                db.execute("INSERT OR IGNORE INTO market_details(run_id,market,asset_id,round_id,last_time) VALUES(?,?,?,?,?)",
+                           (run_id, market_key, asset_id, item.get("round_id"), item.get("time") or 0))
                 db.execute("UPDATE market_details SET round_id=COALESCE(?,round_id),turnover=turnover+?,"
-                           "last_time=MAX(last_time,?) WHERE run_id=? AND market=?",
-                           (item.get("round_id"), sign * (amount or 0), item.get("time") or 0, run_id, market))
-        db.execute("INSERT INTO trade_details VALUES(?,?,?,?) ON CONFLICT(run_id,trade_id,order_id) DO UPDATE SET payload=excluded.payload",
-                   (run_id, event["trade_id"], event["order_id"], json.dumps(event, allow_nan=False)))
+                           "last_time=MAX(last_time,?) WHERE run_id=? AND asset_id=? AND market=?",
+                           (item.get("round_id"), sign * (amount or 0), item.get("time") or 0, run_id, asset_id, market_key))
+        db.execute("INSERT INTO trade_details(run_id,trade_id,order_id,asset_id,payload) VALUES(?,?,?,?,?) ON CONFLICT(run_id,trade_id,order_id) DO UPDATE SET payload=excluded.payload,asset_id=excluded.asset_id",
+                   (run_id, trade_key, order_key, asset_id, json.dumps(event, allow_nan=False)))
         for market in {item.get("market") for item in (prior, event) if item and item.get("market")}:
-            Ledger._refresh_settlement(db, run_id, market)
+            Ledger._refresh_settlement(db, run_id, _identity_key(asset_id, market), asset_id)
 
     @staticmethod
     def _record_settlement(db, run_id, event):
-        prior = db.execute("SELECT verified,source_at,payload FROM settlement_details WHERE run_id=? AND market=?",
-                           (run_id, event["market"])).fetchone()
+        asset_id = _asset_from(event)
+        market_key = _identity_key(asset_id, event["market"])
+        prior = db.execute("SELECT verified,source_at,payload FROM settlement_details WHERE run_id=? AND asset_id=? AND market=?",
+                           (run_id, asset_id, market_key)).fetchone()
         verified = event.get("payout_verified") is True
         if prior and (prior["verified"] and not verified or prior["source_at"] > (event.get("time") or 0)):
             return
@@ -924,14 +988,15 @@ class Ledger:
         if payload["coverage"] is None and prior:
             payload["coverage"] = json.loads(prior["payload"]).get("coverage")
         db.execute("""INSERT INTO settlement_details
-            (run_id,market,market_id,round_id,source_at,verified,pnl,payload)
-            VALUES(?,?,?,?,?,?,?,?)
+            (run_id,market,market_id,asset_id,round_id,source_at,verified,pnl,payload)
+            VALUES(?,?,?,?,?,?,?,?,?)
             ON CONFLICT(run_id,market) DO UPDATE SET market_id=COALESCE(excluded.market_id,settlement_details.market_id),
+            asset_id=excluded.asset_id,
             round_id=COALESCE(excluded.round_id,settlement_details.round_id),source_at=excluded.source_at,
             verified=excluded.verified,payload=excluded.payload""",
-                   (run_id, event["market"], event.get("market_id"), event.get("round_id"),
+                   (run_id, market_key, event.get("market_id"), asset_id, event.get("round_id"),
                     event.get("time") or 0, int(verified), None, json.dumps(payload, allow_nan=False)))
-        Ledger._refresh_settlement(db, run_id, event["market"])
+        Ledger._refresh_settlement(db, run_id, market_key, asset_id)
 
     @staticmethod
     def _coverage_from_runtime(runtime, market_id, market, round_id=None):
@@ -961,8 +1026,8 @@ class Ledger:
         return None
 
     @staticmethod
-    def _refresh_settlement(db, run_id, market):
-        row = db.execute("SELECT * FROM settlement_details WHERE run_id=? AND market=?", (run_id, market)).fetchone()
+    def _refresh_settlement(db, run_id, market, asset_id="btc"):
+        row = db.execute("SELECT * FROM settlement_details WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market)).fetchone()
         if row is None:
             return
         payload = json.loads(row["payload"])
@@ -972,8 +1037,8 @@ class Ledger:
             round_id = row["round_id"]
             trades = [json.loads(item[0]) for item in db.execute(
                 "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=? "
-                "AND (? IS NULL OR json_extract(payload,'$.round_id')=?)",
-                (run_id, market, round_id, round_id))]
+                "AND (? IS NULL OR json_extract(payload,'$.round_id')=?) AND json_extract(payload,'$.asset_id')=?",
+                (run_id, _identity_value(asset_id, market), round_id, round_id, asset_id))]
             trades = [item for item in trades if item.get("trade_status") != "FAILED"]
             coverage = payload.get("coverage")
             reason = "cost_basis_unverified"
@@ -993,25 +1058,25 @@ class Ledger:
                     pnl = _number(payload["credited_usd"] - net_cost)
                     reason = None if pnl is not None else "invalid_pnl"
         payload.update(pnl=pnl, accounting_state="confirmed" if row["verified"] else "pending", pnl_error=reason)
-        db.execute("UPDATE settlement_details SET pnl=?,payload=? WHERE run_id=? AND market=?",
-                   (pnl, json.dumps(payload, allow_nan=False), run_id, market))
+        db.execute("UPDATE settlement_details SET pnl=?,payload=? WHERE run_id=? AND asset_id=? AND market=?",
+                   (pnl, json.dumps(payload, allow_nan=False), run_id, asset_id, market))
         prior = db.execute("SELECT m.settled,m.fills,d.pnl FROM markets m JOIN market_details d "
-                           "ON d.run_id=m.run_id AND d.market=m.market WHERE m.run_id=? AND m.market=?",
-                           (run_id, market)).fetchone()
+                           "ON d.run_id=m.run_id AND d.asset_id=m.asset_id AND d.market=m.market WHERE m.run_id=? AND m.asset_id=? AND m.market=?",
+                           (run_id, asset_id, market)).fetchone()
         if row["verified"] and prior and prior["fills"]:
             settled, old_pnl = prior["settled"], prior["pnl"]
-            db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND market=?", (run_id, market))
-            db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND market=?", (pnl, run_id, market))
+            db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market))
+            db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND asset_id=? AND market=?", (pnl, run_id, asset_id, market))
             db.execute("""UPDATE runs SET settled_markets=settled_markets+?,
                 known_settled_pnl=known_settled_pnl+?,missing_pnl=missing_pnl+? WHERE run_id=?""",
                        (int(not settled), (pnl or 0) - ((old_pnl or 0) if settled else 0),
                         int(pnl is None) - int(bool(settled) and old_pnl is None), run_id))
         elif prior and not prior["fills"]:
-            db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND market=?", (run_id, market))
+            db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market))
         elif prior and not prior["settled"]:
-            db.execute("UPDATE market_details SET status='待结算' WHERE run_id=? AND market=?", (run_id, market))
+            db.execute("UPDATE market_details SET status='待结算' WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market))
 
-    def orders_page(self, run_id, *, limit=10, offset=0, status=None, market=None, as_of=None, snapshot_event_id=None):
+    def orders_page(self, run_id, *, limit=10, offset=0, status=None, market=None, asset_id=None, market_id=None, round_id=None, as_of=None, snapshot_event_id=None):
         """Page order snapshots at one journal cutoff so new events do not shift pages."""
         if type(limit) is not int or limit not in (10, 20, 50) or type(offset) is not int or offset < 0:
             raise ValueError("invalid order page")
@@ -1019,6 +1084,7 @@ class Ledger:
             raise ValueError("invalid order status")
         if market is not None and (not isinstance(market, str) or len(market) > 200):
             raise ValueError("invalid market")
+        asset_id = _asset_id(asset_id) if asset_id is not None else None
         stamp = time.time() if as_of is None else _number(as_of)
         if stamp is None or stamp <= 0 or stamp > time.time() + 1:
             raise ValueError("invalid order snapshot time")
@@ -1038,8 +1104,11 @@ class Ledger:
             AND (? IS NULL OR json_extract(payload,'$.status')=?
               OR (?='active' AND json_extract(payload,'$.status') IN ('SUBMITTING','OPEN','PARTIAL','UNKNOWN'))
               OR (?='failed' AND json_extract(payload,'$.status')='REJECTED'))
-            AND (? IS NULL OR json_extract(payload,'$.market')=? OR json_extract(payload,'$.market_id')=?
-                OR json_extract(payload,'$.round_id')=? OR json_extract(payload,'$.market')=?)) """
+            AND (? IS NULL OR json_extract(payload,'$.asset_id')=? )
+            AND ((? IS NULL AND ? IS NULL AND ? IS NULL)
+              OR (? IS NOT NULL AND json_extract(payload,'$.market_id')=?)
+              OR (? IS NOT NULL AND json_extract(payload,'$.round_id')=?)
+              OR (? IS NOT NULL AND json_extract(payload,'$.market')=?)) )"""
         with self._connect() as db:
             self._run(db, run_id)
             cutoff = snapshot_event_id if snapshot_event_id is not None else db.execute(
@@ -1049,8 +1118,10 @@ class Ledger:
                 ORDER BY CASE WHEN round_id=? THEN 0 WHEN market_id=? THEN 1 ELSE 2 END LIMIT 1""",
                                (run_id, market, market, market, market, market)).fetchone() \
                 if market and self._has_table(db, "market_aliases") else None
+            legacy_market = (alias["market"] if alias else market) if market_id is None and round_id is None else None
             args = (run_id, cutoff, stamp, cutoff, stamp, status, status, status, status,
-                    market, market, market, market, alias["market"] if alias else market)
+                    asset_id, asset_id, market_id, round_id, legacy_market,
+                    market_id, market_id, round_id, round_id, legacy_market, legacy_market)
             total = db.execute(cte + "SELECT COUNT(*) FROM filtered", args).fetchone()[0]
             rows = db.execute(cte + "SELECT payload FROM filtered ORDER BY first_id DESC LIMIT ? OFFSET ?",
                               (*args, limit, offset)).fetchall()
@@ -1085,10 +1156,13 @@ class Ledger:
         with self._connect() as db:
             counts = {r["kind"]: r["count"] for r in db.execute("SELECT kind,count FROM kind_counts WHERE run_id=?", (run_id,))}
             traded = db.execute("SELECT COUNT(*) FROM markets WHERE run_id=? AND fills>0", (run_id,)).fetchone()[0]
-            markets = [dict(r) for r in db.execute("""SELECT d.market,COALESCE(m.round_id,d.round_id) AS round_id,
+            markets = [dict(r) for r in db.execute("""SELECT d.market,d.asset_id,COALESCE(m.round_id,d.round_id) AS round_id,
                 m.fills,d.turnover,d.pnl,d.status,d.last_time
-                FROM market_details d JOIN markets m ON d.run_id=m.run_id AND d.market=m.market
+                FROM market_details d JOIN markets m ON d.run_id=m.run_id AND d.asset_id=m.asset_id AND d.market=m.market
                 WHERE d.run_id=? ORDER BY d.last_time DESC LIMIT 50""", (run_id,))]
+            for market in markets:
+                market["market"] = _identity_value(market.get("asset_id"), market.get("market"))
+                market["assetId"] = market.get("asset_id")
             orders, order_count, runtime_row = [], 0, None
             if self._has_table(db, "order_details"):
                 orders = [json.loads(row[0]) for row in db.execute(
@@ -1128,14 +1202,16 @@ class Ledger:
                 "latency": summary.get("latency"), "runtime": runtime,
                 "orders": orders, "order_count": order_count, "orders_truncated": order_count > len(orders)}
 
-    def position(self, run_id, round_id=None):
+    def position(self, run_id, round_id=None, *, asset_id=None, market_id=None):
         """Return the latest projected BTC reversal round position.
 
         This reads the platform status projection only.  It never queries the
         exchange from an HTTP request and reports an unavailable/stale result
         when the projection has no authoritative position snapshot.
         """
-        unavailable = {"available": False, "stale": True, "runId": run_id, "roundId": round_id,
+        asset_id = _asset_id(asset_id) if asset_id is not None else None
+        unavailable = {"available": False, "stale": True, "runId": run_id, "assetId": asset_id,
+                       "roundId": round_id,
                        "marketId": None, "stage": None, "confirmations": None, "yesShares": None,
                        "noShares": None, "averagePrice": None, "occupiedUsd": None,
                        "outcomePnl": {"yes": None, "no": None}, "updatedAt": None}
@@ -1172,8 +1248,12 @@ class Ledger:
                 candidates.append(current)
             candidates.extend(item for item in strategy.get("rounds", []) if isinstance(item, dict))
         selected = None
+        legacy_market_lookup = (market_id is None and isinstance(round_id, str) and round_id.startswith("0x"))
         for item in candidates:
-            if round_id is None or round_id in (item.get("marketId"), item.get("roundId")):
+            if (((round_id is None or item.get("roundId") == round_id)
+                 or (legacy_market_lookup and item.get("marketId") == round_id))
+                    and (market_id is None or item.get("marketId") == market_id)
+                    and (asset_id is None or _asset_id(item.get("assetId") or item.get("asset_id")) == asset_id)):
                 selected = item
                 break
         if selected is None or not selected.get("roundId"):
@@ -1196,6 +1276,7 @@ class Ledger:
             "error": error,
             "runId": run_id,
             # Only the runtime's explicit round identity is returned here.
+            "assetId": _asset_id(selected.get("assetId") or selected.get("asset_id")),
             "roundId": selected.get("roundId"),
             "marketId": selected.get("marketId"),
             "stage": selected.get("nextStage"),
@@ -1273,10 +1354,11 @@ class Ledger:
             result["latency"] = latency
             return result
 
-    def metrics_summary(self, run_id, *, range="today"):
+    def metrics_summary(self, run_id, *, range="today", asset_id=None, market_id=None, round_id=None):
         """Slow, read-only statistics scoped to one account and UTC calendar days."""
         if range not in ("run", "today", "all"):
             raise ValueError("invalid metrics range")
+        asset_id = _asset_id(asset_id) if asset_id is not None else None
         now = time.time()
         start = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() \
             if range == "today" else None
@@ -1299,6 +1381,12 @@ class Ledger:
             latest_fills = {}
             for row in fill_rows:
                 fill = json.loads(row["payload"])
+                if asset_id is not None and _asset_from(fill) != asset_id:
+                    continue
+                if market_id is not None and fill.get("market_id") != market_id:
+                    continue
+                if round_id is not None and fill.get("round_id") != round_id:
+                    continue
                 key = (fill.get("trade_id"), fill.get("order_id")) if fill.get("trade_id") and fill.get("order_id") \
                     else (row["run_id"], row["id"])
                 revised = _trade_revision(latest_fills.get(key), fill)
@@ -1314,13 +1402,25 @@ class Ledger:
                 estimated_fees += _number(fill.get("fee_estimate")) or 0
                 missing_notional += int(fill.get("amount") is None)
                 missing_fees += int(fill.get("fee") is None)
-            settled_rows = list(db.execute(f"SELECT d.run_id,d.market,d.pnl,d.last_time FROM market_details d "
-                + f"WHERE d.run_id IN ({placeholders}) AND d.status='已结算'", run_ids))
+            settled_rows = list(db.execute(f"SELECT d.run_id,d.market,d.asset_id,d.round_id,d.pnl,d.last_time FROM market_details d "
+                + f"WHERE d.run_id IN ({placeholders}) AND d.status='已结算'"
+                + (" AND d.asset_id=?" if asset_id is not None else "")
+                + (" AND d.round_id=?" if round_id is not None else ""),
+                (*run_ids, *(([asset_id] if asset_id is not None else [])), *(([round_id] if round_id is not None else [])))))
             settlements = {(row["run_id"], row["market"]): dict(row) for row in db.execute(
                 f"SELECT * FROM settlement_details WHERE run_id IN ({placeholders})", run_ids)} \
                 if self._has_table(db, "settlement_details") else {}
+            settlements = {key: item for key, item in settlements.items()
+                           if (asset_id is None or item.get("asset_id", "btc") == asset_id)
+                           and (market_id is None or item.get("market_id") == market_id)
+                           and (round_id is None or item.get("round_id") == round_id)}
             settled_markets = {}
             for row in settled_rows:
+                if market_id is not None:
+                    modern_market = db.execute("SELECT market_id FROM settlement_details WHERE run_id=? AND asset_id=? AND market=?",
+                                               (row["run_id"], row["asset_id"], row["market"])).fetchone()
+                    if not modern_market or modern_market["market_id"] != market_id:
+                        continue
                 modern = settlements.get((row["run_id"], row["market"]))
                 if modern:
                     at = modern["source_at"]
@@ -1330,7 +1430,7 @@ class Ledger:
                                        (row["run_id"], row["market"])).fetchone()[0]
                     at = stamp if stamp is not None else row["last_time"]
                 if start is None or start <= at <= now:
-                    key = modern.get("market_id") or row["market"] if modern else row["market"]
+                    key = (row["asset_id"], modern.get("market_id") or row["market"], row["round_id"]) if modern else (row["asset_id"], row["market"], row["round_id"])
                     prior = settled_markets.get(key)
                     if key not in settled_markets or prior is None:
                         settled_markets[key] = row["pnl"]
@@ -1380,7 +1480,7 @@ class Ledger:
             runs = [dict(row) for row in rows[:limit]]
             return {"runs": runs, "next_before_id": runs[-1]["id"] if len(rows) > limit else None}
 
-    def events(self, run_id, *, before_id=None, limit=100, kinds=None):
+    def events(self, run_id, *, before_id=None, limit=100, kinds=None, asset_id=None, market_id=None, round_id=None):
         limit = max(1, min(int(limit), 200))
         with self._connect() as db:
             self._run(db, run_id)
@@ -1395,6 +1495,16 @@ class Ledger:
                     raise ValueError("invalid event kinds")
                 clause += f" AND kind IN ({','.join('?' for _ in kinds)})"
                 args.extend(kinds)
+            if asset_id is not None:
+                asset_id = _asset_id(asset_id)
+                clause += " AND json_extract(payload,'$.asset_id')=?"
+                args.append(asset_id)
+            if market_id is not None:
+                clause += " AND json_extract(payload,'$.market_id')=?"
+                args.append(market_id)
+            if round_id is not None:
+                clause += " AND json_extract(payload,'$.round_id')=?"
+                args.append(round_id)
             args.append(limit + 1)
             rows = list(db.execute("SELECT id,byte_offset,payload FROM events WHERE run_id=? AND kind!='platform_status'"
                                    + clause + " ORDER BY id DESC LIMIT ?", args))
@@ -1402,7 +1512,7 @@ class Ledger:
             return {"run_id": run_id, "events": items,
                     "next_before_id": items[-1]["id"] if len(rows) > limit else None}
 
-    def settlements_page(self, run_id, *, before_id=None, limit=100):
+    def settlements_page(self, run_id, *, before_id=None, limit=100, asset_id=None, market_id=None, round_id=None):
         limit = max(1, min(int(limit), 200))
         with self._connect() as db:
             self._run(db, run_id)
@@ -1414,6 +1524,15 @@ class Ledger:
             if before_id is not None:
                 clause = " AND rowid<?"
                 args.append(int(before_id))
+            if asset_id is not None:
+                clause += " AND asset_id=?"
+                args.append(_asset_id(asset_id))
+            if market_id is not None:
+                clause += " AND market_id=?"
+                args.append(market_id)
+            if round_id is not None:
+                clause += " AND round_id=?"
+                args.append(round_id)
             args.append(limit + 1)
             rows = list(db.execute("SELECT rowid AS id,payload FROM settlement_details WHERE run_id=?"
                                    + clause + " ORDER BY rowid DESC LIMIT ?", args))

@@ -10,7 +10,10 @@ from pathlib import Path
 
 FIELDS = {
     "wallet": "POLYMARKET_WALLET_ADDRESS",
+    "funder": "POLY_FUNDER",
+    "signature_type": "POLY_SIGNATURE_TYPE",
     "owner_key": "POLYMARKET_OWNER_PRIVATE_KEY",
+    "session_private_key": "POLYMARKET_SESSION_PRIVATE_KEY",
     "relayer_key": "RELAYER_API_KEY",
     "relayer_address": "RELAYER_API_KEY_ADDRESS",
     "builder_api_key": "POLY_BUILDER_API_KEY",
