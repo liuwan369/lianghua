@@ -50,6 +50,7 @@ class LedgerRegressionTests(unittest.TestCase):
 
     def settlement(self, **extra):
         return {"event": "platform_settlement", "market_id": self.market_id, "market_slug": self.slug,
+                "round_id": self.round_id,
                 "state": "confirmed", "transaction_id": "0x" + "b" * 64, "payout_verified": True,
                 "credited_usd": 10, "expected_payout_usd": 10, **extra}
 
@@ -124,15 +125,28 @@ class LedgerRegressionTests(unittest.TestCase):
     def test_order_identity_alias_and_cutoff_are_stable(self):
         order = {"event": "order", "client_order_id": "client-a", "order_id": "order-a", "status": "OPEN",
                  "market_slug": self.slug, "updated_at": self.now, "shares": 10, "price": .4, "filled_shares": 0}
+        order.update({"created_at": self.now - 1, "average_price": .4})
         self.write("run-a", [self.runtime(), order])
         first = self.ledger.orders_page("run-a", market=self.market_id)
         self.assertEqual(first["total"], 1)
+        by_round = self.ledger.orders_page("run-a", market=self.round_id)
+        self.assertEqual(by_round["total"], 1)
         self.write("run-a", [{**order, "status": "FILLED", "filled_shares": 10}, self.fill()])
         frozen = self.ledger.orders_page("run-a", market=self.slug, as_of=first["asOf"], snapshot_event_id=first["snapshotEventId"])
         self.assertEqual(frozen["orders"][0]["status"], "OPEN")
         current = self.ledger.orders_page("run-a", market=self.slug)
         self.assertEqual(current["orders"][0]["status"], "FILLED")
         self.assertAlmostEqual(current["orders"][0]["fee"], .1)
+        self.assertAlmostEqual(current["orders"][0]["created_at"], self.now - 1)
+        self.assertAlmostEqual(current["orders"][0]["average_price"], .4)
+
+    def test_order_abandoned_and_error_message_are_visible(self):
+        self.write("run-a", [{"event": "order_abandoned", "order_id": "abandoned-order",
+                              "message": "venue timeout", "market_slug": self.slug}])
+        item = self.ledger.events("run-a")["events"][0]
+        self.assertEqual(item["event"], "error")
+        self.assertEqual(item["source_event"], "order_abandoned")
+        self.assertEqual(item["message"], "venue timeout")
 
     def test_runtime_mapping_backfills_late_market_and_round_identity(self):
         # Runtime status is allowed to arrive after journal business events.
@@ -147,7 +161,7 @@ class LedgerRegressionTests(unittest.TestCase):
         runtime["runtime"]["markets"][0]["roundId"] = self.round_id
         runtime["runtime"]["strategy_runtime"]["currentRound"]["roundId"] = self.round_id
         runtime["runtime"]["strategy_runtime"]["rounds"][0]["roundId"] = self.round_id
-        self.write("run-a", [order, self.fill(trade_id="late-trade"), settlement, runtime])
+        self.write("run-a", [order, self.fill(trade_id="late-trade", market_id=self.market_id, round_id="wrong-round"), settlement, runtime])
         events = self.ledger.events("run-a", kinds={"order", "fill", "settlement"})["events"]
         by_event = {item["event"]: item for item in events}
         for item in by_event.values():

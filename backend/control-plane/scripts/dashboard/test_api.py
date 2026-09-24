@@ -126,6 +126,16 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(failed["stale"])
         self.assert_metadata(failed)
 
+    def test_ledger_metadata_uses_source_clock_not_projection_clock(self):
+        with patch.object(server_module, "_projection_snapshot", return_value={
+                "run_id": "run", "state": "ready", "stale": False, "as_of": time.time() + 1000}), \
+                patch.object(server_module, "_api_ledger") as ledger:
+            ledger.return_value.metadata.return_value = {
+                "source": "ledger", "asOf": 1234.0, "stale": False, "error": None}
+            value = server_module._ledger_metadata("run")
+        self.assertEqual(value["asOf"], 1234.0)
+        self.assertFalse(value["stale"])
+
     def test_event_mapping_and_query_errors(self):
         mapped = server_module._event_dto({"id": 2, "event": "fill", "market": "btc-updown-5m-1",
                                            "market_id": "0xcondition", "round_id": "1800000000", "time": 12.})
@@ -214,8 +224,20 @@ class ApiTests(unittest.TestCase):
                     status = server_module.account_config_status()
                 self.assertIs(status["settlement_credentials_ready"], expected)
                 self.assertIs(status["settlementCredentialsReady"], expected)
+                self.assertEqual(status["live_start_ready"], expected is True)
+                self.assertEqual(status["liveStartReady"], expected is True)
                 self.assertNotIn("POLY_BUILDER_SECRET", status)
                 self.assertNotIn("POLY_BUILDER_PASSPHRASE", status)
+
+    def test_account_without_check_is_not_live_ready(self):
+        values = {"POLYMARKET_WALLET_ADDRESS": "0x" + "a" * 40,
+                  "POLYMARKET_OWNER_PRIVATE_KEY": "0x" + "b" * 64}
+        with patch.object(server_module, "_account_values", return_value=values), \
+                patch.object(server_module, "_account_report", None), \
+                patch.object(server_module, "_account_check_error", None):
+            status = server_module.account_config_status()
+        self.assertFalse(status["live_start_ready"])
+        self.assertFalse(status["liveStartReady"])
 
 
 class SnapshotTests(unittest.TestCase):

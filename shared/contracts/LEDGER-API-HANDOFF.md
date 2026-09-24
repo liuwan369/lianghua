@@ -8,10 +8,11 @@
 
 - 账本、控制面和共享契约：`ae1820c`
 - 结算凭据三态回归测试：`2c3d9fd`
+- 当前交接审查修复：本次提交（包含 roundId 订单过滤、错误事件、结算覆盖隔离和启动门控）
 - 当前分支：`codex/ledger-api`
 - 当前工作区已验证无未提交修改。
 
-交易运行时和行情分支不在本工作区。运行时交接已说明 `roundId` 和结算身份已经补齐；账本侧支持显式字段和旧事件的晚到映射回填。组合部署提交号需要集成会话在合并各分支后产生。
+交易运行时和行情分支不在本工作区。当前运行时状态快照已提供 `roundId` 和结算身份；但运行时 CLI 的 order/fill/settlement journal 仍需要直接写 `market_id/round_id`，账本保留晚到映射作为兼容路径。组合部署提交号需要集成会话在合并各分支后产生。
 
 ## 数据流
 
@@ -35,7 +36,7 @@
 - `--control-file`
 - `--stop-file`
 
-运行日志路径模式为 `TRADING_ROOT/results/live/dashboard-<run_id>.jsonl`；状态、控制、停止和控制面状态文件均由运行时启动代码按同一 run 建立。账本 SQLite 位于 `TRADING_ROOT/results/dashboard/ledger.sqlite3`，异步投影快照位于同目录的 `snapshot.json` 和 `heartbeat.json`。
+运行日志路径模式为 `TRADING_ROOT/results/live/dashboard-<run_id>.jsonl`；运行时 state/control/stop 文件位于同一 `results/live` 目录，控制面恢复状态实际位于 `TRADING_ROOT/results/dashboard-state.json`。账本 SQLite 位于 `TRADING_ROOT/results/dashboard/ledger.sqlite3`，异步投影快照位于同目录的 `snapshot.json` 和 `heartbeat.json`。
 
 HTTP 请求只读取 SQLite、原子 JSON 快照或已有缓存。投影 worker 才打开 journal 并批量消费，查询不会在行情回调或下单线程中解析日志，也不会执行历史统计、资源采样或账户 RPC。
 
@@ -51,6 +52,8 @@ HTTP 请求只读取 SQLite、原子 JSON 快照或已有缓存。投影 worker 
 | `platform_status` | 运行状态、市场映射、策略轮次、持仓覆盖和暂停确认 |
 | `platform_stopped` | 停止事件和运行日志历史 |
 | error 事件 | 运行错误和事件列表中的错误状态 |
+
+`order_abandoned` 会归一为 `kind=error`，并保留 `source_event=order_abandoned`；运行时提供的安全 `message` 会进入事件 DTO，原始异常和凭据不会进入投影。
 
 `marketId`/`market_id` 是运行时提供的 Polymarket condition ID；`roundId`/`round_id` 是运行时明确提供的 BTC 五分钟场次边界字符串。账本从 `platform_status.runtime.markets[]`、`strategy_runtime.currentRound` 和 `strategy_runtime.rounds[]` 建立映射，并可回填先到达的订单、成交和结算。
 
@@ -113,16 +116,17 @@ schemaVersion, source, asOf, stale, error
 - `false` 原样返回 `false`；
 - 缺失、显式 `null` 或无法识别的值返回 `null`。
 
-该字段不由账本根据 Builder/Relayer 字段猜测，也不把任何凭据写入 SQLite、快照、日志、DTO 或浏览器。当前字段同时保留 snake_case 和 camelCase 兼容名称：`settlement_credentials_ready`、`settlementCredentialsReady`。
+该字段不由账本根据 Builder/Relayer 字段猜测，也不把任何凭据写入 SQLite、快照、日志、DTO 或浏览器。当前字段同时保留 snake_case 和 camelCase 兼容名称：`settlement_credentials_ready`、`settlementCredentialsReady`。实盘启动门控要求该字段明确为 `true`；`false` 或 `null` 只能展示为未就绪，不能启动实盘。
 
 ## 兼容和剩余风险
 
 1. 旧 `/api/v1/markets` 保留旧 `round_id` slug 字段；现代 `roundId` 不使用该兼容字段，也不会据此给历史订单归属。
 2. 前端必须使用现代 `marketId`/`roundId`、YES/NO 字段和 `stale/error` 状态，不能把旧 `up_bid/down_bid` 或 slug 当成现代身份。
 3. 运行时必须持续输出显式 `roundId`；若旧运行时仍缺字段，账本会安全返回 `null`，相关按场次查询会 unavailable。
-4. `account-check` 的 `settlement_credentials_ready` 需要由交易运行时 CLI 输出；账本只透传三态。交易运行时仍负责根据钱包类型验证 Builder/Relayer，并在 redeem 前结合真实回执确认。
-5. 尚未完成服务器实测：真实下单、撤单、成交回报、资金释放、重启恢复、连续场次切换和链上 redeem。
-6. 集成会话需要组合最新 `codex/market-data`、`codex/trading-runtime` 和本分支 `2c3d9fd`，生成组合部署提交号并执行真实联调；本会话没有权限伪造该提交号。
+4. `account-check` 的 `settlement_credentials_ready` 需要由交易运行时 CLI 输出；账本只透传三态，控制面实盘启动要求明确为 `true`。交易运行时仍负责根据钱包类型验证 Builder/Relayer，并在 redeem 前结合真实回执确认。
+5. 运行时 CLI 仍需直接在 order/fill/settlement journal 写入 `market_id/round_id` 和订单 `created_at`；在此之前账本依赖状态映射回填，前端可能看不到完整的首条事件身份。
+6. 尚未完成服务器实测：真实下单、撤单、成交回报、资金释放、重启恢复、连续场次切换和链上 redeem。
+7. 集成会话需要组合最新 `codex/market-data`、`codex/trading-runtime` 和本分支最新提交，生成组合部署提交号并执行真实联调；本会话没有权限伪造该提交号。
 
 ## 验证
 

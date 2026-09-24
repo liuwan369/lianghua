@@ -300,6 +300,8 @@ def _projection(record):
     result = {"event": record["event"], "market": _text(record.get("market_slug")) or _text(record.get("market_id")),
               "side": record.get("side") if record.get("side") in ("UP", "DOWN", "up", "down") else None,
               "winner": record.get("winner") if record.get("winner") in ("UP", "DOWN", "up", "down") else None}
+    result["message"] = _text(record.get("message"), 500)
+    result["source_event"] = _text(record.get("source_event"))
     if record["event"] in ("order", "fill"):
         result["side"] = _text(record.get("side"))
     for field, source in (("time", "recv_ts"), ("engine_ts", "engine_ts"),
@@ -330,7 +332,7 @@ def _projection(record):
         result["payout_verified"] = verified
         result.update({field: amount if verified and amount is not None and amount >= 0 else None
                        for field, amount in amounts.items()})
-    for field in ("filled_shares", "reserved_usd", "reserved_shares", "sign_latency_ms", "risk_metadata_latency_ms", "ack_latency_ms", "total_ack_latency_ms",
+    for field in ("created_at", "average_price", "filled_shares", "reserved_usd", "reserved_shares", "sign_latency_ms", "risk_metadata_latency_ms", "ack_latency_ms", "total_ack_latency_ms",
                   "cancel_requested_at", "cancel_ack_at", "cancel_ack_latency_ms", "venue_status_at",
                   "venue_status_latency_ms", "venue_status_after_ack_latency_ms", "updated_at"):
         result[field] = _number(record.get(field))
@@ -491,7 +493,9 @@ class Ledger:
         # The observed runtime map is authoritative when a legacy slug and a
         # condition id disagree; never preserve a mixed identity pair.
         event["market"] = row["market"]
-        event["round_id"] = event.get("round_id") or row["round_id"]
+        # The runtime mapping is authoritative. Never keep a conflicting
+        # event round paired with the mapped market condition.
+        event["round_id"] = row["round_id"] or event.get("round_id")
         return event
 
     @staticmethod
@@ -645,10 +649,12 @@ class Ledger:
                         db.execute("UPDATE runs SET invalid_records=invalid_records+1 WHERE run_id=?", (run_id,))
                         continue
                     kind = record.get("event")
-                    aliases = {"platform_error": "error", "platform_stopped": "stopped", "platform_settlement": "settlement"}
+                    aliases = {"platform_error": "error", "platform_stopped": "stopped", "platform_settlement": "settlement",
+                               "order_abandoned": "error"}
                     if isinstance(kind, str) and kind in aliases:
+                        source_event = kind
                         kind = aliases[kind]
-                        record = {**record, "event": kind}
+                        record = {**record, "event": kind, "source_event": source_event}
                     if kind == "latency":
                         metric, duration, at = record.get("metric"), _number(record.get("duration_ms")), _number(record.get("recv_ts"))
                         event_mode = record.get("mode")
@@ -737,9 +743,9 @@ class Ledger:
                         # pending settlement rows once authoritative positions arrive.
                         if self._has_table(db, "settlement_details"):
                             for settlement in db.execute(
-                                    "SELECT market,market_id,payload FROM settlement_details WHERE run_id=? AND verified=1", (run_id,)):
+                                    "SELECT market,market_id,round_id,payload FROM settlement_details WHERE run_id=? AND verified=1", (run_id,)):
                                 payload = json.loads(settlement["payload"])
-                                coverage = self._coverage_from_runtime(runtime, settlement["market_id"], settlement["market"])
+                                coverage = self._coverage_from_runtime(runtime, settlement["market_id"], settlement["market"], settlement["round_id"])
                                 if coverage is not None:
                                     payload["coverage"] = coverage
                                     db.execute("UPDATE settlement_details SET payload=? WHERE run_id=? AND market=?",
@@ -909,7 +915,7 @@ class Ledger:
         row = db.execute("SELECT source_at,payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
         if row and event.get("time") and 0 <= event["time"] - row["source_at"] <= RUNTIME_MAX_AGE:
             payload["coverage"] = Ledger._coverage_from_runtime(
-                json.loads(row["payload"]), event.get("market_id"), event.get("market"))
+                json.loads(row["payload"]), event.get("market_id"), event.get("market"), event.get("round_id"))
         if payload["coverage"] is None and prior:
             payload["coverage"] = json.loads(prior["payload"]).get("coverage")
         db.execute("""INSERT INTO settlement_details
@@ -923,7 +929,7 @@ class Ledger:
         Ledger._refresh_settlement(db, run_id, event["market"])
 
     @staticmethod
-    def _coverage_from_runtime(runtime, market_id, market):
+    def _coverage_from_runtime(runtime, market_id, market, round_id=None):
         if not isinstance(runtime, dict) or runtime.get("positions_complete") is not True:
             return None
         if (runtime.get("risk") or {}).get("reconciliationRequired"):
@@ -931,8 +937,17 @@ class Ledger:
         strategy = runtime.get("strategy_runtime") or {}
         rounds = [strategy.get("currentRound")] + strategy.get("rounds", [])
         for candidate in rounds:
-            if (not isinstance(candidate, dict)
-                    or not (({candidate.get("marketId"), candidate.get("name")} & {market_id, market}) - {None})):
+            if not isinstance(candidate, dict):
+                continue
+            candidate_round = candidate.get("roundId") or candidate.get("round_id")
+            # A settlement without an explicit round must not borrow coverage
+            # from a runtime round that does have one. This avoids carrying a
+            # position across consecutive rounds sharing a condition id.
+            if round_id is not None and candidate_round != round_id:
+                continue
+            if round_id is None and candidate_round is not None:
+                continue
+            if not (({candidate.get("marketId"), candidate.get("name")} & {market_id, market}) - {None}):
                 continue
             tokens = (candidate.get("upTokenId"), candidate.get("downTokenId"))
             shares = (candidate.get("upShares"), candidate.get("downShares"))
@@ -949,9 +964,11 @@ class Ledger:
         pnl = None
         reason = "payout_unverified"
         if row["verified"]:
+            round_id = row["round_id"]
             trades = [json.loads(item[0]) for item in db.execute(
-                "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=?",
-                (run_id, market))]
+                "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=? "
+                "AND (? IS NULL OR json_extract(payload,'$.round_id')=?)",
+                (run_id, market, round_id, round_id))]
             trades = [item for item in trades if item.get("trade_status") != "FAILED"]
             coverage = payload.get("coverage")
             reason = "cost_basis_unverified"
@@ -1017,15 +1034,18 @@ class Ledger:
               OR (?='active' AND json_extract(payload,'$.status') IN ('SUBMITTING','OPEN','PARTIAL','UNKNOWN'))
               OR (?='failed' AND json_extract(payload,'$.status')='REJECTED'))
             AND (? IS NULL OR json_extract(payload,'$.market')=? OR json_extract(payload,'$.market_id')=?
-                OR json_extract(payload,'$.market')=?)) """
+                OR json_extract(payload,'$.round_id')=? OR json_extract(payload,'$.market')=?)) """
         with self._connect() as db:
             self._run(db, run_id)
             cutoff = snapshot_event_id if snapshot_event_id is not None else db.execute(
                 "SELECT COALESCE(MAX(id),0) FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
-            alias = db.execute("SELECT market FROM market_aliases WHERE run_id=? AND market_id=?", (run_id, market)).fetchone() \
+            alias = db.execute("""SELECT market,market_id,round_id FROM market_aliases
+                WHERE run_id=? AND (market_id=? OR market=? OR round_id=?)
+                ORDER BY CASE WHEN round_id=? THEN 0 WHEN market_id=? THEN 1 ELSE 2 END LIMIT 1""",
+                               (run_id, market, market, market, market, market)).fetchone() \
                 if market and self._has_table(db, "market_aliases") else None
-            args = (run_id, cutoff, stamp, cutoff, stamp, status, status, status, status, market, market, market,
-                    alias[0] if alias else market)
+            args = (run_id, cutoff, stamp, cutoff, stamp, status, status, status, status,
+                    market, market, market, market, alias["market"] if alias else market)
             total = db.execute(cte + "SELECT COUNT(*) FROM filtered", args).fetchone()[0]
             rows = db.execute(cte + "SELECT payload FROM filtered ORDER BY first_id DESC LIMIT ? OFFSET ?",
                               (*args, limit, offset)).fetchall()
