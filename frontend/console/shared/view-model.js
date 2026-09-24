@@ -2,6 +2,7 @@
 (() => {
   const finite = (value, fallback = null) => Number.isFinite(Number(value)) ? Number(value) : fallback;
   const first = (...values) => values.find((value) => value !== undefined && value !== null && value !== "");
+  const payloadOf = (value) => value?.data && typeof value.data === "object" ? value.data : value;
   const assetIdFrom = (raw, index = 0) => String(first(raw.assetId, raw.asset_id, raw.asset, raw.symbol, raw.slug, `market-${index}`)).toLowerCase();
   const symbolFrom = (raw, assetId) => String(first(raw.symbol, raw.ticker, assetId.split("-")[0])).toUpperCase();
   const market = (raw = {}, index = 0) => {
@@ -38,32 +39,39 @@
     };
   };
   const catalog = (payload = {}) => {
+    payload = payloadOf(payload) || {};
     const list = Array.isArray(payload) ? payload : first(payload.items, payload.markets, payload.current_markets, []);
     return {
       items: list.map((item, index) => market(item, index)),
       source: String(first(payload.source, payload.node_label, "backend")),
-      asOf: first(payload.asOf, payload.as_of, Date.now()),
+      asOf: first(payload.asOf, payload.as_of, null),
       stale: payload.stale === true || payload.collector_online === false,
       error: payload.error || null
     };
   };
   const pool = (payload = {}, catalogItems = []) => {
+    payload = payloadOf(payload) || {};
     const known = new Set(catalogItems.map((item) => item.assetId));
     const desired = first(payload.desiredIds, payload.enabledIds, payload.enabled_ids, []);
     const current = first(payload.currentIds, payload.runningIds, payload.current_ids, []);
     const next = first(payload.nextRoundIds, payload.next_round_ids, []);
     const clean = (values) => Array.isArray(values) ? [...new Set(values.map(String).filter((id) => !known.size || known.has(id)))] : [];
-    return { desiredIds: clean(desired), currentIds: clean(current), nextRoundIds: clean(next), effectiveRoundId: first(payload.effectiveRoundId, payload.effective_round_id, null), source: String(first(payload.source, "backend")), updatedAt: first(payload.updatedAt, payload.updated_at, Date.now()) };
+    return { desiredIds: clean(desired), currentIds: clean(current), nextRoundIds: clean(next), effectiveRoundId: first(payload.effectiveRoundId, payload.effective_round_id, null), source: String(first(payload.source, "backend")), updatedAt: first(payload.updatedAt, payload.updated_at, null) };
   };
-  const runtime = (payload = {}) => ({
-    status: String(first(payload.status, payload.state, payload.running === true ? "running" : "stopped")),
+  const runtime = (payload = {}) => {
+    payload = payloadOf(payload) || {};
+    const status = String(first(payload.status, payload.state, payload.running === true ? "running" : "stopped"));
+    return {
+    status,
+    state: status,
     source: String(first(payload.source, "backend")),
     stale: payload.stale === true,
-    asOf: first(payload.asOf, payload.as_of, Date.now()),
+    asOf: first(payload.asOf, payload.as_of, null),
     runId: first(payload.runId, payload.run_id, null),
     strategyId: first(payload.strategyId, payload.strategy_id, null),
     markets: Array.isArray(payload.markets) ? payload.markets : [],
     error: payload.error || null
-  });
+    };
+  };
   window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime });
 })();

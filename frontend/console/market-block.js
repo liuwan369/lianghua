@@ -35,12 +35,12 @@
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">选择平台支持的加密货币五分钟市场，并决定哪些币种加入自动交易。</p>
       <nav aria-label="加密货币市场导航">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span>原型预览</span><small>数据待接入</small></div>
+      <div class="sidebar-status"><i></i><span data-sidebar-state>原型预览</span><small data-sidebar-detail>数据待接入</small></div>
     </aside>
 
     <main class="preview-main market-main crypto-market-main">
       <header class="preview-header market-header crypto-market-header">
-        <div class="hero-copy"><p class="eyebrow">CRYPTO MARKET POOL</p><div class="hero-title-row"><h1>加密货币市场</h1><span class="language-chip">5 分钟 · YES / NO</span></div><p class="subtitle">只展示平台支持的加密货币五分钟市场。启用币种后，自动交易可在运行中加入下一个可用场次。</p><div class="market-header-actions"><span class="market-note"><i></i>公开行情 · 仅展示演示数据</span><button class="hero-button" type="button" data-refresh-markets>刷新币种</button></div></div>
+        <div class="hero-copy"><p class="eyebrow">CRYPTO MARKET POOL</p><div class="hero-title-row"><h1>加密货币市场</h1><span class="language-chip">5 分钟 · YES / NO</span></div><p class="subtitle">只展示平台支持的加密货币五分钟市场。启用币种后，自动交易可在运行中加入下一个可用场次。</p><div class="market-header-actions"><span class="market-note" data-market-source><i></i>公开行情 · 仅展示演示数据</span><button class="hero-button" type="button" data-refresh-markets>刷新币种</button></div></div>
         <div class="market-header-side"><div class="header-status-grid"><article class="header-status"><span>支持币种</span><strong data-market-count>6 个</strong></article><article class="header-status"><span>已启用</span><strong class="status-good" data-enabled-count>2 个</strong></article><article class="header-status"><span>当前运行</span><strong data-running-count>1 个</strong></article><article class="header-status"><span>市场周期</span><strong class="status-good">固定 5 分钟</strong></article></div></div>
       </header>
 
@@ -140,6 +140,15 @@
     if (action) { action.textContent = coin.enabled ? "停用（下一场生效）" : "启用并关联自动交易"; action.classList.toggle("selected", coin.enabled); }
     text("[data-selection-note]", coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "下一场可开始运行。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
+  const renderCatalogStatus = (resource) => {
+    const local = window.PolyPreview.config.mode === "local-preview";
+    const status = resource?.status;
+    const textValue = local ? "公开行情 · 演示数据" : status === "stale" ? "行情连接中断 · 保留上次快照" : status === "unavailable" ? "行情待接入" : "公开行情 · 已连接";
+    text("[data-market-source]", textValue);
+    text("[data-sidebar-state]", local ? "原型预览" : status === "ready" ? "行情已连接" : "数据连接");
+    text("[data-sidebar-detail]", local ? "演示数据" : status === "stale" ? "保留最近成功数据" : status === "unavailable" ? "等待后端" : "五分钟市场");
+    if (!local && status === "stale") text("[data-market-refresh-note]", `连接中断 · ${resource.error || "保留上次数据"}`);
+  };
 
   async function toggleEnabled(id) {
     const coin = coins.find((item) => item.id === id);
@@ -153,11 +162,7 @@
     try {
       // The current round is server-owned. Only desiredIds is changed here;
       // the backend decides when currentIds/nextRoundIds roll over.
-      await adapter.saveMarketPool({
-        desiredIds,
-        currentIds: state.marketPool.currentIds,
-        nextRoundIds: state.marketPool.nextRoundIds
-      });
+      await adapter.saveMarketPool({ desiredIds, effectiveRoundId: state.marketPool.effectiveRoundId });
       syncCoins();
       renderCounts();
       renderList();
@@ -187,10 +192,13 @@
     } catch (error) { text("[data-market-refresh-note]", error.message || "市场目录读取失败"); }
     finally { button.disabled = false; }
   });
-  store.subscribe("marketCatalog", () => { syncCoins(); renderCounts(); renderList(); renderDetail(); });
+  store.subscribe("marketCatalog", (value) => { selectedId = value.selectedId || value.items[0]?.assetId || null; syncCoins(); renderCounts(); renderList(); renderDetail(); renderCatalogStatus(value); });
   store.subscribe("marketPool", () => { syncCoins(); renderCounts(); renderList(); renderDetail(); });
   renderCounts();
   renderList();
   renderDetail();
-  if (window.PolyPreview.config.mode !== "local-preview") void adapter.loadMarkets();
+  if (window.PolyPreview.config.mode !== "local-preview") {
+    void adapter.loadMarkets();
+    void adapter.loadMarketPool();
+  }
 })();

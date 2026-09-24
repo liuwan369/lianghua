@@ -5,11 +5,13 @@
   if (!root) throw new Error("auto trade block root missing");
   var store = window.PolyPreviewStore;
   var adapter = window.PolyPreviewAdapter;
+  var vm = window.PolyPreviewViewModel;
   var marketAssets = store.getState().marketCatalog.items.map(function(item) {
-    return { id: item.assetId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone };
+    return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone };
   });
   var marketPool = store.getState().marketPool;
   var assetById = function(id) { return marketAssets.find(function(asset) { return asset.id === id; }); };
+  var marketIdsForCommand = function() { return marketPool.desiredIds.map(assetById).filter(Boolean).map(function(asset) { return asset.marketId || asset.id; }); };
   var navItems = [
     ["\u25C8", "\u603B\u89C8", "overview.html"],
     ["\u25C7", "\u5E02\u573A", "market.html"],
@@ -18,7 +20,7 @@
     ["\u2699", "\u8BBE\u7F6E", "settings.html"]
   ];
   var navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "\u81EA\u52A8\u4EA4\u6613" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "\u81EA\u52A8\u4EA4\u6613" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
-  var depthRows = (prices, sizes, tone) => prices.map((price, index) => `<tr><td>${index + 1}</td><td class="depth-price ${tone}">${price.toFixed(3)}</td><td>${sizes[index].toFixed(1)}</td><td><span class="depth-bar ${tone}" style="--depth:${Math.round(sizes[index] / 62 * 100)}%"></span></td></tr>`).join("");
+  var depthRows = (prices = [], sizes = [], tone) => prices.map((price, index) => `<tr><td>${index + 1}</td><td class="depth-price ${tone}">${price.toFixed(3)}</td><td>${sizes[index].toFixed(1)}</td><td><span class="depth-bar ${tone}" style="--depth:${Math.round(sizes[index] / 62 * 100)}%"></span></td></tr>`).join("");
   root.innerHTML = `
   <div class="overview-preview auto-trade-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
@@ -32,7 +34,7 @@
       </div>
       <p class="sidebar-copy">\u9762\u5411 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u5B9E\u65F6\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
       <nav aria-label="\u81EA\u52A8\u4EA4\u6613\u9884\u89C8\u5BFC\u822A">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span>\u539F\u578B\u9884\u89C8</span><small>\u6570\u636E\u5F85\u63A5\u5165</small></div>
+      <div class="sidebar-status"><i></i><span data-sidebar-state>\u539F\u578B\u9884\u89C8</span><small data-sidebar-detail>\u6570\u636E\u5F85\u63A5\u5165</small></div>
     </aside>
 
     <main class="preview-main auto-trade-main">
@@ -51,7 +53,7 @@
           <span class="live-chip"><i></i><b data-live-status>\u8BBE\u8BA1\u7A3F \xB7 \u5F85\u63A5\u5165</b><small data-live-clock>--:--:--</small></span>
           <div class="header-status-grid">
             <article class="header-status"><span>\u5F53\u524D\u5E02\u573A</span><strong data-active-market>当前选中市场 / 5m YES-NO</strong></article>
-            <article class="header-status"><span>\u6570\u636E\u8FDE\u63A5</span><strong class="status-warning">\u6F14\u793A\u6570\u636E \xB7 \u5F85\u63A5\u5165</strong></article>
+            <article class="header-status"><span>\u6570\u636E\u8FDE\u63A5</span><strong class="status-warning" data-connection-status>\u6F14\u793A\u6570\u636E \xB7 \u5F85\u63A5\u5165</strong></article>
             <article class="header-status"><span>\u4EA4\u6613\u6A21\u5F0F</span><strong>\u5B9E\u76D8 \xB7 \u5355\u7B56\u7565</strong></article>
             <article class="header-status"><span>\u8D26\u6237\u4F59\u989D</span><strong>-- USDC</strong></article>
           </div>
@@ -95,22 +97,22 @@
             <div class="book-live"><i></i><span>\u5F85\u63A5\u5165</span><small data-book-age>--</small></div>
           </div>
           <div class="quote-strip">
-            <div class="quote-box up-quote"><span><i></i>YES \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="up-bid">--</b><em>/</em><b data-quote="up-ask">--</b></strong></div>
-            <div class="quote-box down-quote"><span><i></i>NO \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="down-bid">--</b><em>/</em><b data-quote="down-ask">--</b></strong></div>
+            <div class="quote-box up-quote"><span><i></i>YES \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="yes-bid">--</b><em>/</em><b data-quote="yes-ask">--</b></strong></div>
+            <div class="quote-box down-quote"><span><i></i>NO \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="no-bid">--</b><em>/</em><b data-quote="no-ask">--</b></strong></div>
           </div>
-          <div class="depth-toolbar"><div><strong>\u4E94\u6863\u6DF1\u5EA6</strong><span>\u4E70\u5356\u4E24\u4FA7\u5B9E\u65F6\u663E\u793A</span></div><span class="depth-source">\u6F14\u793A\u7ED3\u6784 \xB7 \u540E\u7AEF\u5F85\u63A5\u5165</span></div>
+          <div class="depth-toolbar"><div><strong>\u4E94\u6863\u6DF1\u5EA6</strong><span>\u4E70\u5356\u4E24\u4FA7\u5B9E\u65F6\u663E\u793A</span></div><span class="depth-source" data-book-source>\u7B49\u5F85\u5B9E\u65F6\u5FEB\u7167</span></div>
           <div class="depth-columns">
             <section class="depth-book up-depth" aria-label="YES \u4E94\u6863\u6DF1\u5EA6">
               <div class="depth-book-title"><span class="direction-dot up-dot"></span><strong>YES</strong><small>\u4E70\u5165\u65B9\u5411</small></div>
-              <table class="depth-table"><thead><tr><th>\u6863\u4F4D</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>\u6DF1\u5EA6</th></tr></thead><tbody data-depth="up">${depthRows([0.486, 0.483, 0.479, 0.474, 0.468], [18.4, 26.2, 41.8, 51.2, 61.7], "bid")}</tbody></table>
+              <table class="depth-table"><thead><tr><th>\u6863\u4F4D</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>\u6DF1\u5EA6</th></tr></thead><tbody data-depth="up"></tbody></table>
               <div class="depth-divider"><span>\u5356\u51FA</span><span>---</span></div>
-              <table class="depth-table asks"><tbody>${depthRows([0.492, 0.496, 0.501, 0.507, 0.514], [12.7, 23.4, 31.8, 45.6, 56.8], "ask")}</tbody></table>
+              <table class="depth-table asks"><tbody data-depth-asks="up"></tbody></table>
             </section>
             <section class="depth-book down-depth" aria-label="NO \u4E94\u6863\u6DF1\u5EA6">
               <div class="depth-book-title"><span class="direction-dot down-dot"></span><strong>NO</strong><small>\u5356\u51FA\u65B9\u5411</small></div>
-              <table class="depth-table"><thead><tr><th>\u6863\u4F4D</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>\u6DF1\u5EA6</th></tr></thead><tbody data-depth="down">${depthRows([0.508, 0.504, 0.499, 0.493, 0.487], [16.8, 29.6, 37.2, 48.4, 63.5], "bid")}</tbody></table>
+              <table class="depth-table"><thead><tr><th>\u6863\u4F4D</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>\u6DF1\u5EA6</th></tr></thead><tbody data-depth="down"></tbody></table>
               <div class="depth-divider"><span>\u5356\u51FA</span><span>---</span></div>
-              <table class="depth-table asks"><tbody>${depthRows([0.514, 0.518, 0.523, 0.529, 0.536], [11.3, 21.9, 34.7, 43.5, 58.2], "ask")}</tbody></table>
+              <table class="depth-table asks"><tbody data-depth-asks="down"></tbody></table>
             </section>
           </div>
           <div class="book-decision"><span class="decision-mark">\u21AF</span><div><span>\u4EA4\u6613\u5224\u65AD</span><strong data-decision>\u7B49\u5F85\u786E\u8BA4\uFF0C\u4E0D\u4E0B\u5355</strong><small data-decision-reason>\u53CD\u8F6C\u4FE1\u53F7\u9700\u8981\u8FDE\u7EED\u786E\u8BA4\uFF0C\u5F53\u524D\u76D8\u53E3\u4EC5\u7528\u4E8E\u89C2\u5BDF\u3002</small></div><b class="decision-state" data-decision-state>\u89C2\u5BDF\u4E2D</b></div>
@@ -119,7 +121,7 @@
         <article class="trade-panel position-panel" aria-labelledby="position-title">
           <div class="panel-heading">
             <div><p class="eyebrow">ROUND POSITION</p><h2 id="position-title">\u672C\u573A\u6301\u4ED3\u4E0E\u7ED3\u679C</h2></div>
-            <span class="panel-meta">\u5F53\u524D\u573A\u6B21 \xB7 \u672A\u7ED3\u7B97</span>
+            <span class="panel-meta" data-round-identity>\u5F53\u524D\u573A\u6B21 \xB7 \u7B49\u5F85\u8F6E\u6B21\u6807\u8BC6</span>
           </div>
           <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong></div><span class="position-badge">\u5F85\u63A5\u5165</span></div>
           <div class="holding-grid">
@@ -171,25 +173,143 @@
     text("[data-active-market]", activeMarket);
     text("[data-market-pool-note]", visibleAssets.length ? `已启用 ${enabledAssets.length} 个币种；当前场次继续运行，新增币种从下一场加入。` : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
+  var renderSnapshot = function(raw) {
+    raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+    if (!raw) return;
+    var model = vm.market(raw.market || raw);
+    var quote = function(key, value) { text(`[data-quote="${key}"]`, Number.isFinite(value) ? value.toFixed(3) : "--"); };
+    quote("yes-bid", model.yesBid); quote("yes-ask", model.yesAsk); quote("no-bid", model.noBid); quote("no-ask", model.noAsk);
+    var book = raw.book || raw.orderBook || raw.orderbook || {};
+    var levels = function(side, kind) {
+      var source = book[side] || book[side.toUpperCase()] || {};
+      var list = Array.isArray(source) ? source : source[kind] || source[`${kind}s`] || [];
+      return Array.isArray(list) ? list.map(function(level) { return Array.isArray(level) ? { price: Number(level[0]), size: Number(level[1]) } : { price: Number(level.price), size: Number(level.size ?? level.quantity ?? level.shares) }; }).filter(function(level) { return Number.isFinite(level.price) && Number.isFinite(level.size); }) : [];
+    };
+    ["yes", "no"].forEach(function(side) {
+      var bids = levels(side, "bid"); var asks = levels(side, "ask");
+      var render = function(list, tone) { return depthRows(list.slice(0, 5).map(function(level) { return level.price; }), list.slice(0, 5).map(function(level) { return level.size; }), tone); };
+      var bidNode = document.querySelector(`[data-depth="${side}"]`); var askNode = document.querySelector(`[data-depth-asks="${side}"]`);
+      if (bidNode) bidNode.innerHTML = render(bids, "bid");
+      if (askNode) askNode.innerHTML = render(asks, "ask");
+    });
+    text("[data-book-source]", model.sourceAt || model.quoteAt ? `实时快照 · ${window.PolyPreview.format.time(model.sourceAt || model.quoteAt)}` : "快照时间未知");
+    text("[data-book-age]", model.sourceAt || model.quoteAt ? window.PolyPreview.format.time(model.sourceAt || model.quoteAt) : "--");
+  };
+  var streams = [];
+  var currentContext = function() {
+    var id = marketPool.currentIds[0] || marketPool.desiredIds[0];
+    var asset = assetById(id);
+    return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { marketId: null, roundId: null };
+  };
+  var payloadOf = function(frame) { return frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame || {}; };
+  var frameMatches = function(frame, requireRound) {
+    var context = currentContext();
+    var payload = payloadOf(frame);
+    var marketId = payload.marketId || payload.market_id || frame?.marketId || frame?.market_id;
+    var roundId = payload.roundId || payload.round_id || frame?.roundId || frame?.round_id;
+    if (!marketId && !requireRound) return true;
+    if (!context.marketId || marketId !== context.marketId) return false;
+    if (requireRound && !context.roundId) return false;
+    return !context.roundId || roundId === context.roundId;
+  };
+  var streamUrl = function(name) {
+    var configured = window.PolyPreview.config.streams?.[name];
+    return typeof configured === "string" ? configured : configured?.url || null;
+  };
+  var renderPosition = function(raw) {
+    raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+    var position = raw?.position || raw;
+    if (!position || typeof position !== "object") return;
+    var number = function(...keys) { for (var key of keys) { var value = Number(position[key]); if (Number.isFinite(value)) return value; } return null; };
+    var occupied = number("occupiedUsd", "occupied_usd");
+    if (occupied != null) text("[data-invested]", `${occupied.toFixed(2)} USDC`);
+    if (position.stage != null) text("[data-stage]", `阶段 ${position.stage}`);
+    if (position.confirmations != null) text("[data-confirmations]", String(position.confirmations));
+    var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
+    if (yesShares != null) text('[data-holding="up"]', yesShares.toFixed(2));
+    if (noShares != null) text('[data-holding="down"]', noShares.toFixed(2));
+  };
+  var renderOrders = function(raw) {
+    raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+    var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : [];
+    var body = document.querySelector(".orders-table tbody");
+    if (!body) return;
+    text("[data-order-count]", String(orders.length));
+    body.innerHTML = orders.length ? orders.slice(0, 20).map(function(order) {
+      var side = order.side || order.outcome || order.token || "--";
+      var price = Number(order.price); var size = Number(order.size ?? order.quantity ?? order.shares); var filled = Number(order.filled ?? order.filledSize ?? order.filled_size);
+      return `<tr><td>${window.PolyPreview.format.time(order.updatedAt || order.createdAt || order.time)}</td><td>${window.PolyPreview.format.escape(String(side).toUpperCase())}</td><td>${Number.isFinite(price) ? price.toFixed(3) : "--"}</td><td>${Number.isFinite(size) ? size.toFixed(2) : "--"}</td><td>${Number.isFinite(filled) ? filled.toFixed(2) : "--"}</td><td>${window.PolyPreview.format.escape(order.status || "--")}</td></tr>`;
+    }).join("") : '<tr><td colspan="6">当前场次暂无订单</td></tr>';
+  };
+  var stopStreams = function() { streams.splice(0).forEach(function(stream) { stream.close(); }); };
+  var startStreams = function() {
+    stopStreams();
+    if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
+    var context = currentContext();
+    var hasMarketStream = Boolean(streamUrl("markets"));
+    if (!hasMarketStream) text("[data-book-source]", "实时流未配置 · 保留最近快照");
+    var make = function(name, requireRound, onMessage, onState) {
+      var url = streamUrl(name); if (!url) return;
+      var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { text("[data-book-source]", error.message || "实时流不可用 · 保留最近快照"); } });
+      stream.connect();
+      stream.subscribe({ marketIds: context.marketId ? [context.marketId] : [], marketId: context.marketId, roundId: context.roundId || undefined });
+      streams.push(stream);
+    };
+    make("markets", true, function(frame) {
+      var payload = payloadOf(frame); var snapshot = payload.snapshot || payload;
+      var hasQuote = ["yesBid", "yesAsk", "noBid", "noAsk", "yes_bid", "yes_ask", "no_bid", "no_ask"].some(function(key) { return snapshot[key] != null; });
+      if (snapshot.book || snapshot.orderBook || snapshot.orderbook || hasQuote) { renderSnapshot(snapshot); text("[data-book-source]", "实时流 · 已连接"); }
+    }, function(state) { if (state !== "connected") text("[data-book-source]", `实时流${state === "error" ? "错误" : "断开"} · 保留最近快照`); });
+    make("orders", true, function(frame) { var payload = payloadOf(frame); if (payload.position) renderPosition(payload.position); if (payload.order) renderOrders([payload.order]); else if (payload.orders || payload.items) renderOrders(payload.orders || payload); }, function() {});
+    make("runtime", false, function(frame) { var payload = payloadOf(frame); if (payload.status == null && payload.state == null && payload.running == null) return; var runtime = vm.runtime(payload); store.setSlice("runtime", { ...runtime, connectionStatus: "ready", stale: false, error: null }); }, function(state) {
+      var current = store.getState().runtime;
+      if (state === "connected") return;
+      store.setSlice("runtime", { ...current, connectionStatus: state, runtimeState: current.runtimeState || current.status, stale: true, error: "运行状态流已断开，保留上次成功状态" });
+    });
+  };
+  var loadCurrentMarket = async function() {
+    if (window.PolyPreview.config.mode === "local-preview") return;
+    var id = marketPool.currentIds[0] || marketPool.desiredIds[0];
+    var asset = assetById(id);
+    if (!asset?.marketId) return;
+    text("[data-round-identity]", asset.roundId ? `marketId ${asset.marketId} · roundId ${asset.roundId}` : `marketId ${asset.marketId} · \u5F53\u524D\u8F6E\u6B21\u6807\u8BC6\u5F85\u540E\u7AEF\u63D0\u4F9B`);
+    try {
+      var raw = await adapter.loadMarketSnapshot(asset.marketId);
+      renderSnapshot(raw);
+      if (asset.roundId) {
+        var results = await Promise.allSettled([adapter.loadPosition(asset.roundId), adapter.loadOrders(asset.roundId)]);
+        var position = results[0].status === "fulfilled" ? results[0].value : null;
+        var orders = results[1].status === "fulfilled" ? results[1].value : null;
+        if (position) renderPosition(position);
+        if (orders) renderOrders(orders);
+      }
+    } catch (error) { text("[data-book-source]", error.message || "实时快照不可用"); }
+  };
+  var streamLifecycleReady = false;
   renderMarketPool();
   store.subscribe("marketPool", function(value) {
     marketPool = value;
     renderMarketPool();
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void loadCurrentMarket(); startStreams(); }
   });
   store.subscribe("marketCatalog", function(value) {
-    marketAssets = value.items.map(function(item) { return { id: item.assetId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone }; });
+    marketAssets = value.items.map(function(item) { return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone }; });
     renderMarketPool();
   });
   store.subscribe("runtime", function(runtime) {
+    const local = window.PolyPreview.config.mode === "local-preview";
     const ready = runtime.status !== "unavailable" && !runtime.stale;
-    text("[data-live-status]", ready ? runtime.status : "设计稿 · 待接入");
+    text("[data-live-status]", local ? "设计稿 · 待接入" : ready ? runtime.status : "连接中断 · 保留状态");
+    text("[data-connection-status]", local ? "演示数据 · 待接入" : runtime.status === "unavailable" ? "等待后端" : runtime.stale ? "连接中断 · 保留快照" : "已连接 · 独立流");
+    text("[data-sidebar-state]", local ? "原型预览" : runtime.stale ? "连接中断" : runtime.status === "unavailable" ? "等待后端" : "运行状态已连接");
+    text("[data-sidebar-detail]", local ? "数据待接入" : runtime.stale ? "保留最近成功状态" : runtime.status === "unavailable" ? "实时数据待接入" : "五分钟反转策略");
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
       const action = button.dataset.action;
       button.disabled = true;
       try {
-        const result = await adapter.commandRuntime({ action, marketIds: marketPool.desiredIds, strategyId: window.PolyPreview.config.strategyId, requestId: `preview-${Date.now()}` });
+        const result = await adapter.commandRuntime({ action, marketIds: marketIdsForCommand(), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` });
         text("[data-live-status]", result.message || (result.accepted ? "指令已接收，等待运行状态确认" : "设计稿操作 · 后端未接入"));
         text("[data-strategy-status]", result.accepted ? "等待状态确认" : "待接入");
       } catch (error) { text("[data-live-status]", error.message || "控制请求失败"); }
@@ -216,6 +336,8 @@
   document.querySelectorAll(".quiet-button").forEach((button) => button.addEventListener("click", () => {
     text("[data-live-status]", "演示操作 · 后端未接入");
   }));
-  if (window.PolyPreview.config.mode !== "local-preview") void adapter.loadRuntime();
+  if (window.PolyPreview.config.mode !== "local-preview") {
+    Promise.all([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime()]).then(function() { streamLifecycleReady = true; return loadCurrentMarket(); }).then(startStreams).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
+  }
 })();
 
