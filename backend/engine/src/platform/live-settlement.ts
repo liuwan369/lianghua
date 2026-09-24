@@ -37,6 +37,7 @@ export interface LiveSettlementRecord {
   marketId: string;
   /** Added after the original market-id-only persistence format. */
   roundId?: string;
+  assetId?: string;
   tokenIds: string[];
   status: "prepared" | "submitted" | "confirmed" | "failed";
   operation: "approval" | "redeem";
@@ -129,7 +130,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const verified = status === "confirmed" && record?.status === "confirmed" && record.operation === "redeem"
       && hashPattern.test(record.transactionHash ?? "") && usd(record.creditedPusd) !== undefined;
-    return { marketId: request.marketId, roundId: request.roundId, state: status, reason,
+    return { marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, state: status, reason,
       transactionId: record?.transactionHash ?? record?.relayerId,
       payoutVerified: verified,
       ...(verified ? { creditedUsd: usd(record!.creditedPusd), expectedPayoutUsd: usd(record!.expectedPayout),
@@ -271,7 +272,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const prepared = await backend.prepare(call);
     record = {
-      marketId: request.marketId, roundId: request.roundId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
+      marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
       prepared, fromBlock: before.block.toString(), balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(),
       expectedPayout: expectedPayout.toString(), transactionHash: prepared.transactionHash,
     };

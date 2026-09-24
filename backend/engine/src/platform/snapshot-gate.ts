@@ -1,6 +1,7 @@
-import type { MarketBookSnapshot, RuntimeMarketAssetSnapshot } from "./contracts.js";
+import type { AssetId, MarketBookSnapshot, RuntimeMarketAssetSnapshot } from "./contracts.js";
 
 export type SnapshotRejectReason =
+  | "asset_id_mismatch"
   | "market_id_mismatch"
   | "round_id_mismatch"
   | "sequence_invalid"
@@ -15,6 +16,7 @@ export type SnapshotRejectReason =
   | "source_at_regression";
 
 export interface SnapshotGateIdentity {
+  assetId?: AssetId;
   marketId: string;
   roundId: string;
   endsAt: number;
@@ -66,6 +68,7 @@ export function validateMarketSnapshot(
 ): SnapshotGateResult {
   if (snapshot.marketId !== identity.marketId) return { ok: false, reason: "market_id_mismatch" };
   if (snapshot.roundId !== identity.roundId) return { ok: false, reason: "round_id_mismatch" };
+  if (identity.assetId !== undefined && snapshot.assetId !== identity.assetId) return { ok: false, reason: "asset_id_mismatch" };
   if (now >= identity.endsAt) return { ok: false, reason: "round_ended" };
   if (!healthy) return { ok: false, reason: "book_unhealthy" };
   if (!Number.isSafeInteger(snapshot.sequence) || snapshot.sequence! < 0) {

@@ -1,9 +1,11 @@
-import type { Instrument, MarketBookSnapshot, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
+import type { AssetId, Instrument, MarketBookSnapshot, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
   StrategyContext, StrategyPlugin, TradingEvent } from "../platform/contracts.js";
 
 export type ReversalDirection = "UP" | "DOWN";
 export interface BtcReversalConfig {
   instanceId: string;
+  /** Selected market asset. The historical strategy name is retained for BTC compatibility. */
+  assetId: AssetId;
   revision: string;
   triggerPrice: number;
   confirmationPrice: number;
@@ -41,6 +43,7 @@ interface QuoteReference {
   downTs: number;
 }
 export interface ReversalRound {
+  assetId: AssetId;
   marketId: string;
   /** Five-minute Unix start identity carried by paired market snapshots. */
   roundId: string;
@@ -76,7 +79,7 @@ export interface BtcReversalOptions {
 }
 
 export const BTC_REVERSAL_DEFAULTS: Readonly<BtcReversalConfig> = Object.freeze({
-  instanceId: "btc-reversal", revision: "1", triggerPrice: 0.67, confirmationPrice: 0.70,
+  instanceId: "btc-reversal", assetId: "btc", revision: "1", triggerPrice: 0.67, confirmationPrice: 0.70,
   maxBuyPrice: 0.70, stageShares: [5, 18, 54, 130], maxStages: 4,
   maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
@@ -91,6 +94,9 @@ export function normalizeBtcReversalConfig(input: Partial<BtcReversalConfig> = {
   if (input.maxStages === undefined && input.stageShares !== undefined) config.maxStages = input.stageShares.length;
   if (typeof config.instanceId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(config.instanceId)
     || typeof config.revision !== "string" || !config.revision.trim()) throw new Error("invalid strategy instance or revision");
+  if (typeof config.assetId !== "string" || !/^[a-z0-9_-]{1,32}$/.test(config.assetId)) {
+    throw new Error("invalid strategy asset identity");
+  }
   for (const key of ["triggerPrice", "confirmationPrice", "maxBuyPrice"] as const) {
     if (!positive(config[key]) || config[key] >= 1) throw new Error(`${key} must be between 0 and 1`);
   }
@@ -183,6 +189,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
   onEvent(event: TradingEvent, context: StrategyContext): readonly StrategyAction[] {
     if (!Number.isFinite(context.now)) return [];
     this.latestNow = context.now;
+    if (event.kind === "reference" && event.assetId !== this.state.config.assetId) return [];
     let changed = this.discover(context);
     // A durable stage intent can outlive the five-minute market if the
     // process dies after persisting the strategy state but before the order
@@ -403,7 +410,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const instruments = this.marketInstruments(market);
       if (!instruments) continue;
       const eligible = context.now <= market.startsAt;
-      const round: ReversalRound = { marketId: market.id, roundId: market.roundId, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
+      const round: ReversalRound = { assetId: market.assetId ?? this.state.config.assetId, marketId: market.id, roundId: market.roundId, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
         upTokenId: instruments.UP.tokenId, downTokenId: instruments.DOWN.tokenId, config: clone(this.state.config),
         status: eligible ? "waiting_start" : "waiting_next_round", firstSampleSeen: false, rebuildingReference: false,
         pendingAmbiguity: false, confirmationCount: 0, stages: [], reason: eligible ? "等待本场开始" : "中途启动，等待下一场" };
@@ -415,17 +422,21 @@ export class BtcReversalStrategy implements StrategyPlugin {
   }
 
   private marketInstruments(market: MarketInfo): Record<ReversalDirection, Instrument> | undefined {
-    const match = /^btc-updown-5m-(\d+)$/.exec(market.name);
-    if (!match || Number(match[1]) !== market.startsAt || market.endsAt - market.startsAt !== 300
+    const asset = market.assetId ?? this.state.config.assetId;
+    if (asset !== this.state.config.assetId) return undefined;
+    const match = /^([a-z0-9_-]+)-updown-5m-(\d+)$/.exec(market.name.toLowerCase());
+    if (!match || match[1] !== asset || Number(match[2]) !== market.startsAt || market.endsAt - market.startsAt !== 300
       || market.instruments.length !== 2) return undefined;
-    const up = market.instruments.find(i => i.outcome.toUpperCase() === "UP");
-    const down = market.instruments.find(i => i.outcome.toUpperCase() === "DOWN");
+    const up = market.instruments.find(i => ["UP", "YES"].includes(i.outcome.toUpperCase()));
+    const down = market.instruments.find(i => ["DOWN", "NO"].includes(i.outcome.toUpperCase()));
     if (!up || !down || up.tokenId === down.tokenId || up.marketId !== market.id || down.marketId !== market.id) return undefined;
     return { UP: up, DOWN: down };
   }
 
   private pairFromSnapshot(round: ReversalRound, snapshot: MarketBookSnapshot, now: number): QuoteReference | undefined {
     if (snapshot.marketId !== round.marketId || snapshot.roundId !== round.roundId
+      || snapshot.assetId !== undefined && snapshot.assetId !== round.assetId
+      || round.assetId !== "btc" && snapshot.assetId !== round.assetId
       || snapshot.expiresAt == null || snapshot.expiresAt <= now
       || snapshot.marketAgeMs != null && snapshot.marketAgeMs > round.config.maxQuoteAgeSeconds * 1000) return undefined;
     const yes = snapshot.YES, no = snapshot.NO;
@@ -443,7 +454,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
     return up === down ? undefined : up ? "UP" : "DOWN";
   }
   private orderIntent(round: ReversalRound, stage: ReversalStage, config: BtcReversalConfig): Omit<OrderRequest, "strategyId"> {
-    return { clientOrderId: stage.clientOrderId, marketId: round.marketId, roundId: round.roundId,
+    return { clientOrderId: stage.clientOrderId, assetId: round.assetId, marketId: round.marketId, roundId: round.roundId,
       tokenId: stage.tokenId, direction: "BUY", price: stage.price,
       shares: stage.shares, timeInForce: "GTC", postOnly: false,
       ...(config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: config.roundBudgetUsd }) };
@@ -493,7 +504,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
     const markets = new Set<string>(), clients = new Set<string>();
     for (const round of state.rounds) {
       round.config = normalizeBtcReversalConfig(round.config);
+      round.assetId ??= state.config.assetId;
       if (!round.marketId || markets.has(round.marketId) || round.config.instanceId !== state.instanceId
+        || round.assetId !== state.config.assetId
         || !Number.isFinite(round.startsAt) || round.endsAt - round.startsAt !== 300
         || typeof round.roundId !== "string" || !round.roundId.trim()
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId

@@ -7,7 +7,7 @@ import { runBtcFeed } from "../live/feeds/btc.js";
 import { FeedQueue, type FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
-import type { AccountSnapshot, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketBookSnapshot, MarketInfo,
+import type { AccountSnapshot, AssetId, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketBookSnapshot, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
 import { normalizeVenueOrderStatus } from "./contracts.js";
 import { TradingPlatform } from "./platform.js";
@@ -30,6 +30,7 @@ type FiveMinuteDiscovery = {
   start: number;
   end: number;
   slug?: string;
+  referenceProducer?: string;
 };
 type DiscoveryModule = typeof marketDiscovery & {
   findFiveMinuteMarket?: (asset: string, options: { now: number; allowCollectorFallback: boolean; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
@@ -44,15 +45,16 @@ type RuntimeFeedStarter = (
 ) => { stop: () => void; isHealthy?: (maxStaleMs?: number) => boolean };
 const startPolymarketFeed = runPolymarketFeed as unknown as RuntimeFeedStarter;
 
-function binaryMarketSides(market: MarketInfo): { up: Instrument; down: Instrument } | undefined {
-  const up = market.instruments.find(item => item.outcome.toUpperCase() === "UP");
-  const down = market.instruments.find(item => item.outcome.toUpperCase() === "DOWN");
+export function binaryMarketSides(market: MarketInfo): { up: Instrument; down: Instrument } | undefined {
+  const up = market.instruments.find(item => ["UP", "YES"].includes(item.outcome.toUpperCase()));
+  const down = market.instruments.find(item => ["DOWN", "NO"].includes(item.outcome.toUpperCase()));
   if (!up || !down || up.tokenId === down.tokenId || up.marketId !== market.id || down.marketId !== market.id) return undefined;
   return { up, down };
 }
 
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
-export async function discoverBtcMarket(
+export async function discoverMarket(
+  asset: AssetId = "btc",
   at = Date.now() / 1000,
   _directOnly = false,
   signal?: AbortSignal,
@@ -64,7 +66,7 @@ export async function discoverBtcMarket(
   if (typeof discovery.findFiveMinuteMarket !== "function") {
     throw new Error("identity-aware market discovery unavailable; deploy with codex/market-data");
   }
-  const market = await discovery.findFiveMinuteMarket("btc", {
+  const market = await discovery.findFiveMinuteMarket(asset, {
     now: at,
     allowCollectorFallback: false,
     directOnly: true,
@@ -97,7 +99,14 @@ export async function discoverBtcMarket(
     return { tokenId, outcome, marketId, tickSize, minOrderSize };
   }));
   if (market.roundId !== String(start)) throw new Error("market round id does not match discovery start");
-  return [{ id: marketId, roundId: market.roundId, name: String(market.slug ?? `btc-updown-5m-${start}`), startsAt: start, endsAt: end, instruments }];
+  const discoveredAsset = String(market.asset ?? asset).toLowerCase();
+  if (discoveredAsset !== asset) throw new Error("market discovery asset identity mismatch");
+  return [{ id: marketId, assetId: asset, referenceProducer: market.referenceProducer ?? `${asset}-reference`, roundId: market.roundId,
+    name: String(market.slug ?? `${asset}-updown-5m-${start}`), startsAt: start, endsAt: end, instruments }];
+}
+
+export async function discoverBtcMarket(at = Date.now() / 1000, directOnly = false, signal?: AbortSignal): Promise<MarketInfo[]> {
+  return discoverMarket("btc", at, directOnly, signal);
 }
 
 export function accountSnapshot(raw: unknown): AccountSnapshot {
@@ -176,6 +185,10 @@ export interface ConnectOptions {
   settle?: PlatformAdapters["settle"];
   durationSec?: number;
   referenceFeed?: boolean;
+  /** Selected asset is checked against every supplied market. */
+  assetId?: AssetId;
+  /** Reference producers are injected by the asset-aware market-data adapter. */
+  referenceFeeds?: Partial<Record<string, (sink: (event: FeedEvent) => void, assetId: AssetId) => { stop: () => void }>>;
 }
 
 export async function connectPolymarketPlatform(options: ConnectOptions) {
@@ -183,8 +196,18 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   if (!options.markets.length || options.markets.some(m => typeof m.roundId !== "string"
     || !/^\d+$/.test(m.roundId) || m.roundId !== String(m.startsAt)
     || !Number.isFinite(m.startsAt) || !Number.isFinite(m.endsAt) || m.endsAt - m.startsAt !== 300
-    || m.instruments.length !== 2 || !binaryMarketSides(m))) {
+    || m.instruments.length !== 2 || !binaryMarketSides(m)
+    || (options.assetId !== undefined && m.assetId !== options.assetId)
+    || (m.assetId !== undefined && (!/^[a-z0-9_-]{1,32}$/.test(m.assetId) || !m.referenceProducer)))) {
     throw new Error("the current Polymarket feed adapter requires explicit binary markets");
+  }
+  if (options.referenceFeed) {
+    for (const market of options.markets) {
+      const assetId = market.assetId ?? options.assetId ?? "btc";
+      if (!options.referenceFeeds?.[assetId] && assetId !== "btc") {
+        throw new Error(`reference producer unavailable for asset ${assetId}`);
+      }
+    }
   }
   let platform!: TradingPlatform;
   let client: ClobWrapper | undefined;
@@ -203,7 +226,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const usersByMarket = new Map<string, UserFeedControl>();
   const connectedMarkets = new Set<string>();
   const registered = new Map<string, Set<string>>();
-  const feedQueue = new FeedQueue();
+  // Keep queue coalescing isolated per market. The legacy FeedQueue coalesces
+  // by event kind, so one shared instance could replace BTC with ETH books.
+  const feedQueues = new Map<string, FeedQueue>();
   const snapshotWatermarks = new Map<string, SnapshotWatermark>();
   const snapshotRejectNotice = new Map<string, SnapshotRejectReason>();
   // A disconnect invalidates snapshots already waiting in the queue. The next
@@ -368,7 +393,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   });
   platform = new TradingPlatform({ account, instruments: options.markets.flatMap(m => m.instruments),
     limits: options.limits, restored: options.restored,
-    adapters: { gateway, readAccount, discoverMarkets: discoverBtcMarket, estimateFee: fee,
+    adapters: { gateway, readAccount, discoverMarkets: () => discoverMarket(options.assetId ?? "btc"), estimateFee: fee,
       persist: options.persist, deferPersistence: options.deferPersistence,
       persistPreparedOrder: options.persistPreparedOrder,
       record: options.record, settle: options.settle,
@@ -398,14 +423,17 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const marketIdentity = (market: MarketInfo): SnapshotGateIdentity => {
     const sides = binaryMarketSides(market);
     if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
-    return { marketId: market.id, roundId: market.roundId, endsAt: market.endsAt,
+    return { assetId: market.assetId, marketId: market.id, roundId: market.roundId, endsAt: market.endsAt,
       yesAssetId: sides.up.tokenId, noAssetId: sides.down.tokenId };
   };
   const routeMarket = (event: RoutedFeedEvent): MarketInfo | undefined => {
     const payload = event as unknown as Record<string, unknown>;
     const snapshot = event.kind === "book" ? payload.snapshot as MarketBookSnapshot | undefined : undefined;
     const eventMarketId = typeof payload.marketId === "string" ? payload.marketId : snapshot?.marketId;
-    return options.markets.find(market => market.id === (eventMarketId ?? event.__runtimeMarketId));
+    const byIdentity = options.markets.find(market => market.id === (eventMarketId ?? event.__runtimeMarketId));
+    if (byIdentity) return byIdentity;
+    const eventAsset = typeof payload.assetId === "string" ? payload.assetId : undefined;
+    return eventAsset ? options.markets.find(market => market.assetId === eventAsset) : undefined;
   };
   const rejectSnapshot = (market: MarketInfo, reason: SnapshotRejectReason): void => {
     const key = snapshotStateKey(market);
@@ -495,7 +523,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     }
     if (event.kind === "marketTrade") return;
     if (event.kind === "btc" || event.kind === "oracle") {
-      platform.ingest({ kind: "reference", symbol: event.kind === "btc" ? "BTC" : "BTC_ORACLE", price: event.price, ts: event.tsUnix });
+      const eventAsset = typeof payload.assetId === "string" ? payload.assetId : "btc";
+      const marketForAsset = options.markets.find(item => (item.assetId ?? "btc") === eventAsset);
+      if (!marketForAsset || eventAsset !== (marketForAsset.assetId ?? "btc")) return;
+      const producer = typeof payload.producer === "string" ? payload.producer : event.kind === "btc" ? "btc-reference" : "btc-oracle";
+      if (marketForAsset.referenceProducer && marketForAsset.referenceProducer !== producer) return;
+      platform.ingest({ kind: "reference", assetId: eventAsset, symbol: event.kind === "btc" ? eventAsset.toUpperCase() : `${eventAsset.toUpperCase()}_ORACLE`, price: event.price, ts: event.tsUnix });
       return;
     }
     if (event.kind !== "user" || !market || !acceptUserEvents) return;
@@ -529,15 +562,25 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const sink = (market: MarketInfo) => (event: FeedEvent) => {
     // The venue callback only performs a bounded queue push. Strategy code,
     // record listeners, account reads and HTTP work run in the consumer.
-    feedQueue.push({ ...event, __runtimeMarketId: market.id } as RoutedFeedEvent as FeedEvent);
+    const queue = feedQueues.get(market.id);
+    if (!queue) return;
+    queue.push({ ...event, __runtimeMarketId: market.id } as RoutedFeedEvent as FeedEvent);
   };
   const startFeedConsumer = (): void => {
     if (feedConsumer) return;
     feedConsumerAlive = true;
     feedConsumer = (async () => {
       while (feedConsumerAlive) {
-        const event = await feedQueue.pop(250);
-        if (!event || !feedConsumerAlive) continue;
+        if (!feedQueues.size) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+          continue;
+        }
+        let event: RoutedFeedEvent | undefined;
+        for (const queue of feedQueues.values()) {
+          const candidate = queue.tryPop();
+          if (candidate) { event = candidate as RoutedFeedEvent; break; }
+        }
+        if (!event) { await new Promise(resolve => setTimeout(resolve, 5)); continue; }
         try { consumeFeedEvent(event); }
         catch (error) {
           const market = routeMarket(event as RoutedFeedEvent);
@@ -823,6 +866,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     }
     signal?.throwIfAborted();
     if (stopped) return;
+    if (!feedQueues.has(market.id)) feedQueues.set(market.id, new FeedQueue());
     if (client) {
       market.instruments = market.instruments.map(instrument => {
         const rule = client!.feeRule(instrument.tokenId);
@@ -835,6 +879,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
     const { up, down } = sides;
     if (market.endsAt > Date.now() / 1000) {
+      if (startPolymarketFeed.length < 5) throw new Error("identity-aware Polymarket feed unavailable; deploy market-data feed adapter");
       const feed = startPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt), {
         marketId: market.id, roundId: market.roundId,
       });
@@ -986,7 +1031,14 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           });
         }
         await Promise.all(options.markets.map(market => startMarket(market)));
-        if (options.referenceFeed) controls.add(runBtcFeed(sink(options.markets[0])));
+        if (options.referenceFeed) {
+          for (const market of options.markets) {
+            const assetId = market.assetId ?? options.assetId ?? "btc";
+            const producer = options.referenceFeeds?.[assetId];
+            if (producer) controls.add(producer(sink(market), assetId));
+            else if (assetId === "btc") controls.add(runBtcFeed(sink(market)));
+          }
+        }
         cleanupExpiredFeeds(); cleanupTimer = setInterval(cleanupExpiredFeeds, 5000);
         refreshCashFlows(); cashFlowTimer = setInterval(refreshCashFlows, 30_000);
       } catch (error) {
@@ -1010,7 +1062,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       catch (error) { stopError = error; }
       finally {
         for (const control of controls) control.stop();
-        bookHealth.clear(); stopHeartbeat?.(); client?.stopHeartbeat();
+        bookHealth.clear(); feedQueues.clear(); stopHeartbeat?.(); client?.stopHeartbeat();
       }
       if (stopError) throw stopError;
     },
