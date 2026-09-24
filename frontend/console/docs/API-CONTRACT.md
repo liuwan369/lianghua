@@ -11,7 +11,7 @@
 3. 实时行情、运行状态和订单事件分别通过独立流接入。只有配置了 `streams.markets`、`streams.runtime`、`streams.orders` 的地址后，前端才会建立对应 WebSocket；地址未配置时显示待接入并保留最近一次成功的 REST 快照。
 4. 账户快照、账户检查和交易控制必须由真实后端提供。前端不接收或保存私钥、Token、签名材料或其他账户秘密；账户页面只显示服务器返回的配置状态、检查结果和只读摘要。
 
-后端尚未提供上述能力时，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。
+后端尚未提供上述能力时，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。后端必须提供符合当前约定的市场目录、运行池、快照和 `marketId + roundId` 字段；旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识。
 
 ## 现有服务可复用接口
 
@@ -243,8 +243,8 @@ await PolyPreviewAdapter.commandRuntime({ action: "start", marketIds, strategyId
 await PolyPreviewAdapter.saveStrategy(draft);
 ```
 
-adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。预览模式返回明确的“待接入”结果，不模拟成功，也不把本地草稿当成服务器运行状态。
+adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。后端未接入时返回明确的 `unavailable/stale` 状态，不模拟成功，也不把浏览器本地状态当成服务器运行状态。
 
-策略保存和激活是两个动作：策略页先向 `/api/strategy/drafts` 提交完整 config（包括 `maxStages`）并保存 `draftId`/`expectedRevision`，不会自动发布或启动；随后向 `/api/strategy/activate` 提交 `{strategyId,draftId,expectedRevision}`。当前服务端只支持未来未创建场次生效，`effectiveRoundId` 非空会返回 501；只有激活确认正 revision 并重新读取已发布配置后，启动命令才可提交该 revision。现代草稿路由失败时不回退会直接发布的 legacy PUT。
+策略保存和激活是两个动作：策略页先向 `/api/strategy/drafts` 提交完整 config（包括 `maxStages`）并保存 `draftId`/`expectedRevision`，不会自动发布或启动；随后向 `/api/strategy/activate` 提交 `{strategyId,draftId,expectedRevision}`。当前服务端只支持未来未创建场次生效，`effectiveRoundId` 非空会返回 501；只有激活确认正 revision 并重新读取已发布配置后，启动命令才可提交该 revision。只有明确配置 `apiFlavor: "legacy"` 时才使用旧 `PUT /api/strategy-config`，旧接口的保存语义是直接发布，页面会隐藏单独激活按钮并明确提示。
 
-后端联调时需要先提供：市场目录、运行池、runtime status、单市场快照和带 `roundId` 的持仓/订单查询；随后接入 markets/runtime/orders 三条实时流。若暂时只有现有策略接口，adapter 会把策略草稿转换成 `{ expectedRevision, config }` 并回退到 `PUT /api/strategy-config`。账户秘密不经过浏览器接口，账户页面只读取服务器保存状态；如需更换账户，由服务器环境配置或部署系统完成。真实账户和交易链路完成联调前，不能把页面的“已连接”“运行中”解释为真实下单成功。
+后端联调时需要先提供：市场目录、运行池、runtime status、单市场快照和带 `roundId` 的持仓/订单查询；随后接入 markets/runtime/orders 三条实时流。若暂时只有现有策略接口，部署配置必须明确使用 `apiFlavor: "legacy"`，不能让现代草稿接口静默降级为直接发布。账户秘密不经过浏览器接口，账户页面只读取服务器保存状态；如需更换账户，由服务器环境配置或部署系统完成。真实账户和交易链路完成联调前，不能把页面的“已连接”“运行中”解释为真实下单成功。

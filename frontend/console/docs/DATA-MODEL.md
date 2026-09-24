@@ -36,7 +36,7 @@ desired 是用户选择，current/next 是服务器确认结果。停用当前�
 
 `{ strategyId, revision, triggerPrice, confirmationPrice, maxBuyPrice, stageShares, roundBudgetUsd, totalBudgetUsd, dailyLossUsd, durationMinutes, effectiveRoundId }`
 
-价格单位固定为 USD 概率（0 到 1）或固定为 cents，二者不能混用。当前设计稿输入是 cents、预览显示 USD，接入时必须在 adapter 统一成一种。
+价格单位固定为 USD 概率（0 到 1）或固定为 cents，二者不能混用。策略页输入使用 cents，adapter 提交前统一转换为 USD 概率。
 
 ### SystemHealthViewModel / AccountViewModel / ActivityEventViewModel
 

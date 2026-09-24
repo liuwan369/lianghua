@@ -4,7 +4,6 @@
   const store = window.PolyPreviewStore;
   const vm = window.PolyPreviewViewModel;
   if (!core || !store || !vm) throw new Error("preview shared modules must load before api-adapter.js");
-  const demoMode = () => core.config.mode === "local-preview";
   const errorText = (error) => error?.message || "接口暂时不可用，页面保留上次成功数据";
   const resourceStatus = (raw, fallback = "ready") => {
     if (["stale", "unavailable", "error", "degraded"].includes(raw?.status)) return raw.status;
@@ -65,7 +64,6 @@
   let runtimeRequest = null;
   const adapter = {
     async loadMarkets() {
-      if (demoMode()) return store.getState().marketCatalog;
       return readSlice("marketCatalog", async () => {
         const raw = await modernOrLegacy(() => core.api.markets(), () => core.api.legacyMarkets());
         store.setMarketCatalog(raw);
@@ -73,7 +71,6 @@
       });
     },
     async loadMarketPool() {
-      if (demoMode()) return store.getState().marketPool;
       return readSlice("marketPool", async () => {
         const raw = await modernOrLegacy(() => core.api.marketPool(), null);
         const poolPayload = raw?.data && typeof raw.data === "object" ? raw.data : raw;
@@ -102,7 +99,6 @@
       });
     },
     async loadMarketSnapshot(marketId, context = {}) {
-      if (demoMode()) return null;
       try { return await core.api.marketSnapshot(marketId, context); }
       catch (error) {
         if (error?.status !== 404) throw error;
@@ -112,15 +108,14 @@
       }
     },
     async loadPosition(roundId, context = {}) {
-      if (demoMode() || !roundId) return null;
+      if (!roundId) return null;
       return core.api.position(roundId, context);
     },
     async loadOrders(roundId, context = {}) {
-      if (demoMode() || !roundId) return null;
+      if (!roundId) return null;
       return core.api.orders(roundId, context);
     },
     async loadRuntime(context = null) {
-      if (demoMode()) return store.getState().runtime;
       if (context) {
         try {
           const raw = await core.api.runtimeStatus(context);
@@ -139,59 +134,74 @@
         const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
         const model = vm.runtime(raw);
         const connectionStatus = resourceStatus(raw);
+        const current = store.getState().runtime;
+        if (connectionStatus !== "ready" && hasSnapshot("runtime", current)) {
+          return store.setSlice("runtime", { ...current, status: connectionStatus, stale: true, connectionStatus, error: raw?.error || "运行状态已过期，保留最近成功数据" });
+        }
         return store.setSlice("runtime", { ...model, runtimeState: model.status, connectionStatus, stale: connectionStatus !== "ready" });
       });
       try { return await runtimeRequest; }
       finally { runtimeRequest = null; }
     },
     async loadStrategy() {
-      if (demoMode()) return store.getState().strategy;
       return readSlice("strategy", async () => {
         const raw = await modernOrLegacy(() => core.api.strategyConfig(), () => core.api.legacyStrategyConfig());
-        const data = raw || {};
-        return store.setSlice("strategy", { status: resourceStatus(data), stale: resourceStatus(data) !== "ready", data, draft: data.draft || null, revision: data.savedRevision ?? data.revision ?? null, error: data.error || null });
+        const payload = raw?.data && typeof raw.data === "object" ? raw.data : raw || {};
+        const status = resourceStatus(raw);
+        const current = store.getState().strategy;
+        if (status !== "ready" && (current.data || current.draft || current.revision != null)) {
+          return store.setSlice("strategy", { ...current, status, stale: true, error: raw?.error || payload.error || "策略配置已过期，保留最近成功数据" });
+        }
+        return store.setSlice("strategy", {
+          status,
+          stale: status !== "ready",
+          data: payload,
+          draft: raw?.draft || payload.draft || null,
+          revision: raw?.savedRevision ?? raw?.revision ?? payload.savedRevision ?? payload.revision ?? null,
+          error: raw?.error || payload.error || null
+        });
       });
     },
     async loadAccount() {
-      if (demoMode()) return store.getState().account;
       return readSlice("account", async () => {
       const raw = await modernOrLegacy(() => core.api.accountSnapshot(), () => core.api.legacyAccountSnapshot());
       const data = raw || {};
-      return store.setSlice("account", { status: resourceStatus(data), stale: resourceStatus(data) === "stale", data, error: data.error || null });
+      const status = resourceStatus(data);
+      const current = store.getState().account;
+      if (status !== "ready" && current.data) return store.setSlice("account", { ...current, status, stale: true, error: data.error || "账户快照已过期，保留最近成功数据" });
+      return store.setSlice("account", { status, stale: status !== "ready", data, error: data.error || null });
     });
   },
     async loadAccountStatus() {
-      if (demoMode()) return store.getState().accountStatus;
       return readSlice("accountStatus", async () => {
         const raw = await core.api.accountStatus();
         const status = resourceStatus(raw);
+        const current = store.getState().accountStatus;
+        if (status !== "ready" && current.data) return store.setSlice("accountStatus", { ...current, status, stale: true, error: raw?.error || "账户状态已过期，保留最近成功数据" });
         return store.setSlice("accountStatus", { status, stale: status !== "ready", data: raw, error: raw?.error || null });
       });
     },
     async checkAccount(payload = {}) {
-      if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户检查接口尚未连接" };
       const raw = await core.api.accountCheck(payload);
       return raw;
     },
     async saveAccount(payload = {}) {
-      if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户保存接口尚未连接" };
       return core.api.accountSave(payload);
     },
     async openControlSession(token) {
-      if (demoMode()) throw new Error("演示模式不能连接交易控制会话");
       if (!token?.trim()) throw new Error("请输入交易控制密码");
       return core.api.controlSession(token.trim());
     },
     async loadDiagnostics() {
-      if (demoMode()) return store.getState().diagnostics;
       return readSlice("diagnostics", async () => {
         const raw = await modernOrLegacy(() => core.api.diagnostics(), () => core.api.legacySystemMetrics());
         const status = resourceStatus(raw);
+        const current = store.getState().diagnostics;
+        if (status !== "ready" && current.data) return store.setSlice("diagnostics", { ...current, status, stale: true, error: raw?.error || "诊断数据已过期，保留最近成功数据" });
         return store.setSlice("diagnostics", { status, stale: status === "stale", data: raw || {}, error: raw?.error || null });
       });
     },
     async loadMetrics(runId) {
-      if (demoMode()) return store.getState().metrics;
       return readSlice("metrics", async () => {
         const results = await Promise.allSettled([core.api.metrics("today"), modernOrLegacy(() => core.api.metrics("run"), async () => {
           const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
@@ -210,7 +220,6 @@
       });
     },
     async loadEvents(runId) {
-      if (demoMode()) return store.getState().events;
       return readSlice("events", async () => {
         const raw = await modernOrLegacy(() => core.api.events(), async () => {
           const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
@@ -219,13 +228,15 @@
         });
         const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.events) ? raw.events : [];
         const status = resourceStatus(raw);
+        const current = store.getState().events;
+        if (status !== "ready" && (current.data || current.items?.length)) return store.setSlice("events", { ...current, status, stale: true, error: raw?.error || "事件已过期，保留最近成功数据" });
         return store.setSlice("events", { status, stale: status !== "ready", items, cursor: raw?.cursor ?? raw?.next_before_id ?? null, data: raw, error: raw?.error || null });
       });
     },
     async saveMarketPool(payload) {
       const next = vm.pool(payload, store.getState().marketCatalog.items);
-      if (demoMode()) return store.setMarketPool(next);
       const current = store.getState().marketPool;
+      if (current.status !== "ready") throw new Error("运行池最近确认状态不可用，恢复服务器连接后再修改");
       const catalog = new Map(store.getState().marketCatalog.items.map((item) => [item.assetId, item]));
       for (const id of next.desiredIds) {
         const item = catalog.get(id);
@@ -239,7 +250,6 @@
       return store.setSlice("marketPool", { ...current, status: "stale", stale: true, pendingDesiredIds: next.desiredIds, error: "已提交运行池变更，等待服务器确认；当前仍显示最近确认状态" });
     },
     async commandRuntime(payload) {
-      if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：运行控制接口尚未连接" };
       const command = { ...(payload || {}) };
       if (command.action === "start" && !Number.isInteger(command.revision)) {
         await adapter.loadStrategy();
@@ -261,7 +271,6 @@
       return commandResult(raw);
     },
     async saveStrategy(payload) {
-      if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略保存接口尚未连接" };
       const state = store.getState();
       const strategyData = state.strategy?.data || {};
       const urlAssetId = new URLSearchParams(window.location.search).get("assetId");
@@ -299,18 +308,29 @@
         assetId: String(assetId).trim(),
         config
       };
+      if (core.config.apiFlavor === "legacy") {
+        const raw = await core.api.legacyStrategySave({ expectedRevision: modernPayload.expectedRevision, config });
+        const result = raw?.data && typeof raw.data === "object" ? { ...raw, ...raw.data } : raw || {};
+        const revision = result.savedRevision ?? result.revision;
+        if (!(result.ok === true || result.accepted === true || Number.isInteger(revision)) || !Number.isInteger(Number(revision)) || !result.config) throw new Error(result.error || "旧策略接口未确认保存成功，输入尚未发布");
+        const published = { ...result, strategyId, savedRevision: Number(revision), revision: Number(revision), config: result.config };
+        store.setSlice("strategy", { status: "ready", stale: false, data: published, draft: null, revision: Number(revision), error: null });
+        return { accepted: true, published: true, revision: Number(revision), config: result.config, strategyId };
+      }
       const raw = await core.api.strategyDraft(modernPayload);
-      if (raw.accepted !== true || !raw.draftId || !raw.config || !Number.isInteger(raw.expectedRevision)) throw new Error("服务器未返回有效策略草稿回执，尚未发布");
-      store.setSlice("strategy", { draft: raw });
-      return raw;
+      const result = raw?.data && typeof raw.data === "object" ? { ...raw, ...raw.data } : raw;
+      if (result.accepted !== true || !result.draftId || !result.config || !Number.isInteger(result.expectedRevision)) throw new Error("服务器未返回有效策略草稿回执，尚未发布");
+      store.setSlice("strategy", { draft: result });
+      return result;
     },
     async activateStrategy(payload) {
-      if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略激活接口尚未连接" };
       const raw = await core.api.strategyActivate(payload);
-      if (raw?.accepted !== true || !Number.isInteger(raw.revision) || raw.revision <= 0) throw new Error(raw?.error || "策略激活未获服务器确认，草稿仍未发布");
-      store.setSlice("strategy", { draft: null });
+      const result = raw?.data && typeof raw.data === "object" ? { ...raw, ...raw.data } : raw;
+      if (result?.accepted !== true || !Number.isInteger(result.revision) || result.revision <= 0) throw new Error(result?.error || "策略激活未获服务器确认，草稿仍未发布");
+      // Let the confirmed follow-up read clear the draft. If that read is
+      // stale or unavailable, the existing draft remains recoverable.
       await adapter.loadStrategy();
-      return raw;
+      return result;
     }
   };
   window.PolyPreviewAdapter = Object.freeze(adapter);

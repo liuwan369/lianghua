@@ -27,7 +27,7 @@
       tone: String(first(raw.tone, assetId)),
       cycle: String(first(raw.cycle, raw.duration, "5m")),
       marketId: first(raw.marketId, raw.market_id) == null ? null : String(first(raw.marketId, raw.market_id)),
-      roundId: first(raw.roundId) == null ? null : String(first(raw.roundId)),
+      roundId: first(raw.roundId, raw.round_id) == null ? null : String(first(raw.roundId, raw.round_id)),
       startAt: first(raw.startAt, raw.start, null),
       endAt: first(raw.endAt, raw.end, null),
       yesBid: finite(first(raw.yesBid, raw.yes_bid, raw.up_bid)),

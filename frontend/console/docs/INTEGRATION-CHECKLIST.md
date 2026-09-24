@@ -18,11 +18,11 @@
 - [ ] loading/stale/empty/error 都有可见状态，错误保留上次成功数据。
 - [ ] 页面切到后台暂停低优先级刷新，返回时恢复快照。
 - [ ] 页面只通过 `PolyPreviewAdapter` 读写，不直接调用 fetch 或 localStorage。
-- [ ] 市场目录只在 `demo-data.js`/Store 中定义一次，自动交易不复制币种列表。
+- [ ] 市场目录只由服务器返回并写入 Store，自动交易不复制币种列表或演示资产。
 - [ ] 启用币种写入 market-pool 后，后端返回 effectiveRoundId/currentIds/nextRoundIds。
 - [ ] 控制按钮传递 requestId 和 marketIds，不能只修改页面文字。
 - [ ] 策略保存提交统一 ViewModel，价格单位在 adapter 中只转换一次。
 - [ ] 用真实接口检查空数据、过期数据、断线、重复 command、权限错误以及缺失 roundId 的旧市场响应。
 - [ ] 用浏览器检查桌面和窄屏布局，确认无横向滚动和整页闪烁。
 
-当前独立稿仍是预览，以上勾选项在后端接入前不应标记为完成。
+以上清单描述真实联调前提；后端尚未提供的能力必须在页面保持 `unavailable/stale`，不能用演示数据填充。
