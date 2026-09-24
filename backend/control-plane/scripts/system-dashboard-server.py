@@ -1652,7 +1652,10 @@ def _modern_settlements(run_id: str | None, query: dict) -> dict:
 
 
 def make_handler(root: Path):
-    docs = root / "docs"
+    # The release publisher installs the console under frontend/console.
+    # Keep static serving rooted at the published frontend tree so /console/
+    # resolves to the same files that are deployed and tested.
+    docs = root / "frontend"
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
