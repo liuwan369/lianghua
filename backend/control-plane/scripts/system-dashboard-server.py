@@ -34,19 +34,15 @@ from dashboard.config import ConfigConflictError
 from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
-from dashboard.market_snapshot import validate_snapshot
+from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after_ms,
+                                       validate_snapshot)
 from dashboard.account_data import AccountData
 from dashboard.system_metrics import SystemMetrics
 
 
-_SCRIPT_ROOT = Path(__file__).resolve().parents[1]
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-_TRADING_ROOT_CANDIDATES = (
-    _SCRIPT_ROOT / "_external" / "btc-5m-market-trading-bot",
-    _REPOSITORY_ROOT / "backend" / "engine",
-    _REPOSITORY_ROOT / "_external" / "btc-5m-market-trading-bot",
-)
-TRADING_ROOT = next((path for path in _TRADING_ROOT_CANDIDATES if path.is_dir()), _TRADING_ROOT_CANDIDATES[0])
+_REPO_ENGINE = Path(__file__).resolve().parents[2] / "engine"
+_EXTERNAL_ENGINE = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
+TRADING_ROOT = _EXTERNAL_ENGINE if _EXTERNAL_ENGINE.is_dir() else _REPO_ENGINE
 DEPLOYMENT_LOCK_PATH = TRADING_ROOT.parents[1] / "data" / "dashboard" / "deployment.lock"
 _trading_lock = threading.RLock()
 _account_check_lock = threading.Lock()
@@ -832,6 +828,18 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
         return None
     markets = runtime.get("markets") if isinstance(runtime.get("markets"), list) else []
     snapshots = runtime.get("snapshots") if isinstance(runtime.get("snapshots"), list) else []
+    strategy_runtime = runtime.get("strategy_runtime") if isinstance(runtime.get("strategy_runtime"), dict) else {}
+    strategy_config = strategy_runtime.get("config") if isinstance(strategy_runtime.get("config"), dict) else {}
+    current_round = strategy_runtime.get("currentRound") if isinstance(strategy_runtime.get("currentRound"), dict) else {}
+    current_config = current_round.get("config") if isinstance(current_round.get("config"), dict) else {}
+    configured_age = strategy_config.get("maxQuoteAgeSeconds", current_config.get("maxQuoteAgeSeconds"))
+    if configured_age is None:
+        runtime_age_ms = runtime.get("stale_after_ms", runtime.get("quote_max_age_ms"))
+    else:
+        runtime_age_ms = _epoch(configured_age) * 1000 if _epoch(configured_age) is not None else configured_age
+    stale_after_ms = normalize_stale_after_ms(runtime_age_ms)
+    stale_after_invalid = runtime_age_ms is not None and stale_after_ms is None
+    runtime_stale = runtime.get("stale") is True
     market_by_id = {str(market.get("id")): market for market in markets
                     if isinstance(market, dict) and market.get("id")}
     rows = []
@@ -858,12 +866,14 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
         rows.append({"slug": market.get("name") or market_id, "name": market.get("name") or market_id,
                      "condition_id": market_id, "round_id": round_id,
                      "start": _epoch(market.get("startsAt")), "end": _epoch(market.get("endsAt")),
-                     "paired_snapshot": snapshot, "healthy": runtime.get("stale") is not True,
-                     "source": "platform-runtime"})
+                     "paired_snapshot": snapshot, "source": "platform-runtime",
+                     "stale_after_ms": stale_after_ms, "_stale_after_invalid": stale_after_invalid,
+                     "_runtime_stale": runtime_stale})
     if not rows:
         return None
     return {"collector_online": status.get("running") is True and runtime.get("status") == "running",
             "current_markets": rows, "source": "platform-runtime",
+            "stale": runtime_stale,
             "stale_reason": runtime.get("error") or ("runtime_snapshot_stale" if runtime.get("stale") else None),
             "asOf": _epoch(runtime.get("source_at"))}
 
@@ -1367,10 +1377,7 @@ def _epoch(value):
 def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
     """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
-    snapshot = row.get("paired_snapshot") if isinstance(row, dict) else None
-    if (not isinstance(snapshot, dict) and isinstance(row, dict)
-            and isinstance(row.get("YES"), dict) and isinstance(row.get("NO"), dict)):
-        snapshot = row
+    snapshot = canonical_snapshot(row)
     slug = str(row.get("slug") or "")
     start, end = _epoch(row.get("start")), _epoch(row.get("end"))
     if not isinstance(snapshot, dict):
@@ -1383,9 +1390,9 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         no = {"assetId": row.get("down_token") or row.get("noToken"),
               "bid": row.get("down_bid", row.get("noBid")),
               "ask": row.get("down_ask", row.get("noAsk"))}
-        stale_after = _epoch(row.get("stale_after_ms", stale_after_ms))
+        stale_after = normalize_stale_after_ms(row.get("stale_after_ms", stale_after_ms))
         expires_at = (quote_at + stale_after / 1000 if quote_at is not None and stale_after is not None
-                      and 0 < stale_after <= 15000 else None)
+                      else None)
         market_id = market_id if isinstance(market_id, str) and market_id else None
         round_id = round_id if isinstance(round_id, str) and round_id else None
         return {"assetId": "btc", "symbol": "BTC", "name": str(row.get("name") or slug or "BTC 五分钟反转"),
@@ -1417,8 +1424,15 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                 and isinstance(yes.get("assetId"), str) and isinstance(no.get("assetId"), str)
                 and type(sequence) is int and sequence >= 0 and source_at is not None and expires_at is not None)
     expired = expires_at is None or expires_at <= now
+    stale_after = normalize_stale_after_ms(row.get("stale_after_ms", stale_after_ms))
+    age_limit = stale_after / 1000 if stale_after is not None else None
+    side_times = [_epoch(side.get("sourceAt")) for side in (yes, no)
+                  if isinstance(side, dict) and side.get("sourceAt") is not None]
     stale = (not complete or expired or source_at is None or source_at > now + 1
-             or row.get("healthy") is False)
+             or row.get("_runtime_stale") is True or row.get("_stale_after_invalid") is True
+             or stale_after is None
+             or (age_limit is not None and (source_at < now - age_limit
+                 or any(value is None or value < now - age_limit or value > now + 1 for value in side_times))))
     quote_times = [_epoch(value.get("sourceAt")) for value in (yes, no) if value]
     quote_times = [value for value in quote_times if value is not None]
     quote_at = min(quote_times, default=source_at)
@@ -1452,7 +1466,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "expiresAt": expires_at,
         "sequence": sequence if type(sequence) is int else None,
         "depthAvailable": depth_available,
-        "strategyEligible": complete and not stale and row.get("source") == "platform-runtime",
+        "strategyEligible": bool(row.get("source") == "platform-runtime") and complete and not stale,
         "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
                       "sequence": sequence if type(sequence) is int else None,
                       "sourceAt": source_at, "expiresAt": expires_at, "stale": stale},
@@ -1472,7 +1486,10 @@ def _modern_markets() -> dict:
     if raw is None:
         raw = cached_live_status()
     rows = raw.get("current_markets") if isinstance(raw.get("current_markets"), list) else []
-    items = [_modern_market(row) for row in rows if isinstance(row, dict)]
+    has_stale_after = "stale_after_ms" in raw
+    stale_after = raw.get("stale_after_ms")
+    items = [_modern_market({**row, "stale_after_ms": stale_after} if has_stale_after else row)
+             for row in rows if isinstance(row, dict)]
     stale = (raw.get("collector_online") is not True or not items or bool(raw.get("stale_reason"))
              or any(item["stale"] for item in items))
     value = {"schemaVersion": 1, "items": items, "markets": items,
@@ -1485,7 +1502,8 @@ def _modern_markets() -> dict:
         # A collector fallback is display-only because it lacks the runtime
         # acceptance watermark/depth. It must not become the last successful
         # modern snapshot used after the fallback itself disappears.
-        if not stale:
+        has_canonical = any(canonical_snapshot(row) is not None for row in rows if isinstance(row, dict))
+        if not stale and has_canonical:
             _modern_market_cache = value
         elif _modern_market_cache:
             retained = [{**item, "stale": True} for item in _modern_market_cache["items"]]
@@ -1622,10 +1640,7 @@ def _modern_settlements(run_id: str | None, query: dict) -> dict:
 
 
 def make_handler(root: Path):
-    frontend_root = root / "frontend" / "console"
-    generated_docs = root / "docs"
-    docs = frontend_root if frontend_root.is_dir() else generated_docs
-    generated_console = (docs / "console").is_dir()
+    docs = root / "docs"
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -1802,18 +1817,10 @@ def make_handler(root: Path):
             if path == "/api/account/status":
                 self._send_json(json.dumps({**account_config_status(), "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
                 return
-            if path == "/api/runtime/market-pool":
-                self._send_json(json.dumps({**market_pool(), "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
-                return
             if path == "/api/live":
                 self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
                 return
-            if path in {"/console", "/console/"}:
-                relative = "console/index.html" if generated_console else "index.html"
-            elif path.startswith("/console/") and not generated_console:
-                relative = path.removeprefix("/console/")
-            else:
-                relative = path.lstrip("/")
+            relative = "console/index.html" if path in {"/console", "/console/"} else path.lstrip("/")
             candidate = (docs / relative).resolve()
             if docs not in candidate.parents or not candidate.is_file():
                 self.send_error(404)
@@ -2000,12 +2007,7 @@ def make_handler(root: Path):
                     )
                     return
                 if path == "/api/runtime/market-pool":
-                    auth_error = _control_request_error(self.headers, "live")
-                    if auth_error:
-                        status, message = auth_error
-                        self._send_json(json.dumps({"ok": False, "error": message}, ensure_ascii=False).encode("utf-8"), status)
-                        return
-                    self._send_json(json.dumps({"ok": True, **save_market_pool(payload)}, ensure_ascii=False,
+                    self._send_json(json.dumps(save_market_pool(payload), ensure_ascii=False,
                                                 allow_nan=False).encode("utf-8"))
                     return
                 if path == "/api/runtime/commands":
@@ -2094,9 +2096,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Trading dashboard and isolated analytics")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    default_root = (_REPOSITORY_ROOT if (_REPOSITORY_ROOT / "frontend" / "console").is_dir()
-                    else Path(__file__).resolve().parents[1])
-    parser.add_argument("--root", default=str(default_root))
+    parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"}:
         parser.error("交易控制台只允许监听本机地址")

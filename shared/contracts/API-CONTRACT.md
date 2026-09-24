@@ -25,7 +25,7 @@
 | 用途 | 方法 | 路径 | 频率/说明 |
 |---|---|---|---|
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
-| BTC 五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 复用运行时/采集器已有快照 |
+| BTC 五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 运行时 accepted snapshot 优先；采集器 canonical paired snapshot 只读展示 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
 | 固定运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化 BTC 状态；PUT 只接受 `btc`，当前/下一场由运行时维护 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
@@ -55,7 +55,9 @@
 
 订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。`/api/fills` 返回成交 journal 修订记录，不能将各页记录直接累加为成交金额；汇总以投影去重结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；`accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。
 
-市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+
+行情新鲜度统一使用 `stale_after_ms`：缺省为 2000ms，显式值必须大于 0 且不超过 15000ms；非法值、过期或连接不可用时保留原始 canonical 快照并标记 `stale=true`，不得继续标记为 `strategyEligible`。运行时策略的 `maxQuoteAgeSeconds` 映射到同一阈值；YES/NO 的 `sourceAt` 只有在字段存在时校验，存在但无效或过期仍使快照失效。
 
 旧 `/api/v1/markets` 保留原始 `round_id` slug 字段供旧调用方读取；该兼容字段不代表现代 `roundId` 身份，也不会参与账本归属或结算统计。
 
