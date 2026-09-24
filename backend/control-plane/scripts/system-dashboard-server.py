@@ -1428,6 +1428,15 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     if isinstance(snapshot, dict):
         asset_id = snapshot.get("assetId") or snapshot.get("asset_id") or asset_id
     asset_id = asset_id.strip().lower() if isinstance(asset_id, str) and _ASSET_ID_RE.fullmatch(asset_id.strip().lower()) else None
+    # The standalone public collector carries the asset in its canonical slug
+    # (for example btc-updown-5m-...). Keep the asset identity available to
+    # the API and UI even though the paired snapshot intentionally contains
+    # only market and outcome token identities.
+    if asset_id is None:
+        slug_hint = str(row.get("slug") or row.get("name") or "").strip().lower()
+        match = re.match(r"^([a-z0-9]+)-updown-5m-", slug_hint)
+        if match and _ASSET_ID_RE.fullmatch(match.group(1)):
+            asset_id = match.group(1)
     symbol = row.get("symbol") if isinstance(row.get("symbol"), str) else (asset_id.upper() if asset_id else None)
     cycle = row.get("cycle") if isinstance(row.get("cycle"), str) else "5m"
     slug = str(row.get("slug") or "")
@@ -1447,7 +1456,9 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                       else None)
         market_id = market_id if isinstance(market_id, str) and market_id else None
         round_id = round_id if isinstance(round_id, str) and round_id else None
-        return {"assetId": asset_id, "symbol": symbol, "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
+        supported = asset_id in SUPPORTED_ASSET_IDS
+        return {"assetId": asset_id, "symbol": symbol, "supported": supported, "canEnable": supported,
+                "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
                 "marketId": market_id, "roundId": round_id, "market_id": market_id, "round_id": round_id,
                 "cycle": cycle, "startAt": start, "endAt": end, "yes": yes, "no": no,
                 "yesToken": yes["assetId"], "noToken": no["assetId"], "yesBid": yes["bid"],
@@ -1493,9 +1504,12 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     no = no or {}
     depth_available = all(isinstance(side.get(key), list) and len(side[key]) >= 5
                           for side in (yes, no) for key in ("bids", "asks"))
+    supported = asset_id in SUPPORTED_ASSET_IDS
     return {
         "assetId": asset_id,
         "symbol": symbol,
+        "supported": supported,
+        "canEnable": supported,
         "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
         "marketId": market_id,
         "roundId": round_id,
