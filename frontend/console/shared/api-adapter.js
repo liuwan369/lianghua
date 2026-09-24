@@ -7,6 +7,7 @@
   const demoMode = () => core.config.mode === "local-preview";
   const errorText = (error) => error?.message || "接口暂时不可用，页面保留上次成功数据";
   const resourceStatus = (raw, fallback = "ready") => {
+    if (["stale", "unavailable", "error"].includes(raw?.status)) return raw.status;
     if (raw?.stale === true || raw?.collector_online === false || raw?.depthUnavailable === true || raw?.depth_unavailable === true) return "stale";
     if (raw?.available === false) return "unavailable";
     return fallback;
@@ -14,6 +15,7 @@
   const hasSnapshot = (slice, resource) => {
     if (!resource) return false;
     if (slice === "marketCatalog") return Array.isArray(resource.items) && resource.items.length > 0;
+    if (slice === "marketPool") return [resource.desiredIds, resource.currentIds, resource.nextRoundIds].some((items) => Array.isArray(items) && items.length > 0) || resource.effectiveRoundId != null;
     if (slice === "events") return resource.data != null || Array.isArray(resource.items) && resource.items.length > 0;
     if (slice === "runtime") return resource.status !== "unavailable" && (resource.asOf != null || resource.runId != null || Array.isArray(resource.markets) && resource.markets.length > 0);
     return resource.data != null;
@@ -74,8 +76,30 @@
       if (demoMode()) return store.getState().marketPool;
       return readSlice("marketPool", async () => {
         const raw = await modernOrLegacy(() => core.api.marketPool(), null);
-        const next = vm.pool(raw, store.getState().marketCatalog.items);
-        return store.setSlice("marketPool", { ...next, status: raw?.stale ? "stale" : "ready", stale: raw?.stale === true, error: raw?.error || null });
+        const poolPayload = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+        const next = vm.pool(poolPayload, store.getState().marketCatalog.items);
+        const status = resourceStatus(poolPayload);
+        const current = store.getState().marketPool;
+        const hasCurrent = hasSnapshot("marketPool", current);
+        const hasPoolFields = poolPayload && typeof poolPayload === "object" && ["desiredIds", "enabledIds", "enabled_ids", "currentIds", "runningIds", "current_ids", "nextRoundIds", "next_round_ids", "effectiveRoundId", "effective_round_id"].some((key) => key in poolPayload);
+        const hasPoolData = [next.desiredIds, next.currentIds, next.nextRoundIds].some((items) => items.length > 0) || next.effectiveRoundId != null;
+        if (!hasPoolFields || !hasPoolData) {
+          return store.setSlice("marketPool", {
+            ...current,
+            status: hasCurrent ? "stale" : "unavailable",
+            stale: true,
+            error: poolPayload?.error || "运行池没有返回有效快照"
+          });
+        }
+        if (status !== "ready" && hasCurrent) {
+          return store.setSlice("marketPool", {
+            ...current,
+            status,
+            stale: true,
+            error: raw?.error || "运行池快照已过期，保留上次成功数据"
+          });
+        }
+        return store.setSlice("marketPool", { ...next, status, stale: status === "stale", error: raw?.error || null });
       });
     },
     async loadMarketSnapshot(marketId) {
@@ -169,7 +193,14 @@
       if (demoMode()) return store.setMarketPool(next);
       const raw = await core.api.marketPool({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ desiredIds: next.desiredIds, effectiveRoundId: next.effectiveRoundId }) });
       const hasPoolFields = raw && typeof raw === "object" && ["desiredIds", "enabledIds", "enabled_ids", "currentIds", "runningIds", "current_ids", "nextRoundIds", "next_round_ids"].some((key) => key in raw);
-      const result = hasPoolFields ? raw : { ...next, source: raw?.source || "backend", updatedAt: raw?.updatedAt || raw?.updated_at || null };
+      const current = store.getState().marketPool;
+      const result = hasPoolFields ? raw : {
+        ...current,
+        desiredIds: next.desiredIds,
+        effectiveRoundId: next.effectiveRoundId ?? current.effectiveRoundId ?? null,
+        source: raw?.source || current.source || "backend",
+        updatedAt: raw?.updatedAt || raw?.updated_at || current.updatedAt || null
+      };
       return store.setMarketPool(result);
     },
     async commandRuntime(payload) {

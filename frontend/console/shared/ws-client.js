@@ -30,7 +30,7 @@
         options.onState?.("connected");
         if (subscription) socket.send(JSON.stringify({ type: "subscribe", stream: name, ...subscription }));
       });
-      socket.addEventListener("close", () => { options.onState?.("closed"); scheduleReconnect(); });
+      socket.addEventListener("close", () => { if (!closed) options.onState?.("closed"); scheduleReconnect(); });
       socket.addEventListener("error", () => options.onState?.("error"));
       socket.addEventListener("message", (event) => {
         try {

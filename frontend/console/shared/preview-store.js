@@ -15,8 +15,8 @@
     marketPool: core.config.mode === "local-preview"
       ? { ...vm.pool(saved, demoItems), status: "demo", stale: false }
       : { desiredIds: [], currentIds: [], nextRoundIds: [], effectiveRoundId: null, source: "backend", status: "unavailable", stale: true, error: "运行池尚未接入" },
-    runtime: { status: "unavailable", source: "local-preview", stale: true, asOf: null, markets: [], error: "后端尚未接入" },
-    strategy: { status: "demo", revision: null, data: null, error: null },
+    runtime: { status: "unavailable", source: core.config.mode === "local-preview" ? "local-preview" : "backend", stale: true, asOf: null, markets: [], error: "后端尚未接入" },
+    strategy: { status: core.config.mode === "local-preview" ? "demo" : "unavailable", revision: null, data: null, error: core.config.mode === "local-preview" ? null : "策略配置尚未接入" },
     account: { status: "unavailable", data: null, error: "后端尚未接入" },
     diagnostics: { status: "unavailable", data: null, error: "后端尚未接入" },
     metrics: { status: "unavailable", data: null, error: "后端尚未接入" },
