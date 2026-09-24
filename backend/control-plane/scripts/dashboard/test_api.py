@@ -265,6 +265,31 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(market["stale"])
         self.assertFalse(market["strategyEligible"])
 
+    def test_collector_unhealthy_row_is_stale_even_before_expires_at(self):
+        now = time.time()
+        levels = [[0.49 - i * 0.01, 10 - i] for i in range(5)]
+        asks = [[0.51 + i * 0.01, 11 + i] for i in range(5)]
+        snapshot = {"marketId": "0xunhealthy", "roundId": "1800000000", "sequence": 10,
+                    "sourceAt": now, "expiresAt": now + 30,
+                    "YES": {"assetId": "yes-token", "bid": .49, "ask": .51,
+                            "bids": levels, "asks": asks},
+                    "NO": {"assetId": "no-token", "bid": .49, "ask": .51,
+                           "bids": levels, "asks": asks}}
+        raw = {"checked_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+               "collector_online": True, "collector_connected": True,
+               "source": "polymarket-ws", "stale_after_ms": 2000,
+               "current_markets": [{"snapshot": snapshot, "healthy": False,
+                                     "quote_fresh": False, "collector_online": False}]}
+        validated = server_module.validate_snapshot(raw, now=now)
+        with patch.object(server_module, "_running_engine_market_status", return_value=None), \
+                patch.object(server_module, "cached_live_status", return_value=validated):
+            value = server_module._modern_markets()
+        market = value["items"][0]
+        self.assertTrue(market["stale"])
+        self.assertFalse(market["strategyEligible"])
+        self.assertEqual(market["expiresAt"], now + 30)
+        self.assertEqual(market["error"], "market_snapshot_unhealthy")
+
     def test_market_pool_reads_saved_state_and_rejects_non_btc(self):
         path = self.root / "results" / "dashboard" / "market_pool.json"
         path.parent.mkdir(parents=True)
