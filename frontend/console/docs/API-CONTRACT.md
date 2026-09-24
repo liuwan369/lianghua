@@ -191,7 +191,7 @@ legacy 模式实际使用的 DTO 边界如下：
 - `nextRoundIds` 是服务器确认下一场生效的资产 ID。
 - `effectiveRoundId` 是这次变更计划生效的轮次。
 
-前端 PUT 只提交 `desiredIds` 和可选的 `effectiveRoundId`，不能用客户端状态覆盖服务器的 `currentIds` 或 `nextRoundIds`。
+前端 PUT 只提交 `desiredIds` 和可选的 `effectiveRoundId`，不能用客户端状态覆盖服务器的 `currentIds` 或 `nextRoundIds`。当前单实例运行池要求始终保留一个 desired asset；市场页因此会禁用最后一个已启用币种的停用操作，停止交易使用 runtime stop 命令。
 
 ## WebSocket 实时流
 
@@ -231,7 +231,7 @@ window.__POLY_PREVIEW_CONFIG__ = {
 }
 ```
 
-响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。
+响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。停止命令允许在运行状态暂时 stale 或缺少市场身份时提交，由服务器最终确认。
 
 ## 前端调用方式
 
