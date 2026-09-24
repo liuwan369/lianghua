@@ -17,6 +17,24 @@ codex/market-data
 
 行情快照必须是同一 `marketId + roundId` 的完整 YES/NO paired snapshot。运行时只接受经过身份、时间戳、过期时间、sequence、sourceAt、价格和 book health 校验的快照。行情失败时保留展示用的最后快照，但关闭执行门控，不清零价格，也不产生新订单。
 
+## 已接受快照状态接口
+
+`TradingPlatform.market.snapshots()` 是低频状态读取接口，返回经过 freshness gate
+接受、并同时发送给策略的 paired snapshot。CLI 会将它放入
+`platform_status.runtime.snapshots`，并在状态 JSON 顶层输出 `snapshots`。每项保留完整
+的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt`，以及 `YES/NO` 的
+`assetId`、best bid/ask、size、排序后的五档 `bids/asks`、各自时间戳、过期时间和
+sequence。`books` 只是单 token 兼容视图，不能用来重新拼 paired snapshot。
+
+`TradingPlatform.ingestBooks()` 和没有身份的旧 `book` 事件仍只属于旧平台适配兼容面，
+不会产生现代 accepted snapshot，也不能作为 BTC 实盘策略的行情入口。生产运行必须由
+`codex/market-data` 接线到 identity-aware `runPolymarketFeed` 和 `FeedQueue`；交易运行时
+自身的旧兼容入口不能替代该接线。
+
+策略回调与状态接口通过上述身份、sequence、时间戳、过期时间和两边 asset/depth
+字段确认来自同一个已接受快照。平台在 API 边界会 clone 数据，因此这里的“同一个”
+指同一份已接受数据和序列，不是共享可变 JavaScript 引用。
+
 ## 接入要求
 
 行情底座必须提供以下能力：
@@ -41,6 +59,10 @@ codex/market-data
 - 场次结束后的结算触发和结算状态持久化。
 
 运行时事件也携带身份：订单和成交包含 `marketId/roundId`，结算请求和结果包含 `marketId/roundId`。账本/API 应原样保存这些字段；缺少身份时保持空值或拒绝需要身份的操作，不能根据 slug 或接收时间回填。
+
+CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
+`market_id`、`round_id` 和 `created_at`。订单/成交优先使用运行时事件顶层身份，
+结算优先使用结算结果身份；slug 只用于展示，不是身份来源。
 
 ## 启动前结算凭据检查
 
