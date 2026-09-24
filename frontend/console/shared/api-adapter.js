@@ -169,12 +169,12 @@
       });
     },
     async checkAccount(payload = {}) {
-      if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户检查接口尚未连接" };
+      if (demoMode()) return { ok: false, status: "unavailable", message: "服务器未连接，无法检查账户" };
       const raw = await core.api.accountCheck(payload);
       return raw;
     },
     async saveAccount(payload = {}) {
-      if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户保存接口尚未连接" };
+      if (demoMode()) return { ok: false, status: "unavailable", message: "服务器未连接，无法保存账户" };
       return core.api.accountSave(payload);
     },
     async openControlSession(token) {
@@ -239,7 +239,7 @@
       return store.setSlice("marketPool", { ...current, status: "stale", stale: true, pendingDesiredIds: next.desiredIds, error: "已提交运行池变更，等待服务器确认；当前仍显示最近确认状态" });
     },
     async commandRuntime(payload) {
-      if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：运行控制接口尚未连接" };
+      if (demoMode()) return { accepted: false, status: "unavailable", message: "服务器未连接，无法提交运行控制" };
       const command = { ...(payload || {}) };
       if (command.action === "start" && !Number.isInteger(command.revision)) {
         await adapter.loadStrategy();
@@ -261,7 +261,7 @@
       return commandResult(raw);
     },
     async saveStrategy(payload) {
-      if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略保存接口尚未连接" };
+      if (demoMode()) return { accepted: false, status: "unavailable", message: "服务器未连接，无法保存策略" };
       const state = store.getState();
       const strategyData = state.strategy?.data || {};
       const urlAssetId = new URLSearchParams(window.location.search).get("assetId");
@@ -305,7 +305,7 @@
       return raw;
     },
     async activateStrategy(payload) {
-      if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略激活接口尚未连接" };
+      if (demoMode()) return { accepted: false, status: "unavailable", message: "服务器未连接，无法激活策略" };
       const raw = await core.api.strategyActivate(payload);
       if (raw?.accepted !== true || !Number.isInteger(raw.revision) || raw.revision <= 0) throw new Error(raw?.error || "策略激活未获服务器确认，草稿仍未发布");
       store.setSlice("strategy", { draft: null });

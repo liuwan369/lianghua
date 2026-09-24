@@ -154,10 +154,8 @@
     legacyStrategyConfig: () => request("/api/strategy-config")
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  const config = { apiBase: "", mode: window.location.protocol === "file:" ? "local-preview" : "backend", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, ...runtimeConfig };
-  config.demo = config.mode === "local-preview";
+  const config = { apiBase: "", mode: "backend", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, ...runtimeConfig };
+  config.mode = "backend";
+  config.demo = false;
   window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, setSelectedAssetUrl, on, emit });
-  window.addEventListener("storage", (event) => {
-    if (config.mode === "local-preview" && event.key) emit(`storage:${event.key}`, storage.read(event.key, null));
-  });
 })();
