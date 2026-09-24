@@ -30,6 +30,9 @@ class ApiTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.engine_patch = patch.object(server_module, "TRADING_ROOT", self.root)
         self.engine_patch.start()
+        account_patch = patch.object(server_module, "_account_values", return_value={})
+        account_patch.start()
+        self.addCleanup(account_patch.stop)
         server_module._modern_response_cache.clear()
         server_module._modern_market_cache = {}
         server_module._market_pool_cache = {}
@@ -135,9 +138,9 @@ class ApiTests(unittest.TestCase):
                "up_bid": .4, "up_ask": .5, "down_bid": .5, "down_ask": .6}
         raw = {"collector_online": True, "source": "platform-runtime", "current_markets": [row]}
         with patch.object(server_module, "_running_engine_market_status", return_value=raw), \
-                patch.object(server_module, "cached_live_status") as collector:
+                patch.object(server_module, "cached_live_status", return_value={}) as collector:
             code, first = self.request("/api/markets")
-            collector.assert_not_called()
+            collector.assert_called_once()
         self.assertEqual(code, 200)
         market = first["items"][0]
         self.assertEqual(market["marketId"], "0xcondition")
@@ -164,7 +167,7 @@ class ApiTests(unittest.TestCase):
         with patch.object(server_module, "_running_engine_market_status", return_value={
                 "collector_online": True, "source": "platform-runtime", "current_markets": [
                     {"paired_snapshot": snapshot, "start": now - 1, "end": now + 299}]}), \
-                patch.object(server_module, "cached_live_status", side_effect=AssertionError("collector fallback")):
+                patch.object(server_module, "cached_live_status", return_value={}):
             value = server_module._modern_markets()
         market = value["items"][0]
         self.assertEqual(market["roundId"], "1800000000")
@@ -445,7 +448,8 @@ class ApiTests(unittest.TestCase):
             ledger.return_value.summary.assert_called_once_with("run", range="today")
 
     def test_legacy_summary_keeps_shape(self):
-        with patch.object(server_module, "Ledger") as ledger:
+        with patch.object(server_module, "Ledger") as ledger, \
+                patch.object(server_module, "_scoped_run_id", return_value="run"):
             ledger.return_value.summary.return_value = {"settled_pnl": 2.}
             code, body = self.request("/api/v1/summary?run_id=run")
         self.assertEqual(code, 200)
@@ -460,6 +464,7 @@ class ApiTests(unittest.TestCase):
                        "checked_at": time.time(), "checks": [],
                        "wallet_kind": "eoa", "signature_type": "eoa"}
         with patch.object(server_module, "_account_values", return_value=values), \
+                patch.object(server_module, "_account_report_identity", server_module._account_identity(values)), \
                 patch.object(server_module, "_account_check_error", None):
             for supplied, expected in ((True, True), (False, False), ("unknown", None), (None, None)):
                 report = {**base_report}

@@ -4,18 +4,27 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import os
 import queue
+import shutil
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dashboard_account import child_environment, contains_secret
+
+
+class _ReaderError(RuntimeError):
+    """Fixed diagnostic codes only; never expose a child error or environment."""
+
+
+_SECTIONS = ("collateral", "open_orders", "trades", "positions", "closed_positions", "activity")
+
 
 class AccountData:
     def __init__(self, engine: Path, values_loader, interval: float = 30, timeout: float = 90):
-        self.engine, self.values_loader = Path(engine), values_loader
+        self.engine, self.values_loader = Path(engine).resolve(), values_loader
         self.interval, self.timeout = max(30., interval), timeout
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
@@ -67,27 +76,33 @@ class AccountData:
             threading.Thread(target=reap, name="account-reader-reap", daemon=True).start()
 
     def _spawn(self, values):
-        env = os.environ.copy()
-        for key in ("POLYMARKET_WALLET_ADDRESS", "POLYMARKET_OWNER_PRIVATE_KEY", "POLYMARKET_PRIVATE_KEY", "POLYMARKET_SESSION_PRIVATE_KEY", "POLY_FUNDER", "POLY_SIGNATURE_TYPE", "RELAYER_API_KEY", "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"):
-            env.pop(key, None)
-        for key in ("POLYMARKET_WALLET_ADDRESS", "POLYMARKET_OWNER_PRIVATE_KEY", "POLYMARKET_PRIVATE_KEY", "POLY_FUNDER"):
-            if values.get(key):
-                env[key] = values[key]
-        if os.environ.get("PM_ACCOUNT_RPC_URL"):
-            env["POLYGON_RPC"] = os.environ["PM_ACCOUNT_RPC_URL"]
-        if os.environ.get("PM_ACCOUNT_NODE_COMPILE_CACHE"):
-            env["NODE_COMPILE_CACHE"] = os.environ["PM_ACCOUNT_NODE_COMPILE_CACHE"]
-        process = subprocess.Popen(["node", str(self.engine / "dist" / "cli" / "account-data.js")], cwd=self.engine,
-                                   env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                   text=True, encoding="utf-8", bufsize=1)
+        env = child_environment(values)
+        entry = self.engine / "dist" / "cli" / "account-data.js"
+        if not self.engine.is_dir():
+            raise _ReaderError("account_engine_missing")
+        if not entry.is_file():
+            raise _ReaderError("account_reader_build_missing")
+        node = shutil.which("node")
+        if not node:
+            raise _ReaderError("account_node_missing")
+        try:
+            process = subprocess.Popen([node, str(entry)], cwd=self.engine,
+                                       env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                       text=True, encoding="utf-8", bufsize=1)
+        except ValueError:
+            raise _ReaderError("account_reader_config_invalid") from None
         messages = queue.Queue(maxsize=2)
         def read():
             try:
                 for line in process.stdout:
                     if len(line) > 32_000_000:
-                        messages.put(None)
                         break
-                    messages.put(line)
+                    try:
+                        messages.put_nowait(line)
+                    except queue.Full:
+                        break
+            except (OSError, UnicodeError):
+                pass
             finally:
                 try:
                     messages.put_nowait(None)
@@ -121,44 +136,73 @@ class AccountData:
                 if not wallet:
                     self._cache = self._empty(None, "account_not_configured")
                     return False
-                process, messages = (self._process, self._queue)
-                if process is None or process.poll() is not None:
-                    process, messages = self._spawn(values)
             try:
+                with self._lock:
+                    process, messages = (self._process, self._queue)
+                    if process is None or process.poll() is not None:
+                        process, messages = self._spawn(values)
                 process.stdin.write('{"command":"refresh"}\n')
                 process.stdin.flush()
                 line = messages.get(timeout=self.timeout)
                 if line is None:
-                    raise ValueError("reader closed")
+                    raise _ReaderError("account_reader_exited")
                 result = json.loads(line)
-                if not isinstance(result, dict) or result.get("error_code") or str(result.get("wallet", "")).lower() != wallet.lower():
+                if isinstance(result, dict) and result.get("error_code"):
+                    raise _ReaderError("account_data_fetch_failed")
+                if not isinstance(result, dict) or contains_secret(result, values) or str(result.get("wallet", "")).lower() != wallet.lower():
                     raise ValueError("invalid response")
                 source_age = time.time()-datetime.fromisoformat(result["checked_at"]).timestamp()
                 if not (-5 <= source_age <= self.timeout+5) or result.get("read_only") is not True:
                     raise ValueError("invalid source clock")
-                for key in ("collateral", "open_orders", "trades", "positions", "closed_positions", "activity"):
+                for key in _SECTIONS:
                     section = result.get(key)
                     if not isinstance(section, dict) or not isinstance(section.get("available"), bool) or not isinstance(section.get("complete"), bool) or not isinstance(section.get("items"), list):
                         raise ValueError("missing account section")
-                result["available"] = any(result[key].get("available") for key in ("collateral", "open_orders", "trades", "positions", "closed_positions", "activity"))
                 # Reject a reply if the saved account changed during network I/O.
                 _, _, current = self._account()
                 with self._lock:
                     if current != identity:
                         return False
+                    # A failed section must not erase the last observed balance
+                    # or orders while unrelated public queries still succeed.
+                    for key in (*_SECTIONS, "order_history", "fees", "rewards", "reconciliation", "occupancy"):
+                        section, previous = result.get(key), self._cache.get(key)
+                        if (isinstance(section, dict)
+                                and (section.get("available") is False or (key in _SECTIONS and section.get("error_code") and not section.get("complete")))
+                                and isinstance(previous, dict)):
+                            result[key] = {**previous, "available": False, "complete": False, "stale": True,
+                                           "error_code": section.get("error_code") or "account_section_fetch_failed",
+                                           "attempted_at": section.get("checked_at")}
+                    result["available"] = any(result[key].get("available") for key in _SECTIONS)
+                    if not result["available"]:
+                        result["error_code"] = "account_sections_unavailable"
                     self._cache, self._checked = result, time.monotonic()
                 return True
-            except Exception:
+            except Exception as exc:
+                if isinstance(exc, _ReaderError):
+                    code = str(exc)
+                elif isinstance(exc, PermissionError):
+                    code = "account_reader_permission_denied"
+                elif isinstance(exc, FileNotFoundError):
+                    code = "account_reader_executable_missing"
+                elif isinstance(exc, (queue.Empty, subprocess.TimeoutExpired)):
+                    code = "account_reader_timeout"
+                elif isinstance(exc, (ValueError, TypeError, KeyError, UnicodeError)):
+                    code = "account_response_invalid"
+                elif isinstance(exc, (BrokenPipeError, OSError)):
+                    code = "account_reader_io_failed"
+                else:
+                    code = "account_reader_unavailable"
                 with self._lock:
                     if identity == self._identity:
                         self._stop_process()
-                        if self._checked and self._cache.get("available"):
+                        if self._checked:
                             self._cache = {
                                 **self._cache,
-                                "error_code": "account_data_fetch_failed",
+                                "error_code": code,
                             }
                         else:
-                            self._cache = self._empty(wallet, "account_data_fetch_failed")
+                            self._cache = self._empty(wallet, code)
                 return False
         finally:
             self._refresh_lock.release()

@@ -64,13 +64,13 @@ type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]:
 function jsonOrStrArray(v: unknown): string[] | undefined {
   if (v == null) return undefined;
   if (Array.isArray(v)) {
-    return v.filter((x): x is string => typeof x === "string");
+    return v.every((x): x is string => typeof x === "string") ? v : undefined;
   }
   if (typeof v === "string") {
     try {
       const parsed = JSON.parse(v) as unknown;
       if (Array.isArray(parsed)) {
-        return parsed.filter((x): x is string => typeof x === "string");
+        return parsed.every((x): x is string => typeof x === "string") ? parsed : undefined;
       }
     } catch {
       return undefined;
@@ -102,16 +102,15 @@ export function parseMarket(m: Record<string, JsonValue>, asset = DEFAULT_MARKET
 
   const toks =
     jsonOrStrArray(m.clobTokenIds) ?? jsonOrStrArray(m.clob_token_ids);
-  if (!toks || toks.length < 2 || !toks[0] || !toks[1] || toks[0] === toks[1]) return undefined;
+  if (!toks || toks.length !== 2 || !toks[0]?.trim() || !toks[1]?.trim() || toks[0] === toks[1]) return undefined;
 
   const outs = jsonOrStrArray(m.outcomes) ?? [];
+  const labels = outs.map(value => value.trim().toLowerCase());
+  const upI = labels.findIndex(value => value === "up" || value === "yes");
+  const downI = labels.findIndex(value => value === "down" || value === "no");
+  if (labels.length !== 2 || upI < 0 || downI < 0 || upI === downI) return undefined;
   const slugStart = Number.parseInt(roundRaw, 10);
   if (!Number.isSafeInteger(slugStart) || slugStart < 0 || slugStart % FIVE_MINUTES_SEC !== 0) return undefined;
-
-  const upI =
-    outs.length === 2 && ["down", "no"].includes(outs[0]?.trim().toLowerCase() ?? "")
-      ? 1
-      : 0;
 
   const conditionId = [m.conditionId, m.condition_id]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";

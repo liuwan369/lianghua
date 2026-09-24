@@ -213,7 +213,7 @@ class LedgerRegressionTests(unittest.TestCase):
         runtime["runtime"]["markets"][0]["roundId"] = self.round_id
         runtime["runtime"]["strategy_runtime"]["currentRound"]["roundId"] = self.round_id
         runtime["runtime"]["strategy_runtime"]["rounds"][0]["roundId"] = self.round_id
-        self.write("run-a", [order, self.fill(trade_id="late-trade", market_id=self.market_id, round_id="wrong-round"), settlement, runtime])
+        self.write("run-a", [order, self.fill(trade_id="late-trade", market_id=self.market_id), settlement, runtime])
         events = self.ledger.events("run-a", kinds={"order", "fill", "settlement"})["events"]
         by_event = {item["event"]: item for item in events}
         for item in by_event.values():
@@ -229,6 +229,102 @@ class LedgerRegressionTests(unittest.TestCase):
         item = self.ledger.events("run-a", kinds={"fill"})["events"][0]
         self.assertIsNone(item["market_id"])
         self.assertIsNone(item["round_id"])
+
+    def test_explicit_old_round_is_not_reassigned_by_current_runtime(self):
+        self.write("run-a", [self.fill(market_id=self.market_id, round_id="old-round"), self.runtime()])
+        item = self.ledger.events("run-a", kinds={"fill"})["events"][0]
+        self.assertEqual(item["round_id"], "old-round")
+        self.assertEqual(len(self.ledger.events("run-a", round_id=self.round_id)["events"]), 0)
+
+    def test_unknown_and_invalid_asset_do_not_become_btc(self):
+        self.write("run-a", [self.fill(market_slug="unidentified", trade_id="unknown"),
+                             self.fill(assetId="!invalid", trade_id="invalid")])
+        events = self.ledger.events("run-a", kinds={"fill"})["events"]
+        self.assertTrue(all(item["asset_id"] is None for item in events))
+        self.assertEqual(self.ledger.events("run-a", asset_id="btc")["events"], [])
+        self.assertEqual(self.ledger.metrics_summary("run-a", range="run", asset_id="btc")["fill_count"], 0)
+        with self.assertRaises(ValueError):
+            self.ledger.metrics_summary("run-a", range="run", asset_id="!invalid")
+
+    def test_shared_economic_ids_are_distinct_across_assets_and_rounds(self):
+        entries = []
+        identities = [("btc", "market-a", "round-a", .1), ("eth", "market-a", "round-a", .2),
+                      ("btc", "market-b", "round-b", .3)]
+        for asset, market, round_id, fee in identities:
+            entries.extend([
+                {"event": "order", "assetId": asset, "market_id": market, "market_slug": market,
+                 "round_id": round_id, "client_order_id": "same-client", "order_id": "same-order",
+                 "status": "FILLED", "filled_shares": 10, "updated_at": self.now},
+                self.fill(assetId=asset, market_id=market, market_slug=market, round_id=round_id,
+                          trade_id="same-trade", order_id="same-order", fee=fee),
+            ])
+        self.write("run-a", entries)
+        self.write("run-b", entries)
+        self.assertEqual(self.ledger.orders_page("run-a")["total"], 3)
+        self.assertEqual(self.ledger.summary("run-a")["fill_count"], 3)
+        self.assertEqual(self.ledger.metrics_summary("run-a", range="all")["fill_count"], 3)
+        for asset, market, round_id, fee in identities:
+            page = self.ledger.orders_page("run-a", asset_id=asset, market_id=market, round_id=round_id)
+            self.assertEqual(page["total"], 1)
+            self.assertEqual(len(page["orders"][0]["fills"]), 1)
+            self.assertAlmostEqual(page["orders"][0]["fee"], fee)
+            summary = self.ledger.metrics_summary("run-a", range="run", asset_id=asset, market_id=market,
+                                                  round_id=round_id)
+            self.assertEqual(summary["fill_count"], 1)
+            self.assertEqual(summary["run_count"], 1)
+            self.assertAlmostEqual(summary["fees"], fee)
+        self.assertEqual(self.ledger.orders_page("run-a", asset_id="eth", market_id="market-b",
+                                                round_id="round-a")["total"], 0)
+
+    def test_legacy_null_order_identity_keeps_one_latest_lifecycle(self):
+        self.write("run-a", [{"event": "order", "client_order_id": "legacy", "order_id": "order",
+                              "status": "OPEN"},
+                             {"event": "order", "client_order_id": "legacy", "order_id": "order",
+                              "status": "CANCELLED"}])
+        page = self.ledger.orders_page("run-a")
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["orders"][0]["status"], "CANCELLED")
+
+    def test_position_ambiguous_round_requires_composite_identity(self):
+        runtime = self.runtime()["runtime"]
+        first = runtime["strategy_runtime"]["currentRound"]
+        second = {**first, "assetId": "eth", "marketId": "market-eth", "name": "eth-round"}
+        runtime["strategy_runtime"]["rounds"] = [first, second]
+        self.write("run-a", [{"event": "platform_status", "runtime": runtime}])
+        ambiguous = self.ledger.position("run-a", self.round_id)
+        self.assertFalse(ambiguous["available"])
+        self.assertIn("ambiguous", ambiguous["error"])
+        self.assertTrue(self.ledger.position("run-a", self.round_id, asset_id="btc", market_id=self.market_id)["available"])
+
+    def test_eth_settlement_late_runtime_preserves_pnl_after_position_cleared(self):
+        runtime = self.runtime()["runtime"]
+        runtime["assetId"] = "eth"
+        runtime["markets"][0]["assetId"] = "eth"
+        runtime["strategy_runtime"]["currentRound"]["assetId"] = "eth"
+        self.write("run-a", [self.fill(assetId="eth", market_id=self.market_id, round_id=self.round_id),
+                             self.settlement(assetId="eth"), {"event": "platform_status", "runtime": runtime}])
+        page = self.ledger.settlements_page("run-a", asset_id="eth")["settlements"]
+        self.assertEqual(len(page), 1)
+        self.assertAlmostEqual(page[0]["pnl"], 5.9)
+        runtime["strategy_runtime"]["currentRound"]["upShares"] = 0
+        runtime["strategy_runtime"]["currentRound"]["costUsd"] = 0
+        runtime["positions"] = []
+        runtime["positions_count"] = 0
+        self.write("run-a", [{"event": "platform_status", "runtime": runtime, "recv_ts": self.now + .1}])
+        page = self.ledger.settlements_page("run-a", asset_id="eth")["settlements"]
+        self.assertEqual(len(page), 1)
+        self.assertAlmostEqual(page[0]["pnl"], 5.9)
+
+    def test_older_runtime_cannot_overwrite_mapping_or_settlement_evidence(self):
+        self.write("run-a", [self.fill(), self.runtime(), self.settlement()])
+        older = self.runtime()
+        older["recv_ts"] = self.now - 1
+        older["runtime"]["markets"][0]["roundId"] = "old-round"
+        older["runtime"]["strategy_runtime"]["currentRound"]["roundId"] = "old-round"
+        self.write("run-a", [older])
+        item = self.ledger.events("run-a", kinds={"fill"})["events"][0]
+        self.assertEqual(item["round_id"], self.round_id)
+        self.assertAlmostEqual(self.ledger.summary("run-a")["settled_pnl"], 5.9)
 
     def test_range_is_utc_account_scoped_and_restart_deduplicated(self):
         self.write("run-a", [self.fill(), self.runtime(), self.settlement()])

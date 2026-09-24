@@ -14,6 +14,7 @@ const DISCOVERY_PREWARM_RETRY_MS = 250;
 const DISCOVERY_POST_BOUNDARY_MS = 20_000;
 
 export interface MarketSnapshotOptions {
+  assets?: string[];
   output: string;
   durationSec: number;
   staleAfterMs: number;
@@ -24,19 +25,24 @@ export interface MarketSnapshotOptions {
 export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOptions | undefined {
   const options: MarketSnapshotOptions = { output: "data/dashboard/market-snapshot.json", durationSec: 0,
     staleAfterMs: 2_000, publishMs: 250, discoveryMs: 15_000 };
-  const numeric = new Map<string, keyof Omit<MarketSnapshotOptions, "output">>([
+  const numeric = new Map<string, keyof Omit<MarketSnapshotOptions, "output" | "assets">>([
     ["--duration-sec", "durationSec"], ["--stale-after-ms", "staleAfterMs"],
     ["--publish-ms", "publishMs"], ["--discovery-ms", "discoveryMs"],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: market-snapshot [--output path] [--duration-sec seconds] [--stale-after-ms ms] [--publish-ms ms] [--discovery-ms ms]");
+      console.log("Usage: market-snapshot [--assets btc,eth,sol] [--output path] [--duration-sec seconds] [--stale-after-ms ms] [--publish-ms ms] [--discovery-ms ms]");
       return undefined;
     }
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
     if (arg === "--output") options.output = value;
+    else if (arg === "--assets") {
+      const assets = value.split(",").map(asset => asset.trim().toLowerCase());
+      if (assets.some(asset => !asset)) throw new Error("--assets must contain one or more comma-separated assets");
+      options.assets = [...new Set(assets)];
+    }
     else {
       const field = numeric.get(arg);
       if (!field) throw new Error(`unknown option: ${arg}`);
@@ -44,6 +50,9 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
     }
   }
   if (!Number.isFinite(options.durationSec) || options.durationSec < 0) throw new Error("--duration-sec must be non-negative");
+  if (options.assets && (!options.assets.length || options.assets.some(asset => !["btc", "eth", "sol"].includes(asset)))) {
+    throw new Error("--assets supports one or more of btc, eth and sol");
+  }
   for (const field of ["staleAfterMs", "publishMs", "discoveryMs"] as const) {
     if (!Number.isFinite(options[field]) || options[field] <= 0) throw new Error(`${field} must be positive`);
   }
@@ -52,14 +61,14 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
 
 export interface MarketSnapshotDependencies {
   now: () => number;
-  discover: (at: number, directOnly?: boolean, signal?: AbortSignal) => Promise<Market | undefined>;
+  discover: (at: number, directOnly?: boolean, signal?: AbortSignal, asset?: string) => Promise<Market | undefined>;
   feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number, identity?: FeedMarketIdentity) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
 }
 
 const defaults: MarketSnapshotDependencies = {
   now: () => Date.now() / 1000,
-  discover: (at, directOnly = false, signal) => findMarket(at, false, directOnly, signal),
+  discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, false, directOnly, signal, asset),
   feed: runPolymarketFeed,
   publish: publishSnapshot,
 };
@@ -67,12 +76,13 @@ const defaults: MarketSnapshotDependencies = {
 /** Runs only public Gamma discovery and the existing public CLOB WS feed. */
 export async function runMarketSnapshot(options: MarketSnapshotOptions, dependencies: Partial<MarketSnapshotDependencies> = {}, signal?: AbortSignal): Promise<void> {
   const deps = { ...defaults, ...dependencies };
+  const assets = options.assets ?? ["btc"];
   const active = new Map<string, { market: Market; projection: ClobMarketProjection; stop: () => void }>();
   let lastPublished = readPublishedSnapshot(options.output);
   if (lastPublished) lastPublished = stalePublishedSnapshot(lastPublished, deps.now(), "Collector restarted; waiting for a fresh paired quote");
   let stopped = false;
   let failure: unknown;
-  let discoveryJob: Promise<void> | undefined;
+  const discoveryJobs = new Map<string, Promise<void>>();
   let publishTimer: ReturnType<typeof setInterval> | undefined;
   let discoveryTimer: ReturnType<typeof setInterval> | undefined;
   let discoveryPrewarmStartTimer: ReturnType<typeof setTimeout> | undefined;
@@ -93,35 +103,45 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     for (const [key, item] of active) {
       if (item.market.end <= now) { item.stop(); item.projection.disconnect(); active.delete(key); }
     }
-    const current = [...active.values()].filter(item => item.market.start <= now && now < item.market.end)
-      .sort((a, b) => b.market.start - a.market.start)[0];
-    let value = current?.projection.snapshot(now) ?? {
-      checked_at: new Date(now * 1000).toISOString(), collector_online: false, collector_connected: false,
-      strategyEligible: false as const, stale_after_ms: options.staleAfterMs,
-      source: "polymarket-ws" as const, current_markets: [],
-      stale_reason: "Waiting for the current BTC market and its CLOB WebSocket quotes",
+    const rows: MarketProjectionSnapshot["current_markets"] = [];
+    let connected = false;
+    for (const asset of assets) {
+      const current = [...active.values()].filter(item => item.market.asset === asset && item.market.start <= now && now < item.market.end)
+        .sort((a, b) => b.market.start - a.market.start)[0];
+      const snapshot = current?.projection.snapshot(now);
+      connected ||= snapshot?.collector_connected === true;
+      if (snapshot?.current_markets.length) rows.push(...snapshot.current_markets);
+      else if (lastPublished) {
+        const retained = stalePublishedSnapshot(lastPublished, now, "Waiting for a fresh paired quote");
+        rows.push(...retained.current_markets.filter(row => (row.assetId ?? (row.slug.split("-updown-5m-")[0] || "btc")) === asset));
+      }
+    }
+    const online = rows.some(row => row.healthy);
+    const value: MarketProjectionSnapshot = {
+      checked_at: new Date(now * 1000).toISOString(), collector_online: online, collector_connected: connected,
+      strategyEligible: false, stale_after_ms: options.staleAfterMs,
+      source: "polymarket-ws", current_markets: rows,
+      ...(!online ? { stale_reason: "Waiting for fresh CLOB WebSocket quotes" } : {}),
     };
-    if (value.current_markets.length) lastPublished = value;
-    else if (lastPublished) value = stalePublishedSnapshot(lastPublished, now,
-      value.stale_reason ?? "Waiting for a fresh paired quote", current?.projection.isConnected() ?? false);
+    if (rows.length) lastPublished = value;
     deps.publish(options.output, value);
   };
   const safePublish = () => {
     try { publish(); } catch (error) { failure ??= error; stop(); }
   };
   const discover = (target?: number, directOnly = false): Promise<void> => {
-    if (discoveryJob || stopped) return discoveryJob ?? Promise.resolve();
-    discoveryJob = (async () => {
-      const now = deps.now();
-      const next = target ?? (Math.floor(now / MARKET_WINDOW_SEC) + 1) * MARKET_WINDOW_SEC;
-      const candidates = target == null
-        ? await Promise.allSettled([deps.discover(now, false, discoveryAbort.signal),
-          deps.discover(next, false, discoveryAbort.signal)])
-        : await Promise.allSettled([deps.discover(next, directOnly, discoveryAbort.signal)]);
-      if (stopped) return;
-      for (const result of candidates) {
-        const market = result.status === "fulfilled" ? result.value : undefined;
-        if (!market || market.end <= deps.now() || active.has(market.slug)) continue;
+    if (stopped) return Promise.resolve();
+    const now = deps.now();
+    const next = target ?? (Math.floor(now / MARKET_WINDOW_SEC) + 1) * MARKET_WINDOW_SEC;
+    const jobs = assets.flatMap(asset => (target == null ? [now, next] : [next]).map(at => {
+      const key = `${asset}:${Math.floor(at / MARKET_WINDOW_SEC)}`;
+      const existing = discoveryJobs.get(key);
+      if (existing) return existing;
+      const job = (async () => {
+        let market: Market | undefined;
+        try { market = await deps.discover(at, directOnly, discoveryAbort.signal, asset); }
+        catch { return; } // A failed public discovery is retried on its own cadence.
+        if (stopped || !market || market.asset !== asset || market.end <= deps.now() || active.has(market.slug)) return;
         const projection = new ClobMarketProjection({ ...market, staleAfterMs: options.staleAfterMs });
         const previous = lastPublished?.current_markets.find(row => row.marketId === market.conditionId
           && row.roundId === market.roundId && row.snapshot.marketId === market.conditionId
@@ -140,19 +160,21 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
           yesAssetId: market.upToken, noAssetId: market.downToken,
           sequenceBase: previous?.snapshot.sequence });
         active.set(market.slug, { market, projection, stop: control.stop });
-      }
-      safePublish();
-    })().catch(error => {
-      if (!stopped) { failure ??= error; stop(); }
-    }).finally(() => { discoveryJob = undefined; });
-    return discoveryJob;
+        safePublish();
+      })().catch(error => {
+        if (!stopped) { failure ??= error; stop(); }
+      }).finally(() => { discoveryJobs.delete(key); });
+      discoveryJobs.set(key, job);
+      return job;
+    }));
+    return Promise.allSettled(jobs).then(() => {});
   };
   const scheduleBoundaryDiscovery = () => {
     if (stopped) return;
     const nowMs = deps.now() * 1000;
     const boundaryMs = (Math.floor(nowMs / (MARKET_WINDOW_SEC * 1000)) + 1) * MARKET_WINDOW_SEC * 1000;
-    const boundaryPrepared = () => [...active.values()].some(item =>
-      item.market.start <= boundaryMs / 1000 && boundaryMs / 1000 < item.market.end);
+    const boundaryPrepared = () => assets.every(asset => [...active.values()].some(item =>
+      item.market.asset === asset && item.market.start <= boundaryMs / 1000 && boundaryMs / 1000 < item.market.end));
     const stopPrewarm = () => {
       clearInterval(discoveryPrewarmTimer);
       discoveryPrewarmTimer = undefined;
@@ -193,7 +215,7 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     clearInterval(discoveryPrewarmTimer); clearTimeout(discoveryPrewarmStopTimer);
     for (const item of active.values()) { item.stop(); item.projection.disconnect(); }
     safePublish();
-    await discoveryJob;
+    await Promise.allSettled(discoveryJobs.values());
     process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", interrupt);
     signal?.removeEventListener("abort", stop);
   }

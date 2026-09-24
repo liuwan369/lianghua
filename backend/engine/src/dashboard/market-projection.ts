@@ -7,6 +7,7 @@ export const DEFAULT_STALE_AFTER_MS = 2_000;
 const MAX_CLOCK_SKEW_MS = 1_000;
 
 export interface MarketProjectionConfig {
+  asset?: string;
   upToken: string;
   downToken: string;
   slug?: string;
@@ -17,6 +18,7 @@ export interface MarketProjectionConfig {
 }
 
 export interface MarketProjectionRow {
+  assetId?: string;
   marketId: string;
   roundId: string;
   snapshot: PairedMarketSnapshot;
@@ -123,6 +125,7 @@ function pairedSnapshot(snapshot: BookSnapshot): PairedMarketSnapshot | undefine
  * visible only when both sides have complete, fresh WebSocket data.
  */
 export class ClobMarketProjection {
+  readonly assetId: string | undefined;
   readonly upToken: string;
   readonly downToken: string;
   readonly slug: string;
@@ -142,6 +145,7 @@ export class ClobMarketProjection {
     const stale = config.staleAfterMs ?? DEFAULT_STALE_AFTER_MS;
     if (!Number.isFinite(stale) || stale < 0) throw new Error("staleAfterMs must be non-negative");
     this.upToken = config.upToken; this.downToken = config.downToken;
+    this.assetId = config.asset;
     this.slug = config.slug ?? ""; this.conditionId = config.conditionId ?? "";
     this.start = config.start ?? null; this.end = config.end ?? null; this.staleAfterMs = stale;
   }
@@ -199,6 +203,7 @@ export class ClobMarketProjection {
     const quoteAt = yes && no ? Math.min(yes.sourceAt!, no.sourceAt!) : 0;
     const healthy = Boolean(this.connected && fresh);
     return {
+      assetId: this.assetId,
       marketId: snapshot?.marketId ?? this.conditionId,
       roundId: snapshot?.roundId ?? (this.start == null ? "" : String(this.start)),
       snapshot: copy(snapshot),

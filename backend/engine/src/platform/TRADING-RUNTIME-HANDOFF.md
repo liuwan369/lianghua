@@ -44,6 +44,7 @@ sequence。`books` 只是单 token 兼容视图，不能用来重新拼 paired s
 - `runPolymarketFeed(sink, upToken, downToken, market.end, { marketId, roundId })`。
 - `FeedEvent.kind === "book"` 中的 `snapshot`，字段为 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt`、`YES`、`NO`。
 - YES/NO 的 `assetId`、`bid`、`ask`、`bidSize`、`askSize`、`bids`、`asks`、`sourceAt`、`expiresAt`、`sequence`。
+- 若行情底座提供 L2 深度时钟，YES/NO 还可带 `depthSourceAt` 和 `depthExpiresAt`（Unix 秒）。它们必须来自原始 L2 基线，不能用较快的 best bid/ask 时间替代；缺失或过期时，`market.depth()` 不可用，但 paired best quote 仍按普通快照门控。
 - 断线后发送 `market_feed_disconnected` 或 `stale_book`，并在恢复后等待新的完整 YES/NO paired snapshot。
 
 运行时不再回退到旧的 `findMarket` 列表发现路径。错误地只部署交易运行分支时，应在启动或发现阶段失败，而不能用缺少 `marketId/roundId` 的旧行情继续交易。
@@ -94,6 +95,8 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 - `snapshot-gate.test.ts`
 - `runtime-snapshot.test.ts`
 - `runtime-lifecycle.test.ts`
+- `runtime-order-identity.test.ts`、`runtime-cli-limits.test.ts`、`runtime-feed-integration.test.mjs`
+- 真实 feed 函数带默认第五参数的启动接缝、无顶层 underlying asset 的 paired snapshot、断线后旧帧拒绝和可选 L2 深度过期门控。
 - 服务器临时组合最新行情底座和交易运行代码后，行情测试与交易运行测试通过。
 - BTC 行情探针验证了 paired snapshots、五档 YES/NO、sequence/sourceAt 无回退和断线恢复。
 

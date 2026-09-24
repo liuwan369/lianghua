@@ -1,6 +1,6 @@
 "use strict";
 (() => {
-  const finite = (value, fallback = null) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const finite = (value, fallback = null) => value != null && value !== "" && typeof value !== "boolean" && Number.isFinite(Number(value)) ? Number(value) : fallback;
   const first = (...values) => values.find((value) => value !== undefined && value !== null && value !== "");
   const payloadOf = (value) => value?.data && typeof value.data === "object" ? value.data : value;
   const assetIdFrom = (raw, index = 0) => String(first(raw.assetId, raw.asset_id, raw.asset, raw.symbol, raw.slug, `market-${index}`)).trim();
@@ -10,10 +10,7 @@
     if (raw.supported === false || raw.canEnable === false || raw.can_enable === false) return false;
     if (eligibility === false || ["unsupported", "unavailable", "blocked"].includes(String(eligibility || "").toLowerCase())) return false;
     if (raw.supported === true || raw.canEnable === true || raw.can_enable === true || eligibility === true || ["supported", "eligible", "available"].includes(String(eligibility || "").toLowerCase())) return true;
-    // The deployed shared contract is BTC-only. Other catalog entries remain
-    // visible/selectable, but cannot be added to the server pool without an
-    // explicit eligibility signal from the API.
-    return assetId.toLowerCase() === "btc" || assetId.toLowerCase().startsWith("btc-");
+    return false;
   };
   const market = (raw = {}, index = 0) => {
     const assetId = assetIdFrom(raw, index);
@@ -37,8 +34,8 @@
       yesAsk: finite(first(raw.yesAsk, raw.yes_ask, raw.up_ask)),
       noBid: finite(first(raw.noBid, raw.no_bid, raw.down_bid)),
       noAsk: finite(first(raw.noAsk, raw.no_ask, raw.down_ask)),
-      volume: finite(first(raw.volume, raw.volumeUsd, raw.volume_usd), 0),
-      liquidity: finite(first(raw.liquidity, raw.liquidityUsd, raw.liquidity_usd), 0),
+      volume: finite(first(raw.volume, raw.volumeUsd, raw.volume_usd)),
+      liquidity: finite(first(raw.liquidity, raw.liquidityUsd, raw.liquidity_usd)),
       spread: finite(raw.spread),
       close: first(raw.close, raw.closeAt, raw.endAt, "--"),
       remaining: first(raw.remaining, raw.remainingText, "--"),
@@ -47,6 +44,8 @@
       sourceAt: first(raw.sourceAt, raw.source_at, null),
       expiresAt: first(raw.expiresAt, raw.expires_at, null),
       orderBook: raw.orderBook || raw.orderbook || raw.book || null,
+      depthAvailable: raw.depthAvailable === true,
+      strategyEligible: raw.strategyEligible === true,
       depthUnavailable: raw.depthUnavailable === true || raw.depth_unavailable === true,
       stale: raw.stale === true,
       staleReason: first(raw.staleReason, raw.stale_reason, null),
@@ -63,7 +62,7 @@
       items,
       source: String(first(payload.source, payload.node_label, "backend")),
       asOf: first(payload.asOf, payload.as_of, null),
-      stale: payload.stale === true || payload.collector_online === false || payload.depthUnavailable === true || payload.depth_unavailable === true || items.some((item) => item.stale || item.depthUnavailable),
+      stale: payload.stale === true || payload.collector_online === false,
       error: payload.error || payload.error_code || null
     };
   };
@@ -74,13 +73,13 @@
     const current = first(payload.currentIds, payload.runningIds, payload.current_ids, []);
     const next = first(payload.nextRoundIds, payload.next_round_ids, []);
     const clean = (values) => Array.isArray(values) ? [...new Set(values.map((value) => String(value).trim()).filter((id) =>
-      id && known.has(id)
+      id
     ))] : [];
     return { desiredIds: clean(desired), currentIds: clean(current), nextRoundIds: clean(next), effectiveRoundId: first(payload.effectiveRoundId, payload.effective_round_id, null), source: String(first(payload.source, "backend")), updatedAt: first(payload.updatedAt, payload.updated_at, null) };
   };
   const runtime = (payload = {}) => {
     payload = payloadOf(payload) || {};
-    const status = String(first(payload.status, payload.state, payload.running === true ? "running" : "stopped"));
+    const status = String(first(payload.status, payload.state, payload.running === true ? "running" : payload.running === false ? "stopped" : "unavailable"));
     return {
     status,
     state: status,

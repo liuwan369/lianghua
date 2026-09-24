@@ -7,12 +7,11 @@
   var adapter = window.PolyPreviewAdapter;
   var vm = window.PolyPreviewViewModel;
   var marketAssets = store.getState().marketCatalog.items.map(function(item) {
-    return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone };
+    return { ...item, id: item.assetId };
   });
   var marketPool = store.getState().marketPool;
   var selectedAssetId = store.getState().marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId || null;
   var assetById = function(id) { return marketAssets.find(function(asset) { return asset.id === id; }); };
-  var marketIdsForCommand = function() { return marketPool.desiredIds.map(assetById).filter(function(asset) { return asset && asset.marketId; }).map(function(asset) { return asset.marketId; }); };
   var navItems = [
     ["\u25C8", "\u603B\u89C8", "overview.html"],
     ["\u25C7", "\u5E02\u573A", "market.html"],
@@ -21,7 +20,6 @@
     ["\u2699", "\u8BBE\u7F6E", "settings.html"]
   ];
   var navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "\u81EA\u52A8\u4EA4\u6613" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "\u81EA\u52A8\u4EA4\u6613" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
-  var depthRows = (prices = [], sizes = [], tone) => prices.map((price, index) => `<tr><td>${index + 1}</td><td class="depth-price ${tone}">${price.toFixed(3)}</td><td>${sizes[index].toFixed(1)}</td><td><span class="depth-bar ${tone}" style="--depth:${Math.round(sizes[index] / 62 * 100)}%"></span></td></tr>`).join("");
   root.innerHTML = `
   <div class="overview-preview auto-trade-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
@@ -78,7 +76,7 @@
       <section class="trade-panel market-pool-panel" aria-labelledby="market-pool-title">
         <div class="panel-heading">
           <div><p class="eyebrow">ENABLED MARKET POOL</p><h2 id="market-pool-title">\u5F53\u524D\u8FD0\u884C\u6C60</h2></div>
-          <a class="pool-link" href="market.html">\u7BA1\u7406\u5E02\u573A <span>↗</span></a>
+          <a class="pool-link" href="market.html" data-manage-markets>\u7BA1\u7406\u5E02\u573A <span>↗</span></a>
         </div>
         <label class="market-selector"><span>详情市场</span><select data-market-selector><option value="">等待市场目录</option></select></label>
         <div class="market-pool-row" data-market-pool-row></div>
@@ -125,7 +123,7 @@
             <div><p class="eyebrow">ROUND POSITION</p><h2 id="position-title">\u672C\u573A\u6301\u4ED3\u4E0E\u7ED3\u679C</h2></div>
             <span class="panel-meta" data-round-identity>\u5F53\u524D\u573A\u6B21 \xB7 \u7B49\u5F85\u8F6E\u6B21\u6807\u8BC6</span>
           </div>
-          <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong></div><span class="position-badge">\u5F85\u63A5\u5165</span></div>
+          <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong></div><span class="position-badge" data-position-state>\u5F85\u63A5\u5165</span></div>
           <div class="holding-grid">
             <div class="holding-item up-holding"><span>YES \u4EFD\u989D</span><strong data-holding="up">--</strong><small>\u5747\u4EF7 <b data-average="up">--</b></small></div>
             <div class="holding-item down-holding"><span>NO \u4EFD\u989D</span><strong data-holding="down">--</strong><small>\u5747\u4EF7 <b data-average="down">--</b></small></div>
@@ -143,9 +141,9 @@
       <section class="orders-panel trade-panel" aria-labelledby="orders-title">
         <div class="panel-heading">
           <div><p class="eyebrow">ORDER LIFECYCLE</p><h2 id="orders-title">\u5F53\u524D\u8FD0\u884C\u8BA2\u5355</h2></div>
-          <div class="orders-meta"><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div>
+          <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div>
         </div>
-        <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>\u6210\u4EA4\u989D</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
+        <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
       </section>
 
       <section class="activity-panel trade-panel" aria-labelledby="activity-title">
@@ -157,14 +155,17 @@
 `;
   var text = (selector, value) => {
     const node = document.querySelector(selector);
-    if (node) node.textContent = value;
+    if (node && node.textContent !== String(value)) node.textContent = value;
   };
+  var html = function(node, value) { if (node && node.innerHTML !== value) node.innerHTML = value; };
+  var identityKey = function(context) { return JSON.stringify([context.assetId, context.marketId, context.roundId]); };
+  var numeric = function(value) { return value == null || value === "" ? null : Number.isFinite(Number(value)) ? Number(value) : null; };
   var renderMarketSelector = function() {
     var selector = document.querySelector("[data-market-selector]");
     if (!selector) return;
-    selector.innerHTML = marketAssets.length ? marketAssets.map(function(asset) { return `<option value="${window.PolyPreview.format.escape(asset.id)}">${window.PolyPreview.format.escape(asset.symbol)} · ${window.PolyPreview.format.escape(asset.name)}</option>`; }).join("") : '<option value="">等待市场目录</option>';
+    html(selector, '<option value="">请选择市场</option>' + marketAssets.map(function(asset) { return `<option value="${window.PolyPreview.format.escape(asset.id)}">${window.PolyPreview.format.escape(asset.symbol)} · ${window.PolyPreview.format.escape(asset.name)}</option>`; }).join(""));
     selector.value = assetById(selectedAssetId) ? selectedAssetId : "";
-    selector.disabled = !assetById(selectedAssetId);
+    selector.disabled = marketAssets.length === 0;
   };
   var renderMarketPool = function() {
     renderMarketSelector();
@@ -173,22 +174,20 @@
     var visibleAssets = [...new Map([...runningAssets, ...enabledAssets].map((asset) => [asset.id, asset])).values()];
     var row = document.querySelector("[data-market-pool-row]");
     if (row) {
-      row.innerHTML = visibleAssets.length ? visibleAssets.map(function(asset) {
+      html(row, visibleAssets.length ? visibleAssets.map(function(asset) {
         var running = marketPool.currentIds.includes(asset.id);
         var queued = marketPool.desiredIds.includes(asset.id);
-        return `<div class="market-pool-chip ${running ? "running" : "queued"}"><span class="pool-coin-icon ${asset.tone}">${window.PolyPreview.format.escape(asset.icon)}</span><div><strong>${window.PolyPreview.format.escape(asset.symbol)}</strong><small>${running && !queued ? "本场继续 · 下场停用" : running ? "运行中" : "下一场加入"}</small></div><b>5M</b></div>`;
-      }).join("") : '<div class="market-pool-empty"><span>＋</span><strong>暂无启用币种</strong><small>前往市场启用五分钟加密货币。</small></div>';
+        return `<div class="market-pool-chip ${running ? "running" : "queued"}"><span class="pool-coin-icon ${window.PolyPreview.format.escape(asset.tone)}">${window.PolyPreview.format.escape(asset.icon)}</span><div><strong>${window.PolyPreview.format.escape(asset.symbol)}</strong><small>${running && !queued ? "本场继续 · 下场停用" : running ? "运行中" : "已启用 · 待运行"}</small></div><b>5M</b></div>`;
+      }).join("") : '<div class="market-pool-empty"><span>＋</span><strong>暂无启用币种</strong><small>前往市场启用五分钟加密货币。</small></div>');
     }
-    var activeMarket = runningAssets.length ? `${runningAssets[0].symbol}${runningAssets.length > 1 ? ` + ${runningAssets.length - 1} 个` : ""} / 5m YES-NO` : "等待启用币种";
+    var selected = assetById(selectedAssetId);
+    var activeMarket = selected ? `${selected.symbol} / ${selected.cycle || "5m"} YES-NO` : "请选择详情市场";
     text("[data-active-market]", activeMarket);
-    text("[data-market-pool-note]", visibleAssets.length ? `已启用 ${enabledAssets.length} 个币种；当前场次继续运行，新增币种从下一场加入。` : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
+    text("[data-market-pool-note]", marketPool.stale ? "运行池连接中断 · 保留服务器最近确认配置" : marketPool.pendingDesiredIds ? "变更已提交 · 等待服务器确认运行池" : visibleAssets.length ? "单实例运行一个资产；详情选择只切换查看内容，运行状态以服务器确认结果为准。" : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
   var marketSelector = document.querySelector("[data-market-selector]");
   marketSelector?.addEventListener("change", function(event) {
-    selectedAssetId = event.target.value || null;
-    store.setSelectedMarket(selectedAssetId);
-    syncMarketContext();
-    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
+    if (event.target.value && event.target.value !== selectedAssetId) store.setSelectedMarket(event.target.value);
   });
   var snapshotWatermarks = new Map();
   var snapshotExpiryTimer = null;
@@ -196,8 +195,14 @@
   var snapshotRefreshInFlight = null;
   var marketContextRefreshTimer = null;
   var marketContextRefreshInFlight = null;
+  var roundRefreshTimer = null;
+  var roundRefreshInFlight = null;
+  var runtimeRefreshTimer = null;
+  var runtimeRefreshInFlight = null;
+  var contextVersion = 0;
+  var selectedRuntime = null;
+  var commandPending = false;
   var currentMarketContextKey = null;
-  var loadedRoundContextKey = null;
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
   var lastSnapshotValid = false;
@@ -225,7 +230,7 @@
     var marketId = model.marketId;
     var roundId = model.roundId;
     var context = currentContext();
-    if (expectedContextKey != null && `${String(model.assetId || "")}\u0000${String(marketId || "")}\u0000${String(roundId || "")}` !== expectedContextKey) return false;
+    if (expectedContextKey != null && identityKey(context) !== expectedContextKey) return false;
     if (!vm.matchesIdentity(source, context)) { markSnapshotStale("盘口身份与所选资产不匹配 · 保留最近快照"); return false; }
     var book = source.book || source.orderBook || source.orderbook || model.orderBook || {};
     var bookSide = function(side) { return book[side] || book[side.toUpperCase()] || {}; };
@@ -233,15 +238,16 @@
       var sideBook = bookSide(side);
       return Array.isArray(sideBook.bids || sideBook.bid) && Array.isArray(sideBook.asks || sideBook.ask);
     });
-    var watermarkKey = `${String(marketId || "")}\u0000${String(roundId || "")}`;
+    var watermarkKey = identityKey(context);
     var previousSequence = snapshotWatermarks.get(watermarkKey);
     var valid = Boolean(marketId && roundId) && hasDepth && !model.depthUnavailable && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
       && sourceAt <= now + 5000 && expiresAt > now && source.stale !== true && raw.stale !== true
-      && (previousSequence == null || sequence > previousSequence);
+      && (previousSequence == null || sequence >= previousSequence);
     if (!valid) {
       markSnapshotStale(model.depthUnavailable ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
       return false;
     }
+    if (sequence === previousSequence && lastSnapshotValid) return true;
     lastSnapshotValid = true;
     snapshotWatermarks.set(watermarkKey, sequence);
     if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
@@ -257,11 +263,25 @@
     };
     ["yes", "no"].forEach(function(side) {
       var bids = levels(side, "bid"); var asks = levels(side, "ask");
-      var render = function(list, tone) { return depthRows(list.slice(0, 5).map(function(level) { return level.price; }), list.slice(0, 5).map(function(level) { return level.size; }), tone); };
+      var render = function(node, list, tone) {
+        if (!node) return;
+        if (node.rows.length !== 5) node.innerHTML = Array.from({ length: 5 }, function(_, index) { return `<tr><td>${index + 1}</td><td class="depth-price ${tone}">--</td><td>--</td><td><span class="depth-bar ${tone}" style="--depth:0%"></span></td></tr>`; }).join("");
+        var maximum = Math.max(1, ...list.slice(0, 5).map(function(level) { return level.size; }));
+        Array.from(node.rows).forEach(function(row, index) {
+          var level = list[index];
+          var price = level ? level.price.toFixed(3) : "--";
+          var size = level ? level.size.toFixed(1) : "--";
+          if (row.cells[1].textContent !== price) row.cells[1].textContent = price;
+          if (row.cells[2].textContent !== size) row.cells[2].textContent = size;
+          var bar = row.cells[3].firstElementChild;
+          var depth = `${level ? Math.min(100, Math.max(0, level.size / maximum * 100)) : 0}%`;
+          if (bar.style.getPropertyValue("--depth") !== depth) bar.style.setProperty("--depth", depth);
+        });
+      };
       var domSide = side === "yes" ? "up" : "down";
       var bidNode = document.querySelector(`[data-depth="${domSide}"]`); var askNode = document.querySelector(`[data-depth-asks="${domSide}"]`);
-      if (bidNode) bidNode.innerHTML = render(bids, "bid");
-      if (askNode) askNode.innerHTML = render(asks, "ask");
+      render(bidNode, bids, "bid");
+      render(askNode, asks, "ask");
     });
     text("[data-book-source]", `${fromStream ? "实时流" : "REST 快照"} · ${window.PolyPreview.format.time(sourceAt)}`);
     text("[data-book-live-state]", fromStream ? "实时流 · 已连接" : "REST 快照 · 已更新");
@@ -270,8 +290,7 @@
   };
   var streams = [];
   var currentContext = function() {
-    var id = selectedAssetId || (marketPool.currentIds.length + marketPool.desiredIds.length === 1 ? marketPool.currentIds[0] || marketPool.desiredIds[0] : null);
-    var asset = assetById(id);
+    var asset = assetById(selectedAssetId);
     return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { assetId: null, marketId: null, roundId: null };
   };
   var payloadOf = function(frame) { return frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame || {}; };
@@ -280,7 +299,7 @@
     var payload = payloadOf(frame);
     var marketId = payload.marketId || payload.market_id || frame?.marketId || frame?.market_id;
     var roundId = payload.roundId || payload.round_id || frame?.roundId || frame?.round_id;
-    if (!marketId && !requireRound) return true;
+    if (!marketId && !requireRound) return false;
     var assetId = payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id;
     if (!context.assetId || !context.marketId || !context.roundId || !marketId || !roundId || !assetId) return false;
     return String(assetId) === String(context.assetId) && marketId === context.marketId && roundId === context.roundId;
@@ -291,11 +310,21 @@
   };
   var streamConfigKey = function() { return ["markets", "runtime", "orders"].map(function(name) { return `${name}:${streamUrl(name) || ""}`; }).join("|"); };
   var markStreamPending = function() {
-    text("[data-book-source]", "实时流待接入 · 保留最近快照");
-    text("[data-book-live-state]", "待接入 · 保留快照");
+    if (!lastSnapshotValid) text("[data-book-live-state]", "等待 REST 快照");
   };
   var resetRoundPanels = function() {
-    markSnapshotStale("场次已切换 · 等待新轮次快照");
+    if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
+    snapshotExpiryTimer = null;
+    snapshotWatermarks.clear();
+    markSnapshotStale("所选市场已切换 · 等待对应场次快照");
+    ["yes-bid", "yes-ask", "no-bid", "no-ask"].forEach(function(key) { text(`[data-quote="${key}"]`, "--"); });
+    document.querySelectorAll("[data-depth], [data-depth-asks]").forEach(function(node) { node.innerHTML = ""; });
+    text("[data-book-age]", "--");
+    text("[data-strategy-status]", "所选市场状态待接入");
+    text("[data-status-age]", "--");
+    text("[data-position-state]", "读取中");
+    text("[data-orders-state]", "读取中");
+    text("[data-live-status]", "所选市场状态待接入");
     text("[data-invested]", "--");
     text('[data-holding="up"]', "--");
     text('[data-holding="down"]', "--");
@@ -305,6 +334,7 @@
     text("[data-confirmations]", "--");
     text("[data-stage-progress]", "--");
     text("[data-order-count]", "--");
+    ["[data-bought]", "[data-occupied]", '[data-outcome="up"]', '[data-outcome="down"]'].forEach(function(selector) { text(selector, "--"); });
     var body = document.querySelector(".orders-table tbody");
     if (body) body.innerHTML = '<tr><td colspan="6">正在读取新场次持仓和订单</td></tr>';
     var timeline = document.querySelector("[data-stage-timeline]");
@@ -315,70 +345,89 @@
   };
   var syncMarketContext = function() {
     var context = currentContext();
-    var contextKey = `${String(context.assetId || "")}\u0000${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
+    var contextKey = identityKey(context);
     if (contextKey === currentMarketContextKey) return contextKey;
     currentMarketContextKey = contextKey;
-    loadedRoundContextKey = null;
+    contextVersion += 1;
+    selectedRuntime = null;
     resetRoundPanels();
     text("[data-round-identity]", context.assetId && context.marketId && context.roundId ? `${context.assetId} · marketId ${context.marketId} · roundId ${context.roundId}` : "所选资产的 marketId + roundId 待后端提供");
+    text("[data-round]", context.roundId || "场次身份待接入");
     return contextKey;
   };
   var renderPosition = function(raw) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var position = raw?.position || raw;
-    if (!position || typeof position !== "object") return;
-    var number = function(...keys) { for (var key of keys) { var value = Number(position[key]); if (Number.isFinite(value)) return value; } return null; };
+    if (!position || !vm.matchesIdentity(position, currentContext()) || raw.stale || raw.error || raw.available === false || position.stale || position.available === false || position.error) {
+      text("[data-position-state]", "持仓 unavailable/stale · 保留本场最近成功数据");
+      return false;
+    }
+    var number = function(...keys) { for (var key of keys) { var value = numeric(position[key]); if (value != null) return value; } return null; };
     var occupied = number("occupiedUsd", "occupied_usd");
-    if (occupied != null) text("[data-invested]", `${occupied.toFixed(2)} USDC`);
-    if (position.stage != null) text("[data-stage]", `阶段 ${position.stage}`);
-    if (position.confirmations != null) text("[data-confirmations]", String(position.confirmations));
+    text("[data-invested]", occupied != null ? `${occupied.toFixed(2)} USDC` : "-- USDC");
+    text("[data-stage]", position.stage != null ? `阶段 ${position.stage}` : "--");
+    text("[data-confirmations]", position.confirmations == null ? "--" : String(position.confirmations));
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
-    if (yesShares != null) text('[data-holding="up"]', yesShares.toFixed(2));
-    if (noShares != null) text('[data-holding="down"]', noShares.toFixed(2));
+    text('[data-holding="up"]', yesShares == null ? "--" : yesShares.toFixed(2));
+    text('[data-holding="down"]', noShares == null ? "--" : noShares.toFixed(2));
     var average = position.averagePrice && typeof position.averagePrice === "object" ? position.averagePrice : {};
-    var yesAverage = Number(average.yes ?? average.up ?? position.yesAveragePrice ?? position.yes_average_price);
-    var noAverage = Number(average.no ?? average.down ?? position.noAveragePrice ?? position.no_average_price);
-    if (Number.isFinite(yesAverage)) text('[data-average="up"]', yesAverage.toFixed(3));
-    if (Number.isFinite(noAverage)) text('[data-average="down"]', noAverage.toFixed(3));
-    var progress = Number(position.stageProgress ?? position.stage_progress);
-    if (Number.isFinite(progress)) text("[data-stage-progress]", `${progress}%`);
+    var yesAverage = numeric(average.yes ?? average.up ?? position.yesAveragePrice ?? position.yes_average_price);
+    var noAverage = numeric(average.no ?? average.down ?? position.noAveragePrice ?? position.no_average_price);
+    text('[data-average="up"]', yesAverage == null ? "--" : yesAverage.toFixed(3));
+    text('[data-average="down"]', noAverage == null ? "--" : noAverage.toFixed(3));
+    var progress = numeric(position.stageProgress ?? position.stage_progress);
+    text("[data-stage-progress]", progress == null ? "--" : `${progress}%`);
+    text("[data-position-state]", `已更新 · ${window.PolyPreview.format.time(position.updatedAt ?? raw.asOf)}`);
+    return true;
   };
   var renderOrders = function(raw, asset) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
-    var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : [];
-    if (asset) orders = orders.filter(function(order) { return itemMatchesContext(order, asset); });
+    var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : null;
+    if (!orders || !asset || raw.stale || raw.error || raw.available === false || orders.some(function(order) { return !itemMatchesContext(order, asset); })) {
+      text("[data-orders-state]", "订单 unavailable/stale · 保留本场最近成功数据");
+      return false;
+    }
+    // Empty pages are valid for this scoped REST request; non-empty rows must all identify this asset and round.
+    if (!Array.isArray(raw) && ["assetId", "marketId", "roundId"].some(function(key) { return raw[key] != null && String(raw[key]) !== String(currentContext()[key]); })) {
+      text("[data-orders-state]", "订单身份不匹配 · 保留本场最近成功数据");
+      return false;
+    }
     var body = document.querySelector(".orders-table tbody");
     if (!body) return;
-    text("[data-order-count]", String(orders.length));
-    body.innerHTML = orders.length ? orders.slice(0, 20).map(function(order) {
+    text("[data-order-count]", String(numeric(raw.total) ?? orders.length));
+    html(body, orders.length ? orders.slice(0, 20).map(function(order) {
       var side = order.side || order.outcome || order.token || "--";
-      var price = Number(order.price); var size = Number(order.size ?? order.quantity ?? order.shares); var filled = Number(order.filled ?? order.filledSize ?? order.filled_size);
+      var price = numeric(order.price); var size = numeric(order.size ?? order.quantity ?? order.shares); var filled = numeric(order.filledShares ?? order.filled_shares ?? order.filled ?? order.filledSize ?? order.filled_size);
       return `<tr><td>${window.PolyPreview.format.time(order.updatedAt || order.createdAt || order.time)}</td><td>${window.PolyPreview.format.escape(String(side).toUpperCase())}</td><td>${Number.isFinite(price) ? price.toFixed(3) : "--"}</td><td>${Number.isFinite(size) ? size.toFixed(2) : "--"}</td><td>${Number.isFinite(filled) ? filled.toFixed(2) : "--"}</td><td>${window.PolyPreview.format.escape(order.status || "--")}</td></tr>`;
-    }).join("") : '<tr><td colspan="6">当前场次暂无订单</td></tr>';
+    }).join("") : '<tr><td colspan="6">当前场次暂无订单</td></tr>');
+    text("[data-orders-state]", `已更新 · ${window.PolyPreview.format.time(raw.asOf)}`);
+    return true;
   };
   var stopStreams = function() { streams.splice(0).forEach(function(stream) { stream.close(); }); };
   var startStreams = function() {
     if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
     syncMarketContext();
     var context = currentContext();
-    var contextKey = `${String(context.assetId || "")}\u0000${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
+    var contextKey = identityKey(context);
     var configKey = streamConfigKey();
     if (activeStreamContextKey === contextKey && activeStreamConfigKey === configKey) {
       if (!streamUrl("markets")) markStreamPending();
       return;
     }
-    stopStreams();
     activeStreamContextKey = contextKey;
     activeStreamConfigKey = configKey;
+    stopStreams();
     var lifecycleKey = `${contextKey}|${configKey}`;
-    var currentLifecycle = function() { return `${activeStreamContextKey}|${activeStreamConfigKey}` === lifecycleKey; };
+    var lifecycleVersion = contextVersion;
+    var currentLifecycle = function() { return lifecycleVersion === contextVersion && `${activeStreamContextKey}|${activeStreamConfigKey}` === lifecycleKey; };
+    if (!context.assetId || !context.marketId || !context.roundId) return;
     var hasMarketStream = Boolean(streamUrl("markets"));
     if (!hasMarketStream) markStreamPending();
     var make = function(name, requireRound, onMessage, onState) {
       var url = streamUrl(name); if (!url) return;
       var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { if (currentLifecycle()) markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
       stream.connect();
-      stream.subscribe({ marketIds: context.marketId ? [context.marketId] : [], marketId: context.marketId, roundId: context.roundId || undefined });
+      stream.subscribe({ assetId: context.assetId, marketIds: [context.marketId], marketId: context.marketId, roundId: context.roundId });
       streams.push(stream);
     };
     make("markets", true, function(frame) {
@@ -390,6 +439,7 @@
         sourceAt: sourceSnapshot.sourceAt ?? sourceSnapshot.source_at ?? payload.sourceAt ?? payload.source_at ?? frame.sourceAt ?? frame.source_at,
         expiresAt: sourceSnapshot.expiresAt ?? sourceSnapshot.expires_at ?? payload.expiresAt ?? payload.expires_at ?? frame.expiresAt ?? frame.expires_at,
         stale: sourceSnapshot.stale ?? payload.stale ?? frame.stale,
+        assetId: sourceSnapshot.assetId ?? sourceSnapshot.asset_id ?? payload.assetId ?? payload.asset_id ?? frame.assetId ?? frame.asset_id,
         marketId: sourceSnapshot.marketId ?? sourceSnapshot.market_id ?? payload.marketId ?? payload.market_id ?? frame.marketId ?? frame.market_id,
         roundId: sourceSnapshot.roundId ?? sourceSnapshot.round_id ?? payload.roundId ?? payload.round_id ?? frame.roundId ?? frame.round_id
       };
@@ -402,39 +452,25 @@
         text("[data-book-live-state]", "连接中断 · 保留快照");
       }
     });
-    make("orders", true, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); var asset = assetById(currentContext().assetId); if (payload.position && asset && itemMatchesContext(payload.position, asset)) renderPosition(payload.position); if (payload.order) renderOrders([payload.order], asset); else if (payload.orders || payload.items) renderOrders(payload.orders || payload, asset); }, function() {});
-    make("runtime", false, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); if (payload.status == null && payload.state == null && payload.running == null) return; var runtime = vm.runtime(payload); store.setSlice("runtime", { ...runtime, connectionStatus: "ready", stale: false, error: null }); }, function(state) {
+    make("orders", true, function(frame) { if (!currentLifecycle()) return; scheduleRoundRefresh(0); }, function() {});
+    make("runtime", false, function(frame) { if (!currentLifecycle()) return; scheduleRuntimeRefresh(0); }, function(state) {
       if (!currentLifecycle()) return;
-      var current = store.getState().runtime;
       if (state === "connected") return;
-      store.setSlice("runtime", { ...current, connectionStatus: state, runtimeState: current.runtimeState || current.status, stale: true, error: "运行状态流已断开，保留上次成功状态" });
+      text("[data-connection-status]", "运行流中断 · REST 独立刷新");
     });
   };
   var loadCurrentMarket = async function() {
     if (window.PolyPreview.config.mode === "local-preview") return null;
     syncMarketContext();
-    var id = selectedAssetId || (marketPool.currentIds.length + marketPool.desiredIds.length === 1 ? marketPool.currentIds[0] || marketPool.desiredIds[0] : null);
-    var asset = assetById(id);
-    if (!asset?.marketId) { markSnapshotStale("当前市场身份待接入 · 保留最近快照"); return null; }
-    var contextKey = `${asset.id}\u0000${asset.marketId}\u0000${asset.roundId || ""}`;
-    var contextChanged = contextKey !== loadedRoundContextKey;
-    text("[data-round-identity]", asset.roundId ? `${asset.id} · marketId ${asset.marketId} · roundId ${asset.roundId}` : `${asset.id} · marketId ${asset.marketId} · 当前轮次标识待后端提供`);
+    var context = currentContext();
+    if (!context.assetId || !context.marketId || !context.roundId) { markSnapshotStale("所选市场身份待接入"); return null; }
+    var contextKey = identityKey(context);
+    var version = contextVersion;
     try {
-      var raw = await adapter.loadMarketSnapshot(asset.marketId, { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId });
-      if (currentMarketContextKey !== contextKey) return contextKey;
+      var raw = await adapter.loadMarketSnapshot(context.marketId, context);
+      if (version !== contextVersion || currentMarketContextKey !== contextKey) return contextKey;
       renderSnapshot(raw, false, contextKey);
-      if (contextChanged && asset.roundId) {
-        var results = await Promise.allSettled([adapter.loadPosition(asset.roundId, { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId }), adapter.loadOrders(asset.roundId, { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId })]);
-        if (currentMarketContextKey !== contextKey) return contextKey;
-        var position = results[0].status === "fulfilled" ? results[0].value : null;
-        var orders = results[1].status === "fulfilled" ? results[1].value : null;
-        if (position && itemMatchesContext(position, asset)) renderPosition(position);
-        if (orders) renderOrders(orders, asset);
-        loadedRoundContextKey = contextKey;
-      } else if (contextChanged) {
-        loadedRoundContextKey = contextKey;
-      }
-    } catch (error) { markSnapshotStale(error.message || "实时快照不可用 · 保留最近快照"); }
+    } catch (error) { if (version === contextVersion) markSnapshotStale(error.message || "快照读取失败 · 保留本场最近快照"); }
     return contextKey;
   };
   var scheduleSnapshotRefresh = function(delay = 1000) {
@@ -447,11 +483,88 @@
   };
   var refreshCurrentMarket = function() {
     if (snapshotRefreshInFlight) return snapshotRefreshInFlight;
+    var version = contextVersion;
     snapshotRefreshInFlight = Promise.resolve(loadCurrentMarket()).finally(function() {
       snapshotRefreshInFlight = null;
-      scheduleSnapshotRefresh();
+      scheduleSnapshotRefresh(version === contextVersion ? 1000 : 0);
     });
     return snapshotRefreshInFlight;
+  };
+  var scheduleRoundRefresh = function(delay = 3000) {
+    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (roundRefreshTimer) window.clearTimeout(roundRefreshTimer);
+    roundRefreshTimer = window.setTimeout(function() { roundRefreshTimer = null; void refreshRoundData(); }, delay);
+  };
+  var refreshRoundData = function() {
+    if (roundRefreshInFlight) return roundRefreshInFlight;
+    var context = currentContext();
+    if (!context.assetId || !context.marketId || !context.roundId) {
+      text("[data-position-state]", "unavailable · 等待完整市场身份");
+      text("[data-orders-state]", "unavailable · 等待完整市场身份");
+      scheduleRoundRefresh();
+      return Promise.resolve();
+    }
+    var version = contextVersion;
+    var asset = assetById(context.assetId);
+    roundRefreshInFlight = Promise.allSettled([
+      Promise.resolve().then(function() { return adapter.loadPosition(context.roundId, context); }).then(function(value) {
+        if (version === contextVersion) renderPosition(value);
+      }, function() { if (version === contextVersion) text("[data-position-state]", "读取失败 · 保留本场最近成功数据"); }),
+      Promise.resolve().then(function() { return adapter.loadOrders(context.roundId, context); }).then(function(value) {
+        if (version === contextVersion) renderOrders(value, asset);
+      }, function() { if (version === contextVersion) text("[data-orders-state]", "读取失败 · 保留本场最近成功数据"); })
+    ]).finally(function() {
+      roundRefreshInFlight = null;
+      scheduleRoundRefresh(version === contextVersion ? 3000 : 0);
+    });
+    return roundRefreshInFlight;
+  };
+  var updateControls = function() {
+    var context = currentContext();
+    var asset = assetById(context.assetId);
+    var running = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused"].includes(selectedRuntime.state || selectedRuntime.status);
+    document.querySelectorAll("[data-action]").forEach(function(button) {
+      var action = button.dataset.action;
+      var reason = commandPending ? "控制指令处理中" : window.PolyPreview.config.mode === "local-preview" ? "演示模式不提交交易命令" : !context.marketId || !context.roundId ? "所选市场身份待后端提供" : "";
+      if (!reason && action === "start" && (!asset?.canEnable || asset?.strategyEligible !== true || asset?.stale === true || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = asset?.strategyEligible !== true ? "服务器尚未确认该市场符合策略条件" : asset?.stale === true ? "行情已过期，暂不允许启动" : "请先在市场页启用所选币种并等待服务器确认";
+      if (!reason && action === "start" && running) reason = "所选市场正在运行";
+      if (!reason && action !== "start" && !running) reason = "所选市场运行状态尚未确认";
+      if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";
+      button.disabled = Boolean(reason);
+      button.title = reason;
+    });
+  };
+  var renderRuntime = function(runtime) {
+    var matching = vm.matchesIdentity(runtime, currentContext());
+    var available = matching && runtime.status !== "unavailable" && !runtime.stale && !runtime.error;
+    if (available) selectedRuntime = runtime;
+    else if (selectedRuntime) selectedRuntime = { ...selectedRuntime, stale: true };
+    var state = available ? runtime.state || runtime.status : selectedRuntime ? `${selectedRuntime.state || selectedRuntime.status} · stale` : "所选市场状态 unavailable";
+    text("[data-strategy-status]", state);
+    text("[data-live-status]", state);
+    text("[data-status-age]", window.PolyPreview.format.time((available ? runtime : selectedRuntime)?.asOf));
+    text("[data-connection-status]", available ? "REST 独立刷新" : "运行状态待接入 · 行情独立刷新");
+    text("[data-sidebar-state]", available ? "所选市场已连接" : "所选市场状态待接入");
+    text("[data-sidebar-detail]", available ? "五分钟反转策略" : "保留本场最近成功数据");
+    updateControls();
+  };
+  var scheduleRuntimeRefresh = function(delay = 2000) {
+    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (runtimeRefreshTimer) window.clearTimeout(runtimeRefreshTimer);
+    runtimeRefreshTimer = window.setTimeout(function() { runtimeRefreshTimer = null; void refreshRuntime(); }, delay);
+  };
+  var refreshRuntime = function() {
+    if (runtimeRefreshInFlight) return runtimeRefreshInFlight;
+    var context = currentContext();
+    if (!context.assetId || !context.marketId || !context.roundId) { scheduleRuntimeRefresh(); return Promise.resolve(); }
+    var version = contextVersion;
+    runtimeRefreshInFlight = Promise.resolve().then(function() { return adapter.loadRuntime(context); }).then(function(runtime) {
+      if (version === contextVersion) renderRuntime(runtime);
+    }, function() { if (version === contextVersion) renderRuntime({ status: "unavailable", stale: true }); }).finally(function() {
+      runtimeRefreshInFlight = null;
+      scheduleRuntimeRefresh(version === contextVersion ? 2000 : 0);
+    });
+    return runtimeRefreshInFlight;
   };
   var scheduleMarketContextRefresh = function(delay = 10000) {
     if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
@@ -466,7 +579,6 @@
     marketContextRefreshInFlight = Promise.resolve()
       .then(function() { return adapter.loadMarkets(); })
       .then(function() { return adapter.loadMarketPool(); })
-      .then(function() { return refreshCurrentMarket(); })
       .finally(function() {
         marketContextRefreshInFlight = null;
         scheduleMarketContextRefresh();
@@ -479,9 +591,15 @@
       snapshotRefreshTimer = null;
       if (marketContextRefreshTimer) window.clearTimeout(marketContextRefreshTimer);
       marketContextRefreshTimer = null;
+      if (roundRefreshTimer) window.clearTimeout(roundRefreshTimer);
+      roundRefreshTimer = null;
+      if (runtimeRefreshTimer) window.clearTimeout(runtimeRefreshTimer);
+      runtimeRefreshTimer = null;
     } else {
       scheduleSnapshotRefresh(0);
       scheduleMarketContextRefresh(0);
+      scheduleRoundRefresh(0);
+      scheduleRuntimeRefresh(0);
     }
   });
   var streamLifecycleReady = false;
@@ -489,69 +607,63 @@
   store.subscribe("marketPool", function(value) {
     marketPool = value;
     renderMarketPool();
-    syncMarketContext();
-    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
+    updateControls();
   });
   store.subscribe("marketCatalog", function(value) {
-    marketAssets = value.items.map(function(item) { return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone }; });
+    marketAssets = value.items.map(function(item) { return { ...item, id: item.assetId }; });
     selectedAssetId = value.selectedId || null;
     renderMarketPool();
+    var previousContext = currentMarketContextKey;
     syncMarketContext();
-    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
-  });
-  document.querySelector("[data-market-selector]")?.addEventListener("change", function(event) {
-    selectedAssetId = event.target.value || null;
-    store.setSelectedMarket(selectedAssetId);
-    syncMarketContext();
-    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
-  });
-  store.subscribe("runtime", function(runtime) {
-    const local = window.PolyPreview.config.mode === "local-preview";
-    const ready = runtime.status !== "unavailable" && !runtime.stale;
-    const configuredStreams = ["markets", "runtime", "orders"].filter(function(name) { return Boolean(streamUrl(name)); });
-    const allStreamsConfigured = configuredStreams.length === 3;
-    text("[data-live-status]", local ? "设计稿 · 待接入" : runtime.stale ? "连接中断 · 保留状态" : !allStreamsConfigured ? "实时流待接入 · 保留快照" : ready ? runtime.status : "等待后端");
-    text("[data-connection-status]", local ? "演示数据 · 待接入" : runtime.status === "unavailable" ? "等待后端" : runtime.stale ? "连接中断 · 保留快照" : !allStreamsConfigured ? `实时流待接入 · ${configuredStreams.length}/3` : "已连接 · 独立流");
-    text("[data-sidebar-state]", local ? "原型预览" : runtime.stale ? "连接中断" : runtime.status === "unavailable" ? "等待后端" : "运行状态已连接");
-    text("[data-sidebar-detail]", local ? "数据待接入" : runtime.stale ? "保留最近成功状态" : runtime.status === "unavailable" ? "实时数据待接入" : "五分钟反转策略");
+    updateControls();
+    if (streamLifecycleReady && previousContext !== currentMarketContextKey) {
+      scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); startStreams();
+    }
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const action = button.dataset.action;
-      button.disabled = true;
+      const action = button.dataset.action === "pause" && (selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused") ? "resume" : button.dataset.action;
+      if (commandPending || button.disabled) return;
+      var context = currentContext();
+      var version = contextVersion;
+      commandPending = true;
+      updateControls();
       try {
-        const command = { action, marketIds: marketIdsForCommand(), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
-        if (action === "start") command.assetId = currentContext().assetId;
+        const command = { action, assetId: context.assetId, marketIds: [context.marketId], strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
         const result = await adapter.commandRuntime(command);
-        const accepted = result?.accepted === true;
+        if (version !== contextVersion) return;
+        const accepted = result?.accepted === true && result.commandStatus !== "failed";
         text("[data-live-status]", result.message || (accepted ? "指令已接收，等待运行状态确认" : "指令未接受，运行状态未改变"));
         text("[data-strategy-status]", accepted ? "等待状态确认" : "指令未接受，未改变运行状态");
       } catch (error) {
-        text("[data-live-status]", error.message || "控制请求失败，运行状态未改变");
-        text("[data-strategy-status]", "控制失败，未改变运行状态");
+        if (version === contextVersion) {
+          text("[data-live-status]", error.message || "控制请求失败，运行状态未改变");
+          text("[data-strategy-status]", "控制失败，未改变运行状态");
+        }
       }
-      finally { button.disabled = false; }
+      finally { commandPending = false; updateControls(); scheduleRuntimeRefresh(500); }
     });
   });
   document.querySelectorAll("[data-preview-nav]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.dataset.previewTarget;
-      if (target) { window.PolyPreview.navigate(target); return; }
-      document.querySelectorAll("[data-preview-nav]").forEach((item) => {
-        item.classList.toggle("active", item === button);
-        if (item === button) item.setAttribute("aria-current", "page");
-        else item.removeAttribute("aria-current");
-      });
+      if (target) window.PolyPreview.navigate(target);
     });
   });
   // The preview intentionally does not synthesize quotes, latency, countdowns
   // or order events. A real adapter will push independent snapshots here;
   // keeping this page static avoids flicker and prevents fake "live" states.
-  document.querySelectorAll(".quiet-button").forEach((button) => button.addEventListener("click", () => {
-    text("[data-live-status]", "演示操作 · 后端未接入");
-  }));
+  document.querySelector("[data-manage-markets]")?.addEventListener("click", function(event) { event.preventDefault(); window.PolyPreview.navigate("market.html"); });
+  document.querySelectorAll(".quiet-button").forEach(function(button) {
+    button.disabled = true;
+    button.title = "此详情功能尚未接入";
+    button.textContent += " · 未提供";
+  });
   if (window.PolyPreview.config.mode !== "local-preview") {
-    Promise.all([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime()]).then(function() { streamLifecycleReady = true; scheduleMarketContextRefresh(); return refreshCurrentMarket(); }).then(startStreams).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
+    Promise.resolve(adapter.loadMarkets()).then(function() { return adapter.loadMarketPool(); }).finally(function() {
+      streamLifecycleReady = true;
+      scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); startStreams();
+    }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
   }
 })();
 

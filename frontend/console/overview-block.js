@@ -75,20 +75,23 @@
   document.querySelectorAll("[data-preview-nav]").forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.dataset.previewTarget;
-      if (target) window.location.href = target;
+      if (target) window.PolyPreview.navigate(target);
     });
   });
   document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", () => {
     const action = button.dataset.overviewAction;
     if (action === "start" || action === "exit") {
-      button.disabled = true;
-      const marketIds = store.getState().marketPool.desiredIds
-        .map((assetId) => store.getState().marketCatalog.items.find((item) => item.assetId === assetId)?.marketId)
-        .filter(Boolean);
-      adapter.commandRuntime({ action: action === "start" ? "start" : "stop", marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
-        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "设计稿 · 待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
+      const state = store.getState();
+      const assetId = state.marketPool.desiredIds[0];
+      const item = state.marketCatalog.items.find((item) => item.assetId === assetId);
+      if (action === "start" && (!item?.marketId || !item.roundId || state.marketPool.stale)) { text("[data-overview-runtime]", "请先在市场页面启用币种，并等待运行池与轮次确认"); return; }
+      document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
+      const marketIds = item?.marketId ? [item.marketId] : [];
+      if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
+      adapter.commandRuntime({ action: action === "start" ? "start" : "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
+        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "服务器未确认")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
-        .finally(() => { button.disabled = false; });
+        .finally(() => { document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = false; }); void adapter.loadRuntime(); });
       return;
     }
     if (action === "strategy") return window.PolyPreview?.navigate("strategy.html");
@@ -110,7 +113,7 @@
     }
     return fallback;
   };
-  const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+  const finite = (value) => value != null && value !== "" && typeof value !== "boolean" && Number.isFinite(Number(value)) ? Number(value) : null;
   const bytes = (value) => {
     let amount = finite(value);
     if (amount == null || amount < 0) return "--";
@@ -126,25 +129,26 @@
   const periodValue = (data, period, fields, rootFields = fields) => {
     const root = data?.summary || data || {};
     const bucket = data?.[period] || data?.periods?.[period] || root?.[period] || {};
-    return read(bucket, fields, read(root, rootFields));
+    return read(bucket, fields);
   };
   const renderMetrics = (resource) => {
     const data = resource?.data;
-    text("[data-metrics-state]", resource?.status === "stale" ? "统计接口断开，保留上次成功数据。" : resource?.status === "unavailable" ? "统计数据待接入。" : "仅统计已取得的真实记录；后端接入后再显示真实账户数据。");
+    text("[data-metrics-state]", resource?.status === "stale" ? "部分统计未更新，保留上次结果。" : resource?.status === "unavailable" ? "统计数据待接入。" : "主值为当前运行；今日按 UTC 统计。当前接口不提供月度统计，显示 --。");
     if (!data) return;
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);
     ["current", "today", "month"].forEach((period) => {
       const suffix = period === "current" ? "current" : period;
       setMetric(`orders-${suffix}`, formatMetric(periodValue(data, period, ["orders", "orderCount", "order_count", "ordersCount"], ["orders", "orderCount", "order_count"])));
-      setMetric(`wins-${suffix}`, formatMetric(periodValue(data, period, ["wins", "winCount", "win_count"], ["wins", "winCount", "win_count"])));
-      setMetric(`losses-${suffix}`, formatMetric(periodValue(data, period, ["losses", "lossCount", "loss_count"], ["losses", "lossCount", "loss_count"])));
+      setMetric(`wins-${suffix}`, formatMetric(periodValue(data, period, ["settled_wins", "wins", "winCount", "win_count"])));
+      setMetric(`losses-${suffix}`, formatMetric(periodValue(data, period, ["settled_losses", "losses", "lossCount", "loss_count"])));
       const rate = finite(periodValue(data, period, ["winRate", "win_rate", "rate"], ["winRate", "win_rate", "rate"]));
       setMetric(`rate-${suffix}`, rate == null ? "--" : (rate <= 1 ? rate * 100 : rate).toFixed(2));
       setMetric(`pnl-${suffix}`, formatMetric(periodValue(data, period, ["pnlUsd", "pnl_usd", "profit", "settledPnl", "settled_pnl"], ["pnlUsd", "pnl_usd", "profit", "settledPnl", "settled_pnl"]), 2));
     });
   };
   const renderDiagnostics = (resource) => {
-    const data = resource?.data;
+    const health = resource?.data;
+    const data = health?.resources || health;
     if (!data) return;
     text("[data-server=cpu]", `${formatMetric(data.cpu?.percent, 1)}% · ${data.cpu?.cores ?? "--"} 核`);
     text("[data-server=memory]", `${formatMetric(data.memory?.percent, 1)}% · ${bytes(data.memory?.used_bytes)} / ${bytes(data.memory?.total_bytes)}`);
@@ -158,22 +162,23 @@
       const stateClass = state === "active" ? "service-good" : state === "stopped" || state === "inactive" ? "" : "service-warning";
       return `<div><span>${window.PolyPreview.format.escape(names[name] || name)}</span><strong class="${stateClass}">${window.PolyPreview.format.escape(states[state] || state)}</strong><small>PID ${service?.pid ?? "--"} · 内存 ${bytes(service?.rss_bytes)} · 运行 ${service?.uptime_seconds == null ? "--" : `${Math.floor(service.uptime_seconds)} 秒`}</small></div>`;
     }).join("");
-    const stamp = data.asOf == null ? "" : window.PolyPreview.format.time(data.asOf);
+    const stamp = health.asOf == null ? "" : window.PolyPreview.format.time(health.asOf);
     text(".server-expired", resource?.status === "stale"
-      ? `连接中断 · 保留上次采样${stamp ? ` · ${stamp}` : ""}`
+      ? `服务降级或采样过期${stamp ? ` · ${stamp}` : ""}`
       : stamp ? `更新 ${stamp}` : "等待系统采样");
   };
   const renderAccount = (resource) => {
     const data = resource?.data;
     if (!data) return;
-    const total = read(data, ["totalUsd", "total_usd", "equity", "balance"]);
-    const available = read(data, ["availableUsd", "available_usd", "available", "cash"]);
+    const total = read(data, ["totalUsd", "total_usd", "equity"], data.collateral?.available === true ? data.collateral.value : null);
+    const available = read(data, ["availableUsd", "available_usd", "balance_occupancy.spendable_balance"]);
     const formatUsd = (value) => { const amount = finite(value); return amount == null ? "--" : `${amount.toFixed(2)} USDC`; };
     text("[data-account-total]", formatUsd(total));
     text("[data-account-available]", formatUsd(available));
+    document.querySelectorAll("[data-account-total], [data-account-available]").forEach((node) => { node.title = resource.stale ? "数据过期，保留最近账户快照" : "服务器账户快照；缺少可用余额时显示 --"; });
   };
   const renderEvents = (resource) => {
-    text("[data-events-state]", resource?.status === "stale" ? "连接中断 · 保留上次事件" : resource?.status === "ready" ? "已连接" : "设计稿预览");
+    text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : "等待服务器事件");
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
     const list = document.querySelector("[data-overview-log-list]");
@@ -194,9 +199,16 @@
   store.subscribe("account", renderAccount);
   store.subscribe("events", renderEvents);
   store.subscribe("runtime", (runtime) => {
-    const label = runtime.status === "unavailable" ? "设计稿 · 待接入" : runtime.status === "stale" ? "连接中断 · 保留上次状态" : runtime.status;
+    const states = { running: "运行中", stopped: "已停止", paused: "已暂停新增", starting: "启动中", stopping: "停止中", failed: "运行失败" };
+    const label = runtime.status === "unavailable" ? "运行状态待接入" : runtime.stale ? `状态过期 · ${states[runtime.runtimeState] || runtime.runtimeState || "保留上次状态"}` : states[runtime.status] || runtime.status;
     text("[data-overview-runtime]", label);
   });
+  text('[data-overview-action="exit"]', "停止交易");
+  text('[data-overview-action="strategy"]', "配置策略");
+  text(".sidebar-status span", "服务器数据");
+  text(".sidebar-status small", "各模块独立更新");
+  text(".log-state small", "当前运行");
+  document.querySelector("[data-account-total]").previousElementSibling.textContent = "账户资产 / 抵押余额";
   if (window.PolyPreview.config.mode !== "local-preview") {
     void adapter.loadMarkets();
     void adapter.loadMarketPool();

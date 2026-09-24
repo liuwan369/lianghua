@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { createLiveSettlementAdapter, type LiveSettlementBackend, type LiveSettlementState } from "./live-settlement.js";
+import { createLiveSettlementAdapter, type LiveSettlementBackend, type LiveSettlementRecord, type LiveSettlementState } from "./live-settlement.js";
 import { TradingPlatform } from "./platform.js";
 import type { AccountSnapshot, GatewayAck, Instrument, MarketInfo, OrderRequest } from "./contracts.js";
 
@@ -77,5 +77,59 @@ assert.equal(persisted?.records[settlementMarketId], undefined);
 const ethAttempt = await settle({ marketId: settlementMarketId, assetId: "eth", roundId: "2000", tokenIds: ["5001", "5002"] });
 assert.equal(ethAttempt.state, "unsupported");
 assert.equal(ethAttempt.reason, "settlement_asset_identity_changed");
+
+const request = { marketId: settlementMarketId, assetId: "btc", roundId: "2000", tokenIds: ["5001", "5002"] };
+const canonicalKey = JSON.stringify([request.assetId, request.marketId, request.roundId]);
+const oldRoundKey = JSON.stringify([request.marketId, request.roundId]);
+const confirmed = structuredClone(persisted!.records[canonicalKey]!);
+const invalidRecords: Array<{ key: string; changes: Partial<LiveSettlementRecord>; reason: string }> = [
+  { key: oldRoundKey, changes: { marketId }, reason: "settlement_market_identity_changed" },
+  { key: oldRoundKey, changes: { roundId: "1999" }, reason: "settlement_round_identity_changed" },
+  { key: oldRoundKey, changes: { tokenIds: ["5001", "5003"] }, reason: "settlement_token_identity_changed" },
+  { key: oldRoundKey, changes: { assetId: "eth" }, reason: "settlement_asset_identity_changed" },
+  { key: request.marketId, changes: { marketId, roundId: undefined }, reason: "settlement_market_identity_changed" },
+  { key: request.marketId, changes: { roundId: "1999" }, reason: "settlement_round_identity_changed" },
+  { key: canonicalKey, changes: { marketId }, reason: "settlement_market_identity_changed" },
+];
+for (const { key, changes, reason } of invalidRecords) {
+  const restore: LiveSettlementState = { schemaVersion: 1, wallet,
+    records: { [key]: { ...structuredClone(confirmed), ...changes } } };
+  const before = structuredClone(restore);
+  let saves = 0;
+  const adapter = await createLiveSettlementAdapter({ backend, restore, persist: () => { saves++; } });
+  const rejected = await adapter(request);
+  assert.equal(rejected.state, "unsupported", `${key}: ${reason}`);
+  assert.equal(rejected.reason, reason);
+  assert.equal(saves, 0, "invalid persisted identity must never be migrated or saved");
+  assert.deepEqual(restore, before, "invalid persisted identity must remain unchanged");
+}
+
+for (const key of [oldRoundKey, request.marketId]) {
+  const legacy = structuredClone(confirmed);
+  if (key === request.marketId) delete legacy.roundId;
+  // Explicit asset identity must survive a failed persistence, including an
+  // otherwise valid migration that will be retried in this same process.
+  const restore: LiveSettlementState = { schemaVersion: 1, wallet, records: { [key]: legacy } };
+  const before = structuredClone(restore);
+  let attempts = 0;
+  const adapter = await createLiveSettlementAdapter({ backend, restore, persist: () => {
+    if (++attempts === 1) throw new Error("storage unavailable");
+  } });
+  assert.equal((await adapter(request)).state, "pending");
+  assert.deepEqual(restore, before, "failed migration preserves every original identity field");
+  const retried = await adapter(request);
+  assert.equal(retried.state, "confirmed");
+  assert.equal(retried.payoutVerified, true);
+  assert.equal(restore.records[key], undefined);
+  assert.equal(restore.records[canonicalKey]?.assetId, "btc");
+  assert.equal(restore.records[canonicalKey]?.roundId, "2000");
+}
+
+const unlabelledRound = structuredClone(confirmed);
+delete unlabelledRound.assetId;
+const roundRestore: LiveSettlementState = { schemaVersion: 1, wallet, records: { [oldRoundKey]: unlabelledRound } };
+const roundAdapter = await createLiveSettlementAdapter({ backend, restore: roundRestore, persist: () => {} });
+assert.equal((await roundAdapter(request)).state, "confirmed", "unlabelled BTC round remains migratable");
+assert.equal(roundRestore.records[canonicalKey]?.assetId, "btc");
 
 console.log("runtime-identity-migration.test: PASS");

@@ -4,9 +4,74 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ClobMarketProjection, publishSnapshot } from "../../dist/dashboard/market-projection.js";
-import { runMarketSnapshot } from "../../dist/cli/market-snapshot.js";
+import { parseMarketSnapshotOptions, runMarketSnapshot } from "../../dist/cli/market-snapshot.js";
 
 const OLD_ROUND = 1_800_000_000;
+
+test("asset list rejects empty entries", () => {
+  assert.throws(() => parseMarketSnapshotOptions(["--assets", ","]), /comma-separated assets/);
+  assert.throws(() => parseMarketSnapshotOptions(["--assets", "btc,,eth"]), /comma-separated assets/);
+});
+
+test("slow asset discovery does not delay a resolved asset feed", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "market-discovery-isolation-"));
+  const controller = new AbortController();
+  const started = [];
+  let releaseSlow;
+  const slow = new Promise(resolve => { releaseSlow = resolve; });
+  const running = runMarketSnapshot({ assets: ["btc", "eth"], output: join(dir, "snapshot.json"),
+    durationSec: 0, staleAfterMs: 250, publishMs: 5, discoveryMs: 1000 }, {
+    now: () => OLD_ROUND + 100,
+    discover: async (_at, _direct, _signal, asset) => {
+      if (asset === "eth") await slow;
+      return { asset, slug: `${asset}-updown-5m-${OLD_ROUND}`, conditionId: `${asset}-market`,
+        roundId: String(OLD_ROUND), upToken: `${asset}-yes`, downToken: `${asset}-no`, start: OLD_ROUND, end: OLD_ROUND + 300 };
+    },
+    feed: (_sink, _yes, _no, _deadline, identity) => { started.push(identity.marketId); return { stop() {} }; },
+    publish: () => {},
+  }, controller.signal);
+  t.after(async () => { controller.abort(); releaseSlow(); await running; rmSync(dir, { recursive: true, force: true }); });
+  for (let attempt = 0; attempt < 100 && !started.length; attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(started, ["btc-market"]);
+});
+
+test("collector publishes independent assets and retains only the disconnected asset as stale", async t => {
+  const now = OLD_ROUND + 100;
+  const sinks = new Map();
+  const rows = new Map();
+  let latest;
+  const controller = new AbortController();
+  const dir = mkdtempSync(join(tmpdir(), "market-multi-asset-"));
+  const running = runMarketSnapshot({ assets: ["btc", "eth", "sol"], output: join(dir, "snapshot.json"),
+    durationSec: 0, staleAfterMs: 250, publishMs: 5, discoveryMs: 1000 }, {
+    now: () => now,
+    discover: async (_at, _direct, _signal, asset) => ({ asset, slug: `${asset}-updown-5m-${OLD_ROUND}`,
+      conditionId: `${asset}-market`, roundId: String(OLD_ROUND), upToken: `${asset}-yes`, downToken: `${asset}-no`,
+      start: OLD_ROUND, end: OLD_ROUND + 300 }),
+    feed: (sink, yes, no, _deadline, identity) => {
+      sinks.set(identity.marketId, sink);
+      rows.set(identity.marketId, pairedBook({ marketId: identity.marketId, roundId: identity.roundId,
+        yesAssetId: yes, noAssetId: no, sequence: 1, now }));
+      return { stop() {} };
+    },
+    publish: (_path, value) => { latest = structuredClone(value); },
+  }, controller.signal);
+  t.after(async () => { controller.abort(); await running; rmSync(dir, { recursive: true, force: true }); });
+  const waitFor = async predicate => {
+    for (let attempt = 0; attempt < 200 && !predicate(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(predicate());
+  };
+  await waitFor(() => sinks.size === 3);
+  for (const [id, sink] of sinks) sink(rows.get(id));
+  await waitFor(() => latest.current_markets.length === 3);
+  assert.deepEqual(latest.current_markets.map(row => row.assetId).sort(), ["btc", "eth", "sol"]);
+  sinks.get("eth-market")({ kind: "bookStatus", healthy: false, connected: false, reason: "transport_disconnected" });
+  await waitFor(() => latest.current_markets.find(row => row.assetId === "eth")?.healthy === false);
+  assert.equal(latest.collector_online, true);
+  assert.equal(latest.current_markets.find(row => row.assetId === "btc").healthy, true);
+  assert.equal(latest.current_markets.find(row => row.assetId === "sol").healthy, true);
+  assert.equal(latest.current_markets.find(row => row.assetId === "eth").snapshot.sequence, 1);
+});
 
 function pairedBook({ marketId, roundId, yesAssetId, noAssetId, sequence, now, sourceAge = 0.02 }) {
   const sourceAt = now - sourceAge;

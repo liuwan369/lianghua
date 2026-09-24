@@ -187,6 +187,17 @@ export interface ReversalConfigFile {
   dailyLossUsd: number | null;
   savedRevision: string;
 }
+
+/** Strategy revisions may tighten a run's operator ceilings, but never raise them. */
+export function resolveReversalLimits(operator: Readonly<HardLimits>,
+  config: Pick<BtcReversalConfig, "totalBudgetUsd" | "dailyLossUsd">): HardLimits {
+  const capitalUsd = Math.min(operator.capitalUsd, config.totalBudgetUsd ?? Number.MAX_SAFE_INTEGER);
+  const configuredLoss = config.dailyLossUsd ?? null;
+  const dailyLossUsd = operator.dailyLossUsd == null ? configuredLoss
+    : configuredLoss == null ? operator.dailyLossUsd : Math.min(operator.dailyLossUsd, configuredLoss);
+  return { ...operator, capitalUsd, maxOrderUsd: Math.min(operator.maxOrderUsd, capitalUsd), dailyLossUsd };
+}
+
 export function readReversalConfig(path: string): ReversalConfigFile {
   let raw: Record<string, unknown>;
   try { raw = JSON.parse(readFileSync(path, "utf8")); }
@@ -205,6 +216,7 @@ export function readReversalConfig(path: string): ReversalConfigFile {
 export async function runPlatformCli(argv: string[]): Promise<void> {
   const options = parsePlatformOptions(argv);
   if (!options) return;
+  const operatorLimits: Readonly<HardLimits> = { ...options.limits };
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
   let strategy: BtcReversalStrategy | undefined;
   let reversal: BtcReversalStrategy | undefined;
@@ -213,9 +225,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     if (strategyConfig.config.assetId !== options.assetId) {
       throw new CliInputError(`strategy configuration asset ${strategyConfig.config.assetId} does not match selected asset ${options.assetId}`);
     }
-    options.limits.dailyLossUsd = strategyConfig.dailyLossUsd;
-    options.limits.capitalUsd = strategyConfig.config.totalBudgetUsd ?? Number.MAX_SAFE_INTEGER;
-    options.limits.maxOrderUsd = options.limits.capitalUsd;
+    Object.assign(options.limits, resolveReversalLimits(operatorLimits, strategyConfig.config));
   }
   const continuousMarkets = options.strategy === "btc-reversal" && !explicitMarkets;
   let store: PlatformStore | undefined;
@@ -469,11 +479,11 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         if (signalReason || primaryFailure) return [];
         const actions = onEvent(event, context);
         const active = reversal!.exportState().rounds.find(round => round.startsAt <= context.now && context.now < round.endsAt);
-        const dailyLossUsd = active?.config.dailyLossUsd ?? null;
-        const capitalUsd = active?.config.totalBudgetUsd ?? Number.MAX_SAFE_INTEGER;
-        if (connection && (options.limits.dailyLossUsd !== dailyLossUsd || options.limits.capitalUsd !== capitalUsd)) {
-          connection.platform.core.updateLimits({ dailyLossUsd, capitalUsd, maxOrderUsd: capitalUsd });
-          Object.assign(options.limits, { dailyLossUsd, capitalUsd, maxOrderUsd: capitalUsd });
+        const limits = resolveReversalLimits(operatorLimits, active?.config ?? strategyConfig!.config);
+        if (connection && (options.limits.dailyLossUsd !== limits.dailyLossUsd || options.limits.capitalUsd !== limits.capitalUsd
+          || options.limits.maxOrderUsd !== limits.maxOrderUsd)) {
+          connection.platform.core.updateLimits(limits);
+          Object.assign(options.limits, limits);
         }
         return actions;
       };

@@ -126,6 +126,20 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
   };
   const recordKey = (request: SettlementRequest): string => JSON.stringify([request.assetId, request.marketId, request.roundId]);
   const legacyRoundKey = (request: SettlementRequest): string => JSON.stringify([request.marketId, request.roundId]);
+  const identityError = (request: SettlementRequest, record: LiveSettlementRecord,
+    legacy: "none" | "round" | "market" = "none"): string | undefined => {
+    if (record.marketId !== request.marketId) return "settlement_market_identity_changed";
+    if (record.roundId !== request.roundId && !(legacy === "market" && record.roundId === undefined)) {
+      return "settlement_round_identity_changed";
+    }
+    if (record.assetId !== request.assetId
+      && !(legacy !== "none" && record.assetId === undefined && request.assetId === "btc")) {
+      return "settlement_asset_identity_changed";
+    }
+    if (!Array.isArray(record.tokenIds) || record.tokenIds.length !== request.tokenIds.length
+      || request.tokenIds.some(id => !record.tokenIds.includes(id))) return "settlement_token_identity_changed";
+    return undefined;
+  };
   const result = (request: SettlementRequest, status: SettlementResult["state"], reason: string, record?: LiveSettlementRecord): SettlementResult => {
     const usd = (raw: string | undefined): number | undefined => {
       if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
@@ -178,66 +192,29 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       && !(item.assetId === undefined && request.assetId === "btc"));
     if (conflictingAsset) return result(request, "unsupported", "settlement_asset_identity_changed", conflictingAsset);
     if (!record) {
-      // The first asset-aware runtime used [marketId, roundId]. Migrate only
-      // when the stored record already declares the same asset, or when the
-      // legacy record is unlabelled BTC. Never let an ETH/SOL request adopt an
-      // unlabelled record from another asset.
+      // Validate the full stored identity before changing either legacy format.
+      // Only an unlabelled BTC record may acquire an asset, and only the oldest
+      // condition-only format may acquire the caller's discovered round.
       const priorRoundKey = legacyRoundKey(request);
-      const priorRound = state.records[priorRoundKey];
-      if (priorRound) {
-        if (priorRound.assetId !== request.assetId
-          && !(priorRound.assetId === undefined && request.assetId === "btc")) {
-          return result(request, "unsupported", "settlement_asset_identity_changed", priorRound);
-        }
-        record = priorRound;
-        record.assetId = request.assetId;
-        delete state.records[priorRoundKey];
-        state.records[key] = record;
-        try { await save(); }
-        catch (error) {
-          delete state.records[key];
-          delete record.assetId;
-          state.records[priorRoundKey] = record;
-          throw error;
-        }
-      }
-    }
-    if (!record) {
-      // The first persistence format keyed records only by conditionId and had
-      // no roundId. Adopt such a record only when the caller supplies the
-      // discovered market identity, the asset is BTC for an unlabelled record,
-      // and the persisted token pair still matches.
-      // This is an identity migration, never a time/slug-based guess.
-      const legacyKey = request.marketId;
+      const legacyKey = state.records[priorRoundKey] ? priorRoundKey : request.marketId;
       const legacy = state.records[legacyKey];
-      if (legacy && legacy.marketId === request.marketId && legacy.roundId === undefined) {
-        if (legacy.assetId !== request.assetId
-          && !(legacy.assetId === undefined && request.assetId === "btc")) {
-          return result(request, "unsupported", "settlement_asset_identity_changed", legacy);
-        }
-        if (!Array.isArray(legacy.tokenIds) || legacy.tokenIds.length !== request.tokenIds.length
-          || request.tokenIds.some(id => !legacy!.tokenIds.includes(id))) {
-          return result(request, "unsupported", "settlement_token_identity_changed", legacy);
-        }
-        record = legacy;
-        record.assetId = request.assetId;
-        record.roundId = request.roundId;
+      if (legacy) {
+        const reason = identityError(request, legacy, legacyKey === priorRoundKey ? "round" : "market");
+        if (reason) return result(request, "unsupported", reason, legacy);
+        record = { ...legacy, assetId: request.assetId, roundId: request.roundId };
         delete state.records[legacyKey];
         state.records[key] = record;
         try { await save(); }
         catch (error) {
           delete state.records[key];
-          delete record.roundId;
-          delete record.assetId;
-          state.records[legacyKey] = record;
+          state.records[legacyKey] = legacy;
           throw error;
         }
       }
     }
-    if (record && (record.assetId !== request.assetId
-      || record.roundId !== request.roundId || record.tokenIds.length !== request.tokenIds.length
-      || request.tokenIds.some(id => !record!.tokenIds.includes(id)))) {
-      return result(request, "unsupported", "settlement_token_identity_changed", record);
+    if (record) {
+      const reason = identityError(request, record);
+      if (reason) return result(request, "unsupported", reason, record);
     }
     if (record?.status === "confirmed") return result(request, "confirmed", "pUSD到账已由链上回执确认", record);
     if (record?.status === "failed") return result(request, "unsupported", record.reason ?? "settlement_failed", record);

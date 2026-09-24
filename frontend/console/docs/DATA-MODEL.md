@@ -42,7 +42,7 @@ desired 是用户选择，current/next 是服务器确认结果。停用当前�
 
 系统健康包含行情节点、控制台、采集、交易、账本投影、CPU、内存、磁盘和负载。账户只返回钱包摘要、配置状态和最近检查结果，不返回私钥。事件必须有 id、time、kind、marketId、roundId、severity 和 message。
 
-账户 ViewModel 的真实数据源是服务器账户快照、账户状态和账户检查接口。当前前端只完成 adapter 和展示层，尚未连接真实后端账户或交易环境；因此没有快照时应显示 `unavailable`，请求失败后保留上一次快照并显示 `stale`。
+账户 ViewModel 的真实数据源是服务器账户快照、独立账户状态和账户检查接口。账户状态单独存储为 `accountStatus`，不会被余额快照覆盖；账户快照中的根 `available` 是分区可用性布尔值，不能当作余额金额，金额应读取 `collateral.value` 或服务器明确的金额字段。当前前端尚未完成真实账户和交易环境联调；没有快照时显示 `unavailable`，请求失败后保留上一次快照并显示 `stale`。账户检查分为表单候选检查和服务器已保存账户检查，后者发送 `{}`。
 
 ## 页面状态
 
@@ -55,6 +55,6 @@ desired 是用户选择，current/next 是服务器确认结果。停用当前�
 - `marketCatalog`：支持币种、当前场次、报价元数据、选中币种。
 - `marketPool`：desired/current/nextRound 三种运行池状态。
 - `runtime`：运行状态、来源、过期标记和按市场摘要。
-- `strategy`、`account`、`diagnostics`、`metrics`、`events`：各自独立更新。
+- `strategy`、`accountStatus`、`account`、`diagnostics`、`metrics`、`events`：各自独立更新。
 
 一个接口响应只更新对应分片；行情帧不会触发账户、统计或整页重绘。

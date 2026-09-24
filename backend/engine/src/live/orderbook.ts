@@ -14,17 +14,17 @@ export class OrderBook {
     this.bids.clear();
     this.asks.clear();
     for (const [p, s] of bids) {
-      if (p > 0 && p < 1 && s > 0) this.bids.set(key(p), s);
+      if (p > 0 && p < 1 && Number.isFinite(s) && s > 0) this.bids.set(key(p), s);
     }
     for (const [p, s] of asks) {
-      if (p > 0 && p < 1 && s > 0) this.asks.set(key(p), s);
+      if (p > 0 && p < 1 && Number.isFinite(s) && s > 0) this.asks.set(key(p), s);
     }
     this.bestBidPrice = this.findBest(this.bids, true);
     this.bestAskPrice = this.findBest(this.asks, false);
   }
 
   applyChange(price: number, size: number, isBuy: boolean): void {
-    if (!(price > 0 && price < 1)) return;
+    if (!(price > 0 && price < 1) || !Number.isFinite(size) || size < 0) return;
     const book = isBuy ? this.bids : this.asks;
     const t = key(price);
     if (size > 0) book.set(t, size);
