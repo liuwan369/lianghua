@@ -203,11 +203,15 @@
     },
     async loadMetrics(runId) {
       return readSlice("metrics", async () => {
-        const results = await Promise.allSettled([core.api.metrics("today"), modernOrLegacy(() => core.api.metrics("run"), async () => {
+        const legacySummary = async () => {
           const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
           if (!activeRunId) throw new Error("当前运行标识尚未提供");
           return core.api.legacySummary(activeRunId);
-        })]);
+        };
+        const results = await Promise.allSettled([
+          modernOrLegacy(() => core.api.metrics("today"), legacySummary),
+          modernOrLegacy(() => core.api.metrics("run"), legacySummary)
+        ]);
         const data = { ...(store.getState().metrics.data || {}), periodStatus: {} };
         ["today", "current"].forEach((period, index) => {
           const result = results[index];
