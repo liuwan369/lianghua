@@ -165,10 +165,11 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
     changed_units=[unit_names[name] for name in changed if name in unit_names]
     removed_units=sorted(retired_units_from_manifest | {unit_names[name] for name in obsolete if name in unit_names})
     nginx_public_link=Path('/etc/nginx/sites-enabled/pm-dashboard-public')
+    nginx_auth_file=Path('/etc/nginx/pm-dashboard.htpasswd')
     nginx_needs_update=any(name in changed for name in nginx_specs)
     nginx_public_target=Path(nginx_specs['config/pm-system-dashboard-dublin-public.conf'])
     if (any(not Path(target_name).is_file() for target_name in nginx_specs.values())
-            or not nginx_public_link.is_symlink()):
+            or not nginx_public_link.is_symlink() or not nginx_auth_file.is_file()):
         nginx_needs_update=True
     elif os.readlink(nginx_public_link) != str(nginx_public_target):
         nginx_needs_update=True
@@ -220,6 +221,8 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
         else:
             nginx_before['link']={'type': 'absent'}
         (release/'nginx-state-before.json').write_text(json.dumps(nginx_before))
+    if not nginx_auth_file.is_file():
+        raise RuntimeError('Dashboard password file is missing; refusing to install a public console')
     with tarfile.open(release/'before.tar.gz','w:gz') as backup:
         for name in backup_names:
             backup.add(root/name,arcname=name,recursive=False)
