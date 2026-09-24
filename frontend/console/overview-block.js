@@ -78,7 +78,7 @@
       if (target) window.PolyPreview.navigate(target);
     });
   });
-  document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", async () => {
     const action = button.dataset.overviewAction;
     if (action === "start" || action === "exit") {
       const state = store.getState();
@@ -88,7 +88,13 @@
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
       const marketIds = item?.marketId ? [item.marketId] : [];
       if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
-      adapter.commandRuntime({ action: action === "start" ? "start" : "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
+      const command = async () => {
+        if (action !== "start") return adapter.commandRuntime({ action: "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` });
+        const strategy = await adapter.loadStrategy();
+        if (strategy.status !== "ready" || !(strategy.revision > 0)) throw new Error("请先在策略页面保存并激活有效版本");
+        return adapter.commandRuntime({ action: "start", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, revision: strategy.revision, requestId: `overview-${Date.now()}` });
+      };
+      command()
       .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "运行控制待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
         .finally(() => { document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = false; }); void adapter.loadRuntime(); });

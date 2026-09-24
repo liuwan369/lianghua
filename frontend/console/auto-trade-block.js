@@ -45,7 +45,7 @@
           <div class="hero-actions">
             <button class="hero-button primary-action" type="button" data-action="start">\u542F\u52A8\u81EA\u52A8\u4EA4\u6613</button>
             <button class="hero-button" type="button" data-action="pause">\u6682\u505C\u65B0\u589E</button>
-            <button class="hero-button exit-action" type="button" data-action="stop">\u505C\u6B62\u5E76\u64A4\u4F59\u91CF</button>
+            <button class="hero-button exit-action" type="button" data-action="stop" title="提交停止请求；远端挂单撤销状态以服务器确认为准">\u8BF7\u6C42\u505C\u6B62</button>
           </div>
         </div>
         <div class="trade-header-side">
@@ -234,9 +234,18 @@
     if (!vm.matchesIdentity(source, context)) { markSnapshotStale("盘口身份与所选资产不匹配 · 保留最近快照"); return false; }
     var book = source.book || source.orderBook || source.orderbook || model.orderBook || {};
     var bookSide = function(side) { return book[side] || book[side.toUpperCase()] || {}; };
-    var hasDepth = ["yes", "no"].every(function(side) {
+    var hasFiveLevels = function(levels) {
+      return Array.isArray(levels) && levels.length >= 5 && levels.slice(0, 5).every(function(level) {
+        var price = Array.isArray(level) ? Number(level[0]) : Number(level?.price);
+        var size = Array.isArray(level) ? Number(level[1]) : Number(level?.size ?? level?.quantity ?? level?.shares);
+        return Number.isFinite(price) && price > 0 && price < 1 && Number.isFinite(size) && size > 0;
+      });
+    };
+    var hasDepth = source.depthAvailable !== false && ["yes", "no"].every(function(side) {
       var sideBook = bookSide(side);
-      return Array.isArray(sideBook.bids || sideBook.bid) && Array.isArray(sideBook.asks || sideBook.ask);
+      var bids = sideBook.bids || sideBook.bid;
+      var asks = sideBook.asks || sideBook.ask;
+      return hasFiveLevels(bids) && hasFiveLevels(asks);
     });
     var watermarkKey = identityKey(context);
     var previousSequence = snapshotWatermarks.get(watermarkKey);
@@ -244,7 +253,7 @@
       && sourceAt <= now + 5000 && expiresAt > now && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence >= previousSequence);
     if (!valid) {
-      markSnapshotStale(model.depthUnavailable ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
+      markSnapshotStale(model.depthUnavailable || source.depthAvailable === false || !hasDepth ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
       return false;
     }
     if (sequence === previousSequence && lastSnapshotValid) return true;
@@ -529,14 +538,15 @@
     var context = currentContext();
     var asset = assetById(context.assetId);
     var running = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused"].includes(selectedRuntime.state || selectedRuntime.status);
+    var catalog = store.getState().marketCatalog;
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
       var strategy = store.getState().strategy;
-      var reason = commandPending ? "控制指令处理中" : !context.marketId || !context.roundId ? "所选市场身份待后端提供" : "";
+      var reason = commandPending ? "控制指令处理中" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "start" && (strategy.status !== "ready" || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
-      if (!reason && action === "start" && (!asset?.canEnable || asset?.strategyEligible !== true || asset?.stale === true || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = asset?.strategyEligible !== true ? "服务器尚未确认该市场符合策略条件" : asset?.stale === true ? "行情已过期，暂不允许启动" : "请先在市场页启用所选币种并等待服务器确认";
+      if (!reason && action === "start" && (!asset?.canEnable || asset?.strategyEligible !== true || asset?.stale === true || catalog.stale || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : asset?.strategyEligible !== true ? "服务器尚未确认该市场符合策略条件" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && running) reason = "所选市场正在运行";
-      if (!reason && action !== "start" && !running) reason = "所选市场运行状态尚未确认";
+      if (!reason && action === "pause" && !running) reason = "所选市场运行状态尚未确认";
       if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";
       button.disabled = Boolean(reason);
       button.title = reason;
@@ -637,12 +647,19 @@
       commandPending = true;
       updateControls();
       try {
-        const command = { action, assetId: context.assetId, marketIds: [context.marketId], strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
+        const command = { action, ...(context.assetId ? { assetId: context.assetId } : {}), ...(context.marketId ? { marketIds: [context.marketId] } : {}), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
         const result = await adapter.commandRuntime(command);
         if (version !== contextVersion) return;
         const accepted = result?.accepted === true && result.commandStatus !== "failed";
-        text("[data-live-status]", result.message || (accepted ? "指令已接收，等待运行状态确认" : "指令未接受，运行状态未改变"));
-        text("[data-strategy-status]", accepted ? "等待状态确认" : "指令未接受，未改变运行状态");
+        const remoteOrdersState = result?.remoteOrdersState ?? result?.remote_orders_state;
+        if (action === "stop") {
+          const remoteText = remoteOrdersState === "confirmed" || remoteOrdersState === "cancelled" ? "远端挂单撤销已确认" : remoteOrdersState === "unconfirmed" ? "远端挂单撤销尚未确认" : "远端挂单状态待确认";
+          text("[data-live-status]", `${result.message || (accepted ? "停止请求已接收" : "停止请求未接受")} · ${remoteText}`);
+          text("[data-strategy-status]", accepted ? `等待停止状态确认 · ${remoteText}` : "停止指令未接受，运行状态未改变");
+        } else {
+          text("[data-live-status]", result.message || (accepted ? "指令已接收，等待运行状态确认" : "指令未接受，运行状态未改变"));
+          text("[data-strategy-status]", accepted ? "等待状态确认" : "指令未接受，未改变运行状态");
+        }
       } catch (error) {
         if (version === contextVersion) {
           text("[data-live-status]", error.message || "控制请求失败，运行状态未改变");

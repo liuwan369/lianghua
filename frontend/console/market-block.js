@@ -128,11 +128,12 @@
       const pool = store.getState().marketPool;
       const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
       const waiting = poolSaving || Boolean(pool.pendingDesiredIds) || pool.status !== "ready";
-      button.disabled = waiting || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      button.title = pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
+      const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
+      button.disabled = waiting || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
+      button.title = pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
       button.classList.toggle("enabled", coin.enabled);
       button.setAttribute("aria-pressed", String(coin.enabled));
-      set("[data-enable-coin] span", waiting ? "等待确认" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
+      set("[data-enable-coin] span", waiting ? "等待确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
     });
     if (!filtered.length) list.innerHTML = '<div class="market-empty"><span>⌕</span><strong>没有匹配的加密货币</strong><small>换一个币种名称或代码再试。</small></div>';
     text("[data-pool-caption]", query ? `匹配 ${filtered.length} 个币种` : `${coins.length} 个支持币种`);
@@ -188,9 +189,10 @@
     if (action) {
       const pool = store.getState().marketPool;
       const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
-      action.disabled = poolSaving || pool.status !== "ready" || Boolean(pool.pendingDesiredIds) || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      action.title = pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : "";
-      action.textContent = poolSaving ? "提交中…" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : coin.enabled ? "停用（下一场生效）" : coin.canEnable && completeIdentity ? "启用此币种（替换待运行配置）" : "等待市场身份";
+      const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
+      action.disabled = poolSaving || pool.status !== "ready" || Boolean(pool.pendingDesiredIds) || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
+      action.title = pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : "";
+      action.textContent = poolSaving ? "提交中…" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个币种" : coin.enabled ? "停用（下一场生效）" : coin.canEnable && completeIdentity ? "启用此币种（替换待运行配置）" : "等待市场身份";
       action.classList.toggle("selected", coin.enabled);
     }
     text("[data-selection-note]", !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
@@ -219,6 +221,10 @@
       return;
     }
     const state = store.getState();
+    if (coin.enabled && state.marketPool.desiredIds.length <= 1) {
+      text("[data-selection-note]", "单实例运行池至少保留一个币种；请先启用其他币种再停用当前币种。");
+      return;
+    }
     const desiredIds = coin.enabled ? state.marketPool.desiredIds.filter((value) => value !== id) : [id];
     let resultMessage = null;
     poolSaving = true;
