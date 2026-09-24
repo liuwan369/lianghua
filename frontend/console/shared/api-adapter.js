@@ -241,24 +241,41 @@
     },
     async saveStrategy(payload) {
       if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略保存接口尚未连接" };
-      const legacyPayload = {
-        expectedRevision: store.getState().strategy.revision,
-        config: {
-          triggerPrice: payload.triggerPrice,
-          confirmationPrice: payload.confirmationPrice,
-          maxBuyPrice: payload.maxBuyPrice,
-          stageShares: payload.stageShares,
-          maxStages: payload.stageShares?.length || 0,
-          roundBudgetUsd: payload.roundBudgetUsd ?? null,
-          totalBudgetUsd: payload.totalBudgetUsd ?? null,
-          dailyLossUsd: payload.dailyLossUsd ?? null,
-          durationMinutes: payload.durationMinutes ?? 0,
-          mode: payload.mode || "live",
-          maxQuoteAgeSeconds: payload.maxQuoteAgeSeconds ?? 2,
-          maxQuoteSkewSeconds: payload.maxQuoteSkewSeconds ?? 1.5
-        }
+      const state = store.getState();
+      const strategyData = state.strategy?.data || {};
+      const urlAssetId = new URLSearchParams(window.location.search).get("assetId");
+      const assetId = [
+        payload?.assetId,
+        payload?.config?.assetId,
+        strategyData?.assetId,
+        strategyData?.config?.assetId,
+        strategyData?.config?.asset_id,
+        state.marketCatalog?.selectedId,
+        core.config.selectedAssetId,
+        urlAssetId
+      ].find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+      if (!assetId) throw new Error("当前未选择资产，无法保存策略");
+      const config = {
+        ...(payload?.config || {}),
+        triggerPrice: payload.triggerPrice,
+        confirmationPrice: payload.confirmationPrice,
+        maxBuyPrice: payload.maxBuyPrice,
+        stageShares: payload.stageShares,
+        roundBudgetUsd: payload.roundBudgetUsd ?? null,
+        totalBudgetUsd: payload.totalBudgetUsd ?? null,
+        dailyLossUsd: payload.dailyLossUsd ?? null,
+        durationMinutes: payload.durationMinutes ?? 0,
+        mode: payload.mode || "live",
+        maxQuoteAgeSeconds: payload.maxQuoteAgeSeconds ?? 2,
+        maxQuoteSkewSeconds: payload.maxQuoteSkewSeconds ?? 1.5,
+        assetId: String(assetId).trim()
       };
-      const raw = await modernOrLegacy(() => core.api.strategyDraft(payload), () => core.api.legacyStrategySave(legacyPayload));
+      const modernPayload = { ...payload, assetId: String(assetId).trim(), config };
+      const legacyPayload = {
+        expectedRevision: state.strategy.revision,
+        config: { ...config, maxStages: payload.stageShares?.length || 0 }
+      };
+      const raw = await modernOrLegacy(() => core.api.strategyDraft(modernPayload), () => core.api.legacyStrategySave(legacyPayload));
       const data = raw || {};
       store.setSlice("strategy", { status: resourceStatus(data), stale: resourceStatus(data) === "stale", data, revision: data.savedRevision ?? data.revision ?? null, error: data.error || null });
       return data;
