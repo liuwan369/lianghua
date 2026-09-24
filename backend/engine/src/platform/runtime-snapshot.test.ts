@@ -22,8 +22,10 @@ function createPlatform(now: () => number): TradingPlatform {
 
 function paired(sequence: number, at: number, yesAsk: number, noAsk: number): MarketBookSnapshot {
   return { marketId: "market-1", roundId: "1000", sequence, sourceAt: at, expiresAt: 1299, tsUnix: at,
-    YES: { assetId: "yes-1", bid: yesAsk - 0.05, ask: yesAsk, sourceAt: at, expiresAt: 1299, sequence },
-    NO: { assetId: "no-1", bid: noAsk - 0.05, ask: noAsk, sourceAt: at, expiresAt: 1299, sequence } };
+    YES: { assetId: "yes-1", bid: yesAsk - 0.05, ask: yesAsk, sourceAt: at, expiresAt: 1299,
+      depthSourceAt: at, depthExpiresAt: 1298, bids: [[yesAsk - 0.05, 10]], asks: [[yesAsk, 10]], sequence },
+    NO: { assetId: "no-1", bid: noAsk - 0.05, ask: noAsk, sourceAt: at, expiresAt: 1299,
+      depthSourceAt: at, depthExpiresAt: 1298, bids: [[noAsk - 0.05, 10]], asks: [[noAsk, 10]], sequence } };
 }
 
 {
@@ -41,14 +43,19 @@ function paired(sequence: number, at: number, yesAsk: number, noAsk: number): Ma
   } });
   const first = paired(1, 1000, 0.5, 0.5);
   assert.equal(platform.ingestSnapshot(first), true);
-  assert.deepEqual(observed, first, "listeners receive the paired snapshot");
-  assert.deepEqual(strategyObserved, first, "strategy receives the same paired shape");
-  assert.deepEqual(platform.market.snapshots()[0], first, "status snapshots preserve the accepted paired object");
+  const accepted = { ...first, assetId: "btc" };
+  assert.deepEqual(observed, accepted, "listeners receive the registered market asset and original paired snapshot");
+  assert.deepEqual(strategyObserved, accepted, "strategy receives the same paired shape");
+  assert.deepEqual(platform.market.snapshots()[0], accepted, "status snapshots preserve the accepted paired object");
   const status = strategy.getStatus();
   assert.equal(status.rounds[0]?.roundId, "1000", "strategy status exposes the explicit round identity");
   assert.equal(status.currentRound?.roundId, "1000", "strategy status exposes the current round identity");
   assert.equal(platform.market.book("yes-1")?.ask, 0.5);
   assert.equal(platform.market.book("no-1")?.ask, 0.5);
+  assert.deepEqual(platform.market.depth("yes-1")?.asks, [[0.5, 10]], "valid L2 depth is preserved");
+  now = 1298;
+  assert.equal(platform.market.depth("yes-1"), undefined, "expired L2 depth is unavailable");
+  now = 1000;
   assert.equal(platform.ingestSnapshot({ ...first, sequence: 2,
     YES: { ...first.YES!, assetId: "wrong" }, }), false, "wrong token identity is rejected");
   assert.throws(() => platform.ingest({ kind: "market", market: { ...market, roundId: "1100" } }),

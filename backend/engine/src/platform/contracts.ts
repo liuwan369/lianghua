@@ -47,6 +47,9 @@ export interface Book {
   /** Sorted best first. Strategies may slice(0, 5) for top-five depth. */
   bids?: PriceLevel[];
   asks?: PriceLevel[];
+  /** Venue L2 clock; never replaced by a faster top-of-book timestamp. */
+  depthSourceAt?: number;
+  depthExpiresAt?: number;
 }
 /** Paired market snapshot accepted by the trading runtime after feed gating. */
 export interface RuntimeMarketAssetSnapshot {
@@ -57,6 +60,9 @@ export interface RuntimeMarketAssetSnapshot {
   askSize?: number;
   bids?: PriceLevel[];
   asks?: PriceLevel[];
+  /** Venue L2 clock; absent means depth is unavailable for execution/display. */
+  depthSourceAt?: number;
+  depthExpiresAt?: number;
   sourceAt?: number;
   expiresAt?: number;
   sequence?: number;

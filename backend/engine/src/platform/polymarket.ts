@@ -35,14 +35,6 @@ type DiscoveryModule = typeof marketDiscovery & {
   findFiveMinuteMarket?: (asset: string, options: { now: number; allowCollectorFallback: boolean; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
 };
 type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string; __runtimeAssetId?: AssetId };
-type RuntimeFeedStarter = (
-  sink: (event: FeedEvent) => void,
-  upToken: string,
-  downToken: string,
-  deadline: number,
-  identity?: { marketId: string; roundId: string },
-) => { stop: () => void; isHealthy?: (maxStaleMs?: number) => boolean };
-const startPolymarketFeed = runPolymarketFeed as unknown as RuntimeFeedStarter;
 
 export function binaryMarketSides(market: MarketInfo): { up: Instrument; down: Instrument } | undefined {
   const up = market.instruments.find(item => ["UP", "YES"].includes(item.outcome.toUpperCase()));
@@ -240,9 +232,26 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const usersByMarket = new Map<string, UserFeedControl>();
   const connectedMarkets = new Set<string>();
   const registered = new Map<string, Set<string>>();
-  // Keep queue coalescing isolated per market. The legacy FeedQueue coalesces
-  // by event kind, so one shared instance could replace BTC with ETH books.
+  // Keep the venue identity as a queue boundary. FeedQueue also keys by round
+  // and token pair, but a per-market instance prevents a malformed marketId
+  // from poisoning a valid stream that happens to reuse token metadata.
   const feedQueues = new Map<string, FeedQueue>();
+  let feedWaiter: (() => void) | undefined;
+  let feedWaitTimer: ReturnType<typeof setTimeout> | undefined;
+  const wakeFeedConsumer = (): void => {
+    const resolve = feedWaiter;
+    feedWaiter = undefined;
+    if (feedWaitTimer) { clearTimeout(feedWaitTimer); feedWaitTimer = undefined; }
+    resolve?.();
+  };
+  const waitForFeedEvent = (timeoutMs: number): Promise<void> => new Promise(resolve => {
+    feedWaiter = resolve;
+    feedWaitTimer = setTimeout(() => {
+      if (feedWaiter === resolve) feedWaiter = undefined;
+      feedWaitTimer = undefined;
+      resolve();
+    }, timeoutMs);
+  });
   const snapshotWatermarks = new Map<string, SnapshotWatermark>();
   const snapshotRejectNotice = new Map<string, SnapshotRejectReason>();
   // A disconnect invalidates snapshots already waiting in the queue. The next
@@ -583,25 +592,26 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const sink = (market: MarketInfo) => (event: FeedEvent) => {
     // The venue callback only performs a bounded queue push. Strategy code,
     // record listeners, account reads and HTTP work run in the consumer.
+    if (stopped) return;
     const queue = feedQueues.get(market.id);
     if (!queue) return;
     queue.push({ ...event, __runtimeMarketId: market.id, __runtimeAssetId: market.assetId ?? "btc" } as RoutedFeedEvent as FeedEvent);
+    wakeFeedConsumer();
   };
   const startFeedConsumer = (): void => {
     if (feedConsumer) return;
     feedConsumerAlive = true;
     feedConsumer = (async () => {
       while (feedConsumerAlive) {
-        if (!feedQueues.size) {
-          await new Promise(resolve => setTimeout(resolve, 25));
-          continue;
-        }
         let event: RoutedFeedEvent | undefined;
         for (const queue of feedQueues.values()) {
           const candidate = queue.tryPop();
           if (candidate) { event = candidate as RoutedFeedEvent; break; }
         }
-        if (!event) { await new Promise(resolve => setTimeout(resolve, 5)); continue; }
+        if (!event) {
+          await waitForFeedEvent(100);
+          continue;
+        }
         try { consumeFeedEvent(event); }
         catch (error) {
           const market = routeMarket(event as RoutedFeedEvent);
@@ -614,6 +624,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   };
   const stopFeedConsumer = async (): Promise<void> => {
     feedConsumerAlive = false;
+    wakeFeedConsumer();
     await feedConsumer?.catch(() => undefined);
   };
   const recoverAccount = (): Promise<void> => {
@@ -900,8 +911,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
     const { up, down } = sides;
     if (market.endsAt > Date.now() / 1000) {
-      if (startPolymarketFeed.length < 5) throw new Error("identity-aware Polymarket feed unavailable; deploy market-data feed adapter");
-      const feed = startPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt), {
+      const feed = runPolymarketFeed(sink(market), up.tokenId, down.tokenId, Math.min(feedDeadline, market.endsAt), {
         marketId: market.id, roundId: market.roundId,
       });
       controls.add(feed); bookFeeds.set(market.id, feed);
@@ -998,6 +1008,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (market.endsAt > now) continue;
       const feed = bookFeeds.get(market.id);
       if (feed) { feed.stop(); controls.delete(feed); bookFeeds.delete(market.id); bookHealth.delete(market.id); booksHealthy.delete(market.id); }
+      feedQueues.delete(market.id);
       const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
       const needsUser = account.orders.some(order => tokens.has(order.tokenId)
         && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))
@@ -1083,7 +1094,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       catch (error) { stopError = error; }
       finally {
         for (const control of controls) control.stop();
-        bookHealth.clear(); feedQueues.clear(); stopHeartbeat?.(); client?.stopHeartbeat();
+        bookHealth.clear(); feedQueues.clear(); wakeFeedConsumer(); stopHeartbeat?.(); client?.stopHeartbeat();
       }
       if (stopError) throw stopError;
     },
