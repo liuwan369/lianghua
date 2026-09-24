@@ -6,7 +6,7 @@ import { createPublicClient, createWalletClient, decodeEventLog, encodeFunctionD
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { loadAccountConfig } from "../live/account.js";
-import { inspectWalletAddress } from "../live/clob/wallet.js";
+import { checkSettlementCredentials, inspectWalletAddress } from "../live/clob/wallet.js";
 import { CTF, PUSD } from "../live/contracts.js";
 import type { PlatformAdapters, SettlementRequest, SettlementResult } from "./contracts.js";
 import { COLLATERAL_ADAPTER, redemptionPlan, type RedemptionTransaction } from "./settlement.js";
@@ -35,7 +35,8 @@ export interface PreparedSettlementTransaction {
 }
 export interface LiveSettlementRecord {
   marketId: string;
-  roundId: string;
+  /** Added after the original market-id-only persistence format. */
+  roundId?: string;
   tokenIds: string[];
   status: "prepared" | "submitted" | "confirmed" | "failed";
   operation: "approval" | "redeem";
@@ -81,6 +82,8 @@ export interface LiveSettlementOptions {
   restore?: LiveSettlementState;
   persist?: (state: LiveSettlementState) => void | Promise<void>;
   backend?: LiveSettlementBackend;
+  /** Live strategy processes must fail before trading when settlement cannot be submitted. */
+  requireCredentials?: boolean;
 }
 
 export class UnsupportedSettlement extends Error {}
@@ -96,6 +99,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
   try { backend = options.backend ?? await createBackend(); }
   catch (error) {
     if (!(error instanceof UnsupportedSettlement)) throw error;
+    if (options.requireCredentials !== false) throw error;
     return async request => ({ marketId: request.marketId, state: "unsupported", reason: error.message });
   }
   const stateFile = resolve(options.stateFile ?? "results/platform/live-settlements.json");
@@ -104,7 +108,9 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     : { schemaVersion: 1, wallet: backend.wallet, records: {} });
   if (state.schemaVersion !== 1 || state.wallet.toLowerCase() !== backend.wallet.toLowerCase()
     || !state.records || typeof state.records !== "object"
-    || Object.values(state.records).some(record => !record || typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId))) {
+    || Object.values(state.records).some(record => !record
+      || (record.roundId !== undefined
+        && (typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId))))) {
     throw new Error("settlement state wallet/schema mismatch");
   }
   const save = async () => {
@@ -159,6 +165,31 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     if (request.tokenIds.some(id => !/^\d+$/.test(id))) return result(request, "unsupported", "settlement_invalid_token_id");
     const key = recordKey(request);
     let record: LiveSettlementRecord | undefined = state.records[key];
+    if (!record) {
+      // The first persistence format keyed records only by conditionId and had
+      // no roundId. Adopt such a record only when the caller supplies the
+      // discovered market identity and the persisted token pair still matches.
+      // This is an identity migration, never a time/slug-based guess.
+      const legacyKey = request.marketId;
+      const legacy = state.records[legacyKey];
+      if (legacy && legacy.marketId === request.marketId && legacy.roundId === undefined) {
+        if (!Array.isArray(legacy.tokenIds) || legacy.tokenIds.length !== request.tokenIds.length
+          || request.tokenIds.some(id => !legacy!.tokenIds.includes(id))) {
+          return result(request, "unsupported", "settlement_token_identity_changed", legacy);
+        }
+        record = legacy;
+        record.roundId = request.roundId;
+        delete state.records[legacyKey];
+        state.records[key] = record;
+        try { await save(); }
+        catch (error) {
+          delete state.records[key];
+          delete record.roundId;
+          state.records[legacyKey] = record;
+          throw error;
+        }
+      }
+    }
     if (record && (record.roundId !== request.roundId || record.tokenIds.length !== request.tokenIds.length
       || request.tokenIds.some(id => !record!.tokenIds.includes(id)))) {
       return result(request, "unsupported", "settlement_token_identity_changed", record);
@@ -277,24 +308,31 @@ async function createBackend(): Promise<LiveSettlementBackend> {
   const inspection = await inspectWalletAddress(wallet, rpc);
   const deposit = inspection.walletKind === "DEPOSIT_WALLET";
   if (inspection.walletKind === "CONTRACT_UNKNOWN") throw new UnsupportedSettlement("settlement_wallet_type_requires_safe_or_proxy_sender");
-  if (deposit ? inspection.owner?.toLowerCase() !== account.address.toLowerCase() : wallet.toLowerCase() !== account.address.toLowerCase()) {
-    throw new UnsupportedSettlement("settlement_wallet_owner_mismatch");
-  }
   const builderKey = process.env.POLY_BUILDER_API_KEY?.trim();
   const builderSecret = process.env.POLY_BUILDER_SECRET?.trim();
   const builderPassphrase = process.env.POLY_BUILDER_PASSPHRASE?.trim();
   const relayKey = process.env.RELAYER_API_KEY?.trim();
   const relayAddress = process.env.RELAYER_API_KEY_ADDRESS?.trim();
-  if (deposit && !(builderKey && builderSecret && builderPassphrase) && !(relayKey && relayAddress)) {
-    throw new UnsupportedSettlement("settlement_relayer_or_builder_credentials_missing");
+  const credentials = checkSettlementCredentials({
+    walletKind: inspection.walletKind,
+    ownerSignerPresent: true,
+    ownerMatchesSigner: deposit
+      ? inspection.owner?.toLowerCase() === account.address.toLowerCase()
+      : wallet.toLowerCase() === account.address.toLowerCase(),
+    builderCredentialsPresent: config.builderCredentialsPresent,
+    relayerCredentialsPresent: config.relayerCredentialsPresent,
+  });
+  if (!credentials.ready) {
+    throw new UnsupportedSettlement(`settlement_credentials_${credentials.reason}`);
   }
+  const useBuilder = credentials.route === "builder";
   const client = createPublicClient({ chain: polygon, transport: http(rpc, { timeout: 12_000 }) });
   const signer = createWalletClient({ account, chain: polygon, transport: http(rpc, { timeout: 12_000 }) });
   const relayer = "https://relayer-v2.polymarket.com";
   async function relay(path: string, body?: string): Promise<Record<string, unknown>> {
     const method = body === undefined ? "GET" : "POST";
     const headers: Record<string, string> = { "Content-Type": "application/json", "User-Agent": "pm-platform-settlement" };
-    if (builderKey && builderSecret && builderPassphrase) {
+    if (useBuilder && builderKey && builderSecret && builderPassphrase) {
       const ts = Math.floor(Date.now() / 1000);
       Object.assign(headers, { POLY_BUILDER_API_KEY: builderKey, POLY_BUILDER_PASSPHRASE: builderPassphrase,
         POLY_BUILDER_TIMESTAMP: String(ts), POLY_BUILDER_SIGNATURE: await buildHmacSignature(builderSecret, ts, method, path, body) });

@@ -185,11 +185,15 @@ export class TradingPlatform {
   ingestSnapshot(snapshot: MarketBookSnapshot, marketId = snapshot.marketId, roundId = snapshot.roundId): boolean {
     if (!marketId || !roundId || snapshot.marketId !== marketId || snapshot.roundId !== roundId) return false;
     const market = this.markets.get(marketId);
+    // Keep the platform boundary closed even when a caller bypasses the feed
+    // snapshot gate. A condition ID can be reused by an adapter bug while the
+    // registered five-minute round has already advanced.
+    if (!market || market.roundId !== roundId) return false;
     const yes = snapshot.YES;
     const no = snapshot.NO;
     const yesInstrument = market?.instruments.find(item => item.outcome.toUpperCase() === "UP");
     const noInstrument = market?.instruments.find(item => item.outcome.toUpperCase() === "DOWN");
-    if (!market || !yes || !no || market.instruments.length !== 2 || !yesInstrument || !noInstrument
+    if (!yes || !no || market.instruments.length !== 2 || !yesInstrument || !noInstrument
       || yes.assetId !== yesInstrument.tokenId || no.assetId !== noInstrument.tokenId) return false;
     const toBook = (asset: typeof yes): Book => ({
       tokenId: asset.assetId,

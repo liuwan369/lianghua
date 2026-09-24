@@ -42,6 +42,17 @@ codex/market-data
 
 运行时事件也携带身份：订单和成交包含 `marketId/roundId`，结算请求和结果包含 `marketId/roundId`。账本/API 应原样保存这些字段；缺少身份时保持空值或拒绝需要身份的操作，不能根据 slug 或接收时间回填。
 
+## 启动前结算凭据检查
+
+`account-check` 的只读 JSON 必须包含 `settlement_credentials_ready`。它只返回 `true`、`false` 或错误时的 `null`，不返回私钥、API Key、Secret 或 Passphrase。
+
+- EOA 直接链上赎回：Owner signer 与钱包地址匹配即可，不要求 Builder/Relayer 凭据。
+- Deposit Wallet：Owner signer 必须匹配，并且 Builder 三元凭据或 Relayer API Key 与地址必须完整。
+- 未知合约钱包、Owner 不匹配、凭据缺失：返回 `false`。
+- RPC 或钱包类型无法读取：保留 `null`，不能猜测为已就绪。
+
+实盘策略启动时会重复执行同一套非秘密检查；结算凭据不是等到五分钟结束才第一次检查。检查未通过时平台启动失败，避免先成交后才发现 redeem 不能提交。最终到账仍必须等待链上回执和余额核对，`settlement_credentials_ready=true` 只代表凭据和钱包身份已具备提交条件。
+
 策略参数保存在 `BtcReversalConfig`，前端或控制面应传入配置文件；不要在前端复制一套阈值或阶段计算。
 
 可配置字段包括：

@@ -23,15 +23,21 @@ try {
       detail: report.approvalsFullyReady === null ? "查询失败或协议版本不兼容，请重试" : report.approvalsFullyReady
         ? `当前 CLOB V2 交易授权齐全；其他产品授权缺项 ${report.otherApprovalsMissing ?? 0}，不用于本策略`
         : `当前 CLOB V2 缺资金授权 ${report.missingErc20Approvals} 项、持仓授权 ${report.missingErc1155Approvals} 项` },
+    { name: "结算凭据", ok: report.settlementCredentialsReady === true,
+      detail: report.settlementCredentialsReady
+        ? "结算所需 Owner 与 Builder/Relayer 凭据已就绪"
+        : "结算凭据未就绪，实盘启动将被阻止" },
   ];
   console.log(JSON.stringify({ wallet: report.collateralWallet, owner: report.walletOwner ?? config.ownerSigner ?? null,
     signer_matches: report.ownerMatchesSigner === true, compromised,
     balance: report.pusdOnChain, approvals_ready: report.approvalsFullyReady,
+    settlement_credentials_ready: report.settlementCredentialsReady,
     account_ready: report.ready && !compromised, checks,
     checked_at: new Date().toISOString(), read_only: true }));
 } catch {
   console.log(JSON.stringify({
     error_code: errorCode,
+    settlement_credentials_ready: null,
     error: errorCode === "invalid_account_config"
       ? "账户配置无效，请核对资金钱包地址与签名私钥格式。"
       : "账户链上查询失败，请检查 Polygon RPC 连接后重试。",

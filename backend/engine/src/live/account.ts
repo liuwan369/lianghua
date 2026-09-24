@@ -4,7 +4,7 @@ import {
 } from "@polymarket/client";
 import { getAddress, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { inspectWalletAddress } from "./clob/wallet.js";
+import { checkSettlementCredentials, inspectWalletAddress } from "./clob/wallet.js";
 import { CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD } from "./contracts.js";
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -40,6 +40,7 @@ export interface AccountConfigStatus {
   sessionSigner?: Address;
   relayerApiKeyPresent: boolean;
   relayerApiKeyAddress?: Address;
+  relayerCredentialsPresent: boolean;
   builderCredentialsPresent: boolean;
   errors: string[];
 }
@@ -73,6 +74,9 @@ export function loadAccountConfig(): AccountConfigStatus {
   if (value("POLYMARKET_SESSION_PRIVATE_KEY") && !sessionPrivateKey) {
     errors.push("Session Key 格式无效");
   }
+  if (value("RELAYER_API_KEY_ADDRESS") && !relayerApiKeyAddress) {
+    errors.push("Relayer API 地址格式无效");
+  }
 
   return {
     depositWallet,
@@ -82,6 +86,7 @@ export function loadAccountConfig(): AccountConfigStatus {
     sessionSigner,
     relayerApiKeyPresent: Boolean(value("RELAYER_API_KEY")),
     relayerApiKeyAddress,
+    relayerCredentialsPresent: Boolean(value("RELAYER_API_KEY") && relayerApiKeyAddress),
     builderCredentialsPresent: Boolean(
       value("POLY_BUILDER_API_KEY") &&
         value("POLY_BUILDER_SECRET") &&
@@ -104,6 +109,8 @@ export interface PublicAccountCheck {
   missingErc20Approvals: number;
   missingErc1155Approvals: number;
   approvalsError?: string;
+  /** True only when the wallet can submit the eventual settlement route. */
+  settlementCredentialsReady: boolean;
   /** SDK requirements for other products, outside this engine's CLOB V2 route. */
   otherApprovalsMissing?: number;
 }
@@ -155,18 +162,31 @@ export async function checkPublicAccount(wallet: Address): Promise<PublicAccount
     approvalsError = "交易授权查询失败，请检查 Polygon RPC 和 CLOB V2 服务后重试。";
   }
 
+  const ownerMatchesConfiguredSigner = config.ownerSigner
+    ? inspected.walletKind === "EOA"
+      ? wallet.toLowerCase() === config.ownerSigner.toLowerCase()
+      : inspected.owner
+        ? inspected.owner.toLowerCase() === config.ownerSigner.toLowerCase()
+        : false
+    : null;
+  const settlementCredentialsReady = config.errors.length === 0 && checkSettlementCredentials({
+    walletKind: inspected.walletKind,
+    ownerSignerPresent: Boolean(config.ownerSigner),
+    ownerMatchesSigner: ownerMatchesConfiguredSigner,
+    builderCredentialsPresent: config.builderCredentialsPresent,
+    relayerCredentialsPresent: config.relayerCredentialsPresent,
+  }).ready;
+
   return {
     wallet,
     walletKind: inspected.walletKind,
     owner: inspected.owner,
-    ownerMatchesConfiguredSigner:
-      inspected.owner && config.ownerSigner
-        ? inspected.owner.toLowerCase() === config.ownerSigner.toLowerCase()
-        : null,
+    ownerMatchesConfiguredSigner,
     approvalsFullyReady,
     missingErc20Approvals,
     missingErc1155Approvals,
     approvalsError,
+    settlementCredentialsReady,
     otherApprovalsMissing,
   };
 }

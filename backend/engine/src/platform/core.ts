@@ -470,8 +470,33 @@ export class TradingCore {
     }
     this.state.markets ??= [];
     const index = this.state.markets.findIndex(item => item.id === market.id);
-    if (index >= 0 && this.state.markets[index]!.roundId !== market.roundId) {
-      throw new Error("market round identity changed");
+    if (index >= 0) {
+      // States written before round identity was added have the market, start,
+      // end and token set but no roundId. The next discovery supplies the
+      // authoritative identity. Backfill only after those durable anchors
+      // match; never infer a round from a slug or from the current clock.
+      const persisted = this.state.markets[index] as unknown as {
+        roundId?: unknown;
+        startsAt?: unknown;
+        endsAt?: unknown;
+        instruments?: unknown;
+      };
+      if (persisted.roundId !== undefined
+        && (typeof persisted.roundId !== "string" || persisted.roundId !== market.roundId)) {
+        throw new Error("market round identity changed");
+      }
+      if (persisted.startsAt !== market.startsAt || persisted.endsAt !== market.endsAt
+        || !Array.isArray(persisted.instruments)) {
+        throw new Error("market identity changed");
+      }
+      const persistedTokens = persisted.instruments.map(item =>
+        item && typeof item === "object" && "tokenId" in item && typeof item.tokenId === "string"
+          ? item.tokenId : undefined);
+      if (persistedTokens.some(token => token === undefined)
+        || new Set(persistedTokens).size !== tokens.size
+        || persistedTokens.some(token => !tokens.has(token!))) {
+        throw new Error("market token identity changed");
+      }
     }
     if (index >= 0) this.state.markets[index] = copy(market);
     else this.state.markets.push(copy(market));
@@ -799,7 +824,8 @@ export class TradingCore {
     this.emitOrder(order);
     let ackOutcome: GatewayAck["status"] | undefined;
     try {
-      const ack = await this.options.adapters.gateway.submit(request, copy(instrument), prepared => {
+      const scopedRequest: OrderRequest = { ...request, marketId: order.marketId, roundId: order.roundId };
+      const ack = await this.options.adapters.gateway.submit(scopedRequest, copy(instrument), prepared => {
         if (!prepared.orderHash || !prepared.signedPayload) throw new Error("signed order identity missing");
         if (this.state.orders.some(existing => existing !== order
           && (existing.orderId === prepared.orderHash || existing.clientOrderId === prepared.orderHash))) {
