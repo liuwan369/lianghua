@@ -1377,6 +1377,13 @@ def _epoch(value):
 def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
     """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
+    book_status = row.get("bookStatus") if isinstance(row.get("bookStatus"), dict) else row.get("book_status")
+    row_health_stale = (row.get("healthy") is False
+                        or row.get("quote_fresh") is False
+                        or row.get("quoteFresh") is False
+                        or row.get("collector_online") is False
+                        or row.get("_collector_online") is False
+                        or (isinstance(book_status, dict) and book_status.get("healthy") is False))
     snapshot = canonical_snapshot(row)
     slug = str(row.get("slug") or "")
     start, end = _epoch(row.get("start")), _epoch(row.get("end"))
@@ -1429,6 +1436,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     side_times = [_epoch(side.get("sourceAt")) for side in (yes, no)
                   if isinstance(side, dict) and side.get("sourceAt") is not None]
     stale = (not complete or expired or source_at is None or source_at > now + 1
+             or row_health_stale
              or row.get("_runtime_stale") is True or row.get("_stale_after_invalid") is True
              or stale_after is None
              or (age_limit is not None and (source_at < now - age_limit
@@ -1474,7 +1482,9 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "current": isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= now < end,
         "stale": stale,
         "source": row.get("source") or "platform-runtime",
-        "error": "accepted_snapshot_incomplete" if not complete else ("market_snapshot_expired" if expired else None),
+        "error": ("accepted_snapshot_incomplete" if not complete else
+                   "market_snapshot_expired" if expired else
+                   "market_snapshot_unhealthy" if row_health_stale else None),
         "nextRound": False,
     }
 
@@ -1488,7 +1498,9 @@ def _modern_markets() -> dict:
     rows = raw.get("current_markets") if isinstance(raw.get("current_markets"), list) else []
     has_stale_after = "stale_after_ms" in raw
     stale_after = raw.get("stale_after_ms")
-    items = [_modern_market({**row, "stale_after_ms": stale_after} if has_stale_after else row)
+    items = [_modern_market({**row, **({"stale_after_ms": stale_after} if has_stale_after else {}),
+                             **({"_collector_online": raw.get("collector_online") is True}
+                                if "collector_online" in raw else {})})
              for row in rows if isinstance(row, dict)]
     stale = (raw.get("collector_online") is not True or not items or bool(raw.get("stale_reason"))
              or any(item["stale"] for item in items))
