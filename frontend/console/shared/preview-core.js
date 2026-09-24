@@ -58,10 +58,17 @@
   const createResource = () => ({ data: null, error: null, receivedAt: 0, loading: false, stale: false });
   const format = {
     clock(value = Date.now()) { return new Date(value).toLocaleTimeString("zh-CN", { hour12: false }); },
-    timestamp(value) {
+    timestampMs(value) {
       if (value === null || value === undefined || value === "") return null;
       const number = Number(value);
-      const date = Number.isFinite(number) ? new Date(Math.abs(number) < 1e12 ? number * 1000 : number) : new Date(value);
+      if (Number.isFinite(number)) return Math.abs(number) < 1e12 ? number * 1000 : number;
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    },
+    timestamp(value) {
+      if (value === null || value === undefined || value === "") return null;
+      const timestamp = this.timestampMs(value);
+      const date = timestamp == null ? new Date(value) : new Date(timestamp);
       return Number.isNaN(date.getTime()) ? null : date;
     },
     time(value, fallback = "--:--:--") {

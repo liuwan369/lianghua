@@ -210,13 +210,7 @@
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
   var lastSnapshotValid = false;
-  var timestampMs = function(value) {
-    if (value == null || value === "") return null;
-    var numeric = Number(value);
-    if (Number.isFinite(numeric)) return Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
-    var parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
+  var timestampMs = window.PolyPreview.format.timestampMs;
   var markSnapshotStale = function(message) {
     lastSnapshotValid = false;
     text("[data-book-source]", message || "行情已过期 · 保留最近快照");

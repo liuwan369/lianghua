@@ -87,9 +87,11 @@
     if (item.stale === true || state.marketCatalog.stale) return "行情目录或行情已过期，暂不允许启动";
     if (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)) return "请先在市场页面确认运行池";
     const now = Date.now();
+    const sourceAt = window.PolyPreview.format.timestampMs(item.sourceAt);
+    const expiresAt = window.PolyPreview.format.timestampMs(item.expiresAt);
     const snapshotFresh = item.depthAvailable === true && item.stale !== true
-      && Number.isFinite(Number(item.sequence)) && item.sourceAt != null && item.expiresAt != null
-      && Number(item.expiresAt) > now;
+      && Number.isFinite(Number(item.sequence)) && sourceAt != null && expiresAt != null
+      && sourceAt > 0 && sourceAt <= now + 5000 && expiresAt > now;
     if (!snapshotFresh) return "当前盘口快照未新鲜确认，暂不允许启动";
     const strategy = state.strategy || {};
     if (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
