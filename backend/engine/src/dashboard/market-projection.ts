@@ -1,7 +1,7 @@
 /** Public, read-only market quote projection for the dashboard. */
-import { mkdirSync, openSync, closeSync, renameSync, writeFileSync, fsyncSync, unlinkSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, renameSync, writeFileSync, fsyncSync, unlinkSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { BookSnapshot } from "../live/feeds/index.js";
+import type { BookSnapshot, MarketAssetSnapshot } from "../live/feeds/index.js";
 
 export const DEFAULT_STALE_AFTER_MS = 2_000;
 const MAX_CLOCK_SKEW_MS = 1_000;
@@ -17,6 +17,11 @@ export interface MarketProjectionConfig {
 }
 
 export interface MarketProjectionRow {
+  marketId: string;
+  roundId: string;
+  snapshot: PairedMarketSnapshot;
+  healthy: boolean;
+  strategyEligible: false;
   slug: string;
   condition_id: string;
   up_token: string;
@@ -53,10 +58,21 @@ export interface MarketProjectionSnapshot {
   checked_at: string;
   collector_online: boolean;
   collector_connected: boolean;
+  strategyEligible: false;
   stale_after_ms: number;
   source: "polymarket-ws";
   current_markets: MarketProjectionRow[];
   stale_reason?: string;
+}
+
+export interface PairedMarketSnapshot {
+  marketId: string;
+  roundId: string;
+  sequence: number;
+  sourceAt: number;
+  expiresAt: number;
+  YES: MarketAssetSnapshot;
+  NO: MarketAssetSnapshot;
 }
 
 function iso(unixSeconds: number): string { return new Date(unixSeconds * 1000).toISOString(); }
@@ -64,6 +80,43 @@ function finite(value: number | undefined): number | null {
   return value != null && Number.isFinite(value) ? value : null;
 }
 function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
+
+function isPairedSnapshot(value: unknown): value is PairedMarketSnapshot {
+  if (value == null || typeof value !== "object") return false;
+  const snapshot = value as Partial<PairedMarketSnapshot>;
+  const yes = snapshot.YES;
+  const no = snapshot.NO;
+  if (typeof snapshot.marketId !== "string" || !snapshot.marketId || typeof snapshot.roundId !== "string" || !snapshot.roundId
+    || !Number.isSafeInteger(snapshot.sequence) || snapshot.sequence! < 1
+    || !Number.isFinite(snapshot.sourceAt) || snapshot.sourceAt! <= 0
+    || !Number.isFinite(snapshot.expiresAt) || snapshot.expiresAt! <= 0
+    || !yes?.assetId || !no?.assetId || yes.assetId === no.assetId
+    || !Number.isFinite(yes.bid) || !Number.isFinite(yes.ask) || !Number.isFinite(no.bid) || !Number.isFinite(no.ask)
+    || yes.bid! <= 0 || yes.ask! >= 1 || no.bid! <= 0 || no.ask! >= 1
+    || yes.bid! > yes.ask! || no.bid! > no.ask!
+    || !Number.isFinite(yes.sourceAt) || !Number.isFinite(no.sourceAt)
+    || !Number.isFinite(yes.expiresAt) || !Number.isFinite(no.expiresAt)
+    || snapshot.sourceAt! < Math.max(yes.sourceAt!, no.sourceAt!)
+    || snapshot.expiresAt! > Math.min(yes.expiresAt!, no.expiresAt!)
+    || yes.sequence !== snapshot.sequence || no.sequence !== snapshot.sequence) return false;
+  return true;
+}
+
+function pairedSnapshot(snapshot: BookSnapshot): PairedMarketSnapshot | undefined {
+  const yes = snapshot.YES;
+  const no = snapshot.NO;
+  if (!yes || !no) return undefined;
+  const candidate = {
+    marketId: snapshot.marketId,
+    roundId: snapshot.roundId,
+    sequence: snapshot.sequence!,
+    sourceAt: snapshot.sourceAt!,
+    expiresAt: snapshot.expiresAt!,
+    YES: copy(yes),
+    NO: copy(no),
+  };
+  return isPairedSnapshot(candidate) ? candidate : undefined;
+}
 
 /**
  * Maintains one atomic quote for the two public outcome tokens.  A snapshot is
@@ -78,10 +131,11 @@ export class ClobMarketProjection {
   readonly end: number | null;
   readonly staleAfterMs: number;
   private connected = false;
-  private up: BookSnapshot | undefined;
-  private down: BookSnapshot | undefined;
-  private upReceivedAt = 0;
-  private downReceivedAt = 0;
+  private accepted: PairedMarketSnapshot | undefined;
+  private receivedAt = 0;
+  private bookReady = false;
+  private upTickSize: number | undefined;
+  private downTickSize: number | undefined;
 
   constructor(config: MarketProjectionConfig) {
     if (!config.upToken || !config.downToken || config.upToken === config.downToken) throw new Error("upToken and downToken must be distinct");
@@ -94,14 +148,10 @@ export class ClobMarketProjection {
 
   markConnected(value = true): void { this.connected = value; }
   invalidateBook(): void {
-    this.up = undefined;
-    this.down = undefined;
-    this.upReceivedAt = 0;
-    this.downReceivedAt = 0;
+    this.bookReady = false;
   }
   disconnect(): void {
-    // A reconnect must wait for a fresh bilateral snapshot. Retaining the
-    // previous book would make a silent socket look live after reconnect.
+    // Keep the last quote for display, but require a new pair before marking it healthy.
     this.connected = false;
     this.invalidateBook();
   }
@@ -110,62 +160,65 @@ export class ClobMarketProjection {
   /** Accept only the paired snapshot produced by the public Market WS feed. */
   applySnapshot(snapshot: BookSnapshot, receivedAt = snapshot.receivedAtUnix ?? snapshot.tsUnix): boolean {
     if (snapshot.source !== "polymarket-ws") return false;
-    if (!Number.isFinite(receivedAt)) return false;
-    const prices = [snapshot.upBid, snapshot.upAsk, snapshot.downBid, snapshot.downAsk];
-    const upAt = snapshot.upReceivedAtUnix ?? receivedAt;
-    const downAt = snapshot.downReceivedAtUnix ?? receivedAt;
-    const clocks = [upAt, downAt, snapshot.upExchangeTsUnix, snapshot.downExchangeTsUnix];
-    if (prices.some(price => price == null || !Number.isFinite(price) || price <= 0 || price >= 1)
-      || clocks.some(clock => clock == null || !Number.isFinite(clock) || clock <= 0)
-      || snapshot.upBid! > snapshot.upAsk! || snapshot.downBid! > snapshot.downAsk!) {
-      this.disconnect();
-      return false;
-    }
-    // Bound exchange/local clock skew. The raw exchange clock remains in the
-    // snapshot, so a dashboard heartbeat still cannot refresh an old quote.
-    if (clocks.some(clock => clock != null && clock * 1_000 > receivedAt * 1_000 + MAX_CLOCK_SKEW_MS)) {
-      this.disconnect();
-      return false;
-    }
-    if ((this.up?.upExchangeTsUnix ?? 0) > snapshot.upExchangeTsUnix!
-      || (this.down?.downExchangeTsUnix ?? 0) > snapshot.downExchangeTsUnix!) return false;
+    const paired = pairedSnapshot(snapshot);
+    if (!paired || !Number.isFinite(receivedAt) || receivedAt <= 0
+      || (this.conditionId && paired.marketId !== this.conditionId)
+      || (this.start != null && paired.roundId !== String(this.start))
+      || paired.YES.assetId !== this.upToken || paired.NO.assetId !== this.downToken
+      || paired.expiresAt <= receivedAt
+      || paired.YES.expiresAt! <= receivedAt || paired.NO.expiresAt! <= receivedAt
+      || paired.expiresAt > (this.end ?? Number.POSITIVE_INFINITY)
+      || Math.max(paired.YES.sourceAt!, paired.NO.sourceAt!) > receivedAt + MAX_CLOCK_SKEW_MS / 1_000
+      || Math.max(receivedAt - paired.YES.sourceAt!, receivedAt - paired.NO.sourceAt!) * 1_000 > this.staleAfterMs
+      || this.accepted && (paired.sequence <= this.accepted.sequence
+        || paired.sourceAt < this.accepted.sourceAt
+        || paired.YES.sourceAt! < this.accepted.YES.sourceAt!
+        || paired.NO.sourceAt! < this.accepted.NO.sourceAt!)) return false;
     this.connected = true;
-    // The feed has already applied the entire frame. Store its paired state
-    // together, rather than merging independently observed half-books.
-    this.up = this.down = copy(snapshot);
-    this.upReceivedAt = upAt;
-    this.downReceivedAt = downAt;
+    this.accepted = paired;
+    this.receivedAt = receivedAt;
+    this.bookReady = true;
+    this.upTickSize = finite(snapshot.upTickSize) ?? undefined;
+    this.downTickSize = finite(snapshot.downTickSize) ?? undefined;
     return true;
   }
 
-  private row(now: number): MarketProjectionRow {
-    const up = this.up; const down = this.down;
-    const upReceiveAge = up && this.upReceivedAt ? (now - this.upReceivedAt) * 1000 : null;
-    const downReceiveAge = down && this.downReceivedAt ? (now - this.downReceivedAt) * 1000 : null;
-    const upExchangeAge = up?.upExchangeTsUnix != null ? (now - up.upExchangeTsUnix) * 1000 : null;
-    const downExchangeAge = down?.downExchangeTsUnix != null ? (now - down.downExchangeTsUnix) * 1000 : null;
-    // Both clocks participate in freshness.  A delayed old frame cannot extend
-    // the quote merely because it was received moments ago.
-    const upAge = upReceiveAge != null ? Math.max(0, upReceiveAge, upExchangeAge ?? 0) : null;
-    const downAge = downReceiveAge != null ? Math.max(0, downReceiveAge, downExchangeAge ?? 0) : null;
-    const ready = up?.upBid != null && up.upAsk != null && down?.downBid != null && down.downAsk != null;
-    const ages = [upReceiveAge, downReceiveAge, upExchangeAge, downExchangeAge];
-    const fresh = ready && ages.every(age => age != null && age >= -MAX_CLOCK_SKEW_MS && age <= this.staleAfterMs);
-    const quoteAt = ready && up?.upExchangeTsUnix != null && down?.downExchangeTsUnix != null
-      ? Math.min(up.upExchangeTsUnix, down.downExchangeTsUnix) : 0;
+  private row(now: number): MarketProjectionRow | undefined {
+    const snapshot = this.accepted;
+    if (!snapshot) return undefined;
+    const yes = snapshot?.YES;
+    const no = snapshot?.NO;
+    const receiveAge = snapshot && this.receivedAt ? (now - this.receivedAt) * 1000 : null;
+    const yesAge = yes ? (now - yes.sourceAt!) * 1000 : null;
+    const noAge = no ? (now - no.sourceAt!) * 1000 : null;
+    const yesQuoteAge = yesAge != null && receiveAge != null ? Math.max(0, yesAge, receiveAge) : null;
+    const noQuoteAge = noAge != null && receiveAge != null ? Math.max(0, noAge, receiveAge) : null;
+    const ages = [receiveAge, yesAge, noAge];
+    const fresh = Boolean(this.bookReady && snapshot && snapshot.expiresAt > now
+      && ages.every(age => age != null && age >= -MAX_CLOCK_SKEW_MS && age <= this.staleAfterMs));
+    const quoteAt = yes && no ? Math.min(yes.sourceAt!, no.sourceAt!) : 0;
+    const healthy = Boolean(this.connected && fresh);
     return {
+      marketId: snapshot?.marketId ?? this.conditionId,
+      roundId: snapshot?.roundId ?? (this.start == null ? "" : String(this.start)),
+      snapshot: copy(snapshot),
+      healthy,
+      strategyEligible: false,
       slug: this.slug, condition_id: this.conditionId, up_token: this.upToken, down_token: this.downToken,
       start: this.start, end: this.end,
-      up_bid: finite(up?.upBid), up_ask: finite(up?.upAsk), down_bid: finite(down?.downBid), down_ask: finite(down?.downAsk),
-      up_bid_size: finite(up?.upBidSz), up_ask_size: finite(up?.upAskSz), down_bid_size: finite(down?.downBidSz), down_ask_size: finite(down?.downAskSz),
-      up_bid_levels: up?.upBidLevels ? copy(up.upBidLevels) : null, up_ask_levels: up?.upAskLevels ? copy(up.upAskLevels) : null,
-      down_bid_levels: down?.downBidLevels ? copy(down.downBidLevels) : null, down_ask_levels: down?.downAskLevels ? copy(down.downAskLevels) : null,
-      tick_size: finite(up?.tickSize ?? down?.tickSize), up_tick_size: finite(up?.upTickSize), down_tick_size: finite(down?.downTickSize),
-      ask_sum: up?.upAsk != null && down?.downAsk != null ? up.upAsk + down.downAsk : null,
+      up_bid: finite(yes?.bid), up_ask: finite(yes?.ask), down_bid: finite(no?.bid), down_ask: finite(no?.ask),
+      up_bid_size: finite(yes?.bidSize), up_ask_size: finite(yes?.askSize), down_bid_size: finite(no?.bidSize), down_ask_size: finite(no?.askSize),
+      up_bid_levels: yes?.bids ? copy(yes.bids) : null, up_ask_levels: yes?.asks ? copy(yes.asks) : null,
+      down_bid_levels: no?.bids ? copy(no.bids) : null, down_ask_levels: no?.asks ? copy(no.asks) : null,
+      tick_size: this.upTickSize ?? this.downTickSize ?? null,
+      up_tick_size: this.upTickSize ?? null, down_tick_size: this.downTickSize ?? null,
+      ask_sum: yes?.ask != null && no?.ask != null ? yes.ask + no.ask : null,
       quote_at: quoteAt ? iso(quoteAt) : null,
-      up_exchange_at: up?.upExchangeTsUnix ? iso(up.upExchangeTsUnix) : null,
-      down_exchange_at: down?.downExchangeTsUnix ? iso(down.downExchangeTsUnix) : null,
-      up_quote_age_ms: upAge, down_quote_age_ms: downAge, book_depth_ready: Boolean(up?.upBidLevels && up?.upAskLevels && down?.downBidLevels && down?.downAskLevels),
+      up_exchange_at: yes ? iso(yes.sourceAt!) : null,
+      down_exchange_at: no ? iso(no.sourceAt!) : null,
+      up_quote_age_ms: yesQuoteAge, down_quote_age_ms: noQuoteAge,
+      book_depth_ready: Boolean(yes?.bids && yes.bids.length >= 5 && yes.asks && yes.asks.length >= 5
+        && no?.bids && no.bids.length >= 5 && no.asks && no.asks.length >= 5),
       quote_fresh: fresh, source: "polymarket-ws",
     };
   }
@@ -173,16 +226,54 @@ export class ClobMarketProjection {
   snapshot(now = Date.now() / 1000): MarketProjectionSnapshot {
     if (!Number.isFinite(now)) throw new Error("now must be finite");
     const inWindow = (this.start == null || now >= this.start) && (this.end == null || now < this.end);
-    const row = this.row(now); const online = this.connected && inWindow && row.quote_fresh;
+    const row = this.row(now); const online = Boolean(this.connected && inWindow && row?.quote_fresh);
     const result: MarketProjectionSnapshot = {
       checked_at: iso(now), collector_online: online, collector_connected: this.connected,
-      stale_after_ms: this.staleAfterMs, source: "polymarket-ws", current_markets: online ? [row] : [],
+      strategyEligible: false, stale_after_ms: this.staleAfterMs, source: "polymarket-ws",
+      current_markets: row ? [{ ...row, healthy: online }] : [],
     };
     if (!this.connected) result.stale_reason = "CLOB Market WebSocket 未连接";
     else if (!inWindow) result.stale_reason = "当前市场窗口已结束";
-    else if (!row.quote_fresh) result.stale_reason = row.quote_at ? "CLOB Market WebSocket 行情过期" : "等待完整 UP/DOWN 双边盘口";
+    else if (!row) result.stale_reason = "等待完整 YES/NO 双边盘口";
+    else if (!row.quote_fresh) result.stale_reason = "CLOB Market WebSocket 行情过期";
     return copy(result);
   }
+}
+
+/** Reads the last collector file so a restart can keep its quote visible as stale. */
+export function readPublishedSnapshot(path: string): MarketProjectionSnapshot | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<MarketProjectionSnapshot>;
+    if (!Array.isArray(value.current_markets)) return undefined;
+    const current_markets = value.current_markets.filter((row): row is MarketProjectionRow =>
+      row != null && typeof row === "object" && isPairedSnapshot((row as MarketProjectionRow).snapshot));
+    return { ...value, current_markets } as MarketProjectionSnapshot;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Marks persisted quotes stale without changing their venue timestamps or expiry. */
+export function stalePublishedSnapshot(
+  value: MarketProjectionSnapshot,
+  now: number,
+  reason: string,
+  connected = false,
+): MarketProjectionSnapshot {
+  return {
+    ...value,
+    checked_at: iso(now),
+    collector_online: false,
+    collector_connected: connected,
+    strategyEligible: false,
+    stale_reason: reason,
+    current_markets: value.current_markets.map(row => ({
+      ...row,
+      healthy: false,
+      strategyEligible: false,
+      quote_fresh: false,
+    })),
+  };
 }
 
 /** Atomic JSON write used by the standalone dashboard collector. */

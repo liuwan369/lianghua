@@ -35,10 +35,10 @@ const book = (asset, time, bid = 0.4, ask = 0.6) => ({
 const top = (asset, time, bid = 0.45, ask = 0.55) => ({
   event_type: "best_bid_ask", asset_id: asset, timestamp: String(time), best_bid: bid, best_ask: ask,
 });
-async function harness(t) {
+async function harness(t, identity = { marketId: "market", roundId: "round" }) {
   const events = [];
   const feed = runPolymarketFeed(e => events.push(e), "yes", "no", Date.now() / 1000 + 60,
-    { marketId: "market", roundId: "round" });
+    identity);
   t.after(() => feed.stop());
   await delay(0);
   const socket = Socket.instances.at(-1);
@@ -57,6 +57,15 @@ test("same-frame timestamps use wire order; older fast quote cannot override new
   const count = h.books().length;
   h.socket.frame(top("yes", time + 30, 0.1));
   assert.equal(h.books().length, count);
+});
+
+test("cold restart sequence continues from the persisted same-round watermark", async t => {
+  const h = await harness(t, { marketId: "market", roundId: "round", sequenceBase: 17 });
+  const time = stamp();
+  h.socket.frame([book("yes", time), book("no", time)]);
+  assert.equal(h.books().at(-1).sequence, 18);
+  assert.equal(h.books().at(-1).YES.sequence, 18);
+  assert.equal(h.books().at(-1).NO.sequence, 18);
 });
 
 test("nested price_change uses the frame timestamp and last valid top", async t => {
