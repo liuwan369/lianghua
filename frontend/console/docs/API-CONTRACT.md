@@ -27,6 +27,78 @@
 
 这些接口目前仍是单运行/单当前市场模型，不能直接满足多币种运行池；需要新增市场目录、运行池和按 marketId/roundId 的运行数据契约。现有交易控制接口的最终状态应统一为 runtime command response + status/event stream，避免页面猜测按钮结果。
 
+## 当前 control-plane 实际接口矩阵
+
+以下是本次前端接入审查时对 `backend/control-plane/scripts/system-dashboard-server.py` 的只读核对结果。它描述当前服务实际暴露的路由，不代表目标契约已经在后端落地。
+
+| 当前路由 | 当前状态 | 前端用途 | 关键兼容点 |
+|---|---|---|---|
+| `GET /api/v1/status` | 可用 | 运行状态、配置版本、运行摘要 | 单运行模型；字段为 `running`、`run_id`、`config_revision`、`strategy_id` 等 |
+| `GET /api/v1/markets` | 可用 | 旧市场目录/报价回退 | 返回 `current_markets[]`，没有可靠的 `marketId`/`roundId`；见下方 legacy DTO |
+| `GET /api/v1/account-data` | 可用 | 只读账户数据 | 返回 `collateral`、`open_orders`、`trades`、`positions`、`closed_positions`、`activity` 分区，每个分区带 `available`、`complete`、`items` |
+| `GET /api/account/status` | 可用 | 账户配置和最近检查状态 | 不提供资金余额；不得把配置完成解释成交易已连接 |
+| `POST /api/account/check`、`POST /api/account/save` | 可用 | 服务器账户检查/保存 | 账户秘密只进入服务器受控接口，不进入前端 Store |
+| `GET /api/v1/system-metrics` | 可用 | 资源和服务诊断 | 低频数据，不能与行情刷新共用状态分片 |
+| `GET /api/v1/runs`、`GET /api/v1/events`、`GET /api/v1/summary`、`GET /api/v1/orders` | 可用 | 运行历史、事件、汇总、订单只读查询 | 以 `run_id` 查询，仍不是按 `marketId + roundId` 的实时读模型 |
+| `GET /api/strategy-config`、`PUT /api/strategy-config` | 可用 | 读取/保存策略配置 | 使用 `expectedRevision` + `config`；没有独立 drafts/activate 路由 |
+| `POST /api/trading/control` | 可用 | 启动、暂停、恢复、停止 | 使用 snake_case；`start` 的 `request_id` 必须是 UUID |
+| `/api/bootstrap`、`/api/markets`、`/api/runtime/*`、`/api/rounds/*`、`/api/account/snapshot`、`/api/diagnostics/health`、`/api/metrics/summary` | 当前未发现 | 目标契约接口 | 前端不能把目标路径当成已部署能力；由 Adapter 明确选择回退或显示 `unavailable` |
+| `/api/stream/markets`、`/api/stream/runtime`、`/api/stream/orders` | 当前未发现浏览器侧服务 | 三条独立实时流 | 引擎内部 WebSocket 不等于控制台可订阅流；未配置 URL 时不建立连接 |
+
+### `/api/v1/markets` 的 legacy DTO
+
+当前市场响应的核心形状是：
+
+```json
+{
+  "current_markets": [{
+    "slug": "...",
+    "name": "...",
+    "start": 0,
+    "end": 0,
+    "up_token": "...",
+    "down_token": "...",
+    "up_bid": 0.0,
+    "up_ask": 0.0,
+    "down_bid": 0.0,
+    "down_ask": 0.0,
+    "ask_sum": 0.0,
+    "quote_at": "..."
+  }],
+  "collector_online": true,
+  "collector_connected": true,
+  "cache_age_seconds": 0,
+  "checked_at": "...",
+  "source": "..."
+}
+```
+
+`slug` 可以暂时映射为展示用的兼容 `marketId`，但它不是服务端确认的完整市场身份。当前响应没有 `roundId`，因此 Adapter 必须把 `roundId` 留空，页面只能显示目录和报价，不能请求本场持仓/订单，也不能猜测当前轮次。后端提供真正的 `marketId + roundId` 后，才允许启用按轮次读模型。
+
+### `/api/trading/control` 的字段约束
+
+当前路由不接受页面层的 camelCase 兼容字段。Adapter 发送 legacy 请求时必须转换为：
+
+```json
+{
+  "action": "start",
+  "strategy_id": "btc-reversal",
+  "revision": 12,
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "mode": "live"
+}
+```
+
+`pause`、`resume`、`stop` 也使用 `action`、`strategy_id`、`request_id`。响应只表示服务端接收或拒绝命令；按钮的最终状态必须来自后续 status/event 数据，不能由页面点击结果直接改成“运行中”。
+
+### 当前账户数据边界
+
+`/api/account/status` 只描述钱包/签名/relayer/builder 配置和最近检查结果；`/api/v1/account-data` 才可能提供 `collateral`、订单、成交、持仓及活动的只读分区。余额摘要字段（例如 `totalUsd`、`availableUsd`）不是当前 status 路由的稳定字段，Adapter 没有来源时必须显示 `unavailable`，请求失败时保留最后一次成功快照并标记 `stale`。
+
+### Adapter 模式选择
+
+前端默认 `apiFlavor: "contract"`，表示优先调用目标契约。连接当前 control-plane 时必须显式使用 legacy adapter，或由 Adapter 做完整的 DTO 转换；仅靠 HTTP 404 回退无法解决字段名、请求方法和语义差异。页面不应直接读取 legacy 字段，也不应为了填满界面而在浏览器推导 `roundId`、运行池确认结果或账户余额。
+
 ## REST
 
 | 用途 | 方法 | 路径 | 频率/说明 |
