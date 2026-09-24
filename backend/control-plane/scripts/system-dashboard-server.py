@@ -1089,7 +1089,7 @@ def strategy_config_status() -> dict:
     active = (runtime.get("currentRound") or {}).get("configRevision") if status.get("running") else None
     if isinstance(active, str) and active.isdigit():
         active = int(active)
-    return {**saved, "activeRevision": active,
+    return {**saved, "assetId": saved["config"].get("assetId", "btc"), "activeRevision": active,
             "nextRoundRevision": saved["savedRevision"] if status.get("running") and active != saved["savedRevision"] else None}
 
 
@@ -1223,7 +1223,9 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
             "--stop-file", str(candidate_log.with_suffix(".stop")),
         ]
         if strategy_config:
-            args.extend(["--strategy", STRATEGY_ID, "--strategy-config", str(strategy_config_store().path),
+            configured_asset = strategy_config.get("config", {}).get("assetId", "btc")
+            args.extend(["--strategy", STRATEGY_ID, "--asset", configured_asset,
+                         "--strategy-config", str(strategy_config_store().path),
                          "--control-file", str(candidate_log.with_suffix(".control.json"))])
         env = _trading_environment()
         env["LIVE"] = "true"
@@ -1251,7 +1253,8 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         _trading_params = {"mode": mode, "duration_min": duration_min}
         if strategy_config:
             _trading_params = {"strategy_id": STRATEGY_ID, "mode": mode,
-                               "duration_min": duration_min, "config": strategy_config["config"]}
+                               "duration_min": duration_min, "assetId": strategy_config["config"].get("assetId", "btc"),
+                               "config": strategy_config["config"]}
         _trading_exit_code = None
         _trading_stop_result = None
         _persist_trading_state()
@@ -1563,6 +1566,14 @@ def _modern_runtime(status: dict) -> dict:
     expires_at = _epoch(runtime.get("expires_at"))
     stale = bool(not runtime or source_at is None or expires_at is None or expires_at <= time.time())
     stop_result = status.get("stop_result") if isinstance(status.get("stop_result"), dict) else {}
+    params = status.get("params") if isinstance(status.get("params"), dict) else {}
+    config = params.get("config") if isinstance(params.get("config"), dict) else {}
+    asset_id = runtime.get("assetId") or runtime.get("asset_id") or params.get("assetId") \
+        or params.get("asset_id") or config.get("assetId") or config.get("asset_id")
+    if not isinstance(asset_id, str) or not _ASSET_ID_RE.fullmatch(asset_id.strip().lower()):
+        asset_id = None
+    else:
+        asset_id = asset_id.strip().lower()
     return {"schemaVersion": 1, "status": state, "state": state,
             "serviceState": status.get("service_state") or state,
             "commandStatus": status.get("command_status") or ("executing" if status.get("running") else "confirmed"),
@@ -1570,7 +1581,7 @@ def _modern_runtime(status: dict) -> dict:
             "source": "platform-runtime" if runtime else "control-plane",
             "asOf": source_at,
             "stale": stale, "runId": status.get("run_id"),
-            "strategyId": status.get("strategy_id") or "btc-reversal",
+            "strategyId": status.get("strategy_id") or "btc-reversal", "assetId": asset_id,
             "execution": status.get("execution"), "markets": [
                 {**item, "marketId": item.get("id"),
                  "roundId": item.get("roundId") or item.get("round_id")}
@@ -1708,7 +1719,7 @@ def make_handler(root: Path):
                 runtime = _modern_runtime(status)
                 self._send_json(json.dumps({
                     "schemaVersion": 1, "app": "polymarket-btc-reversal",
-                    "strategyId": "btc-reversal", "cycle": "5m",
+                    "strategyId": "btc-reversal", "assetId": runtime.get("assetId"), "cycle": "5m",
                     "source": "control-plane", "asOf": runtime["asOf"], "stale": runtime["stale"],
                     "error": runtime["error"],
                     "capabilities": ["markets", "runtime", "orders", "positions", "metrics", "events"],

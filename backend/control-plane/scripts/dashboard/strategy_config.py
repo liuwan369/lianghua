@@ -1,4 +1,4 @@
-"""Durable configuration for one configurable BTC reversal strategy."""
+"""Durable configuration for the reversal strategy and its selected asset."""
 from __future__ import annotations
 
 import copy
@@ -9,15 +9,17 @@ import os
 from pathlib import Path
 import tempfile
 import uuid
+import re
 
 from .config import (ConfigStore, ConfigValidationError, ConfigConflictError,
                      ConfigStoreError, _unique_object)
 
 STRATEGY_ID = "btc-reversal"
+ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 
 
 def default_config() -> dict:
-    return {"triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
+    return {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
             "stageShares": [5, 18, 54, 130], "maxStages": 4,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "mode": "live",
@@ -25,9 +27,23 @@ def default_config() -> dict:
 
 
 def validate_config(config: dict) -> dict:
-    if not isinstance(config, dict) or set(config) != set(default_config()):
+    if not isinstance(config, dict):
         raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
     result = copy.deepcopy(config)
+    expected = set(default_config())
+    legacy_expected = expected - {"assetId"}
+    if set(result) == legacy_expected:
+        result["assetId"] = "btc"
+    elif set(result) != expected:
+        raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
+
+    asset_id = result.get("assetId")
+    if not isinstance(asset_id, str):
+        raise ConfigValidationError("assetId必须是文本")
+    asset_id = asset_id.strip().lower()
+    if not ASSET_ID_RE.fullmatch(asset_id):
+        raise ConfigValidationError("assetId格式无效")
+    result["assetId"] = asset_id
 
     def number(value, name, *, positive=True):
         if type(value) not in (int, float):

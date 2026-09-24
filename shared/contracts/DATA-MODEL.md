@@ -38,7 +38,9 @@
 
 ### StrategyConfigViewModel
 
-`{ strategyId, revision, triggerPrice, confirmationPrice, maxBuyPrice, stageShares, roundBudgetUsd, totalBudgetUsd, dailyLossUsd, durationMinutes, effectiveRoundId }`
+`{ strategyId, assetId, revision, triggerPrice, confirmationPrice, maxBuyPrice, stageShares, roundBudgetUsd, totalBudgetUsd, dailyLossUsd, durationMinutes, effectiveRoundId }`
+
+`assetId` defaults to `btc`, is normalized to lowercase by the control plane, and is passed to the runtime start command. A legacy saved configuration without this field is read as `btc` and rewritten with the next save.
 
 价格单位固定为 USD 概率（0 到 1）或固定为 cents，二者不能混用。当前设计稿输入是 cents、预览显示 USD，接入时必须在 adapter 统一成一种。
 
