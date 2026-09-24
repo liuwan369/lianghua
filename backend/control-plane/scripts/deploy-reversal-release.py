@@ -64,6 +64,7 @@ for source in ("backend/control-plane/scripts/system-dashboard-server.py", "back
 # Build the chosen commit in a separate directory: workers may keep editing and
 # building their shared checkout while this immutable program is deployed.
 BUILD = ROOT / ".deploy" / (RELEASE + "-build")
+BUILD.parent.mkdir(parents=True, exist_ok=True)
 BUILD.mkdir()
 sources = subprocess.check_output(["git", "archive", REV, "backend/engine", "frontend/console", "backend/control-plane", "shared/contracts"], cwd=ROOT)
 with tarfile.open(fileobj=io.BytesIO(sources)) as source_archive:
