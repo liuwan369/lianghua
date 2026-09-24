@@ -65,6 +65,7 @@ _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 _account_report: dict | None = None
+_account_report_identity: str | None = None
 _account_check_error: str | None = None
 _account_data: AccountData | None = None
 _account_data_lock = threading.Lock()
@@ -243,6 +244,20 @@ def save_market_pool(payload: dict) -> dict:
     temporary.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
     temporary.replace(path)
     return market_pool()
+
+
+def _pool_runtime_view(value: dict) -> dict:
+    status = trading_status()
+    runtime = (status.get("stats") or {}).get("runtime") or {}
+    strategy = runtime.get("strategy_runtime") or {}
+    current = strategy.get("currentRound") or {}
+    asset = current.get("assetId") or (strategy.get("config") or {}).get("assetId") or (status.get("params") or {}).get("assetId")
+    expires = _epoch(runtime.get("expires_at"))
+    fresh = (status.get("running") is True and runtime.get("status") == "running"
+             and runtime.get("stale") is not True and expires is not None and expires > time.time())
+    return {**value, "currentIds": [asset] if fresh and asset in SUPPORTED_ASSET_IDS else [],
+            "nextRoundIds": [], "effectiveRoundId": current.get("roundId") if fresh else None,
+            "runtimeAsOf": _epoch(runtime.get("source_at")), "runtimeStale": not fresh}
 
 
 def control_source() -> dict:
@@ -486,11 +501,6 @@ def _account_values() -> dict[str, str]:
         "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE",
     }
     profile = account_store.load_profile()
-    # A control-only save must not hide an operator's existing environment
-    # account bootstrap. Once any account field is present, the profile is
-    # authoritative (including explicit empty values used to clear secrets).
-    if profile is not None and any(profile.get(name, "") for name in names):
-        return {name: profile.get(name, "") for name in names}
     result = {name: os.environ.get(name, "") for name in names}
     env_path = TRADING_ROOT / ".env"
     try:
@@ -504,7 +514,29 @@ def _account_values() -> dict[str, str]:
                 result[name] = value
     except OSError:
         pass
+    if profile is not None:
+        profile_wallet = profile.get("POLYMARKET_WALLET_ADDRESS") or profile.get("POLY_FUNDER")
+        env_wallet = result.get("POLYMARKET_WALLET_ADDRESS") or result.get("POLY_FUNDER")
+        clean = lambda value: str(value or "").strip().strip("'\"").lower()
+        # Missing fields may inherit the same account's bootstrap. Explicit
+        # empty fields clear values; switching wallets never inherits secrets.
+        if profile_wallet and clean(profile_wallet) != clean(env_wallet):
+            result = {name: "" for name in names}
+        result.update({name: profile[name] for name in names if name in profile})
+        if not result.get("POLYMARKET_OWNER_PRIVATE_KEY") and profile.get("POLYMARKET_PRIVATE_KEY"):
+            result["POLYMARKET_PRIVATE_KEY"] = profile["POLYMARKET_PRIVATE_KEY"]
+    if not result.get("POLYMARKET_WALLET_ADDRESS"):
+        result["POLYMARKET_WALLET_ADDRESS"] = result.get("POLY_FUNDER", "")
     return result
+
+
+def _account_identity(values: dict) -> str:
+    fields = {name: str(values.get(name, "")).strip().strip("'\"")
+              for name in account_store.ACCOUNT_ENV_FIELDS if name != account_store.CONTROL_FIELD}
+    fields["POLYMARKET_OWNER_PRIVATE_KEY"] = (fields.get("POLYMARKET_OWNER_PRIVATE_KEY")
+                                               or values.get("POLYMARKET_PRIVATE_KEY", ""))
+    fields.pop("POLYMARKET_PRIVATE_KEY", None)
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
 
 
 def _meaningful_account_value(value: str) -> bool:
@@ -541,10 +573,11 @@ def account_config_status() -> dict:
     report = _account_report if isinstance(_account_report, dict) else None
     report_wallet = report.get("wallet") if report else None
     report_matches = bool(wallet_valid and isinstance(report_wallet, str)
-                          and report_wallet.lower() == wallet_clean.lower())
+                          and report_wallet.lower() == wallet_clean.lower()
+                          and _account_report_identity == _account_identity(values))
     checked_at = _epoch(report.get("checked_at")) if report else None
     check_fresh = bool(checked_at is not None and 0 <= time.time() - checked_at <= 15 * 60)
-    account_check_ready = bool(report_matches and check_fresh
+    account_check_ready = bool(not _account_check_error and report_matches and check_fresh
                                and report.get("account_ready") is True
                                and report.get("signer_matches") is True
                                and report.get("approvals_ready") is True
@@ -560,6 +593,7 @@ def account_config_status() -> dict:
     return {
         "wallet": wallet_clean if wallet_valid else "",
         "config_error": config_error,
+        "server_live_enabled": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
         "last_check": report,
         "last_check_error": _account_check_error,
         "last_check_at": checked_at,
@@ -610,12 +644,14 @@ def account_action(payload: dict, save: bool = False) -> dict:
 
 
 def _checked_account_action(payload: dict, save: bool = False) -> dict:
-    global _account_report, _account_check_error
-    # Serialise account changes with start/stop, including the chain check.
+    global _account_report, _account_report_identity, _account_check_error
+    # The account-check lock prevents a concurrent start; slow RPC work must
+    # not hold the runtime status/control lock.
     with _trading_lock:
         if trading_status(include_stats=False)["running"]:
             raise ValueError("请先停止交易，再检查或更换账户")
         values = _account_values()
+        saved_identity = _account_identity(values)
         if save or payload:
             # _account_values intentionally omits the control password.  Merge
             # the private profile here so an ordinary account save cannot
@@ -627,24 +663,28 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
             values = account_store.candidate_profile(payload, previous)
         if not values.get("POLYMARKET_WALLET_ADDRESS"):
             raise ValueError("请先填写资金钱包地址")
-        try:
-            report = account_store.check_account(TRADING_ROOT, values)
-        except account_store.AccountCheckError as exc:
-            # Keep the last successful snapshot for read-only display, but do
-            # not let a failed refresh authorize a live start.
+    candidate_identity = _account_identity(values)
+    try:
+        report = account_store.check_account(TRADING_ROOT, values)
+    except account_store.AccountCheckError as exc:
+        if candidate_identity == saved_identity:
             _account_check_error = exc.code
-            raise
+        raise
+    with _trading_lock:
+        if _account_identity(_account_values()) != saved_identity:
+            raise account_store.AccountCheckError("account_changed_during_check")
         if save:
             if values.get("POLYMARKET_OWNER_PRIVATE_KEY") and not report.get("signer_matches"):
                 raise ValueError("签名私钥与资金账户不匹配，未保存")
             if report.get("compromised"):
                 raise ValueError("此签名账户有凭据暴露记录，请使用新的安全账户；未保存")
             account_store.save_profile(values)
-            # A changed account can never inherit a running process's unlock.
-            os.environ.pop("PM_TRADING_LIVE_UNLOCK", None)
-        # Candidate checks are not reported as checks of the saved account.
-        if save or not payload:
+            if _account_data is not None:
+                _account_data.invalidate()
+        # Readiness belongs to the exact credential set, never wallet alone.
+        if save or candidate_identity == saved_identity:
             _account_report = report
+            _account_report_identity = _account_identity(_account_values()) if save else saved_identity
             _account_check_error = None
         return report
 
@@ -768,7 +808,7 @@ def _control_request_error(headers, mode: str | None, *, allow_session: bool = T
         return None
     if not configured_token:
         return 503, "服务器尚未配置交易控制密码"
-    if allow_session and _valid_control_session(_request_cookie(headers, _CONTROL_SESSION_COOKIE), configured_token):
+    if allow_session and origin and _valid_control_session(_request_cookie(headers, _CONTROL_SESSION_COOKIE), configured_token):
         return None
     authorization = headers.get("Authorization") or ""
     supplied_token = headers.get("X-PM-Control-Token", "") or (authorization[7:].strip() if authorization.startswith("Bearer ") else "")
@@ -875,6 +915,7 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
             continue
         market = market_by_id.get(market_id, {})
         rows.append({"slug": market.get("name") or market_id, "name": market.get("name") or market_id,
+                     "assetId": snapshot.get("assetId") or market.get("assetId") or strategy_config.get("assetId"),
                      "condition_id": market_id, "round_id": round_id,
                      "start": _epoch(market.get("startsAt")), "end": _epoch(market.get("endsAt")),
                      "paired_snapshot": snapshot, "source": "platform-runtime",
@@ -1005,7 +1046,17 @@ def trading_status(include_stats: bool = True) -> dict:
                 status["service_state"] = "running"
             else:
                 status["service_state"] = "starting"
-            status["command_status"] = "executing"
+            pending = (status.get("params") or {}).get("pendingControl") or {}
+            source_at = _epoch(runtime.get("source_at")) if isinstance(runtime, dict) else None
+            expires_at = _epoch(runtime.get("expires_at")) if isinstance(runtime, dict) else None
+            expected_paused = pending.get("action") == "pause"
+            confirmed = (isinstance(runtime, dict) and runtime.get("status") == "running"
+                         and runtime.get("stale") is not True and source_at is not None
+                         and expires_at is not None and expires_at > time.time()
+                         and source_at >= (pending.get("requestedAt") or status.get("started_at") or float("inf"))
+                         and isinstance(strategy_runtime, dict)
+                         and strategy_runtime.get("paused") is expected_paused)
+            status["command_status"] = "confirmed" if confirmed else "executing"
     return status
 
 
@@ -1107,8 +1158,17 @@ def save_strategy_config(payload: dict) -> dict:
     if payload.get("strategyId", STRATEGY_ID) != STRATEGY_ID:
         raise ValueError("策略不存在")
     with _config_control_lock:
+        _validate_running_asset(payload["config"])
         strategy_config_store().save(payload["config"], payload["expectedRevision"])
         return strategy_config_status()
+
+
+def _validate_running_asset(config: dict) -> None:
+    status = trading_status(include_stats=False)
+    active = (status.get("params") or {}).get("assetId")
+    requested = config.get("assetId", active) if isinstance(config, dict) else None
+    if status.get("running") and active and (not isinstance(requested, str) or requested.strip().lower() != active):
+        raise ValueError("请先停止交易，再切换策略资产")
 
 
 def strategy_control(payload: dict) -> dict:
@@ -1126,6 +1186,9 @@ def strategy_control(payload: dict) -> dict:
             temporary = control.with_suffix(".next")
             temporary.write_text(json.dumps({"paused": action == "pause"}), encoding="utf-8")
             temporary.replace(control)
+            if _trading_params is not None:
+                _trading_params["pendingControl"] = {"action": action, "requestedAt": time.time()}
+                _persist_trading_state()
             return {**status, "control_requested": action, "control_pending": True,
                     "command_status": "accepted", "requested_state": "paused" if action == "pause" else "running"}
     if action != "start":
@@ -1138,9 +1201,12 @@ def strategy_control(payload: dict) -> dict:
         raise ValueError("启动请求编号必须是UUID") from None
     with _config_control_lock, _trading_lock:
         _restore_trading_state()
+        selection = {"assetId": payload.get("asset_id"), "marketIds": payload.get("market_ids")}
         if request_id == _trading_request_id:
             if payload["revision"] != _trading_config_revision:
                 raise ValueError("同一启动请求不能改变配置版本")
+            if selection != (_trading_params or {}).get("requestSelection", {"assetId": None, "marketIds": None}):
+                raise ValueError("同一启动请求不能改变资产或市场选择")
             return trading_status(include_stats=False)
         saved = strategy_config_store().get()
         if payload["revision"] != saved["savedRevision"]:
@@ -1159,21 +1225,33 @@ def strategy_control(payload: dict) -> dict:
                     or not requested_markets
                     or any(not isinstance(item, (str, dict)) for item in requested_markets)):
                 raise ValueError("命令 marketIds 无效")
+            catalog = _modern_markets().get("items") or []
             for item in requested_markets:
                 if isinstance(item, dict):
                     item_asset = item.get("assetId") or item.get("asset_id")
                     if item_asset is not None and (not isinstance(item_asset, str)
                                                    or item_asset.strip().lower() != selected_asset):
                         raise ValueError("命令 marketIds 与策略 assetId 不一致")
-                elif item.strip().lower() in SUPPORTED_ASSET_IDS and item.strip().lower() != selected_asset:
-                    raise ValueError("命令 marketIds 与策略 assetId 不一致")
+                market_id = item.get("marketId") or item.get("market_id") if isinstance(item, dict) else item.strip()
+                if not isinstance(market_id, str) or not market_id:
+                    raise ValueError("命令 marketIds 缺少市场身份")
+                if market_id.lower() in SUPPORTED_ASSET_IDS:
+                    if market_id.lower() != selected_asset:
+                        raise ValueError("命令 marketIds 与策略 assetId 不一致")
+                    continue  # Retain the legacy asset-alias command form.
+                matches = [row for row in catalog if row.get("marketId") == market_id
+                           and (not isinstance(item, dict) or not item.get("roundId")
+                                or row.get("roundId") == item["roundId"])]
+                if not matches or {row.get("assetId") for row in matches} != {selected_asset}:
+                    raise ValueError("命令 marketIds 未能映射到所选资产，请刷新市场")
         pool = market_pool()
-        if pool.get("error") == "market_pool_invalid":
+        if pool.get("error") == "market_pool_invalid" or (pool.get("available") and pool.get("stale")):
             raise ValueError("运行池配置无效，请先选择一个资产")
         desired_assets = pool.get("desiredIds") or []
         if desired_assets and desired_assets[0] != selected_asset:
             raise ValueError("运行池资产与策略 assetId 不一致，请先统一配置")
         return start_trading({"mode": config["mode"], "confirm_live": True,
+                              "_request_selection": selection,
                               "duration_min": config["durationMinutes"]},
                              config_revision=saved["savedRevision"], request_id=request_id,
                              strategy_config=saved)
@@ -1185,6 +1263,8 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
     global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
     global _trading_engine
+    if _account_check_lock.locked():
+        raise account_store.AccountCheckError("account_check_busy")
     mode = str(payload.get("mode") or "live").lower()
     if mode != "live":
         raise ValueError("新版交易入口只支持 live 模式")
@@ -1214,6 +1294,8 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
     if not math.isfinite(duration_min) or duration_min < 0 or (duration_min != 0 and duration_min < 0.1):
         raise ValueError("duration_min 必须为 0（一直运行）或至少 0.1 分钟")
     with _trading_lock:
+        if _account_check_lock.locked():
+            raise account_store.AccountCheckError("account_check_busy")
         _restore_trading_state()
         if _trading_process is None and _process_matches(_trading_pid, _trading_log):
             raise RuntimeError("已有交易进程运行中")
@@ -1286,6 +1368,7 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         _trading_params = {"mode": mode, "duration_min": duration_min}
         if strategy_config:
             _trading_params = {"strategy_id": STRATEGY_ID, "mode": mode,
+                               "requestSelection": payload.get("_request_selection"),
                                "duration_min": duration_min, "assetId": strategy_config["config"].get("assetId", "btc"),
                                "config": strategy_config["config"]}
         _trading_exit_code = None
@@ -1305,6 +1388,8 @@ def start_trading(payload: dict, *, config_revision: int | None = None, request_
 def _trading_environment() -> dict:
     env = os.environ.copy()
     env.update(_account_values())
+    if not env.get("POLYMARKET_OWNER_PRIVATE_KEY") and env.get("POLYMARKET_PRIVATE_KEY"):
+        env["POLYMARKET_OWNER_PRIVATE_KEY"] = env["POLYMARKET_PRIVATE_KEY"]
     # Control-plane and diagnostic credentials/configuration belong to the
     # parent process. Do not leak them into a trading child environment.
     for name in ("PM_DASHBOARD_CONTROL_TOKEN", "PM_ACCOUNT_PROFILE", "PM_ACCOUNT_RPC_URL",
@@ -1425,6 +1510,15 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                         or row.get("collector_online") is False
                         or row.get("_collector_online") is False
                         or (isinstance(book_status, dict) and book_status.get("healthy") is False))
+    if isinstance(book_status, dict):
+        row_health_stale = row_health_stale or book_status.get("stale_book") is True \
+            or book_status.get("transport_disconnected") is True \
+            or any(book_status.get(key) in {"stale_book", "transport_disconnected"}
+                   for key in ("status", "reason", "stale_reason"))
+    row_health_stale = row_health_stale or row.get("stale_book") is True \
+        or row.get("transport_disconnected") is True \
+        or any(row.get(key) in {"stale_book", "transport_disconnected"}
+               for key in ("status", "reason", "stale_reason"))
     snapshot = canonical_snapshot(row)
     asset_id = row.get("assetId") or row.get("asset_id") or row.get("asset")
     if isinstance(snapshot, dict):
@@ -1506,6 +1600,10 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     no = no or {}
     depth_available = all(isinstance(side.get(key), list) and len(side[key]) >= 5
                           for side in (yes, no) for key in ("bids", "asks"))
+    depth_available = depth_available and not stale and all(
+        side.get("depthExpiresAt") is None or (
+            _epoch(side["depthExpiresAt"]) is not None and _epoch(side["depthExpiresAt"]) > now)
+        for side in (yes, no))
     supported = asset_id in SUPPORTED_ASSET_IDS
     return {
         "assetId": asset_id,
@@ -1535,7 +1633,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "expiresAt": expires_at,
         "sequence": sequence if type(sequence) is int else None,
         "depthAvailable": depth_available,
-        "strategyEligible": bool(row.get("source") == "platform-runtime") and complete and not stale,
+        "strategyEligible": bool(row.get("source") == "platform-runtime") and supported and complete and not stale,
         "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
                       "sequence": sequence if type(sequence) is int else None,
                       "sourceAt": source_at, "expiresAt": expires_at, "stale": stale},
@@ -1551,52 +1649,67 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
 
 
 def _modern_markets(query: dict | None = None) -> dict:
-    """Read accepted runtime pairs; retain the last complete pair on failure."""
+    """Merge cached sources per asset, retaining failures as stale evidence."""
     global _modern_market_cache
-    raw = _running_engine_market_status()
-    if raw is None:
-        raw = cached_live_status()
-    rows = raw.get("current_markets") if isinstance(raw.get("current_markets"), list) else []
-    has_stale_after = "stale_after_ms" in raw
-    stale_after = raw.get("stale_after_ms")
-    items = [_modern_market({**row, **({"stale_after_ms": stale_after} if has_stale_after else {}),
-                             **({"_collector_online": raw.get("collector_online") is True}
-                                if "collector_online" in raw else {})})
-             for row in rows if isinstance(row, dict)]
-    all_items = items
-    stale = (raw.get("collector_online") is not True or not items or bool(raw.get("stale_reason"))
-             or any(item["stale"] for item in items))
-    value = {"schemaVersion": 1, "items": items, "markets": items,
-            "source": raw.get("source") or "platform-runtime",
-            "asOf": min((item["sourceAt"] for item in items if item["sourceAt"] is not None), default=raw.get("asOf")),
-            "stale": stale,
-            "error": raw.get("error") or raw.get("stale_reason") or ("market_snapshot_stale" if stale else None),
-            "collector_online": raw.get("collector_online") is True, "available": bool(items)}
+    runtime = _running_engine_market_status()
+    collector = cached_live_status()
+
+    def mapped(raw):
+        if not isinstance(raw, dict):
+            return []
+        rows = raw.get("current_markets") or []
+        return [_modern_market({**row, "source": row.get("source") or raw.get("source"),
+                                "stale_after_ms": row.get("stale_after_ms", raw.get("stale_after_ms")),
+                                "_collector_online": row.get("collector_online", raw.get("collector_online")) is True})
+                for row in rows if isinstance(row, dict)]
+
+    runtime_items = mapped(runtime)
+    runtime_assets = {item["assetId"] for item in runtime_items if item["assetId"] is not None}
+    items = [item for item in mapped(collector) if item["assetId"] not in runtime_assets] + runtime_items
+    key = lambda item: (item.get("assetId"), item.get("marketId"), item.get("roundId"))
+    def failed(item, error):
+        return {**item, "stale": True, "strategyEligible": False, "error": error,
+                "orderBook": {**item.get("orderBook", {}), "stale": True}}
+
     with _modern_cache_lock:
-        # A collector fallback is display-only because it lacks the runtime
-        # acceptance watermark/depth. It must not become the last successful
-        # modern snapshot used after the fallback itself disappears.
-        has_canonical = any(canonical_snapshot(row) is not None for row in rows if isinstance(row, dict))
-        if not stale and has_canonical:
-            _modern_market_cache = {**value, "items": all_items, "markets": all_items,
-                                    "available": bool(all_items)}
-        elif _modern_market_cache:
-            retained = [{**item, "stale": True} for item in _modern_market_cache["items"]]
-            value = {**_modern_market_cache, "items": retained, "markets": retained,
-                     "stale": True, "collector_online": False, "error": value["error"]}
-        elif stale and not items:
-            value["items"] = None
-            value["markets"] = None
-            value["available"] = False
+        previous = dict(_modern_market_cache)
+        next_cache = {}
+        for index, item in enumerate(items):
+            old = previous.get(key(item))
+            item_source_at, old_source_at = item.get("sourceAt"), old.get("sourceAt") if old else None
+            item_sequence, old_sequence = item.get("sequence"), old.get("sequence") if old else None
+            regressed = (old is not None and item.get("source") == old.get("source")
+                         and ((isinstance(item_source_at, (int, float)) and isinstance(old_source_at, (int, float))
+                               and item_source_at < old_source_at)
+                              or (type(item_sequence) is int and type(old_sequence) is int
+                                  and item_sequence < old_sequence)))
+            if old and (item["stale"] or regressed):
+                items[index] = failed(old, item.get("error") or "market_snapshot_regressed")
+                next_cache[key(old)] = old
+            elif not item["stale"]:
+                next_cache[key(item)] = item
+        seen = {key(item) for item in items}
+        replaced_assets = {item["assetId"] for item in items if not item["stale"]}
+        for identity, old in previous.items():
+            if identity not in seen and old["assetId"] not in replaced_assets:
+                items.append(failed(old, "market_snapshot_unavailable"))
+                next_cache[identity] = old
+        _modern_market_cache = dict(list(next_cache.items())[-128:])
     if query:
         requested = query.get("assetId", [])
         if not requested and query.get("asset") and query.get("asset") != ["crypto"]:
             requested = query.get("asset")
         if requested:
             wanted = {str(value).strip().lower() for value in requested if isinstance(value, str)}
-            filtered = [item for item in (value.get("items") or []) if item.get("assetId") in wanted]
-            value = {**value, "items": filtered, "markets": filtered, "available": bool(filtered)}
-    return value
+            items = [item for item in items if item.get("assetId") in wanted]
+    stale = not items or any(item["stale"] for item in items)
+    sources = {item.get("source") for item in items if item.get("source")}
+    return {"schemaVersion": 1, "items": items or None, "markets": items or None,
+            "source": next(iter(sources)) if len(sources) == 1 else "market-projection",
+            "asOf": min((item["sourceAt"] for item in items if item["sourceAt"] is not None), default=None),
+            "stale": stale, "partial": bool(items) and stale and any(not item["stale"] for item in items),
+            "error": "market_snapshot_stale" if stale else None,
+            "collector_online": any(not item["stale"] for item in items), "available": bool(items)}
 
 
 def _modern_runtime(status: dict) -> dict:
@@ -1630,7 +1743,7 @@ def _modern_runtime(status: dict) -> dict:
             "stale": stale, "runId": status.get("run_id"),
             "strategyId": status.get("strategy_id") or "btc-reversal", "assetId": asset_id,
             "execution": status.get("execution"), "markets": [
-                {**item, "marketId": item.get("id"),
+                {**item, "marketId": item.get("marketId") or item.get("market_id") or item.get("id"),
                  "roundId": item.get("roundId") or item.get("round_id")}
                 for item in runtime.get("markets", [])],
             "error": runtime.get("error") or ("runtime_snapshot_stale" if stale else None)
@@ -1646,6 +1759,28 @@ def _api_run_id() -> str | None:
 
 def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+
+
+def _current_account_id() -> str | None:
+    with _trading_lock:
+        account_id = _trading_account_id
+    if account_id:
+        return account_id.lower()
+    wallet = account_config_status().get("wallet")
+    return wallet.lower() if isinstance(wallet, str) and wallet else None
+
+
+def _scoped_run_id(run_id: str | None) -> str | None:
+    if not isinstance(run_id, str) or not run_id or len(run_id) > 200:
+        return None
+    account_id = _current_account_id()
+    if not account_id:
+        return None
+    try:
+        owner = _api_ledger().run_account_id(run_id)
+    except (KeyError, OSError, sqlite3.Error, RuntimeError):
+        return None
+    return run_id if isinstance(owner, str) and owner.lower() == account_id else None
 
 
 def _ledger_metadata(run_id: str | None) -> dict:
@@ -1781,10 +1916,15 @@ def make_handler(root: Path):
                 return
             if path.startswith("/api/markets/") and path.endswith("/snapshot"):
                 market_id = path[len("/api/markets/"):-len("/snapshot")].strip("/")
-                catalog = _modern_markets()
-                market = next((item for item in (catalog.get("items") or [])
-                               if market_id in {item.get("marketId"), item.get("roundId"),
-                                                item.get("market_id"), item.get("round_id")}), None)
+                catalog = _modern_markets(query)
+                requested_round = (query.get("roundId") or [None])[0]
+                requested_market = (query.get("marketId") or [None])[0]
+                matches = [item for item in (catalog.get("items") or [])
+                           if (item.get("marketId") == market_id or
+                               (requested_market is None and requested_round is None and item.get("roundId") == market_id))
+                           and (requested_round is None or item.get("roundId") == requested_round)
+                           and (requested_market is None or item.get("marketId") == requested_market)]
+                market = matches[0] if len(matches) == 1 else None
                 if market is None:
                     self._send_json(json.dumps({"available": False, "market": None, "error": "market not found",
                                                  "source": catalog["source"], "asOf": catalog["asOf"],
@@ -1792,8 +1932,8 @@ def make_handler(root: Path):
                     return
                 self._send_json(json.dumps({"schemaVersion": 1, **market,
                     "orderBook": market["orderBook"],
-                    "source": catalog["source"], "asOf": catalog["asOf"],
-                    "stale": catalog["stale"], "error": catalog["error"]},
+                    "source": market["source"], "asOf": market["sourceAt"],
+                    "stale": market["stale"], "error": market["error"]},
                     ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/runtime/status":
@@ -1801,7 +1941,7 @@ def make_handler(root: Path):
                 self._send_json(json.dumps(_modern_runtime(status), ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/runtime/market-pool":
-                self._send_json(json.dumps(market_pool(), ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                self._send_json(json.dumps(_pool_runtime_view(market_pool()), ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/strategy/config":
                 config = strategy_config_status()
@@ -1865,7 +2005,12 @@ def make_handler(root: Path):
                 return
             if path in {"/api/events", "/api/fills", "/api/settlements"}:
                 try:
-                    event_run_id = query.get("runId", [_api_run_id()])[0]
+                    requested_run_id = query.get("runId", [None])[0]
+                    event_run_id = (_scoped_run_id(requested_run_id) if requested_run_id is not None
+                                    else _api_run_id())
+                    if requested_run_id is not None and event_run_id is None:
+                        self._send_json(b'{"error":"run_not_found","stale":true}', 404)
+                        return
                     value = (_modern_settlements(event_run_id, query) if path == "/api/settlements"
                              else _modern_events(event_run_id, query, kinds={"fill"} if path == "/api/fills" else None))
                     self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
@@ -1882,14 +2027,15 @@ def make_handler(root: Path):
                     return
                 try:
                     legacy_market_id = (query.get("marketId") or [None])[0]
-                    legacy_round_id = (query.get("roundId") or [None])[0]
-                    legacy_market = round_id
-                    if (legacy_market_id is None and legacy_round_id is None
+                    explicit_round = (query.get("roundId") or [None])[0]
+                    if explicit_round is not None and explicit_round != round_id:
+                        raise ValueError("conflicting round identity")
+                    legacy_round_id = round_id
+                    if (legacy_market_id is None and explicit_round is None
                             and round_id.startswith("0x")):
-                        legacy_market_id, legacy_market, legacy_round_id = round_id, None, None
+                        legacy_market_id, legacy_round_id = round_id, None
                     result = _api_ledger().orders_page(run_id, limit=int(query.get("limit", ["50"])[0]),
                                                        offset=int(query.get("offset", ["0"])[0]),
-                                                       market=None if legacy_market_id or legacy_round_id else legacy_market,
                                                        asset_id=(query.get("assetId") or [None])[0],
                                                        market_id=legacy_market_id,
                                                        round_id=legacy_round_id)
@@ -1909,14 +2055,19 @@ def make_handler(root: Path):
                              "error": "当前没有运行记录", "roundId": round_id}
                 else:
                     try:
+                        if query.get("roundId") and query["roundId"][0] != round_id:
+                            raise ValueError("conflicting round identity")
                         value = {"schemaVersion": 1, "source": "ledger", **_api_ledger().position(
-                            run_id, (query.get("roundId") or [round_id])[0],
+                            run_id, round_id,
                             asset_id=(query.get("assetId") or [None])[0],
                             market_id=(query.get("marketId") or [None])[0])}
                         metadata = _ledger_metadata(run_id)
                         value["stale"] = value.get("stale", True) or metadata["stale"]
                         value["error"] = value.get("error") or metadata["error"]
                         value.setdefault("asOf", value.get("updatedAt"))
+                    except (ValueError, TypeError):
+                        self._send_json(b'{"error":"invalid_position_query","stale":true}', 400)
+                        return
                     except (KeyError, OSError, sqlite3.Error, RuntimeError):
                         self._send_json(b'{"error":"position_unavailable","stale":true}', 503)
                         return
@@ -1954,9 +2105,6 @@ def make_handler(root: Path):
             body = candidate.read_bytes()
             content_type = _static_content_type(candidate)
             if candidate.suffix == ".html":
-                # This server is the production entry point, including every
-                # bookmarked console page. Configure it before shared scripts
-                # load so no operation can silently use preview data.
                 config = b'<script>window.__POLY_PREVIEW_CONFIG__={mode:"backend",demo:false,apiBase:"",apiFlavor:"contract"};</script>'
                 body = body.replace(b"<head>", b"<head>" + config, 1)
             self.send_response(200)
@@ -1997,6 +2145,9 @@ def make_handler(root: Path):
                     run_id = query.get("run_id", [None])[0]
                     if not run_id or len(run_id) > 200:
                         raise ValueError("请指定运行编号")
+                    run_id = _scoped_run_id(run_id)
+                    if run_id is None:
+                        raise KeyError("Run is not registered")
                     ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
                     stamp = query.get("as_of", [None])[0]
                     cutoff = query.get("snapshot_event_id", [None])[0]
@@ -2013,11 +2164,15 @@ def make_handler(root: Path):
                         before_id = query.get("before_id", [None])[0]
                         limit = int(query.get("limit", ["50"])[0])
                         value = {"schemaVersion": 1, **ledger.list_runs_page(
-                            before_id=int(before_id) if before_id else None, limit=limit)}
+                            before_id=int(before_id) if before_id else None, limit=limit,
+                            account_id=_current_account_id())}
                     else:
                         run_id = query.get("run_id", [None])[0]
                         if not run_id or len(run_id) > 200:
                             raise ValueError("请指定运行编号")
+                        run_id = _scoped_run_id(run_id)
+                        if run_id is None:
+                            raise KeyError("Run is not registered")
                         if path.endswith("/summary"):
                             value = {"schemaVersion": 1, "summary": ledger.summary(run_id)}
                         else:
@@ -2115,7 +2270,7 @@ def make_handler(root: Path):
                     self._send_json(json.dumps({"ok": True, "report": report}, ensure_ascii=False).encode("utf-8"))
                     return
                 if path == "/api/trading/auth/session":
-                    auth_error = _control_request_error(self.headers, "live")
+                    auth_error = _control_request_error(self.headers, "live", allow_session=False)
                     if auth_error:
                         status, message = auth_error
                         self._send_json(
@@ -2139,7 +2294,7 @@ def make_handler(root: Path):
                     )
                     return
                 if path == "/api/runtime/market-pool":
-                    self._send_json(json.dumps(save_market_pool(payload), ensure_ascii=False,
+                    self._send_json(json.dumps(_pool_runtime_view(save_market_pool(payload)), ensure_ascii=False,
                                                 allow_nan=False).encode("utf-8"))
                     return
                 if path == "/api/runtime/commands":
@@ -2165,7 +2320,8 @@ def make_handler(root: Path):
                         raise ValueError("策略不存在")
                     with _config_control_lock:
                         result = strategy_config_store().save_draft(modern_config, expected)
-                    self._send_json(json.dumps({"accepted": True, **result, "savedAt": _epoch(result.get("savedAt"))}, ensure_ascii=False,
+                    self._send_json(json.dumps({"accepted": True, **result, "savedRevision": result["expectedRevision"],
+                                                "revision": result["expectedRevision"], "savedAt": _epoch(result.get("savedAt"))}, ensure_ascii=False,
                                                 allow_nan=False).encode("utf-8"))
                     return
                 if path == "/api/strategy/activate":
@@ -2175,9 +2331,12 @@ def make_handler(root: Path):
                         self._send_json(b'{"accepted":false,"status":"unsupported","error":"activation_at_round_unsupported"}', 501)
                         return
                     with _config_control_lock:
+                        draft = strategy_config_store().get_draft()
+                        if draft:
+                            _validate_running_asset(draft["config"])
                         config = strategy_config_store().activate_draft(payload.get("expectedRevision"), payload.get("draftId"))
                     self._send_json(json.dumps({"accepted": True, "strategyId": "btc-reversal",
-                        "revision": config["savedRevision"], "effectiveRoundId": None,
+                        "revision": config["savedRevision"], "savedRevision": config["savedRevision"], "effectiveRoundId": None,
                         "activationScope": "future_uncreated_round", "status": "published",
                         "source": "control-plane", "asOf": time.time(), "stale": False},
                         ensure_ascii=False, allow_nan=False).encode("utf-8"))

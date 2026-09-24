@@ -93,6 +93,14 @@ class StrategyDraftTests(unittest.TestCase):
         with self.assertRaises(ConfigValidationError):
             self.store.save(config, 0)
 
+    def test_legacy_update_preserves_existing_asset(self):
+        config = {**default_config(), "assetId": "eth"}
+        self.store.save(config, 0)
+        config.pop("assetId")
+        draft = self.store.save_draft(config, 1)
+        self.assertEqual(draft["config"]["assetId"], "eth")
+        self.assertEqual(self.store.save(config, 1)["config"]["assetId"], "eth")
+
     def test_runtime_unsupported_asset_is_rejected(self):
         config = default_config()
         config["assetId"] = "xrp"
