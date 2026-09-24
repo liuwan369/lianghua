@@ -20,7 +20,7 @@
 
 `{ desiredIds, currentIds, nextRoundIds, effectiveRoundId, updatedAt, source, stale }`
 
-desired 是用户选择，current/next 是服务器确认结果。停用当前币种只影响下一场，不删除当前场次订单。
+desired 是用户选择，current/next 是服务器确认结果。单实例运行池至少保留一个 desired asset；切换已启用币种只影响下一场，不删除当前场次订单。停止交易使用 runtime stop 命令，并以服务器回执确认远端挂单状态。
 
 ### OrderBookViewModel
 
