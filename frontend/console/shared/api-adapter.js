@@ -174,10 +174,11 @@
         const revision = store.getState().strategy.revision;
         if (Number.isInteger(revision)) command.revision = revision;
       }
+      command.requestId = uuid(command.requestId);
       const legacyPayload = {
         action: command.action,
         strategy_id: command.strategyId || core.config.strategyId,
-        request_id: uuid(command.requestId),
+        request_id: command.requestId,
         ...(Number.isInteger(command.revision) ? { revision: command.revision } : {}),
         ...(command.mode ? { mode: command.mode } : {})
       };

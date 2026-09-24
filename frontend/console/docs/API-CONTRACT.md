@@ -73,7 +73,9 @@
 }
 ```
 
-`slug` 可以暂时映射为展示用的兼容 `marketId`，但它不是服务端确认的完整市场身份。当前响应没有 `roundId`，因此 Adapter 必须把 `roundId` 留空，页面只能显示目录和报价，不能请求本场持仓/订单，也不能猜测当前轮次。后端提供真正的 `marketId + roundId` 后，才允许启用按轮次读模型。
+`slug` 只能作为缺少 `assetId/symbol` 时的展示资产线索，不能映射为现代 `marketId`。`id`、`slug` 和旧 `round_id` 都不能填充现代身份；当前响应没有服务端确认的 `marketId + roundId` 时，Adapter 必须把两者保持为 `null`，页面只能显示目录和报价，不能请求本场持仓/订单，也不能猜测当前轮次。后端提供真正的 `marketId + roundId` 后，才允许启用按轮次读模型。
+
+当前控制台只维护 BTC 五分钟反转策略。目录转换会丢弃非 BTC 资产；运行池写入只接受 `btc` 或 `btc-*` 且存在于当前目录的 asset ID。后端若返回 ETH、SOL 或其他资产，不能通过页面启用或写入运行池。
 
 ### `/api/trading/control` 的字段约束
 
@@ -98,6 +100,44 @@
 ### Adapter 模式选择
 
 前端默认 `apiFlavor: "contract"`，表示优先调用目标契约。连接当前 control-plane 时必须显式使用 legacy adapter，或由 Adapter 做完整的 DTO 转换；仅靠 HTTP 404 回退无法解决字段名、请求方法和语义差异。页面不应直接读取 legacy 字段，也不应为了填满界面而在浏览器推导 `roundId`、运行池确认结果或账户余额。
+
+## 当前联调连接配置
+
+当前 control-plane 脚本默认监听 `127.0.0.1:8765`（部署地址以实际反向代理为准）。在目标契约尚未部署前，前端联调应显式使用 legacy 模式：
+
+```js
+window.__POLY_PREVIEW_CONFIG__ = {
+  mode: "backend",
+  apiBase: "http://127.0.0.1:8765",
+  apiFlavor: "legacy",
+  strategyId: "btc-reversal",
+  // 当前后端没有浏览器侧三条 stream 路由。
+  streams: {}
+};
+```
+
+legacy 模式实际使用的 DTO 边界如下：
+
+- 市场：`GET /api/v1/markets` → 读取 `current_markets[].slug/name/start/end/up_token/down_token/up_bid/up_ask/down_bid/down_ask/quote_at`；`marketId`、`roundId` 缺失时保持 `null`。
+- 运行：`GET /api/v1/status` → 读取 `running/run_id/config_revision/strategy_id/stats`；这是单运行状态，不是市场运行池确认。
+- 控制：`POST /api/trading/control` → Adapter 发送 `action`、`strategy_id`、`request_id`（UUID）、`revision`，可带 `mode: "live"`。响应仅表示接收，最终状态仍需重新读取 status 或由后端事件确认。
+- 策略：`GET /api/strategy-config`、`PUT /api/strategy-config`，保存体为 `{ expectedRevision, config }`；当前没有独立的 draft/activate endpoint。
+- 账户：`GET /api/account/status` 读取配置/检查状态；`GET /api/v1/account-data` 读取 `collateral/open_orders/trades/positions/closed_positions/activity` 分区。余额摘要没有来源时保持不可用。
+- 低频数据：`GET /api/v1/system-metrics`、`/api/v1/runs`、`/api/v1/events`、`/api/v1/summary`、`/api/v1/orders`，不能与高频行情共用刷新状态。
+
+现代控制请求的页面输入可以使用任意 request ID 字符串，但 Adapter 在发送前统一规范为 UUID：
+
+```json
+{
+  "action": "start",
+  "marketIds": ["btc-market-id"],
+  "strategyId": "btc-reversal",
+  "revision": 12,
+  "requestId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+当前浏览器侧没有可确认的 `/api/stream/markets`、`/api/stream/runtime`、`/api/stream/orders` 服务地址。配置这些 URL 前，页面不会创建 WebSocket；配置后每个行情/订单帧必须同时提供 `marketId`、`roundId`、递增 `sequence`、可解析的 `sourceAt`、未来的 `expiresAt` 和 `stale: false`。重连后旧 sequence 会按 `marketId + roundId` 拒绝；过期、stale、缺字段或断线只保留最后成功快照并显示 stale。
 
 ## REST
 
