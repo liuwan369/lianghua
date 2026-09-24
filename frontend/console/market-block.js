@@ -77,7 +77,7 @@
 
   document.querySelectorAll("[data-preview-nav]").forEach((button) => button.addEventListener("click", () => {
     const target = button.dataset.previewTarget;
-    if (target) window.location.href = target;
+    if (target) window.PolyPreview.navigate(target);
   }));
 
   const coinRow = (coin) => `<article class="coin-row${coin.id === selectedId ? " selected" : ""}" data-coin-row="${escape(coin.id)}">
