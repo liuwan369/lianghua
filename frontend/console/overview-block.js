@@ -89,7 +89,7 @@
       const marketIds = item?.marketId ? [item.marketId] : [];
       if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
       adapter.commandRuntime({ action: action === "start" ? "start" : "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
-        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "设计稿 · 待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
+        .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "服务器未确认")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
         .finally(() => { document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = false; }); void adapter.loadRuntime(); });
       return;
@@ -178,7 +178,7 @@
     document.querySelectorAll("[data-account-total], [data-account-available]").forEach((node) => { node.title = resource.stale ? "数据过期，保留最近账户快照" : "服务器账户快照；缺少可用余额时显示 --"; });
   };
   const renderEvents = (resource) => {
-    text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : window.PolyPreview.config.demo ? "演示模式" : "事件待接入");
+    text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : "等待服务器事件");
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
     const list = document.querySelector("[data-overview-log-list]");
@@ -205,7 +205,7 @@
   });
   text('[data-overview-action="exit"]', "停止交易");
   text('[data-overview-action="strategy"]', "配置策略");
-  text(".sidebar-status span", window.PolyPreview.config.demo ? "演示模式" : "服务器数据");
+  text(".sidebar-status span", "服务器数据");
   text(".sidebar-status small", "各模块独立更新");
   text(".log-state small", "当前运行");
   document.querySelector("[data-account-total]").previousElementSibling.textContent = "账户资产 / 抵押余额";

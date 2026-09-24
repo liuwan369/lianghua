@@ -35,12 +35,12 @@
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">选择平台支持的加密货币五分钟市场，并决定哪些币种加入自动交易。</p>
       <nav aria-label="加密货币市场导航">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span data-sidebar-state>原型预览</span><small data-sidebar-detail>数据待接入</small></div>
+      <div class="sidebar-status"><i></i><span data-sidebar-state>服务器数据</span><small data-sidebar-detail>等待行情</small></div>
     </aside>
 
     <main class="preview-main market-main crypto-market-main">
       <header class="preview-header market-header crypto-market-header">
-        <div class="hero-copy"><p class="eyebrow">CRYPTO MARKET POOL</p><div class="hero-title-row"><h1>加密货币市场</h1><span class="language-chip">5 分钟 · YES / NO</span></div><p class="subtitle">只展示平台支持的加密货币五分钟市场。启用币种后，自动交易可在运行中加入下一个可用场次。</p><div class="market-header-actions"><span class="market-note" data-market-source><i></i>公开行情 · 仅展示演示数据</span><button class="hero-button" type="button" data-refresh-markets>刷新币种</button></div></div>
+        <div class="hero-copy"><p class="eyebrow">CRYPTO MARKET POOL</p><div class="hero-title-row"><h1>加密货币市场</h1><span class="language-chip">5 分钟 · YES / NO</span></div><p class="subtitle">只展示平台支持的加密货币五分钟市场。启用币种后，自动交易可在运行中加入下一个可用场次。</p><div class="market-header-actions"><span class="market-note" data-market-source><i></i>公开行情 · 等待服务器数据</span><button class="hero-button" type="button" data-refresh-markets>刷新币种</button></div></div>
         <div class="market-header-side"><div class="header-status-grid"><article class="header-status"><span>支持币种</span><strong data-market-count>6 个</strong></article><article class="header-status"><span>已启用</span><strong class="status-good" data-enabled-count>2 个</strong></article><article class="header-status"><span>当前运行</span><strong data-running-count>1 个</strong></article><article class="header-status"><span>市场周期</span><strong class="status-good">固定 5 分钟</strong></article></div></div>
       </header>
 
@@ -64,7 +64,7 @@
           <section class="trade-link-card"><div class="trade-link-heading"><span class="link-icon">↗</span><div><p class="eyebrow">AUTO TRADE LINK</p><h3>自动交易关联</h3></div><span class="link-state" data-link-state>运行中</span></div><p data-link-copy>该币种已在自动交易运行池中，当前场次正在执行。</p><button class="enable-coin-button" type="button" data-detail-enable>停用并移出运行池</button><small data-link-note>停用只影响后续场次，不撤销当前场次订单。</small></section>
         </aside>
       </section>
-      <div class="market-selection-note"><span class="note-icon">i</span><span data-selection-note>当前选择 BTC；自动交易会读取已启用币种并在下一场加入新币种。</span><span class="note-time" data-market-refresh-note>最后刷新 · 演示数据</span></div>
+      <div class="market-selection-note"><span class="note-icon">i</span><span data-selection-note>当前选择 BTC；自动交易会读取已启用币种并在下一场加入新币种。</span><span class="note-time" data-market-refresh-note>最后刷新 · 等待服务器</span></div>
     </main>
   </div>`;
 

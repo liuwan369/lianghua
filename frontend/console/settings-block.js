@@ -20,8 +20,8 @@
       <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">面向平台支持加密货币的五分钟反转策略控制平台。</p>
-      <nav aria-label="设置设计稿导航">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span>原型预览</span><small>数据待接入</small></div>
+      <nav aria-label="设置导航">${navMarkup}</nav>
+      <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待连接</small></div>
     </aside>
 
     <main class="settings-main">
@@ -41,7 +41,7 @@
       </div>
 
       <section class="settings-pane active" data-settings-pane="diagnostics" role="tabpanel">
-        <div class="pane-heading"><div><p class="eyebrow">HEALTH OVERVIEW</p><h2>系统诊断</h2><p>显示当前服务健康和交易链路状态，全部为只读信息。</p></div><div class="pane-actions"><span class="live-chip"><i></i><b data-diagnostic-state>设计稿 · 数据待接入</b></span><button type="button" class="action-button" data-refresh-diagnostics><span>↻</span>刷新诊断</button></div></div>
+        <div class="pane-heading"><div><p class="eyebrow">HEALTH OVERVIEW</p><h2>系统诊断</h2><p>显示当前服务健康和交易链路状态，全部为只读信息。</p></div><div class="pane-actions"><span class="live-chip"><i></i><b data-diagnostic-state>等待服务器</b></span><button type="button" class="action-button" data-refresh-diagnostics><span>↻</span>刷新诊断</button></div></div>
 
         <section class="diagnostic-panel connection-panel">
           <div class="panel-heading"><div><p class="eyebrow">CONNECTIONS</p><h3>连接状态</h3></div><span class="panel-meta" data-diagnostic-time>最后检查 --:--:--</span></div>
@@ -53,7 +53,7 @@
           </div>
         </section>
 
-        <div class="diagnostic-note"><span class="note-icon">i</span><span>服务器资源与服务进程在总览查看，交易速度在自动交易查看；这里仅保留连接与版本诊断。</span><span class="note-time" data-note-time>原型预览 · 未连接后端</span></div>
+        <div class="diagnostic-note"><span class="note-icon">i</span><span>服务器资源与服务进程在总览查看，交易速度在自动交易查看；这里仅保留连接与版本诊断。</span><span class="note-time" data-note-time>等待服务器连接</span></div>
       </section>
 
       <section class="settings-pane" data-settings-pane="account" role="tabpanel" hidden>
