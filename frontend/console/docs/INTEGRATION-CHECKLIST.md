@@ -6,9 +6,10 @@
 - [ ] bootstrap 返回版本、能力和固定 5m crypto 范围。
 - [ ] market DTO 有非空 assetId、marketId、roundId、YES/NO token 和有效期；旧 `/api/v1/markets` 缺 roundId 时只能用于目录/报价展示。
 - [ ] market-pool 支持 desired/current/nextRound/effectiveRoundId，停用不撤当前场次，PUT 不接受客户端覆盖 current/next。
-- [ ] runtime command 支持 requestId 幂等，响应和最终状态分开；stop 在状态暂时 stale 或缺少市场身份时仍可提交，`remoteOrdersState` 为 `unconfirmed` 时不能显示为撤单已完成。
+- [ ] runtime command 支持 requestId 幂等，响应和最终状态分开；前端只在当前市场有服务器确认的可停止状态时开放 stop，状态 stale/unavailable 或缺少市场身份时保留按钮禁用并等待刷新；`remoteOrdersState` 为 `unconfirmed` 时不能显示为撤单已完成。
 - [ ] `streams.markets`、`streams.runtime`、`streams.orders` 均配置真实 WebSocket 地址；未配置时使用独立 REST 轮询，页面标明轮询/待接入并保留快照，不生成实时假数据。
 - [ ] WS 帧有 sequence/sourceAt/expiresAt；行情和订单帧有 marketId/roundId，旧帧不会覆盖新帧，断线保留最后成功快照并显示 stale。
+- [ ] 启动按钮只有在当前市场目录/盘口快照具备完整身份、有效期、递增 sequence 和可用 YES/NO 深度时开放；未收到新鲜盘口时保持禁用。
 - [ ] 多币种每个 marketId 独立显示盘口、持仓、订单和阶段。
 - [ ] 策略保存有服务端校验、完整 `maxStages`、`draftId`、`expectedRevision` 和已发布 revision。
 - [ ] 策略草稿保存与策略激活分离；激活请求带 `strategyId`、`draftId`、`expectedRevision`，服务端确认正 revision 后才允许启动；不把草稿提示成已生效。
@@ -26,3 +27,10 @@
 - [ ] 用浏览器检查桌面和窄屏布局，确认无横向滚动和整页闪烁。
 
 以上清单描述真实联调前提；后端尚未提供的能力必须在页面保持 `unavailable/stale`，不能用演示数据填充。
+
+## 最近一次真实只读联调
+
+- 通过公网 Basic Auth 会话逐页访问 `overview.html`、`market.html`、`auto-trade.html`、`strategy.html`、`settings.html`，五个入口均返回 HTTP 200，页面脚本没有运行时异常。
+- 市场目录的 `asOf`、`sourceAt` 和 `sequence` 在连续请求中持续前进，行情采样没有冻结；运行池、交易运行状态、账户快照和统计接口的过期/不可用状态仍按服务器原样显示。
+- 浏览器会话必须使用正常的 Basic Auth challenge、代理会话或请求头注入；不能把 `user:password@host` 写进页面 URL，否则浏览器会拒绝相对 `fetch` 请求。账户密码、Token 和私钥不得写入前端或文档。
+- 本轮服务器仍返回 `market_pool_unavailable`、`runtime_snapshot_stale`、`account_response_invalid`，并且没有可用的 `/api/metrics/summary` 路由；这些属于运行时、账本 API 或部署接线项，前端保留最近成功数据并显示 `stale/unavailable`。

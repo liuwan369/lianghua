@@ -231,7 +231,7 @@ window.__POLY_PREVIEW_CONFIG__ = {
 }
 ```
 
-响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。停止命令允许在运行状态暂时 stale 或缺少市场身份时提交，由服务器最终确认。
+响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。控制台只在当前市场有服务器确认的可停止状态时开放停止；运行状态 stale/unavailable 或缺少市场身份时保持禁用并等待刷新，避免对未知运行发送控制命令。
 
 ## 前端调用方式
 
