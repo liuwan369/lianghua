@@ -87,6 +87,7 @@ export type FeedEvent =
     }
   | {
       kind: "venue";
+      asset?: string;
       venue: number;
       tsUnix: number;
       bid: number;
