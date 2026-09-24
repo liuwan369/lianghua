@@ -116,6 +116,14 @@
     const coin = selectedCoin();
     if (!coin) {
       ["[data-detail-title]", "[data-detail-name]", "[data-detail-english]", "[data-detail-yes]", "[data-detail-no]", "[data-detail-close]", "[data-detail-remaining]", "[data-detail-volume]", "[data-detail-liquidity]"].forEach((selector) => text(selector, "--"));
+      const detailState = document.querySelector("[data-detail-state]");
+      if (detailState) { detailState.className = "detail-state disabled"; detailState.textContent = "待接入"; }
+      const linkState = document.querySelector("[data-link-state]");
+      if (linkState) { linkState.className = "link-state unlinked"; linkState.textContent = "待接入"; }
+      const action = document.querySelector("[data-detail-enable]");
+      if (action) { action.disabled = true; action.textContent = "等待市场目录"; action.classList.remove("selected"); }
+      text("[data-link-copy]", "后端返回有效市场目录后，这里才会显示运行池关联状态。");
+      text("[data-link-note]", "没有有效目录时不会修改运行池。");
       text("[data-selection-note]", "暂无可用加密货币市场");
       return;
     }
@@ -137,17 +145,18 @@
     text("[data-link-copy]", coin.running && !coin.enabled ? "该币种本场继续执行，停用将在本场结束后生效。" : coin.running ? "该币种已在自动交易运行池中，当前场次正在执行。" : coin.enabled ? "该币种已启用，自动交易将在下一个可用五分钟场次加入。" : "启用后，该币种会加入自动交易的下一场候选运行池。");
     text("[data-link-note]", coin.running ? "停用只影响后续场次，不撤销当前场次订单。" : "启用或停用只影响后续场次，不改变当前已运行订单。");
     const action = document.querySelector("[data-detail-enable]");
-    if (action) { action.textContent = coin.enabled ? "停用（下一场生效）" : "启用并关联自动交易"; action.classList.toggle("selected", coin.enabled); }
+    if (action) { action.disabled = false; action.textContent = coin.enabled ? "停用（下一场生效）" : "启用并关联自动交易"; action.classList.toggle("selected", coin.enabled); }
     text("[data-selection-note]", coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "下一场可开始运行。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
   const renderCatalogStatus = (resource) => {
     const local = window.PolyPreview.config.mode === "local-preview";
     const status = resource?.status;
-    const textValue = local ? "公开行情 · 演示数据" : status === "stale" ? "行情连接中断 · 保留上次快照" : status === "unavailable" ? "行情待接入" : "公开行情 · 已连接";
+    const incompleteIdentity = !local && resource?.items?.some((item) => !item.marketId || !item.roundId);
+    const textValue = local ? "公开行情 · 演示数据" : status === "error" ? "行情读取失败 · 保留上次快照" : status === "stale" ? "行情连接中断 · 保留上次快照" : status === "unavailable" ? "行情待接入" : incompleteIdentity ? "行情已读取 · 轮次标识待接入" : "公开行情 · 已连接";
     text("[data-market-source]", textValue);
-    text("[data-sidebar-state]", local ? "原型预览" : status === "ready" ? "行情已连接" : "数据连接");
-    text("[data-sidebar-detail]", local ? "演示数据" : status === "stale" ? "保留最近成功数据" : status === "unavailable" ? "等待后端" : "五分钟市场");
-    if (!local && status === "stale") text("[data-market-refresh-note]", `连接中断 · ${resource.error || "保留上次数据"}`);
+    text("[data-sidebar-state]", local ? "原型预览" : status === "ready" ? (incompleteIdentity ? "轮次标识待接入" : "行情已连接") : status === "error" ? "行情读取失败" : "数据连接");
+    text("[data-sidebar-detail]", local ? "演示数据" : status === "error" ? "保留最近成功数据" : status === "stale" ? "保留最近成功数据" : status === "unavailable" ? "等待后端" : incompleteIdentity ? "目录/报价可用，持仓订单等待 roundId" : "五分钟市场");
+    if (!local && ["error", "stale", "unavailable"].includes(status)) text("[data-market-refresh-note]", status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : status === "unavailable" ? "行情待接入 · 保留上次数据" : `连接中断 · ${resource.error || "保留上次数据"}`);
   };
 
   async function toggleEnabled(id) {
@@ -177,17 +186,43 @@
 
   document.querySelector("[data-detail-enable]")?.addEventListener("click", () => { void toggleEnabled(selectedId); });
   document.querySelector("[data-coin-search]")?.addEventListener("input", (event) => { search = event.target.value; renderList(); });
+  let marketRefreshTimer = null;
+  let marketRefreshInFlight = null;
+  const scheduleMarketRefresh = (delay = 1000) => {
+    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (marketRefreshTimer) window.clearTimeout(marketRefreshTimer);
+    marketRefreshTimer = window.setTimeout(() => {
+      marketRefreshTimer = null;
+      void refreshMarkets();
+    }, Math.max(0, delay));
+  };
+  const refreshMarkets = () => {
+    if (marketRefreshInFlight) return marketRefreshInFlight;
+    marketRefreshInFlight = Promise.resolve(adapter.loadMarkets()).finally(() => {
+      marketRefreshInFlight = null;
+      scheduleMarketRefresh();
+    });
+    return marketRefreshInFlight;
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      if (marketRefreshTimer) window.clearTimeout(marketRefreshTimer);
+      marketRefreshTimer = null;
+    } else {
+      scheduleMarketRefresh(0);
+    }
+  });
   document.querySelector("[data-refresh-markets]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
     try {
-      const resource = await adapter.loadMarkets();
+      const resource = await refreshMarkets();
       syncCoins();
       renderCounts();
       renderList();
       renderDetail();
-      text("[data-market-refresh-note]", resource?.status === "stale" || resource?.status === "unavailable"
-        ? `连接中断 · ${resource.error || "保留上次数据"}`
+      text("[data-market-refresh-note]", resource?.status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : resource?.status === "stale" || resource?.status === "unavailable"
+        ? `${resource.status === "unavailable" ? "行情待接入" : "连接中断"} · ${resource.error || "保留上次数据"}`
         : `最后刷新 · ${window.PolyPreview.format.clock()}`);
     } catch (error) { text("[data-market-refresh-note]", error.message || "市场目录读取失败"); }
     finally { button.disabled = false; }
@@ -198,7 +233,7 @@
   renderList();
   renderDetail();
   if (window.PolyPreview.config.mode !== "local-preview") {
-    void adapter.loadMarkets();
+    void refreshMarkets();
     void adapter.loadMarketPool();
   }
 })();

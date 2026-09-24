@@ -144,8 +144,8 @@ legacy 模式实际使用的 DTO 边界如下：
 | 用途 | 方法 | 路径 | 频率/说明 |
 |---|---|---|---|
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
-| 加密货币五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 15 秒或手动刷新 |
-| 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
+| 加密货币五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 市场页约 1 秒一次；自动交易页约 10 秒一次重解析轮次；均为单请求完成后再排下一次，页面隐藏时暂停 |
+| 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 自动交易页可见时约 1 秒一次；单请求完成后才排下一次，隐藏时暂停；`marketId + roundId` 变化时重新读取轮次数据；同一身份不重建 WebSocket |
 | 运行池 | GET/PUT | `/api/runtime/market-pool` | desired enabled + effectiveRoundId |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
@@ -163,6 +163,26 @@ legacy 模式实际使用的 DTO 边界如下：
 | 事件历史 | GET | `/api/events?cursor=...` | 分页，低频 |
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。`marketId` 和 `roundId` 在生产数据中都必须是非空字符串；不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+
+如 `/api/markets` 同时返回可展示盘口，盘口字段使用以下形状；Adapter/ViewModel 会原样保留 `orderBook` 和来源元数据：
+
+```json
+{
+  "marketId": "btc-market-id",
+  "roundId": "btc-round-id",
+  "orderBook": {
+    "yes": { "bids": [[0.48, 10]], "asks": [[0.49, 8]] },
+    "no": { "bids": [[0.51, 9]], "asks": [[0.52, 11]] }
+  },
+  "sequence": 42,
+  "sourceAt": "2026-09-24T12:00:00.000Z",
+  "expiresAt": "2026-09-24T12:00:02.000Z",
+  "stale": false,
+  "depthUnavailable": false
+}
+```
+
+`bids`/`asks` 也可使用 `{ price, size }` level 对象。`depthUnavailable: true`、`stale: true`、缺少身份或缺少 sequence/sourceAt/expiresAt 时，前端保留上一份盘口并显示待接入/过期，不显示实时已连接。stale 市场目录没有新条目时，Store 保留最后一次成功目录。
 
 运行池 GET/PUT 的语义如下：
 
@@ -197,7 +217,7 @@ window.__POLY_PREVIEW_CONFIG__ = {
 };
 ```
 
-没有配置某个流的 URL 时，该流不会创建连接，不会用定时器或演示数值补齐实时数据。断线重连期间页面保留最近成功数据并标记 `stale`。
+没有配置某个流的 URL 时，该流不会创建连接，不会用定时器或演示数值补齐实时数据。相同 `marketId + roundId` 的目录/运行池轮询只更新 REST 数据，不关闭现有流；主动关闭旧流不会标记新流断线。断线重连期间页面保留最近成功数据并标记 `stale`。
 
 ## 控制命令
 

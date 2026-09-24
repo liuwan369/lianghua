@@ -175,6 +175,15 @@
   };
   var snapshotWatermarks = new Map();
   var snapshotExpiryTimer = null;
+  var snapshotRefreshTimer = null;
+  var snapshotRefreshInFlight = null;
+  var marketContextRefreshTimer = null;
+  var marketContextRefreshInFlight = null;
+  var currentMarketContextKey = null;
+  var loadedRoundContextKey = null;
+  var activeStreamContextKey = null;
+  var activeStreamConfigKey = null;
+  var lastSnapshotValid = false;
   var timestampMs = function(value) {
     if (value == null || value === "") return null;
     var numeric = Number(value);
@@ -183,10 +192,11 @@
     return Number.isFinite(parsed) ? parsed : null;
   };
   var markSnapshotStale = function(message) {
+    lastSnapshotValid = false;
     text("[data-book-source]", message || "行情已过期 · 保留最近快照");
     text("[data-book-live-state]", "已过期 · 保留快照");
   };
-  var renderSnapshot = function(raw, fromStream) {
+  var renderSnapshot = function(raw, fromStream, expectedContextKey) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     if (!raw) return;
     var source = raw.market && typeof raw.market === "object" ? { ...raw, ...raw.market } : raw;
@@ -197,15 +207,23 @@
     var model = vm.market(source);
     var marketId = model.marketId;
     var roundId = model.roundId;
+    if (expectedContextKey != null && `${String(marketId || "")}\u0000${String(roundId || "")}` !== expectedContextKey) return false;
+    var book = source.book || source.orderBook || source.orderbook || model.orderBook || {};
+    var bookSide = function(side) { return book[side] || book[side.toUpperCase()] || {}; };
+    var hasDepth = ["yes", "no"].every(function(side) {
+      var sideBook = bookSide(side);
+      return Array.isArray(sideBook.bids || sideBook.bid) && Array.isArray(sideBook.asks || sideBook.ask);
+    });
     var watermarkKey = `${String(marketId || "")}\u0000${String(roundId || "")}`;
     var previousSequence = snapshotWatermarks.get(watermarkKey);
-    var valid = Boolean(marketId && roundId) && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
+    var valid = Boolean(marketId && roundId) && hasDepth && !model.depthUnavailable && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
       && sourceAt <= now + 5000 && expiresAt > now && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence > previousSequence);
     if (!valid) {
-      markSnapshotStale(raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期或序列落后 · 保留最近快照");
+      markSnapshotStale(model.depthUnavailable ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
       return false;
     }
+    lastSnapshotValid = true;
     snapshotWatermarks.set(watermarkKey, sequence);
     if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
     snapshotExpiryTimer = window.setTimeout(function() {
@@ -213,16 +231,16 @@
     }, Math.max(0, expiresAt - Date.now()));
     var quote = function(key, value) { text(`[data-quote="${key}"]`, Number.isFinite(value) ? value.toFixed(3) : "--"); };
     quote("yes-bid", model.yesBid); quote("yes-ask", model.yesAsk); quote("no-bid", model.noBid); quote("no-ask", model.noAsk);
-    var book = raw.book || raw.orderBook || raw.orderbook || {};
     var levels = function(side, kind) {
-      var source = book[side] || book[side.toUpperCase()] || {};
+      var source = bookSide(side);
       var list = Array.isArray(source) ? source : source[kind] || source[`${kind}s`] || [];
       return Array.isArray(list) ? list.map(function(level) { return Array.isArray(level) ? { price: Number(level[0]), size: Number(level[1]) } : { price: Number(level.price), size: Number(level.size ?? level.quantity ?? level.shares) }; }).filter(function(level) { return Number.isFinite(level.price) && Number.isFinite(level.size); }) : [];
     };
     ["yes", "no"].forEach(function(side) {
       var bids = levels(side, "bid"); var asks = levels(side, "ask");
       var render = function(list, tone) { return depthRows(list.slice(0, 5).map(function(level) { return level.price; }), list.slice(0, 5).map(function(level) { return level.size; }), tone); };
-      var bidNode = document.querySelector(`[data-depth="${side}"]`); var askNode = document.querySelector(`[data-depth-asks="${side}"]`);
+      var domSide = side === "yes" ? "up" : "down";
+      var bidNode = document.querySelector(`[data-depth="${domSide}"]`); var askNode = document.querySelector(`[data-depth-asks="${domSide}"]`);
       if (bidNode) bidNode.innerHTML = render(bids, "bid");
       if (askNode) askNode.innerHTML = render(asks, "ask");
     });
@@ -252,6 +270,43 @@
     var configured = window.PolyPreview.config.streams?.[name];
     return typeof configured === "string" ? configured : configured?.url || null;
   };
+  var streamConfigKey = function() { return ["markets", "runtime", "orders"].map(function(name) { return `${name}:${streamUrl(name) || ""}`; }).join("|"); };
+  var markStreamPending = function() {
+    text("[data-book-source]", "实时流待接入 · 保留最近快照");
+    text("[data-book-live-state]", "待接入 · 保留快照");
+  };
+  var resetRoundPanels = function() {
+    markSnapshotStale("场次已切换 · 等待新轮次快照");
+    text("[data-invested]", "--");
+    text('[data-holding="up"]', "--");
+    text('[data-holding="down"]', "--");
+    text('[data-average="up"]', "--");
+    text('[data-average="down"]', "--");
+    text("[data-stage]", "待接入");
+    text("[data-confirmations]", "--");
+    text("[data-stage-progress]", "--");
+    text("[data-order-count]", "--");
+    var body = document.querySelector(".orders-table tbody");
+    if (body) body.innerHTML = '<tr><td colspan="6">正在读取新场次持仓和订单</td></tr>';
+    var timeline = document.querySelector("[data-stage-timeline]");
+    if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>新场次数据读取中</strong><small>等待后端返回当前 roundId 的持仓和策略阶段</small></div><time>--</time></li>';
+  };
+  var itemMatchesContext = function(item, asset) {
+    var value = item?.data && typeof item.data === "object" ? item.data : item;
+    var marketId = value?.marketId ?? value?.market_id;
+    var roundId = value?.roundId ?? value?.round_id;
+    return (!marketId || marketId === asset.marketId) && (!roundId || roundId === asset.roundId);
+  };
+  var syncMarketContext = function() {
+    var context = currentContext();
+    var contextKey = `${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
+    if (contextKey === currentMarketContextKey) return contextKey;
+    currentMarketContextKey = contextKey;
+    loadedRoundContextKey = null;
+    resetRoundPanels();
+    text("[data-round-identity]", context.marketId ? (context.roundId ? `marketId ${context.marketId} · roundId ${context.roundId}` : `marketId ${context.marketId} · 当前轮次标识待后端提供`) : "当前市场和轮次待后端提供");
+    return contextKey;
+  };
   var renderPosition = function(raw) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var position = raw?.position || raw;
@@ -264,10 +319,18 @@
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
     if (yesShares != null) text('[data-holding="up"]', yesShares.toFixed(2));
     if (noShares != null) text('[data-holding="down"]', noShares.toFixed(2));
+    var average = position.averagePrice && typeof position.averagePrice === "object" ? position.averagePrice : {};
+    var yesAverage = Number(average.yes ?? average.up ?? position.yesAveragePrice ?? position.yes_average_price);
+    var noAverage = Number(average.no ?? average.down ?? position.noAveragePrice ?? position.no_average_price);
+    if (Number.isFinite(yesAverage)) text('[data-average="up"]', yesAverage.toFixed(3));
+    if (Number.isFinite(noAverage)) text('[data-average="down"]', noAverage.toFixed(3));
+    var progress = Number(position.stageProgress ?? position.stage_progress);
+    if (Number.isFinite(progress)) text("[data-stage-progress]", `${progress}%`);
   };
-  var renderOrders = function(raw) {
+  var renderOrders = function(raw, asset) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : [];
+    if (asset) orders = orders.filter(function(order) { return itemMatchesContext(order, asset); });
     var body = document.querySelector(".orders-table tbody");
     if (!body) return;
     text("[data-order-count]", String(orders.length));
@@ -279,19 +342,31 @@
   };
   var stopStreams = function() { streams.splice(0).forEach(function(stream) { stream.close(); }); };
   var startStreams = function() {
-    stopStreams();
     if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
+    syncMarketContext();
     var context = currentContext();
+    var contextKey = `${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
+    var configKey = streamConfigKey();
+    if (activeStreamContextKey === contextKey && activeStreamConfigKey === configKey) {
+      if (!streamUrl("markets")) markStreamPending();
+      return;
+    }
+    stopStreams();
+    activeStreamContextKey = contextKey;
+    activeStreamConfigKey = configKey;
+    var lifecycleKey = `${contextKey}|${configKey}`;
+    var currentLifecycle = function() { return `${activeStreamContextKey}|${activeStreamConfigKey}` === lifecycleKey; };
     var hasMarketStream = Boolean(streamUrl("markets"));
-    if (!hasMarketStream) markSnapshotStale("实时流未配置 · 保留最近快照");
+    if (!hasMarketStream) markStreamPending();
     var make = function(name, requireRound, onMessage, onState) {
       var url = streamUrl(name); if (!url) return;
-      var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
+      var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { if (currentLifecycle()) markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
       stream.connect();
       stream.subscribe({ marketIds: context.marketId ? [context.marketId] : [], marketId: context.marketId, roundId: context.roundId || undefined });
       streams.push(stream);
     };
     make("markets", true, function(frame) {
+      if (!currentLifecycle()) return;
       var payload = payloadOf(frame); var sourceSnapshot = payload.snapshot && typeof payload.snapshot === "object" ? payload.snapshot : payload;
       var snapshot = {
         ...sourceSnapshot,
@@ -303,54 +378,117 @@
         roundId: sourceSnapshot.roundId ?? sourceSnapshot.round_id ?? payload.roundId ?? payload.round_id ?? frame.roundId ?? frame.round_id
       };
       var hasQuote = ["yesBid", "yesAsk", "noBid", "noAsk", "yes_bid", "yes_ask", "no_bid", "no_ask"].some(function(key) { return snapshot[key] != null; });
-      if (snapshot.book || snapshot.orderBook || snapshot.orderbook || hasQuote) renderSnapshot(snapshot, true);
+      if (snapshot.book || snapshot.orderBook || snapshot.orderbook || hasQuote) renderSnapshot(snapshot, true, contextKey);
     }, function(state) {
+      if (!currentLifecycle()) return;
       if (state !== "connected") {
         text("[data-book-source]", `实时流${state === "error" ? "错误" : "断开"} · 保留最近快照`);
         text("[data-book-live-state]", "连接中断 · 保留快照");
       }
     });
-    make("orders", true, function(frame) { var payload = payloadOf(frame); if (payload.position) renderPosition(payload.position); if (payload.order) renderOrders([payload.order]); else if (payload.orders || payload.items) renderOrders(payload.orders || payload); }, function() {});
-    make("runtime", false, function(frame) { var payload = payloadOf(frame); if (payload.status == null && payload.state == null && payload.running == null) return; var runtime = vm.runtime(payload); store.setSlice("runtime", { ...runtime, connectionStatus: "ready", stale: false, error: null }); }, function(state) {
+    make("orders", true, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); var asset = assetById(marketPool.currentIds[0] || marketPool.desiredIds[0]); if (payload.position && asset && itemMatchesContext(payload.position, asset)) renderPosition(payload.position); if (payload.order) renderOrders([payload.order], asset); else if (payload.orders || payload.items) renderOrders(payload.orders || payload, asset); }, function() {});
+    make("runtime", false, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); if (payload.status == null && payload.state == null && payload.running == null) return; var runtime = vm.runtime(payload); store.setSlice("runtime", { ...runtime, connectionStatus: "ready", stale: false, error: null }); }, function(state) {
+      if (!currentLifecycle()) return;
       var current = store.getState().runtime;
       if (state === "connected") return;
       store.setSlice("runtime", { ...current, connectionStatus: state, runtimeState: current.runtimeState || current.status, stale: true, error: "运行状态流已断开，保留上次成功状态" });
     });
   };
   var loadCurrentMarket = async function() {
-    if (window.PolyPreview.config.mode === "local-preview") return;
+    if (window.PolyPreview.config.mode === "local-preview") return null;
+    syncMarketContext();
     var id = marketPool.currentIds[0] || marketPool.desiredIds[0];
     var asset = assetById(id);
-    if (!asset?.marketId) return;
+    if (!asset?.marketId) { markSnapshotStale("当前市场身份待接入 · 保留最近快照"); return null; }
+    var contextKey = `${asset.marketId}\u0000${asset.roundId || ""}`;
+    var contextChanged = contextKey !== loadedRoundContextKey;
     text("[data-round-identity]", asset.roundId ? `marketId ${asset.marketId} · roundId ${asset.roundId}` : `marketId ${asset.marketId} · \u5F53\u524D\u8F6E\u6B21\u6807\u8BC6\u5F85\u540E\u7AEF\u63D0\u4F9B`);
     try {
       var raw = await adapter.loadMarketSnapshot(asset.marketId);
-      renderSnapshot(raw);
-      if (asset.roundId) {
+      if (currentMarketContextKey !== contextKey) return contextKey;
+      renderSnapshot(raw, false, contextKey);
+      if (contextChanged && asset.roundId) {
         var results = await Promise.allSettled([adapter.loadPosition(asset.roundId), adapter.loadOrders(asset.roundId)]);
+        if (currentMarketContextKey !== contextKey) return contextKey;
         var position = results[0].status === "fulfilled" ? results[0].value : null;
         var orders = results[1].status === "fulfilled" ? results[1].value : null;
-        if (position) renderPosition(position);
-        if (orders) renderOrders(orders);
+        if (position && itemMatchesContext(position, asset)) renderPosition(position);
+        if (orders) renderOrders(orders, asset);
+        loadedRoundContextKey = contextKey;
+      } else if (contextChanged) {
+        loadedRoundContextKey = contextKey;
       }
-    } catch (error) { text("[data-book-source]", error.message || "实时快照不可用"); }
+    } catch (error) { markSnapshotStale(error.message || "实时快照不可用 · 保留最近快照"); }
+    return contextKey;
   };
+  var scheduleSnapshotRefresh = function(delay = 1000) {
+    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
+    snapshotRefreshTimer = window.setTimeout(function() {
+      snapshotRefreshTimer = null;
+      void refreshCurrentMarket();
+    }, Math.max(0, delay));
+  };
+  var refreshCurrentMarket = function() {
+    if (snapshotRefreshInFlight) return snapshotRefreshInFlight;
+    snapshotRefreshInFlight = Promise.resolve(loadCurrentMarket()).finally(function() {
+      snapshotRefreshInFlight = null;
+      scheduleSnapshotRefresh();
+    });
+    return snapshotRefreshInFlight;
+  };
+  var scheduleMarketContextRefresh = function(delay = 10000) {
+    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (marketContextRefreshTimer) window.clearTimeout(marketContextRefreshTimer);
+    marketContextRefreshTimer = window.setTimeout(function() {
+      marketContextRefreshTimer = null;
+      void refreshMarketContext();
+    }, Math.max(0, delay));
+  };
+  var refreshMarketContext = function() {
+    if (marketContextRefreshInFlight) return marketContextRefreshInFlight;
+    marketContextRefreshInFlight = Promise.resolve()
+      .then(function() { return adapter.loadMarkets(); })
+      .then(function() { return adapter.loadMarketPool(); })
+      .then(function() { return refreshCurrentMarket(); })
+      .finally(function() {
+        marketContextRefreshInFlight = null;
+        scheduleMarketContextRefresh();
+      });
+    return marketContextRefreshInFlight;
+  };
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
+      snapshotRefreshTimer = null;
+      if (marketContextRefreshTimer) window.clearTimeout(marketContextRefreshTimer);
+      marketContextRefreshTimer = null;
+    } else {
+      scheduleSnapshotRefresh(0);
+      scheduleMarketContextRefresh(0);
+    }
+  });
   var streamLifecycleReady = false;
   renderMarketPool();
   store.subscribe("marketPool", function(value) {
     marketPool = value;
     renderMarketPool();
-    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void loadCurrentMarket(); startStreams(); }
+    syncMarketContext();
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
   });
   store.subscribe("marketCatalog", function(value) {
     marketAssets = value.items.map(function(item) { return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone }; });
     renderMarketPool();
+    syncMarketContext();
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
   });
   store.subscribe("runtime", function(runtime) {
     const local = window.PolyPreview.config.mode === "local-preview";
     const ready = runtime.status !== "unavailable" && !runtime.stale;
-    text("[data-live-status]", local ? "设计稿 · 待接入" : ready ? runtime.status : "连接中断 · 保留状态");
-    text("[data-connection-status]", local ? "演示数据 · 待接入" : runtime.status === "unavailable" ? "等待后端" : runtime.stale ? "连接中断 · 保留快照" : "已连接 · 独立流");
+    const configuredStreams = ["markets", "runtime", "orders"].filter(function(name) { return Boolean(streamUrl(name)); });
+    const allStreamsConfigured = configuredStreams.length === 3;
+    text("[data-live-status]", local ? "设计稿 · 待接入" : runtime.stale ? "连接中断 · 保留状态" : !allStreamsConfigured ? "实时流待接入 · 保留快照" : ready ? runtime.status : "等待后端");
+    text("[data-connection-status]", local ? "演示数据 · 待接入" : runtime.status === "unavailable" ? "等待后端" : runtime.stale ? "连接中断 · 保留快照" : !allStreamsConfigured ? `实时流待接入 · ${configuredStreams.length}/3` : "已连接 · 独立流");
     text("[data-sidebar-state]", local ? "原型预览" : runtime.stale ? "连接中断" : runtime.status === "unavailable" ? "等待后端" : "运行状态已连接");
     text("[data-sidebar-detail]", local ? "数据待接入" : runtime.stale ? "保留最近成功状态" : runtime.status === "unavailable" ? "实时数据待接入" : "五分钟反转策略");
   });
@@ -387,7 +525,7 @@
     text("[data-live-status]", "演示操作 · 后端未接入");
   }));
   if (window.PolyPreview.config.mode !== "local-preview") {
-    Promise.all([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime()]).then(function() { streamLifecycleReady = true; return loadCurrentMarket(); }).then(startStreams).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
+    Promise.all([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime()]).then(function() { streamLifecycleReady = true; scheduleMarketContextRefresh(); return refreshCurrentMarket(); }).then(startStreams).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
   }
 })();
 

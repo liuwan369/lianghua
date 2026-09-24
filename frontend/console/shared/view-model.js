@@ -31,9 +31,13 @@
       close: first(raw.close, raw.closeAt, raw.endAt, "--"),
       remaining: first(raw.remaining, raw.remainingText, "--"),
       quoteAt: first(raw.quoteAt, raw.quote_at, null),
-      sequence: finite(raw.sequence, 0),
+      sequence: finite(raw.sequence),
       sourceAt: first(raw.sourceAt, raw.source_at, null),
       expiresAt: first(raw.expiresAt, raw.expires_at, null),
+      orderBook: raw.orderBook || raw.orderbook || raw.book || null,
+      depthUnavailable: raw.depthUnavailable === true || raw.depth_unavailable === true,
+      stale: raw.stale === true,
+      staleReason: first(raw.staleReason, raw.stale_reason, null),
       enabled: raw.enabled === true,
       current: raw.current === true || raw.running === true,
       nextRound: raw.nextRound === true || raw.next_round === true
@@ -42,12 +46,13 @@
   const catalog = (payload = {}) => {
     payload = payloadOf(payload) || {};
     const list = Array.isArray(payload) ? payload : first(payload.items, payload.markets, payload.current_markets, []);
+    const items = list.map((item, index) => market(item, index)).filter(isBtc);
     return {
-      items: list.map((item, index) => market(item, index)).filter(isBtc),
+      items,
       source: String(first(payload.source, payload.node_label, "backend")),
       asOf: first(payload.asOf, payload.as_of, null),
-      stale: payload.stale === true || payload.collector_online === false,
-      error: payload.error || null
+      stale: payload.stale === true || payload.collector_online === false || payload.depthUnavailable === true || payload.depth_unavailable === true || items.some((item) => item.stale || item.depthUnavailable),
+      error: payload.error || payload.error_code || null
     };
   };
   const pool = (payload = {}, catalogItems = []) => {
