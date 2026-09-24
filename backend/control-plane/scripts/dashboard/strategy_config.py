@@ -8,6 +8,7 @@ import math
 import os
 from pathlib import Path
 import tempfile
+import uuid
 
 from .config import (ConfigStore, ConfigValidationError, ConfigConflictError,
                      ConfigStoreError, _unique_object)
@@ -104,6 +105,87 @@ class StrategyConfigStore(ConfigStore):
     def get(self) -> dict:
         with self._lock:
             return self._public(self._read())
+
+    @property
+    def draft_path(self) -> Path:
+        return self.path.with_name(f"{self.path.stem}.draft{self.path.suffix}")
+
+    def get_draft(self) -> dict | None:
+        with self._lock:
+            try:
+                raw = self.draft_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return None
+            except (OSError, UnicodeError) as exc:
+                raise ConfigStoreError("无法读取策略草稿") from exc
+            try:
+                data = json.loads(raw, object_pairs_hook=_unique_object)
+                if not isinstance(data, dict) or set(data) != {
+                    "schemaVersion", "strategyId", "draftId", "expectedRevision", "savedAt", "config",
+                }:
+                    raise ValueError("invalid draft")
+                if type(data["schemaVersion"]) is not int or data["schemaVersion"] != 1 or data["strategyId"] != STRATEGY_ID:
+                    raise ValueError("invalid schema")
+                if not isinstance(data["draftId"], str) or str(uuid.UUID(data["draftId"])) != data["draftId"]:
+                    raise ValueError("invalid draft identity")
+                if type(data["expectedRevision"]) is not int or data["expectedRevision"] < 0:
+                    raise ValueError("invalid revision")
+                if not isinstance(data["savedAt"], str) or not data["savedAt"].endswith("Z"):
+                    raise ValueError("invalid saved time")
+                datetime.fromisoformat(data["savedAt"][:-1] + "+00:00")
+                data["config"] = validate_config(data["config"])
+                return self._public(data)
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise ConfigStoreError("策略草稿损坏，未替换成默认参数") from exc
+
+    def save_draft(self, config: dict, expected_revision: int) -> dict:
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ConfigValidationError("配置版本必须为非负整数")
+        validated = validate_config(config)
+        with self._lock:
+            current = self._read()
+            if current["savedRevision"] != expected_revision:
+                raise ConfigConflictError(current["savedRevision"])
+            data = {"schemaVersion": 1, "strategyId": STRATEGY_ID,
+                    "draftId": str(uuid.uuid4()), "expectedRevision": expected_revision,
+                    "savedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "config": validated}
+            temporary = None
+            try:
+                self.draft_path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.draft_path.parent,
+                                                 prefix=f".{self.draft_path.name}.", suffix=".tmp", delete=False) as out:
+                    temporary = Path(out.name)
+                    json.dump(data, out, ensure_ascii=False, allow_nan=False)
+                    out.write("\n")
+                    out.flush()
+                    os.fsync(out.fileno())
+                os.replace(temporary, self.draft_path)
+            except OSError as exc:
+                raise ConfigStoreError("策略草稿保存失败") from exc
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            return self._public(data)
+
+    def activate_draft(self, expected_revision: int, draft_id: str) -> dict:
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ConfigValidationError("配置版本必须为非负整数")
+        if not isinstance(draft_id, str) or not draft_id:
+            raise ConfigValidationError("激活需要策略草稿编号")
+        with self._lock:
+            current = self._read()
+            if current["savedRevision"] != expected_revision:
+                raise ConfigConflictError(current["savedRevision"])
+            draft = self.get_draft()
+            if draft is None:
+                raise ConfigValidationError("请先保存策略草稿")
+            if draft["draftId"] != draft_id:
+                raise ConfigValidationError("策略草稿已变化，请重新读取后激活")
+            if draft["expectedRevision"] != expected_revision:
+                raise ConfigConflictError(current["savedRevision"])
+            # Publish through the same atomic file the running engine already watches.
+            return self.save(draft["config"], expected_revision)
 
     def save(self, config: dict, expected_revision: int) -> dict:
         if type(expected_revision) is not int or expected_revision < 0:

@@ -103,7 +103,7 @@ class AccountData:
             result = copy.deepcopy(self._cache)
             age = time.monotonic()-self._checked if self._checked else None
         result["cache_age_seconds"] = age
-        result["stale"] = age is None or age > max(120., self.interval*3)
+        result["stale"] = bool(result.get("error_code")) or age is None or age > max(120., self.interval*3)
         if result["stale"]:
             result["available"] = False
         return result
@@ -171,7 +171,10 @@ class AccountData:
                 except Exception:
                     # Missing runtime/profile is a typed unavailable state, not a dead worker.
                     with self._lock:
-                        self._cache = self._empty(None, "account_reader_unavailable")
+                        if self._cache.get("available") or self._cache.get("checked_at"):
+                            self._cache = {**self._cache, "error_code": "account_reader_unavailable", "stale": True}
+                        else:
+                            self._cache = self._empty(None, "account_reader_unavailable")
                 stop.wait(1)
         finally:
             with self._lock:
