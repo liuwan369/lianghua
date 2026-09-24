@@ -162,6 +162,19 @@ export function validateMarkets(input: unknown, selectedAsset: AssetId = "btc"):
     assetId: selectedAsset, referenceProducer: (market as MarketInfo).referenceProducer ?? referenceProducerForAsset(selectedAsset) }));
 }
 
+export function journalMarketIdentity(market: MarketInfo | undefined, tokenId?: string): {
+  asset_id: AssetId | null; market_id: string | null; round_id: string | null; market_slug: string | null; side: string | null;
+} {
+  return { asset_id: market?.assetId ?? null, market_id: market?.id ?? null, round_id: market?.roundId ?? null,
+    market_slug: market?.name ?? null, side: tokenId ? market?.instruments.find(instrument => instrument.tokenId === tokenId)?.outcome ?? null : null };
+}
+
+export function journalAssetId(event: Extract<TradingEvent, { kind: "order" | "fill" | "settlement" }>, fallback?: AssetId | null): AssetId | null {
+  if (event.kind === "order") return event.assetId ?? event.order.assetId ?? fallback ?? null;
+  if (event.kind === "fill") return event.assetId ?? event.fill.assetId ?? fallback ?? null;
+  return event.result.assetId ?? fallback ?? null;
+}
+
 function readMarkets(path: string, selectedAsset: AssetId): MarketInfo[] {
   let input: unknown;
   try { input = JSON.parse(readFileSync(path, "utf8")); }
@@ -286,8 +299,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   };
   const marketIdentity = (tokenId: string) => {
     const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === tokenId));
-    return { market_id: market?.id ?? null, round_id: market?.roundId ?? null, market_slug: market?.name ?? null,
-      side: market?.instruments.find(instrument => instrument.tokenId === tokenId)?.outcome ?? null };
+    return journalMarketIdentity(market, tokenId);
   };
   const record = (event: TradingEvent) => {
     if (event.kind === "order") {
@@ -298,6 +310,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         venue_status: order.venueStatus ?? null,
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
         price: order.price, shares: order.shares, direction: order.direction, created_at: order.createdAt,
+        asset_id: journalAssetId(event, marketIdentity(order.tokenId).asset_id),
         market_id: event.marketId ?? order.marketId ?? marketIdentity(order.tokenId).market_id,
         round_id: event.roundId ?? order.roundId ?? marketIdentity(order.tokenId).round_id,
         market_slug: marketIdentity(order.tokenId).market_slug, side: marketIdentity(order.tokenId).side,
@@ -326,6 +339,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         strategy_id: order?.strategyId ?? null, price: fill.price, shares: fill.shares,
         fee: fill.feeUsd, fee_source: fill.feeSource ?? null, trade_status: fill.status ?? "CONFIRMED",
         is_maker: fill.isMaker, direction: fill.direction,
+        asset_id: journalAssetId(event, order?.assetId ?? marketIdentity(fill.tokenId).asset_id),
         market_id: event.marketId ?? fill.marketId ?? order?.marketId ?? marketIdentity(fill.tokenId).market_id,
         round_id: event.roundId ?? fill.roundId ?? order?.roundId ?? marketIdentity(fill.tokenId).round_id,
         market_slug: marketIdentity(fill.tokenId).market_slug, side: marketIdentity(fill.tokenId).side,
@@ -352,7 +366,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal?.write("platform_stopped", { reason: signalReason ?? "run_complete" });
     } else if (event.kind === "settlement") {
       const market = selectedMarkets.find(item => item.id === event.result.marketId);
-      journal?.write("platform_settlement", { market_id: event.result.marketId, round_id: event.result.roundId ?? market?.roundId ?? null,
+      journal?.write("platform_settlement", { asset_id: journalAssetId(event, market?.assetId),
+        market_id: event.result.marketId, round_id: event.result.roundId ?? market?.roundId ?? null,
         created_at: Date.now() / 1000, market_slug: market?.name ?? null,
         state: event.result.state, transaction_id: event.result.transactionId ?? null,
         payout_verified: event.result.payoutVerified === true,
