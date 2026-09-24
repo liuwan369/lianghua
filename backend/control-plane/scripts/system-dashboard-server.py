@@ -32,7 +32,7 @@ except ImportError:  # pragma: no cover - Windows development fallback
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_account as account_store
 from dashboard.config import ConfigConflictError
-from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID
+from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID, SUPPORTED_ASSET_IDS
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
 from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after_ms,
@@ -167,6 +167,8 @@ def _pool_ids(value, *, field: str) -> list[str]:
         normalized = item.strip().lower()
         if not _ASSET_ID_RE.fullmatch(normalized):
             raise ValueError(f"{field} 包含无效资产 ID")
+        if normalized not in SUPPORTED_ASSET_IDS:
+            raise ValueError(f"{field} 包含当前运行时不支持的资产")
         if normalized not in result:
             result.append(normalized)
     return result
@@ -1145,6 +1147,24 @@ def strategy_control(payload: dict) -> dict:
             raise ValueError("请先保存策略参数")
         config = saved["config"]
         selected_asset = config.get("assetId", "btc")
+        requested_asset = payload.get("asset_id")
+        if requested_asset is not None:
+            if not isinstance(requested_asset, str) or requested_asset.strip().lower() != selected_asset:
+                raise ValueError("命令 assetId 与策略配置不一致")
+        requested_markets = payload.get("market_ids")
+        if requested_markets is not None:
+            if (not isinstance(requested_markets, list)
+                    or not requested_markets
+                    or any(not isinstance(item, (str, dict)) for item in requested_markets)):
+                raise ValueError("命令 marketIds 无效")
+            for item in requested_markets:
+                if isinstance(item, dict):
+                    item_asset = item.get("assetId") or item.get("asset_id")
+                    if item_asset is not None and (not isinstance(item_asset, str)
+                                                   or item_asset.strip().lower() != selected_asset):
+                        raise ValueError("命令 marketIds 与策略 assetId 不一致")
+                elif item.strip().lower() in SUPPORTED_ASSET_IDS and item.strip().lower() != selected_asset:
+                    raise ValueError("命令 marketIds 与策略 assetId 不一致")
         pool = market_pool()
         if pool.get("error") == "market_pool_invalid":
             raise ValueError("运行池配置无效，请先选择一个资产")
@@ -1842,12 +1862,18 @@ def make_handler(root: Path):
                         "error": "当前没有运行记录"}, ensure_ascii=False).encode("utf-8"))
                     return
                 try:
+                    legacy_market_id = (query.get("marketId") or [None])[0]
+                    legacy_round_id = (query.get("roundId") or [None])[0]
+                    legacy_market = round_id
+                    if (legacy_market_id is None and legacy_round_id is None
+                            and round_id.startswith("0x")):
+                        legacy_market_id, legacy_market, legacy_round_id = round_id, None, None
                     result = _api_ledger().orders_page(run_id, limit=int(query.get("limit", ["50"])[0]),
                                                        offset=int(query.get("offset", ["0"])[0]),
-                                                       market=None if query.get("marketId") or query.get("roundId") else round_id,
+                                                       market=None if legacy_market_id or legacy_round_id else legacy_market,
                                                        asset_id=(query.get("assetId") or [None])[0],
-                                                       market_id=(query.get("marketId") or [None])[0],
-                                                       round_id=(query.get("roundId") or [round_id])[0])
+                                                       market_id=legacy_market_id,
+                                                       round_id=legacy_round_id)
                     result["orders"] = [_order_dto(order) for order in result.get("orders", [])]
                     self._send_json(json.dumps({"schemaVersion": 1, "roundId": round_id,
                         **result, **_ledger_metadata(run_id)},
@@ -2094,7 +2120,8 @@ def make_handler(root: Path):
                 if path == "/api/runtime/commands":
                     action = payload.get("action")
                     translated = {"action": action, "strategy_id": payload.get("strategyId", "btc-reversal"),
-                                  "revision": payload.get("revision"), "request_id": payload.get("requestId")}
+                                  "revision": payload.get("revision"), "request_id": payload.get("requestId"),
+                                  "asset_id": payload.get("assetId"), "market_ids": payload.get("marketIds")}
                     if action == "start" and translated["revision"] is None:
                         translated["revision"] = payload.get("expectedRevision")
                     result = strategy_control(translated)

@@ -16,6 +16,7 @@ from .config import (ConfigStore, ConfigValidationError, ConfigConflictError,
 
 STRATEGY_ID = "btc-reversal"
 ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
+SUPPORTED_ASSET_IDS = frozenset({"btc", "eth", "sol"})
 
 
 def default_config() -> dict:
@@ -43,6 +44,8 @@ def validate_config(config: dict) -> dict:
     asset_id = asset_id.strip().lower()
     if not ASSET_ID_RE.fullmatch(asset_id):
         raise ConfigValidationError("assetId格式无效")
+    if asset_id not in SUPPORTED_ASSET_IDS:
+        raise ConfigValidationError("当前运行时不支持该资产")
     result["assetId"] = asset_id
 
     def number(value, name, *, positive=True):

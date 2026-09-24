@@ -140,6 +140,58 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(current["orders"][0]["created_at"], self.now - 1)
         self.assertAlmostEqual(current["orders"][0]["average_price"], .4)
 
+    def test_composite_identity_filters_do_not_cross_assets(self):
+        btc_order = {"event": "order", "assetId": "btc", "client_order_id": "btc-client",
+                     "order_id": "shared-order", "status": "OPEN", "market_id": self.market_id,
+                     "round_id": self.round_id, "market_slug": self.slug, "updated_at": self.now}
+        eth_order = {"event": "order", "assetId": "eth", "client_order_id": "eth-client",
+                     "order_id": "shared-order", "status": "OPEN", "market_id": self.market_id,
+                     "round_id": self.round_id, "market_slug": self.slug, "updated_at": self.now}
+        btc_fill = self.fill(assetId="btc", order_id="shared-order", trade_id="shared-trade")
+        eth_fill = self.fill(assetId="eth", order_id="shared-order", trade_id="shared-trade")
+        btc_fill.update(market_id=self.market_id, round_id=self.round_id)
+        eth_fill.update(market_id=self.market_id, round_id=self.round_id)
+        btc_settlement = self.settlement(assetId="btc")
+        eth_settlement = self.settlement(assetId="eth")
+        self.write("run-a", [btc_order, eth_order, btc_fill, eth_fill, btc_settlement, eth_settlement])
+
+        btc_orders = self.ledger.orders_page("run-a", asset_id="btc", market_id=self.market_id,
+                                             round_id=self.round_id)
+        eth_orders = self.ledger.orders_page("run-a", asset_id="eth", market_id=self.market_id,
+                                             round_id=self.round_id)
+        self.assertEqual(btc_orders["total"], 1)
+        self.assertEqual(eth_orders["total"], 1)
+        self.assertEqual(btc_orders["orders"][0]["asset_id"], "btc")
+        self.assertEqual(eth_orders["orders"][0]["asset_id"], "eth")
+        self.assertEqual(len(btc_orders["orders"][0]["fills"]), 1)
+        self.assertEqual(len(eth_orders["orders"][0]["fills"]), 1)
+
+        self.assertEqual(len(self.ledger.events("run-a", asset_id="eth", market_id=self.market_id,
+                                                round_id=self.round_id)["events"]), 3)
+        self.assertEqual(len(self.ledger.settlements_page("run-a", asset_id="eth",
+                                                           market_id=self.market_id,
+                                                           round_id=self.round_id)["settlements"]), 1)
+
+    def test_position_composite_identity_selects_the_requested_asset(self):
+        runtime = self.runtime()["runtime"]
+        btc_round = runtime["strategy_runtime"]["currentRound"]
+        eth_round = json.loads(json.dumps(btc_round))
+        eth_round.update({"assetId": "eth", "upTokenId": "eth-yes", "downTokenId": "eth-no",
+                          "upShares": 7, "downShares": 0, "costUsd": 3.2})
+        runtime["markets"] = [{**runtime["markets"][0], "assetId": "btc"},
+                               {**runtime["markets"][0], "assetId": "eth"}]
+        runtime["strategy_runtime"]["rounds"] = [btc_round, eth_round]
+        runtime["positions"] = [
+            {"tokenId": "yes", "shares": 10, "costUsd": 4.1, "realizedPnlUsd": 0},
+            {"tokenId": "eth-yes", "shares": 7, "costUsd": 3.2, "realizedPnlUsd": 0},
+        ]
+        runtime["positions_count"] = 2
+        self.write("run-a", [{"event": "platform_status", "runtime": runtime}])
+        btc = self.ledger.position("run-a", self.round_id, asset_id="btc", market_id=self.market_id)
+        eth = self.ledger.position("run-a", self.round_id, asset_id="eth", market_id=self.market_id)
+        self.assertEqual(btc["yesShares"], 10)
+        self.assertEqual(eth["yesShares"], 7)
+
     def test_order_abandoned_and_error_message_are_visible(self):
         self.write("run-a", [{"event": "order_abandoned", "order_id": "abandoned-order",
                               "message": "venue timeout", "market_slug": self.slug}])

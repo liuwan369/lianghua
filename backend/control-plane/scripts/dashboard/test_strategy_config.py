@@ -93,6 +93,12 @@ class StrategyDraftTests(unittest.TestCase):
         with self.assertRaises(ConfigValidationError):
             self.store.save(config, 0)
 
+    def test_runtime_unsupported_asset_is_rejected(self):
+        config = default_config()
+        config["assetId"] = "xrp"
+        with self.assertRaises(ConfigValidationError):
+            self.store.save(config, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

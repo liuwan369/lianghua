@@ -27,7 +27,7 @@
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
 | 市场目录 | GET | `/api/markets?assetId=btc&asset=crypto&duration=5m` | `assetId` 可选过滤；运行时 accepted snapshot 优先；采集器 canonical paired snapshot 只读展示 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
-| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前/下一场由运行时维护。`btc` 是兼容别名，不能用未知资产 ID 绕过校验 |
+| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前控制面支持 `btc/eth/sol`，单实例只能选择一个；当前/下一场由运行时维护。`btc` 是兼容别名，未知资产拒绝保存 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载；返回已规范化的 `assetId` |

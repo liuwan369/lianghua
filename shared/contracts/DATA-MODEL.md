@@ -22,7 +22,7 @@
 
 `{ assets, desiredIds, currentIds, nextRoundIds, updatedAt, source }`
 
-`desiredIds/currentIds/nextRoundIds` 是服务器确认的资产 ID 列表，不能将浏览器选择当作已确认配置；`btc` 仍兼容旧调用方。运行时未声明可交易能力的资产必须显示为 unavailable/disabled，不能由账本猜测或放行。
+`desiredIds/currentIds/nextRoundIds` 是服务器确认的资产 ID 列表，不能将浏览器选择当作已确认配置；当前控制面运行时支持集合为 `btc`、`eth`、`sol`，`btc` 仍兼容旧调用方。运行时未声明可交易能力的资产必须显示为 unavailable/disabled，不能由账本猜测或放行；单实例运行池只能有一个资产。
 
 ### OrderBookViewModel
 

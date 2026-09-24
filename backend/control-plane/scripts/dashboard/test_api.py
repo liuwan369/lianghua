@@ -86,6 +86,26 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(server_module.strategy_config_store().get()["savedRevision"], 1)
             self.assert_metadata(published)
 
+    def test_runtime_command_rejects_selected_asset_mismatch(self):
+        server_module.strategy_config_store().save(default_config(), 0)
+        with patch.object(server_module, "_control_request_error", return_value=None):
+            code, body = self.request("/api/runtime/commands", {
+                "action": "start", "strategyId": "btc-reversal", "assetId": "eth",
+                "revision": 1, "requestId": "00000000-0000-4000-8000-000000000001",
+            })
+        self.assertEqual(code, 400)
+        self.assertFalse(body.get("ok", True))
+        self.assertIn("assetId", body["error"])
+        with patch.object(server_module, "_control_request_error", return_value=None):
+            code, body = self.request("/api/runtime/commands", {
+                "action": "start", "strategyId": "btc-reversal", "assetId": "btc",
+                "marketIds": ["eth"], "revision": 1,
+                "requestId": "00000000-0000-4000-8000-000000000002",
+            })
+            self.assertEqual(code, 400)
+            self.assertFalse(body.get("ok", True))
+            self.assertIn("marketIds", body["error"])
+
     def test_unimplemented_commands_do_not_report_success(self):
         with patch.object(server_module, "_control_request_error", return_value=None):
             for path in ("/api/orders/id/cancel", "/api/runtime/flatten"):
@@ -309,6 +329,9 @@ class ApiTests(unittest.TestCase):
             code, saved_eth = self.request("/api/runtime/market-pool", {"desiredIds": [" ETH "]}, method="PUT")
             self.assertEqual(code, 200)
             self.assertEqual(saved_eth["desiredIds"], ["eth"])
+            code, rejected_unknown = self.request("/api/runtime/market-pool", {"desiredIds": ["xrp"]}, method="PUT")
+            self.assertEqual(code, 400)
+            self.assertIn("不支持", rejected_unknown["error"])
             code, saved = self.request("/api/runtime/market-pool", {"desiredIds": ["btc"]}, method="PUT")
         self.assertEqual(code, 200)
         self.assertEqual(saved["desiredIds"], ["btc"])

@@ -1093,22 +1093,23 @@ class Ledger:
         cte = """WITH selected AS (
             SELECT e.id,e.payload,
                    (SELECT MIN(first.id) FROM events first WHERE first.run_id=e.run_id AND first.kind='order'
-                    AND json_extract(first.payload,'$.client_order_id')=json_extract(e.payload,'$.client_order_id')) AS first_id
+                    AND json_extract(first.payload,'$.client_order_id')=json_extract(e.payload,'$.client_order_id')
+                    AND json_extract(first.payload,'$.asset_id')=json_extract(e.payload,'$.asset_id')) AS first_id
             FROM events e WHERE e.run_id=? AND e.kind='order' AND e.id<=?
               AND json_extract(e.payload,'$.client_order_id') IS NOT NULL
               AND json_extract(e.payload,'$.time')<=?
               AND NOT EXISTS (SELECT 1 FROM events newer WHERE newer.run_id=e.run_id AND newer.kind='order'
                   AND json_extract(newer.payload,'$.client_order_id')=json_extract(e.payload,'$.client_order_id')
+                  AND json_extract(newer.payload,'$.asset_id')=json_extract(e.payload,'$.asset_id')
                   AND newer.id>e.id AND newer.id<=? AND json_extract(newer.payload,'$.time')<=?)
         ), filtered AS (SELECT * FROM selected WHERE 1=1
             AND (? IS NULL OR json_extract(payload,'$.status')=?
               OR (?='active' AND json_extract(payload,'$.status') IN ('SUBMITTING','OPEN','PARTIAL','UNKNOWN'))
               OR (?='failed' AND json_extract(payload,'$.status')='REJECTED'))
             AND (? IS NULL OR json_extract(payload,'$.asset_id')=? )
-            AND ((? IS NULL AND ? IS NULL AND ? IS NULL)
-              OR (? IS NOT NULL AND json_extract(payload,'$.market_id')=?)
-              OR (? IS NOT NULL AND json_extract(payload,'$.round_id')=?)
-              OR (? IS NOT NULL AND json_extract(payload,'$.market')=?)) )"""
+            AND (? IS NULL OR json_extract(payload,'$.market_id')=?)
+            AND (? IS NULL OR json_extract(payload,'$.round_id')=?)
+            AND (? IS NULL OR json_extract(payload,'$.market')=?))"""
         with self._connect() as db:
             self._run(db, run_id)
             cutoff = snapshot_event_id if snapshot_event_id is not None else db.execute(
@@ -1120,8 +1121,8 @@ class Ledger:
                 if market and self._has_table(db, "market_aliases") else None
             legacy_market = (alias["market"] if alias else market) if market_id is None and round_id is None else None
             args = (run_id, cutoff, stamp, cutoff, stamp, status, status, status, status,
-                    asset_id, asset_id, market_id, round_id, legacy_market,
-                    market_id, market_id, round_id, round_id, legacy_market, legacy_market)
+                    asset_id, asset_id, market_id, market_id, round_id, round_id,
+                    legacy_market, legacy_market)
             total = db.execute(cte + "SELECT COUNT(*) FROM filtered", args).fetchone()[0]
             rows = db.execute(cte + "SELECT payload FROM filtered ORDER BY first_id DESC LIMIT ? OFFSET ?",
                               (*args, limit, offset)).fetchall()
@@ -1131,17 +1132,23 @@ class Ledger:
             if order_ids:
                 fill_rows = db.execute("SELECT payload FROM events WHERE run_id=? AND kind='fill' AND id<=? "
                     "AND (json_extract(payload,'$.time')<=? OR json_extract(payload,'$.time') IS NULL) "
+                    "AND (? IS NULL OR json_extract(payload,'$.asset_id')=?) "
                     f"AND json_extract(payload,'$.order_id') IN ({','.join('?' for _ in order_ids)}) ORDER BY id",
-                    (run_id, cutoff, stamp, *order_ids))
+                    (run_id, cutoff, stamp, asset_id, asset_id, *order_ids))
                 for row in fill_rows:
                     fill = json.loads(row[0])
-                    key = (fill.get("trade_id"), fill["order_id"])
+                    key = (fill.get("asset_id") or "btc", fill.get("trade_id"), fill["order_id"])
                     prior = fills.get(key)
                     revision = _trade_revision(prior, fill)
                     if revision is not None:
                         fills[key] = revision
         for order in orders:
-            actual = [f for f in fills.values() if f["order_id"] == order.get("order_id") and f.get("trade_status") != "FAILED"]
+            actual = [f for f in fills.values()
+                      if f["order_id"] == order.get("order_id")
+                      and f.get("asset_id", "btc") == order.get("asset_id", "btc")
+                      and (not order.get("market_id") or f.get("market_id") == order.get("market_id"))
+                      and (not order.get("round_id") or f.get("round_id") == order.get("round_id"))
+                      and f.get("trade_status") != "FAILED"]
             complete = abs(sum(f.get("shares") or 0 for f in actual) - (order.get("filled_shares") or 0)) < 1e-6
             order["order_notional"] = order.get("amount")
             order["amount"] = sum(f["amount"] for f in actual) if complete and all(f.get("amount") is not None for f in actual) else None
