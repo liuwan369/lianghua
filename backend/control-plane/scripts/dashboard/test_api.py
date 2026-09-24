@@ -187,6 +187,84 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(validated["collector_online"])
         self.assertEqual(validated["current_markets"][0]["snapshot"], snapshot)
 
+    def test_old_collector_canonical_snapshot_is_retained_but_not_usable(self):
+        now = time.time()
+        snapshot = {"marketId": "0xcollector", "roundId": "1800000000", "sequence": 5,
+                    "sourceAt": now - 5, "expiresAt": now + 5,
+                    "YES": {"assetId": "collector-yes", "bid": .49, "ask": .51,
+                            "sourceAt": now - 5},
+                    "NO": {"assetId": "collector-no", "bid": .49, "ask": .51,
+                           "sourceAt": now - 5}}
+        raw = {"checked_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+               "collector_online": True, "collector_connected": True,
+               "source": "polymarket-ws", "stale_after_ms": 2000,
+               "current_markets": [{"snapshot": snapshot}]}
+        validated = server_module.validate_snapshot(raw, now=now)
+        self.assertFalse(validated["collector_online"])
+        self.assertEqual(validated["current_markets"][0]["snapshot"], snapshot)
+        with patch.object(server_module, "_running_engine_market_status", return_value=None), \
+                patch.object(server_module, "cached_live_status", return_value=validated):
+            value = server_module._modern_markets()
+        self.assertTrue(value["stale"])
+        self.assertTrue(value["items"][0]["stale"])
+        self.assertFalse(value["items"][0]["strategyEligible"])
+
+    def test_invalid_collector_freshness_limit_fails_closed(self):
+        now = time.time()
+        snapshot = {"marketId": "0xcollector", "roundId": "1800000000", "sequence": 6,
+                    "sourceAt": now - 1, "expiresAt": now + 5,
+                    "YES": {"assetId": "collector-yes", "bid": .49, "ask": .51},
+                    "NO": {"assetId": "collector-no", "bid": .49, "ask": .51}}
+        raw = {"checked_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+               "collector_online": True, "collector_connected": True,
+               "source": "polymarket-ws", "stale_after_ms": 60000,
+               "current_markets": [{"snapshot": snapshot}]}
+        validated = server_module.validate_snapshot(raw, now=now)
+        self.assertFalse(validated["collector_online"])
+        self.assertEqual(validated["current_markets"][0]["snapshot"], snapshot)
+        with patch.object(server_module, "_running_engine_market_status", return_value=None), \
+                patch.object(server_module, "cached_live_status", return_value=validated):
+            value = server_module._modern_markets()
+        self.assertTrue(value["items"][0]["stale"])
+        self.assertFalse(value["items"][0]["strategyEligible"])
+
+    def test_runtime_snapshot_uses_strategy_quote_age_and_parent_stale(self):
+        now = time.time()
+        snapshot = {"marketId": "0xruntime", "roundId": "1800000000", "sequence": 8,
+                    "sourceAt": now - 3, "expiresAt": now + 5,
+                    "YES": {"assetId": "runtime-yes", "bid": .49, "ask": .51,
+                            "sourceAt": now - 3},
+                    "NO": {"assetId": "runtime-no", "bid": .49, "ask": .51,
+                           "sourceAt": now - 3}}
+        status = {"running": True, "stats": {"runtime": {
+            "engine": "platform", "status": "running", "stale": False,
+            "source_at": now, "expires_at": now + 10,
+            "strategy_runtime": {"config": {"maxQuoteAgeSeconds": 2}},
+            "markets": [{"id": "0xruntime", "name": "btc-updown-5m-1800000000",
+                         "startsAt": now - 5, "endsAt": now + 295}],
+            "snapshots": [snapshot]}}}
+        market_status = server_module._running_engine_market_status(status)
+        self.assertEqual(market_status["current_markets"][0]["stale_after_ms"], 2000)
+        market = server_module._modern_market(market_status["current_markets"][0], now=now)
+        self.assertTrue(market["stale"])
+        self.assertFalse(market["strategyEligible"])
+
+    def test_runtime_parent_stale_blocks_fresh_snapshot(self):
+        now = time.time()
+        snapshot = {"marketId": "0xruntime", "roundId": "1800000000", "sequence": 9,
+                    "sourceAt": now, "expiresAt": now + 5,
+                    "YES": {"assetId": "runtime-yes", "bid": .49, "ask": .51},
+                    "NO": {"assetId": "runtime-no", "bid": .49, "ask": .51}}
+        status = {"running": True, "stats": {"runtime": {
+            "engine": "platform", "status": "running", "stale": True,
+            "source_at": now, "expires_at": now + 10,
+            "markets": [{"id": "0xruntime", "name": "btc-updown-5m-1800000000"}],
+            "snapshots": [snapshot]}}}
+        market_status = server_module._running_engine_market_status(status)
+        market = server_module._modern_market(market_status["current_markets"][0], now=now)
+        self.assertTrue(market["stale"])
+        self.assertFalse(market["strategyEligible"])
+
     def test_market_pool_reads_saved_state_and_rejects_non_btc(self):
         path = self.root / "results" / "dashboard" / "market_pool.json"
         path.parent.mkdir(parents=True)

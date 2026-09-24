@@ -34,7 +34,8 @@ from dashboard.config import ConfigConflictError
 from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
-from dashboard.market_snapshot import canonical_snapshot, validate_snapshot
+from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after_ms,
+                                       validate_snapshot)
 from dashboard.account_data import AccountData
 from dashboard.system_metrics import SystemMetrics
 
@@ -827,6 +828,18 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
         return None
     markets = runtime.get("markets") if isinstance(runtime.get("markets"), list) else []
     snapshots = runtime.get("snapshots") if isinstance(runtime.get("snapshots"), list) else []
+    strategy_runtime = runtime.get("strategy_runtime") if isinstance(runtime.get("strategy_runtime"), dict) else {}
+    strategy_config = strategy_runtime.get("config") if isinstance(strategy_runtime.get("config"), dict) else {}
+    current_round = strategy_runtime.get("currentRound") if isinstance(strategy_runtime.get("currentRound"), dict) else {}
+    current_config = current_round.get("config") if isinstance(current_round.get("config"), dict) else {}
+    configured_age = strategy_config.get("maxQuoteAgeSeconds", current_config.get("maxQuoteAgeSeconds"))
+    if configured_age is None:
+        runtime_age_ms = runtime.get("stale_after_ms", runtime.get("quote_max_age_ms"))
+    else:
+        runtime_age_ms = _epoch(configured_age) * 1000 if _epoch(configured_age) is not None else configured_age
+    stale_after_ms = normalize_stale_after_ms(runtime_age_ms)
+    stale_after_invalid = runtime_age_ms is not None and stale_after_ms is None
+    runtime_stale = runtime.get("stale") is True
     market_by_id = {str(market.get("id")): market for market in markets
                     if isinstance(market, dict) and market.get("id")}
     rows = []
@@ -853,11 +866,14 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
         rows.append({"slug": market.get("name") or market_id, "name": market.get("name") or market_id,
                      "condition_id": market_id, "round_id": round_id,
                      "start": _epoch(market.get("startsAt")), "end": _epoch(market.get("endsAt")),
-                     "paired_snapshot": snapshot, "source": "platform-runtime"})
+                     "paired_snapshot": snapshot, "source": "platform-runtime",
+                     "stale_after_ms": stale_after_ms, "_stale_after_invalid": stale_after_invalid,
+                     "_runtime_stale": runtime_stale})
     if not rows:
         return None
     return {"collector_online": status.get("running") is True and runtime.get("status") == "running",
             "current_markets": rows, "source": "platform-runtime",
+            "stale": runtime_stale,
             "stale_reason": runtime.get("error") or ("runtime_snapshot_stale" if runtime.get("stale") else None),
             "asOf": _epoch(runtime.get("source_at"))}
 
@@ -1374,9 +1390,9 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         no = {"assetId": row.get("down_token") or row.get("noToken"),
               "bid": row.get("down_bid", row.get("noBid")),
               "ask": row.get("down_ask", row.get("noAsk"))}
-        stale_after = _epoch(row.get("stale_after_ms", stale_after_ms))
+        stale_after = normalize_stale_after_ms(row.get("stale_after_ms", stale_after_ms))
         expires_at = (quote_at + stale_after / 1000 if quote_at is not None and stale_after is not None
-                      and 0 < stale_after <= 15000 else None)
+                      else None)
         market_id = market_id if isinstance(market_id, str) and market_id else None
         round_id = round_id if isinstance(round_id, str) and round_id else None
         return {"assetId": "btc", "symbol": "BTC", "name": str(row.get("name") or slug or "BTC 五分钟反转"),
@@ -1408,7 +1424,15 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                 and isinstance(yes.get("assetId"), str) and isinstance(no.get("assetId"), str)
                 and type(sequence) is int and sequence >= 0 and source_at is not None and expires_at is not None)
     expired = expires_at is None or expires_at <= now
-    stale = not complete or expired or source_at is None or source_at > now + 1
+    stale_after = normalize_stale_after_ms(row.get("stale_after_ms", stale_after_ms))
+    age_limit = stale_after / 1000 if stale_after is not None else None
+    side_times = [_epoch(side.get("sourceAt")) for side in (yes, no)
+                  if isinstance(side, dict) and side.get("sourceAt") is not None]
+    stale = (not complete or expired or source_at is None or source_at > now + 1
+             or row.get("_runtime_stale") is True or row.get("_stale_after_invalid") is True
+             or stale_after is None
+             or (age_limit is not None and (source_at < now - age_limit
+                 or any(value is None or value < now - age_limit or value > now + 1 for value in side_times))))
     quote_times = [_epoch(value.get("sourceAt")) for value in (yes, no) if value]
     quote_times = [value for value in quote_times if value is not None]
     quote_at = min(quote_times, default=source_at)
@@ -1462,7 +1486,10 @@ def _modern_markets() -> dict:
     if raw is None:
         raw = cached_live_status()
     rows = raw.get("current_markets") if isinstance(raw.get("current_markets"), list) else []
-    items = [_modern_market(row) for row in rows if isinstance(row, dict)]
+    has_stale_after = "stale_after_ms" in raw
+    stale_after = raw.get("stale_after_ms")
+    items = [_modern_market({**row, "stale_after_ms": stale_after} if has_stale_after else row)
+             for row in rows if isinstance(row, dict)]
     stale = (raw.get("collector_online") is not True or not items or bool(raw.get("stale_reason"))
              or any(item["stale"] for item in items))
     value = {"schemaVersion": 1, "items": items, "markets": items,
