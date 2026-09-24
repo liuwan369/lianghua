@@ -98,10 +98,22 @@ export class ReferenceFeedUnsupportedError extends Error {
   }
 }
 
+export class ReferenceFeedInvalidEventError extends Error {
+  readonly code = "reference_event_invalid";
+
+  constructor() {
+    super("reference event timestamp and price must be finite positive numbers");
+    this.name = "ReferenceFeedInvalidEventError";
+  }
+}
+
 /** Namespaces a reference price without allowing a non-BTC symbol to become a BTC event. */
 export function referenceEvent(asset: string, tsUnix: number, price: number): Extract<FeedEvent, { kind: "btc" | "oracle" }> {
   const capability = referenceFeedCapability(asset);
   if (!capability.supported) throw new ReferenceFeedUnsupportedError(capability);
+  if (!Number.isFinite(tsUnix) || tsUnix <= 0 || !Number.isFinite(price) || price <= 0) {
+    throw new ReferenceFeedInvalidEventError();
+  }
   return capability.asset === "btc"
     ? { kind: "btc", asset: "btc", tsUnix, price }
     : { kind: "oracle", asset: capability.asset, tsUnix, price };

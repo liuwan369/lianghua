@@ -67,6 +67,8 @@ set `PM_REFERENCE_ASSETS=btc,eth` to disable symbols at process configuration
 time. `referenceFeedCapability(asset)` reports `unsupported_asset` or
 `disabled_by_configuration`, and `runReferenceFeed` throws
 `ReferenceFeedUnsupportedError` before opening a socket for those cases.
+Reference events also require finite positive `tsUnix` and `price`; malformed
+direct events are rejected and cannot replace a valid queued signal.
 
 BTC produces `{ kind: "btc", asset: "btc" }`; ETH and SOL produce
 `{ kind: "oracle", asset: "eth" | "sol" }`. The current platform adapter

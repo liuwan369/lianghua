@@ -174,6 +174,16 @@ test("a second asset keeps its reference signal and paired book isolated from BT
   assert.deepEqual(events.filter(event => event.kind === "oracle"), [btc, eth]);
 });
 
+test("invalid reference events cannot replace a valid asset signal", t => {
+  clock(t);
+  const queue = new FeedQueue();
+  const valid = { kind: "oracle", asset: "eth", tsUnix: ROUND + 100, price: 3_000 };
+  queue.push(valid);
+  queue.push({ ...valid, tsUnix: Number.NaN, price: 9_000 });
+  queue.push({ ...valid, tsUnix: ROUND + 101, price: Number.POSITIVE_INFINITY });
+  assert.deepEqual(drain(queue), [valid]);
+});
+
 test("user events stay lossless, tick sizes precede books, and trade telemetry is bounded", t => {
   clock(t);
   const queue = new FeedQueue();

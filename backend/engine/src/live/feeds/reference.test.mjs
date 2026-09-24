@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   ReferenceFeedUnsupportedError,
+  ReferenceFeedInvalidEventError,
   referenceFeedCapability,
   referenceEvent,
   referenceVenueProducts,
@@ -56,4 +57,8 @@ test("asset-scoped reference events cannot relabel ETH or SOL as BTC", () => {
   assert.deepEqual(referenceEvent("sol", 3, 150), {
     kind: "oracle", asset: "sol", tsUnix: 3, price: 150,
   });
+  assert.throws(() => referenceEvent("eth", 0, 3_000), error =>
+    error instanceof ReferenceFeedInvalidEventError && error.code === "reference_event_invalid");
+  assert.throws(() => referenceEvent("eth", 2, Number.NaN), error =>
+    error instanceof ReferenceFeedInvalidEventError && error.code === "reference_event_invalid");
 });
