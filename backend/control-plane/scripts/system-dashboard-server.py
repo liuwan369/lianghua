@@ -44,7 +44,7 @@ from dashboard.system_metrics import SystemMetrics
 _REPO_ENGINE = Path(__file__).resolve().parents[2] / "engine"
 _DEPLOYED_ENGINE = Path(__file__).resolve().parents[1] / "backend" / "engine"
 _EXTERNAL_ENGINE = Path(__file__).resolve().parents[1] / "_external" / "btc-5m-market-trading-bot"
-TRADING_ROOT = next((path for path in (_REPO_ENGINE, _DEPLOYED_ENGINE, _EXTERNAL_ENGINE)
+TRADING_ROOT = next((path for path in (_DEPLOYED_ENGINE, _REPO_ENGINE, _EXTERNAL_ENGINE)
                      if (path / "package.json").is_file()), _REPO_ENGINE)
 DEPLOYMENT_LOCK_PATH = TRADING_ROOT.parents[1] / "data" / "dashboard" / "deployment.lock"
 _trading_lock = threading.RLock()
