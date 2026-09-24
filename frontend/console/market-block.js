@@ -54,8 +54,8 @@
         </div>
 
         <aside class="coin-detail-panel" aria-labelledby="coin-detail-title">
-          <div class="detail-heading"><div><p class="eyebrow">SELECTED ASSET</p><h2 id="coin-detail-title" data-detail-title>比特币 · BTC</h2></div><span class="detail-state enabled" data-detail-state>已启用 · 运行中</span></div>
-          <div class="coin-detail-identity"><span class="detail-coin-icon btc" data-detail-icon>₿</span><div><strong data-detail-name>比特币</strong><small data-detail-english>Bitcoin · BTC</small></div><span class="detail-cycle">5M</span></div>
+          <div class="detail-heading"><div><p class="eyebrow">SELECTED ASSET</p><h2 id="coin-detail-title" data-detail-title>等待选择市场</h2></div><span class="detail-state disabled" data-detail-state>待选择</span></div>
+          <div class="coin-detail-identity"><span class="detail-coin-icon" data-detail-icon>?</span><div><strong data-detail-name>等待后端目录</strong><small data-detail-english>assetId · marketId · roundId</small></div><span class="detail-cycle">5M</span></div>
           <div class="detail-quote-grid"><div class="detail-quote yes-quote"><div><span class="outcome-dot"></span><span>YES</span></div><strong data-detail-yes>0.486</strong><small>买入价 · 48.6%</small></div><div class="detail-quote no-quote"><div><span class="outcome-dot"></span><span>NO</span></div><strong data-detail-no>0.514</strong><small>买入价 · 51.4%</small></div></div>
           <div class="detail-stats"><div><span>本场结束</span><strong data-detail-close>14:10:00</strong></div><div><span>剩余时间</span><strong data-detail-remaining>02:18</strong></div><div><span>交易量</span><strong data-detail-volume>$284.6K</strong></div><div><span>流动性</span><strong data-detail-liquidity>$68.4K</strong></div></div>
 
@@ -68,23 +68,23 @@
     </main>
   </div>`;
 
-  let selectedId = store.getState().marketCatalog.selectedId || "btc";
+  let selectedId = store.getState().marketCatalog.selectedId || null;
   let search = "";
   const text = (selector, value) => { const node = document.querySelector(selector); if (node) node.textContent = value; };
   const money = (value) => Number.isFinite(value) ? value >= 1e3 ? `$${(value / 1e3).toFixed(1)}K` : `$${value.toFixed(0)}` : "--";
-  const selectedCoin = () => coins.find((coin) => coin.id === selectedId) || coins[0] || null;
+  const selectedCoin = () => coins.find((coin) => coin.id === selectedId) || null;
   const escape = (value) => window.PolyPreview.format.escape(value);
 
   document.querySelectorAll("[data-preview-nav]").forEach((button) => button.addEventListener("click", () => {
     const target = button.dataset.previewTarget;
-    if (target) window.location.href = target;
+    if (target) window.PolyPreview.navigate(target);
   }));
 
   const coinRow = (coin) => `<article class="coin-row${coin.id === selectedId ? " selected" : ""}" data-coin-row="${escape(coin.id)}">
     <button class="coin-select" type="button" data-select-coin="${escape(coin.id)}"><span class="coin-logo ${escape(coin.tone)}">${escape(coin.icon)}</span><span class="coin-main"><strong>${escape(coin.symbol)}<small>${escape(coin.name)} · ${escape(coin.english)}</small></strong><span class="coin-market-meta"><b>5 分钟</b><span>结束 ${escape(coin.close)}</span></span></span></button>
     <div class="coin-quotes"><span><small>YES</small><b>${Number.isFinite(coin.yes) ? coin.yes.toFixed(3) : "--"}</b></span><span><small>NO</small><b>${Number.isFinite(coin.no) ? coin.no.toFixed(3) : "--"}</b></span></div>
     <div class="coin-volume"><strong>${money(coin.volume)}</strong><small>交易量</small></div>
-    <button class="coin-enable${coin.enabled ? " enabled" : ""}" type="button" data-enable-coin="${escape(coin.id)}" aria-pressed="${coin.enabled}"><i></i><span>${coin.enabled ? "已启用" : "未启用"}</span></button>
+    <button class="coin-enable${coin.enabled ? " enabled" : ""}" type="button" data-enable-coin="${escape(coin.id)}" aria-pressed="${coin.enabled}" ${!coin.enabled && !coin.canEnable ? "disabled title=\"服务器尚未确认该币种支持运行池\"" : ""}><i></i><span>${coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用"}</span></button>
   </article>`;
 
   const renderCounts = () => {
@@ -139,14 +139,14 @@
     const icon = document.querySelector("[data-detail-icon]");
     if (icon) { icon.textContent = coin.icon; icon.className = `detail-coin-icon ${coin.tone}`; }
     const state = document.querySelector("[data-detail-state]");
-    if (state) { state.className = `detail-state ${coin.enabled || coin.running ? "enabled" : "disabled"}`; state.textContent = coin.running && !coin.enabled ? "本场继续 · 下场停用" : coin.running ? "已启用 · 运行中" : coin.enabled ? "已启用 · 待运行" : "未启用"; }
+    if (state) { state.className = `detail-state ${coin.enabled || coin.running ? "enabled" : "disabled"}`; state.textContent = !coin.canEnable && !coin.enabled ? "服务器未确认支持" : coin.running && !coin.enabled ? "本场继续 · 下场停用" : coin.running ? "已启用 · 运行中" : coin.enabled ? "已启用 · 待运行" : "未启用"; }
     const linkState = document.querySelector("[data-link-state]");
     if (linkState) { linkState.className = `link-state ${coin.enabled || coin.running ? "linked" : "unlinked"}`; linkState.textContent = coin.running && !coin.enabled ? "本场继续" : coin.running ? "运行中" : coin.enabled ? "下一场加入" : "未关联"; }
     text("[data-link-copy]", coin.running && !coin.enabled ? "该币种本场继续执行，停用将在本场结束后生效。" : coin.running ? "该币种已在自动交易运行池中，当前场次正在执行。" : coin.enabled ? "该币种已启用，自动交易将在下一个可用五分钟场次加入。" : "启用后，该币种会加入自动交易的下一场候选运行池。");
     text("[data-link-note]", coin.running ? "停用只影响后续场次，不撤销当前场次订单。" : "启用或停用只影响后续场次，不改变当前已运行订单。");
     const action = document.querySelector("[data-detail-enable]");
-    if (action) { action.disabled = false; action.textContent = coin.enabled ? "停用（下一场生效）" : "启用并关联自动交易"; action.classList.toggle("selected", coin.enabled); }
-    text("[data-selection-note]", coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "下一场可开始运行。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
+    if (action) { action.disabled = !coin.enabled && !coin.canEnable; action.textContent = coin.enabled ? "停用（下一场生效）" : coin.canEnable ? "启用并关联自动交易" : "服务器未确认可运行"; action.classList.toggle("selected", coin.enabled); }
+    text("[data-selection-note]", !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
   const renderCatalogStatus = (resource) => {
     const local = window.PolyPreview.config.mode === "local-preview";
@@ -162,6 +162,10 @@
   async function toggleEnabled(id) {
     const coin = coins.find((item) => item.id === id);
     if (!coin) return;
+    if (!coin.enabled && !coin.canEnable) {
+      text("[data-selection-note]", `${coin.symbol} 当前由服务器标记为 unsupported/unavailable，未修改运行池。`);
+      return;
+    }
     const state = store.getState();
     const desiredIds = state.marketPool.desiredIds.filter((value) => value !== id);
     if (!coin.enabled) desiredIds.push(id);
@@ -176,7 +180,9 @@
       renderCounts();
       renderList();
       renderDetail();
-      text("[data-market-refresh-note]", `运行池已更新 · ${window.PolyPreview.format.clock()}`);
+      const pool = store.getState().marketPool;
+      text("[data-market-refresh-note]", pool.pendingDesiredIds ? "已提交 · 等待服务器确认运行池" : `运行池已确认 · ${window.PolyPreview.format.clock()}`);
+      if (pool.pendingDesiredIds) text("[data-selection-note]", "服务器已接收变更请求，生效状态仍以确认后的运行池为准。");
     } catch (error) {
       text("[data-selection-note]", error.message || "运行池更新失败，保留当前状态");
     } finally {
@@ -227,7 +233,7 @@
     } catch (error) { text("[data-market-refresh-note]", error.message || "市场目录读取失败"); }
     finally { button.disabled = false; }
   });
-  store.subscribe("marketCatalog", (value) => { selectedId = value.selectedId || value.items[0]?.assetId || null; syncCoins(); renderCounts(); renderList(); renderDetail(); renderCatalogStatus(value); });
+  store.subscribe("marketCatalog", (value) => { selectedId = value.selectedId || null; syncCoins(); renderCounts(); renderList(); renderDetail(); renderCatalogStatus(value); });
   store.subscribe("marketPool", () => { syncCoins(); renderCounts(); renderList(); renderDetail(); });
   renderCounts();
   renderList();

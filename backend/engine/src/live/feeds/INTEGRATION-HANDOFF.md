@@ -13,6 +13,10 @@ replacement for the shared API contract.
 - `book`, `bookStatus`, `tickSize`, and public trade feed events.
 - Connection Promise reuse, reconnect backoff with jitter, watchdogs, and stop cancellation.
 - Source timestamp watermarks across reconnects and same-frame wire ordering.
+- Parameterized reference producer mappings for BTC, ETH, and SOL. Unsupported
+  or configuration-disabled symbols fail before a reference socket is opened;
+  non-BTC output is emitted as an asset-scoped `oracle` event and is never
+  relabeled as BTC.
 - Invalid-frame rejection, empty quote tombstones, source freshness, and expiry handling.
 - Multi-market decision queue isolation by `roundId` and YES/NO token pair. Queue
   watermarks reject sequence/source-time regressions, and expired snapshots are
@@ -20,9 +24,9 @@ replacement for the shared API contract.
 - `bookStatus` carries `marketId`, `roundId`, `yesAssetId`, and `noAssetId`, so
   a disconnected feed cannot invalidate another market's health state.
 
-The implementation is committed on `codex/market-data`. The latest cleanup
-commit audited for this handoff is `f778943`; use `git rev-parse HEAD` on the
-branch being integrated instead of copying a stale hash from this document.
+The implementation is committed on `codex/market-data`; use `git rev-parse
+HEAD` on the branch being integrated rather than copying a hash from this
+document.
 
 As of this handoff, `codex/trading-runtime` has already added the identity-aware
 feed start, bounded `FeedQueue` consumer, and snapshot execution gate. Its
@@ -53,6 +57,25 @@ field literally named `marketId`. The trading-runtime adapter maps
 `conditionId -> MarketInfo.id` and `start -> MarketInfo.startsAt`, then passes
 that identity into the feed. The feed itself remains token-based and can
 consume any valid binary market returned by discovery.
+
+### Reference asset capability
+
+`runReferenceFeed(sink, asset)` uses explicit public venue products for `btc`,
+`eth`, and `sol` (Binance spot/perpetual, Coinbase, OKX, and Bybit). The
+backward-compatible `runBtcFeed(sink)` wrapper remains BTC-only. Callers can
+set `PM_REFERENCE_ASSETS=btc,eth` to disable symbols at process configuration
+time. `referenceFeedCapability(asset)` reports `unsupported_asset` or
+`disabled_by_configuration`, and `runReferenceFeed` throws
+`ReferenceFeedUnsupportedError` before opening a socket for those cases.
+Reference events also require finite positive `tsUnix` and `price`; malformed
+direct events are rejected and cannot replace a valid queued signal.
+
+BTC produces `{ kind: "btc", asset: "btc" }`; ETH and SOL produce
+`{ kind: "oracle", asset: "eth" | "sol" }`. The current platform adapter
+still starts the legacy BTC wrapper, so multi-asset runtime wiring must select
+`runReferenceFeed` per market and map the asset-scoped reference event into
+the corresponding strategy. A Polymarket market being discoverable does not
+by itself enable reference or real trading for that asset.
 
 ## Internal Snapshot
 
@@ -88,7 +111,7 @@ The actual field sources and ownership boundaries are:
 | `marketId` | Gamma/collector `conditionId`, or an explicit feed identity | The runtime must pass `MarketInfo.id`; late WS inference is a compatibility fallback only. |
 | `roundId` | Slug Unix start boundary (`{asset}-updown-5m-{roundStart}`) | A decimal string divisible by 300; runtime requires it to equal `String(startsAt)`. |
 | `YES.assetId` / `NO.assetId` | Discovery `upToken` / `downToken` | Token ids must match the active market instruments; they are not interchangeable with another round. |
-| `sequence` | Local counter for accepted paired snapshots in one feed | Strictly increases within a feed; the queue and runtime gate reject duplicates and regressions. A full feed restart starts a new counter and must use a new market key or a fresh runtime generation. |
+| `sequence` | Local counter for accepted paired snapshots in one feed | Strictly increases within a feed; the queue and runtime gate reject duplicates and regressions. The collector resumes a persisted same-round sequence only when all market/round/token identities match; a manually restarted runtime feed must clear or version its watermark. |
 | `sourceAt` | Newest accepted venue timestamp across YES and NO | Per-side `sourceAt` values are retained; regressions are rejected. `expiresAt` uses the older side, so a newer `sourceAt` does not make the pair fresher than its older quote. |
 | `expiresAt` | `min(feed deadline, older sourceAt + 2 seconds)` | The runtime requires `expiresAt > now`; round end is also enforced from `roundId`/`MarketInfo.endsAt`. |
 
@@ -253,8 +276,8 @@ repeat it and investigate any repeated zero-snapshot result.
   or a lossless DTO carrying the same marketId, roundId, sequence, sourceAt,
   expiresAt, YES, and NO values.
 - The existing shared contract is still partly documentation. Until typed DTO validation exists, a field rename can silently break one consumer.
-- The current strategy and `discoverBtcMarket` path are still BTC-specific. Parameterized discovery and an ETH/SOL feed do not authorize trading another asset until its strategy, reference feed, outcome mapping, fee rules, and liquidity checks are explicitly wired.
-- Each asset needs an explicit strategy/reference-feed mapping before automatic trading is enabled. Discovering an ETH or SOL market alone is not evidence that its oracle, outcome order, fee rules, or liquidity are compatible.
+- The current strategy and `discoverBtcMarket` path are still BTC-specific. Parameterized discovery and the ETH/SOL reference producer do not authorize trading another asset until its strategy, reference mapping, outcome order, fee rules, and liquidity checks are explicitly wired.
+- Each asset needs an explicit strategy/reference-feed mapping before automatic trading is enabled. A disabled or unsupported capability must remain a visible startup error, not a fallback to BTC.
 - A manual feed restart inside one running runtime can reset the feed-local sequence. The runtime should clear or version its snapshot watermark when deliberately restarting the same market; ordinary reconnects preserve watermarks and do not have this issue.
 - This work has not placed a real order and does not verify fills, cancellation, reconciliation, settlement, or ledger projection.
 - Polymarket event formats, venue clocks, Gamma availability, or server network conditions can change. The read-only probe must remain part of deployment verification.

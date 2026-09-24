@@ -3,9 +3,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import type { CoreState, HardLimits, MarketInfo, OrderRecord, TradingEvent, TradingMode } from "../platform/contracts.js";
+import * as referenceFeedModule from "../live/feeds/btc.js";
+import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, TradingEvent, TradingMode } from "../platform/contracts.js";
 import { PlatformJournal } from "../platform/journal.js";
-import { connectPolymarketPlatform, discoverBtcMarket } from "../platform/polymarket.js";
+import { connectPolymarketPlatform, discoverMarket, referenceProducerForAsset } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
 import { createBtcReversalStrategy, normalizeBtcReversalConfig, type BtcReversalConfig,
   type BtcReversalState, type BtcReversalStrategy } from "../strategies/btc-reversal.js";
@@ -37,9 +38,16 @@ export interface PlatformCliOptions {
   strategy?: "btc-reversal";
   strategyConfigFile?: string;
   referenceFeed: boolean;
+  assetId: AssetId;
 }
 
 class CliInputError extends Error {}
+const SUPPORTED_ASSETS = new Set<AssetId>(["btc", "eth", "sol"]);
+const parseAsset = (value: unknown): AssetId => {
+  const asset = String(value ?? "btc").trim().toLowerCase();
+  if (!SUPPORTED_ASSETS.has(asset as AssetId)) throw new CliInputError(`unsupported --asset ${asset}; choose btc, eth or sol`);
+  return asset as AssetId;
+};
 const positive = (value: unknown, flag: string): number => {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) throw new CliInputError(`${flag} must be a finite positive number`);
@@ -49,12 +57,13 @@ const positive = (value: unknown, flag: string): number => {
 export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undefined {
   const command = new Command()
     .name("trading-platform")
-    .description("Live Polymarket BTC five-minute reversal trading service")
+    .description("Live Polymarket five-minute reversal trading service")
     .exitOverride()
     .option("--live", "Use authenticated REAL trading services; required and never enabled by environment variables")
     .option("--strategy <name>", "Built-in strategy: btc-reversal")
     .option("--strategy-config <path>", "Persisted strategy configuration JSON")
-    .option("--markets <path>", "JSON MarketInfo[] file; defaults to current BTC binary market discovery")
+    .option("--asset <symbol>", "Selected market asset: btc, eth or sol", "btc")
+    .option("--markets <path>", "JSON MarketInfo[] file; defaults to current selected-asset binary market discovery")
     .option("--capital-usd <number>", "Optional capital ceiling; live always respects actual available funds")
     .option("--daily-loss-usd <number>", "Optional daily loss stop; omitted disables this stop")
     .option("--order-usd <number>", "Maximum order notional (defaults to capital ceiling)")
@@ -66,7 +75,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     .option("--journal-file <path>", "Append pure JSONL platform status and execution events")
     .option("--stop-file <path>", "Stop normally when this controller-owned file exists")
     .option("--control-file <path>", "Controller JSON containing paused true or false")
-    .option("--reference-feed", "Also subscribe to the BTC reference feed");
+    .option("--reference-feed", "Subscribe to the selected asset reference feed");
   try { command.parse(argv, { from: "user" }); }
   catch (error) {
     if (error instanceof CommanderError && error.code === "commander.helpDisplayed") return undefined;
@@ -74,6 +83,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
   }
   const raw = command.opts();
   const mode: TradingMode = "live";
+  const assetId = parseAsset(raw.asset);
   if (raw.strategy && raw.strategy !== "btc-reversal") throw new CliInputError("unknown built-in strategy");
   if (!!raw.strategy !== !!raw.strategyConfig) throw new CliInputError("--strategy requires --strategy-config and vice versa");
   const capitalUsd = positive(raw.capitalUsd ?? Number.MAX_SAFE_INTEGER, "--capital-usd");
@@ -115,24 +125,27 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     statusSec, stateFile, journalFile, stopFile, controlFile, strategy: raw.strategy,
     strategyConfigFile,
     marketsFile: raw.markets ? resolve(raw.markets) : undefined,
-    referenceFeed: raw.referenceFeed === true };
+    referenceFeed: raw.referenceFeed === true, assetId };
 }
 
 /** Validate file input before any market, wallet or gateway connection. */
-export function validateMarkets(input: unknown): MarketInfo[] {
+export function validateMarkets(input: unknown, selectedAsset: AssetId = "btc"): MarketInfo[] {
   if (!Array.isArray(input) || input.length === 0) throw new CliInputError("market list must be a nonempty MarketInfo[]");
   const marketIds = new Set<string>(), tokenIds = new Set<string>();
   const nonempty = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
   const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-  for (const market of input) {
+  for (const candidate of input) {
+    const market = candidate && typeof candidate === "object" ? candidate as MarketInfo & { asset?: unknown } : undefined;
+    const marketAsset = typeof market?.assetId === "string" ? market.assetId.toLowerCase()
+      : typeof market?.asset === "string" ? market.asset.toLowerCase() : selectedAsset;
     if (!market || !nonempty(market.id) || marketIds.has(market.id) || !nonempty(market.name)
-      || !/^btc-updown-5m(?:-|$)/i.test(market.name)
-      || (market.asset !== undefined && (typeof market.asset !== "string" || market.asset.toLowerCase() !== "btc"))
+      || !new RegExp(`^${selectedAsset}-updown-5m(?:-|$)`, "i").test(market.name)
+      || marketAsset !== selectedAsset
       || !nonempty(market.roundId) || !/^\d+$/.test(market.roundId) || market.roundId !== String(market.startsAt)
       || !number(market.startsAt) || !number(market.endsAt) || market.startsAt < 0
       || market.startsAt % MARKET_WINDOW_SEC !== 0 || market.endsAt - market.startsAt !== MARKET_WINDOW_SEC
       || !Array.isArray(market.instruments) || market.instruments.length !== 2) {
-      throw new CliInputError("each market must be a BTC five-minute market with unique identity, aligned timestamps and two instruments");
+      throw new CliInputError(`each market must be a ${selectedAsset.toUpperCase()} five-minute market with unique identity, aligned timestamps and two instruments`);
     }
     marketIds.add(market.id);
     for (const instrument of market.instruments) {
@@ -145,14 +158,28 @@ export function validateMarkets(input: unknown): MarketInfo[] {
       tokenIds.add(instrument.tokenId);
     }
   }
-  return structuredClone(input) as MarketInfo[];
+  return structuredClone(input).map(market => ({ ...market as MarketInfo,
+    assetId: selectedAsset, referenceProducer: (market as MarketInfo).referenceProducer ?? referenceProducerForAsset(selectedAsset) }));
 }
 
-function readMarkets(path: string): MarketInfo[] {
+export function journalMarketIdentity(market: MarketInfo | undefined, tokenId?: string): {
+  asset_id: AssetId | null; market_id: string | null; round_id: string | null; market_slug: string | null; side: string | null;
+} {
+  return { asset_id: market?.assetId ?? null, market_id: market?.id ?? null, round_id: market?.roundId ?? null,
+    market_slug: market?.name ?? null, side: tokenId ? market?.instruments.find(instrument => instrument.tokenId === tokenId)?.outcome ?? null : null };
+}
+
+export function journalAssetId(event: Extract<TradingEvent, { kind: "order" | "fill" | "settlement" }>, fallback?: AssetId | null): AssetId | null {
+  if (event.kind === "order") return event.assetId ?? event.order.assetId ?? fallback ?? null;
+  if (event.kind === "fill") return event.assetId ?? event.fill.assetId ?? fallback ?? null;
+  return event.result.assetId ?? fallback ?? null;
+}
+
+function readMarkets(path: string, selectedAsset: AssetId): MarketInfo[] {
   let input: unknown;
   try { input = JSON.parse(readFileSync(path, "utf8")); }
   catch { throw new CliInputError("--markets must refer to a readable JSON file"); }
-  return validateMarkets(input);
+  return validateMarkets(input, selectedAsset);
 }
 
 export interface ReversalConfigFile {
@@ -178,11 +205,14 @@ export function readReversalConfig(path: string): ReversalConfigFile {
 export async function runPlatformCli(argv: string[]): Promise<void> {
   const options = parsePlatformOptions(argv);
   if (!options) return;
-  const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile) : undefined;
+  const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
   let strategy: BtcReversalStrategy | undefined;
   let reversal: BtcReversalStrategy | undefined;
   let strategyConfig = options.strategyConfigFile ? readReversalConfig(options.strategyConfigFile) : undefined;
   if (strategyConfig) {
+    if (strategyConfig.config.assetId !== options.assetId) {
+      throw new CliInputError(`strategy configuration asset ${strategyConfig.config.assetId} does not match selected asset ${options.assetId}`);
+    }
     options.limits.dailyLossUsd = strategyConfig.dailyLossUsd;
     options.limits.capitalUsd = strategyConfig.config.totalBudgetUsd ?? Number.MAX_SAFE_INTEGER;
     options.limits.maxOrderUsd = options.limits.capitalUsd;
@@ -269,8 +299,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   };
   const marketIdentity = (tokenId: string) => {
     const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === tokenId));
-    return { market_id: market?.id ?? null, round_id: market?.roundId ?? null, market_slug: market?.name ?? null,
-      side: market?.instruments.find(instrument => instrument.tokenId === tokenId)?.outcome ?? null };
+    return journalMarketIdentity(market, tokenId);
   };
   const record = (event: TradingEvent) => {
     if (event.kind === "order") {
@@ -281,6 +310,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         venue_status: order.venueStatus ?? null,
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
         price: order.price, shares: order.shares, direction: order.direction, created_at: order.createdAt,
+        asset_id: journalAssetId(event, marketIdentity(order.tokenId).asset_id),
         market_id: event.marketId ?? order.marketId ?? marketIdentity(order.tokenId).market_id,
         round_id: event.roundId ?? order.roundId ?? marketIdentity(order.tokenId).round_id,
         market_slug: marketIdentity(order.tokenId).market_slug, side: marketIdentity(order.tokenId).side,
@@ -309,6 +339,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         strategy_id: order?.strategyId ?? null, price: fill.price, shares: fill.shares,
         fee: fill.feeUsd, fee_source: fill.feeSource ?? null, trade_status: fill.status ?? "CONFIRMED",
         is_maker: fill.isMaker, direction: fill.direction,
+        asset_id: journalAssetId(event, order?.assetId ?? marketIdentity(fill.tokenId).asset_id),
         market_id: event.marketId ?? fill.marketId ?? order?.marketId ?? marketIdentity(fill.tokenId).market_id,
         round_id: event.roundId ?? fill.roundId ?? order?.roundId ?? marketIdentity(fill.tokenId).round_id,
         market_slug: marketIdentity(fill.tokenId).market_slug, side: marketIdentity(fill.tokenId).side,
@@ -335,7 +366,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal?.write("platform_stopped", { reason: signalReason ?? "run_complete" });
     } else if (event.kind === "settlement") {
       const market = selectedMarkets.find(item => item.id === event.result.marketId);
-      journal?.write("platform_settlement", { market_id: event.result.marketId, round_id: event.result.roundId ?? market?.roundId ?? null,
+      journal?.write("platform_settlement", { asset_id: journalAssetId(event, market?.assetId),
+        market_id: event.result.marketId, round_id: event.result.roundId ?? market?.roundId ?? null,
         created_at: Date.now() / 1000, market_slug: market?.name ?? null,
         state: event.result.state, transaction_id: event.result.transactionId ?? null,
         payout_verified: event.result.payoutVerified === true,
@@ -459,7 +491,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       }
     }
     phase = "market_discovery";
-    const markets = explicitMarkets ?? validateMarkets(await discoverBtcMarket(undefined, false, discoveryAbort.signal));
+    const markets = explicitMarkets ?? validateMarkets(await discoverMarket(options.assetId, undefined, false, discoveryAbort.signal), options.assetId);
     if (continuousMarkets && restored?.markets) {
       const unsettledTokens = new Set([
         ...restored.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
@@ -468,6 +500,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         ...restored.positions.filter(position => position.shares > 0).map(position => position.tokenId),
       ]);
       for (const previous of restored.markets) {
+        if ((previous.assetId ?? "btc") !== options.assetId) continue;
         if (!markets.some(market => market.id === previous.id)
           && previous.instruments.some(instrument => unsettledTokens.has(instrument.tokenId))) markets.push(previous);
       }
@@ -479,6 +512,19 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       const settle = options.mode === "live" && reversal
         ? await (await import("../platform/live-settlement.js")).createLiveSettlementAdapter({ stateFile: `${options.stateFile}.settlements.json` })
         : undefined;
+      const referenceFeeds = options.referenceFeed ? (() => {
+        const module = referenceFeedModule as typeof referenceFeedModule & {
+          referenceFeedCapability?: (asset: string) => { supported: boolean; reason?: string };
+          runReferenceFeed?: (sink: (event: import("../live/feeds/index.js").FeedEvent) => void, asset: string) => { stop: () => void };
+        };
+        const capability = module.referenceFeedCapability?.(options.assetId)
+          ?? (options.assetId === "btc" ? { supported: true } : { supported: false, reason: "asset_reference_feed_unavailable" });
+        if (!capability.supported) throw new CliInputError(`reference feed unavailable for ${options.assetId}: ${capability.reason}`);
+        const runner = module.runReferenceFeed
+          ?? (options.assetId === "btc" ? (sink: (event: import("../live/feeds/index.js").FeedEvent) => void) => referenceFeedModule.runBtcFeed(sink) : undefined);
+        if (!runner) throw new CliInputError(`reference feed producer unavailable for ${options.assetId}`);
+        return { [options.assetId]: (sink: (event: import("../live/feeds/index.js").FeedEvent) => void, _asset: AssetId) => runner(sink, options.assetId) };
+      })() : undefined;
       connection = await connectPolymarketPlatform({ mode: options.mode, markets, limits: options.limits,
         restored, persist: (state, critical) => store!.save(state, critical),
         deferPersistence: () => store!.defer(),
@@ -487,7 +533,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         // Before connection resolution the adapter records initialization;
         // afterwards the subscription includes publish-only plugin/settlement events.
         record: event => { if (!connection) record(event); },
-        durationSec: options.durationSec === 0 ? Infinity : options.durationSec, referenceFeed: options.referenceFeed });
+        durationSec: options.durationSec === 0 ? Infinity : options.durationSec, referenceFeed: options.referenceFeed,
+        assetId: options.assetId, referenceFeeds });
       unsubscribe = connection.platform.subscribe(record);
       if (reversal) connection.platform.core.setStrategyState("btc-reversal", reversal.exportState());
     }
@@ -509,10 +556,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
             const nextBoundary = target ?? (Math.floor(now / MARKET_WINDOW_SEC) + 1) * MARKET_WINDOW_SEC;
             const candidates = target == null
               ? await Promise.allSettled([
-                discoverBtcMarket(now, false, discoveryAbort.signal),
-                discoverBtcMarket(nextBoundary, false, discoveryAbort.signal),
+                discoverMarket(options.assetId, now, false, discoveryAbort.signal),
+                discoverMarket(options.assetId, nextBoundary, false, discoveryAbort.signal),
               ])
-              : await Promise.allSettled([discoverBtcMarket(nextBoundary, directOnly, discoveryAbort.signal)]);
+              : await Promise.allSettled([discoverMarket(options.assetId, nextBoundary, directOnly, discoveryAbort.signal)]);
             if (signalReason || primaryFailure) return;
             for (const result of candidates) {
               if (signalReason || primaryFailure) return;
@@ -520,7 +567,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
               const fresh = result.value.filter(market => market.endsAt > now && !selectedMarkets.some(old => old.id === market.id));
               if (fresh.length) {
                 if (signalReason || primaryFailure) return;
-                await connection!.addMarkets(validateMarkets(fresh), discoveryAbort.signal);
+                await connection!.addMarkets(validateMarkets(fresh, options.assetId), discoveryAbort.signal);
                 for (const market of fresh) scheduleMarketEnd(market);
                 selectedMarkets = connection!.platform.market.list();
               }
@@ -563,7 +610,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         controlTimer = setInterval(() => {
           try {
             if (options.strategyConfigFile) {
-              const next = readReversalConfig(options.strategyConfigFile), key = JSON.stringify(next);
+              const next = readReversalConfig(options.strategyConfigFile);
+              if (next.config.assetId !== options.assetId) throw new CliInputError(`strategy configuration asset ${next.config.assetId} does not match selected asset ${options.assetId}`);
+              const key = JSON.stringify(next);
               if (key !== lastConfig) {
                 reversal!.updateConfig(next.config); strategyConfig = next; lastConfig = key;
                 journal?.write("strategy_config_saved", { saved_revision: next.savedRevision });
@@ -590,7 +639,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
                   && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))) continue;
                 if (state.fills.some(fill => tokenIds.includes(fill.tokenId) && fill.status
                   && !["CONFIRMED", "FAILED"].includes(fill.status))) continue;
-                const result = await connection!.platform.settlement.redeem({ marketId: market.id, tokenIds });
+                const result = await connection!.platform.settlement.redeem({ marketId: market.id, assetId: market.assetId, tokenIds });
                 if (result.state === "confirmed") {
                   await connection!.recoverAccount();
                   confirmedSettlements.add(market.id);

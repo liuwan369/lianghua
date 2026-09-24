@@ -25,6 +25,7 @@ const batchBurn = parseAbiItem("event TransferBatch(address indexed operator,add
 const zero = `0x${"0".repeat(40)}` as Address;
 const hashPattern = /^0x[0-9a-fA-F]{64}$/;
 const depositWalletFactory = "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07" as Address;
+const assetIdPattern = /^[a-z0-9_-]{1,32}$/;
 
 export interface PreparedSettlementTransaction {
   kind: "eoa" | "deposit";
@@ -37,6 +38,7 @@ export interface LiveSettlementRecord {
   marketId: string;
   /** Added after the original market-id-only persistence format. */
   roundId?: string;
+  assetId?: string;
   tokenIds: string[];
   status: "prepared" | "submitted" | "confirmed" | "failed";
   operation: "approval" | "redeem";
@@ -100,7 +102,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
   catch (error) {
     if (!(error instanceof UnsupportedSettlement)) throw error;
     if (options.requireCredentials !== false) throw error;
-    return async request => ({ marketId: request.marketId, state: "unsupported", reason: error.message });
+    return async request => ({ marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, state: "unsupported", reason: error.message });
   }
   const stateFile = resolve(options.stateFile ?? "results/platform/live-settlements.json");
   const state: LiveSettlementState = options.restore ?? (existsSync(stateFile)
@@ -110,7 +112,9 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     || !state.records || typeof state.records !== "object"
     || Object.values(state.records).some(record => !record
       || (record.roundId !== undefined
-        && (typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId))))) {
+        && (typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId)))
+      || (record.assetId !== undefined
+        && (typeof record.assetId !== "string" || !assetIdPattern.test(record.assetId))))) {
     throw new Error("settlement state wallet/schema mismatch");
   }
   const save = async () => {
@@ -120,7 +124,8 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 });
     renameSync(tmp, stateFile);
   };
-  const recordKey = (request: SettlementRequest): string => JSON.stringify([request.marketId, request.roundId]);
+  const recordKey = (request: SettlementRequest): string => JSON.stringify([request.assetId, request.marketId, request.roundId]);
+  const legacyRoundKey = (request: SettlementRequest): string => JSON.stringify([request.marketId, request.roundId]);
   const result = (request: SettlementRequest, status: SettlementResult["state"], reason: string, record?: LiveSettlementRecord): SettlementResult => {
     const usd = (raw: string | undefined): number | undefined => {
       if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
@@ -129,7 +134,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const verified = status === "confirmed" && record?.status === "confirmed" && record.operation === "redeem"
       && hashPattern.test(record.transactionHash ?? "") && usd(record.creditedPusd) !== undefined;
-    return { marketId: request.marketId, roundId: request.roundId, state: status, reason,
+    return { marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, state: status, reason,
       transactionId: record?.transactionHash ?? record?.relayerId,
       payoutVerified: verified,
       ...(verified ? { creditedUsd: usd(record!.creditedPusd), expectedPayoutUsd: usd(record!.expectedPayout),
@@ -148,7 +153,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       if (!recovering && error instanceof RetryableSettlement) {
         // A definite rejection did not consume the nonce. Re-read balance and
         // nonce next time, rather than keeping an unsent request forever.
-        delete state.records[JSON.stringify([record.marketId, record.roundId])];
+        delete state.records[JSON.stringify([record.assetId, record.marketId, record.roundId])];
         record.reason = "settlement_relayer_busy_retrying";
       } else if (!recovering && error instanceof UnsupportedSettlement) {
         record.status = "failed";
@@ -158,6 +163,9 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     await save();
   }
   async function run(request: SettlementRequest): Promise<SettlementResult> {
+    if (!request.assetId || !assetIdPattern.test(request.assetId)) {
+      return result(request, "unsupported", "settlement_asset_identity_missing");
+    }
     if (!request.roundId || !/^\d+$/.test(request.roundId)) {
       return result(request, "unsupported", "settlement_round_identity_missing");
     }
@@ -165,19 +173,54 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     if (request.tokenIds.some(id => !/^\d+$/.test(id))) return result(request, "unsupported", "settlement_invalid_token_id");
     const key = recordKey(request);
     let record: LiveSettlementRecord | undefined = state.records[key];
+    const conflictingAsset = Object.values(state.records).find(item => item.marketId === request.marketId
+      && item.roundId === request.roundId && item.assetId !== request.assetId
+      && !(item.assetId === undefined && request.assetId === "btc"));
+    if (conflictingAsset) return result(request, "unsupported", "settlement_asset_identity_changed", conflictingAsset);
+    if (!record) {
+      // The first asset-aware runtime used [marketId, roundId]. Migrate only
+      // when the stored record already declares the same asset, or when the
+      // legacy record is unlabelled BTC. Never let an ETH/SOL request adopt an
+      // unlabelled record from another asset.
+      const priorRoundKey = legacyRoundKey(request);
+      const priorRound = state.records[priorRoundKey];
+      if (priorRound) {
+        if (priorRound.assetId !== request.assetId
+          && !(priorRound.assetId === undefined && request.assetId === "btc")) {
+          return result(request, "unsupported", "settlement_asset_identity_changed", priorRound);
+        }
+        record = priorRound;
+        record.assetId = request.assetId;
+        delete state.records[priorRoundKey];
+        state.records[key] = record;
+        try { await save(); }
+        catch (error) {
+          delete state.records[key];
+          delete record.assetId;
+          state.records[priorRoundKey] = record;
+          throw error;
+        }
+      }
+    }
     if (!record) {
       // The first persistence format keyed records only by conditionId and had
       // no roundId. Adopt such a record only when the caller supplies the
-      // discovered market identity and the persisted token pair still matches.
+      // discovered market identity, the asset is BTC for an unlabelled record,
+      // and the persisted token pair still matches.
       // This is an identity migration, never a time/slug-based guess.
       const legacyKey = request.marketId;
       const legacy = state.records[legacyKey];
       if (legacy && legacy.marketId === request.marketId && legacy.roundId === undefined) {
+        if (legacy.assetId !== request.assetId
+          && !(legacy.assetId === undefined && request.assetId === "btc")) {
+          return result(request, "unsupported", "settlement_asset_identity_changed", legacy);
+        }
         if (!Array.isArray(legacy.tokenIds) || legacy.tokenIds.length !== request.tokenIds.length
           || request.tokenIds.some(id => !legacy!.tokenIds.includes(id))) {
           return result(request, "unsupported", "settlement_token_identity_changed", legacy);
         }
         record = legacy;
+        record.assetId = request.assetId;
         record.roundId = request.roundId;
         delete state.records[legacyKey];
         state.records[key] = record;
@@ -185,12 +228,14 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
         catch (error) {
           delete state.records[key];
           delete record.roundId;
+          delete record.assetId;
           state.records[legacyKey] = record;
           throw error;
         }
       }
     }
-    if (record && (record.roundId !== request.roundId || record.tokenIds.length !== request.tokenIds.length
+    if (record && (record.assetId !== request.assetId
+      || record.roundId !== request.roundId || record.tokenIds.length !== request.tokenIds.length
       || request.tokenIds.some(id => !record!.tokenIds.includes(id)))) {
       return result(request, "unsupported", "settlement_token_identity_changed", record);
     }
@@ -261,7 +306,8 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       return result(request, "unsupported", "settlement_invalid_payout_vector");
     }
     const expectedPayout = before.balances.reduce((sum, amount, i) => sum + amount * market.numerators[i]! / market.denominator, 0n);
-    const otherPending = Object.values(state.records).find(item => item.marketId !== request.marketId
+    const otherPending = Object.values(state.records).find(item => (item.assetId !== request.assetId
+      || item.marketId !== request.marketId || item.roundId !== request.roundId)
       && (item.status === "prepared" || item.status === "submitted"));
     if (otherPending) return result(request, "pending", "等待钱包上一笔结算交易确认");
     const approved = await backend.approved();
@@ -271,7 +317,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const prepared = await backend.prepare(call);
     record = {
-      marketId: request.marketId, roundId: request.roundId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
+      marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
       prepared, fromBlock: before.block.toString(), balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(),
       expectedPayout: expectedPayout.toString(), transactionHash: prepared.transactionHash,
     };

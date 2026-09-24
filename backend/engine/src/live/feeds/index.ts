@@ -87,6 +87,7 @@ export type FeedEvent =
     }
   | {
       kind: "venue";
+      asset?: string;
       venue: number;
       tsUnix: number;
       bid: number;
@@ -219,6 +220,8 @@ export class FeedQueue {
       // Map replacement keeps a busy market's place instead of starving others.
       this.decisions.set(key, event);
     } else if (event.kind === "btc" || event.kind === "oracle") {
+      if (!Number.isFinite(event.tsUnix) || event.tsUnix <= 0
+        || !Number.isFinite(event.price) || event.price <= 0) return;
       const key = JSON.stringify([event.kind, event.asset?.trim().toLowerCase() || "btc"]);
       const previous = this.decisions.get(key);
       if (previous && (previous.kind === "btc" || previous.kind === "oracle")

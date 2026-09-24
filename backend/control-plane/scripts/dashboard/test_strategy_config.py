@@ -75,6 +75,30 @@ class StrategyDraftTests(unittest.TestCase):
             self.store.activate_draft(0, "missing")
         self.assertFalse(self.path.exists())
 
+    def test_asset_id_is_normalized_and_persisted(self):
+        config = default_config()
+        config["assetId"] = " ETH "
+        saved = self.store.save(config, 0)
+        self.assertEqual(saved["config"]["assetId"], "eth")
+        self.assertEqual(self.store.get()["config"]["assetId"], "eth")
+
+    def test_legacy_config_without_asset_defaults_to_btc(self):
+        config = default_config()
+        config.pop("assetId")
+        self.assertEqual(self.store.save(config, 0)["config"]["assetId"], "btc")
+
+    def test_invalid_asset_id_is_rejected(self):
+        config = default_config()
+        config["assetId"] = "ETH/USD"
+        with self.assertRaises(ConfigValidationError):
+            self.store.save(config, 0)
+
+    def test_runtime_unsupported_asset_is_rejected(self):
+        config = default_config()
+        config["assetId"] = "xrp"
+        with self.assertRaises(ConfigValidationError):
+            self.store.save(config, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

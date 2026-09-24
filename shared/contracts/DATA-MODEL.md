@@ -2,7 +2,7 @@
 
 页面消费统一 ViewModel，后端原始 DTO 由 adapter 转换。
 
-当前只支持 `assetId="btc"` 和 `cycle="5m"`。`marketId` 为 Polymarket conditionId，未知时是 `null`，不能填场次 slug；`roundId` 为运行时明确提供的 BTC 五分钟场次起始 Unix 边界字符串，未知时是 `null`，不能从 slug 或当前时间推导。现代 DTO 的所有规范时间字段统一为 UTC Unix 秒数或 `null`，旧接口及原始兼容字段保留原格式。
+账本/API 支持服务器运行池中的规范化 `assetId` 列表，`btc` 是默认资产和旧接口别名；资产出现在目录中只表示可发现，不表示策略已启用或允许交易。`cycle` 当前由运行时提供，BTC 默认是 `5m`。`marketId` 为 Polymarket conditionId，未知时是 `null`，不能填场次 slug；`roundId` 必须由运行时明确提供，未知时是 `null`，不能从 slug 或当前时间推导。现代 DTO 的所有规范时间字段统一为 UTC Unix 秒数或 `null`，旧接口及原始兼容字段保留原格式。
 
 交易运行时是市场身份的唯一来源。账本投影按 `platform_status.runtime.markets` 保存 `marketId -> roundId` 映射，并把它应用到缺少身份字段的 `order`、`fill` 和 `platform_settlement` 事件。`roundId` 必须由运行时明确提供；`market.name`/`market_slug` 只作显示和兼容别名，不能代替 roundId。映射缺失时保留 `null`，不按时间戳推断轮次；事件到达顺序改变时，后到的运行状态可以回填之前的投影。重启后的成交汇总以账户范围内的 `trade_id + order_id` 作为经济成交身份，不能只依赖单次运行的 `event_id`，不同账户始终隔离。
 
@@ -14,7 +14,7 @@
 
 ### MarketAssetViewModel
 
-`{ assetId, symbol, name, marketId, roundId, cycle: "5m", startAt, endAt, yes, no, volume, liquidity, quoteAt, sourceAt, expiresAt, source, stale, error, eligibility, enabled, effectiveRoundId, runtimeState }`
+`{ assetId, symbol, name, marketId, roundId, cycle, startAt, endAt, yes, no, volume, liquidity, quoteAt, sourceAt, expiresAt, source, stale, error, eligibility, enabled, effectiveRoundId, runtimeState }`
 
 `yes/no` 统一表示 YES/NO；自动交易页面不能再用没有映射说明的 UP/DOWN。
 
@@ -22,7 +22,7 @@
 
 `{ assets, desiredIds, currentIds, nextRoundIds, updatedAt, source }`
 
-当前是固定 BTC 的只读状态，`desiredIds/currentIds` 来自服务器，不能将浏览器选择当作已确认配置。运行池编辑尚未提供，`capabilityDetails.editMarketPool=false`。
+`desiredIds/currentIds/nextRoundIds` 是服务器确认的资产 ID 列表，不能将浏览器选择当作已确认配置；当前控制面运行时支持集合为 `btc`、`eth`、`sol`，`btc` 仍兼容旧调用方。运行时未声明可交易能力的资产必须显示为 unavailable/disabled，不能由账本猜测或放行；单实例运行池只能有一个资产。
 
 ### OrderBookViewModel
 
@@ -38,7 +38,9 @@
 
 ### StrategyConfigViewModel
 
-`{ strategyId, revision, triggerPrice, confirmationPrice, maxBuyPrice, stageShares, roundBudgetUsd, totalBudgetUsd, dailyLossUsd, durationMinutes, effectiveRoundId }`
+`{ strategyId, assetId, revision, triggerPrice, confirmationPrice, maxBuyPrice, stageShares, roundBudgetUsd, totalBudgetUsd, dailyLossUsd, durationMinutes, effectiveRoundId }`
+
+`assetId` defaults to `btc`, is normalized to lowercase by the control plane, and is passed to the runtime start command. A legacy saved configuration without this field is read as `btc` and rewritten with the next save.
 
 价格单位固定为 USD 概率（0 到 1）或固定为 cents，二者不能混用。当前设计稿输入是 cents、预览显示 USD，接入时必须在 adapter 统一成一种。
 
@@ -62,7 +64,7 @@
 
 ## 页面状态
 
-每个模块都要能表达 `loading`、`ready`、`stale`、`empty`、`error`、`unavailable`。错误时保留最后成功快照，同时在标题处显示来源和更新时间。
+每个模块都要能表达 `loading`、`ready`、`stale`、`empty`、`error`、`unavailable`。错误时保留最后成功快照，同时在标题处显示来源和更新时间。订单、成交、结算、持仓和统计的身份过滤使用 `assetId + marketId + roundId`；同名市场、订单或成交 ID 不得跨资产合并。旧的 market/round URL 只做兼容解析，缺少明确身份时保留 `null`，不猜测归属。
 
 ## Store 分片
 

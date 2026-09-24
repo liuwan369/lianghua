@@ -155,6 +155,35 @@ test("reference signals are scoped by asset with a backwards-compatible BTC defa
   assert.deepEqual(drain(queue), [nextBtc, eth]);
 });
 
+test("a second asset keeps its reference signal and paired book isolated from BTC", t => {
+  clock(t);
+  const queue = new FeedQueue();
+  const btcBook = book("btc", 1);
+  const ethBook = book("eth", 1);
+  const btc = { kind: "oracle", asset: "btc", tsUnix: ROUND + 100, price: 100_000 };
+  const eth = { kind: "oracle", asset: "eth", tsUnix: ROUND + 100, price: 3_000 };
+  queue.push(btcBook);
+  queue.push(ethBook);
+  queue.push(btc);
+  queue.push(eth);
+  const events = drain(queue);
+  assert.equal(events.find(event => event.kind === "book" && event.snapshot.marketId === btcBook.snapshot.marketId)?.snapshot.YES.assetId,
+    btcBook.snapshot.YES.assetId);
+  assert.equal(events.find(event => event.kind === "book" && event.snapshot.marketId === ethBook.snapshot.marketId)?.snapshot.YES.assetId,
+    ethBook.snapshot.YES.assetId);
+  assert.deepEqual(events.filter(event => event.kind === "oracle"), [btc, eth]);
+});
+
+test("invalid reference events cannot replace a valid asset signal", t => {
+  clock(t);
+  const queue = new FeedQueue();
+  const valid = { kind: "oracle", asset: "eth", tsUnix: ROUND + 100, price: 3_000 };
+  queue.push(valid);
+  queue.push({ ...valid, tsUnix: Number.NaN, price: 9_000 });
+  queue.push({ ...valid, tsUnix: ROUND + 101, price: Number.POSITIVE_INFINITY });
+  assert.deepEqual(drain(queue), [valid]);
+});
+
 test("user events stay lossless, tick sizes precede books, and trade telemetry is bounded", t => {
   clock(t);
   const queue = new FeedQueue();
