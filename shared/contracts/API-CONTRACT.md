@@ -30,8 +30,8 @@
 | 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前/下一场由运行时维护。`btc` 是兼容别名，不能用未知资产 ID 绕过校验 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
-| 策略当前版本 | GET | `/api/strategy/config` | 页面加载 |
-| 保存策略草稿 | POST | `/api/strategy/drafts` | 独立持久化，不发布、不自动启动 |
+| 策略当前版本 | GET | `/api/strategy/config` | 页面加载；返回已规范化的 `assetId` |
+| 保存策略草稿 | POST | `/api/strategy/drafts` | 独立持久化，不发布、不自动启动；`config.assetId` 缺省兼容为 `btc` |
 | 激活策略 | POST | `/api/strategy/activate` | `{ expectedRevision, draftId, effectiveRoundId?: null }` |
 | 策略参考参数 | GET/POST/DELETE | `/api/strategy/presets` | 尚未提供，`presets=false` |
 | 本场持仓 | GET | `/api/rounds/{roundId}/position?assetId=btc&marketId=...` | 首次加载/切场；按 `assetId + marketId + roundId` 精确匹配，旧 URL 仅作为兼容入口 |
@@ -81,6 +81,7 @@
 {
   "action": "start",
   "strategyId": "btc-reversal",
+  "assetId": "btc",
   "revision": 12,
   "requestId": "uuid"
 }

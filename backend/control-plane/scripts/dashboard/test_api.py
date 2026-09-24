@@ -82,6 +82,7 @@ class ApiTests(unittest.TestCase):
             code, published = self.request("/api/strategy/activate", request)
             self.assertEqual(code, 200)
             self.assertEqual(published["status"], "published")
+            self.assertEqual(server_module.strategy_config_status()["assetId"], "btc")
             self.assertEqual(server_module.strategy_config_store().get()["savedRevision"], 1)
             self.assert_metadata(published)
 
