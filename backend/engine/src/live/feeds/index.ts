@@ -59,6 +59,9 @@ export interface MarketAssetSnapshot {
   askSize?: number;
   bids?: [number, number][];
   asks?: [number, number][];
+  /** L2 observation time, distinct from a later fast best-price update. */
+  depthSourceAt?: number;
+  depthExpiresAt?: number;
   sourceAt?: number;
   expiresAt?: number;
   sequence?: number;
@@ -72,9 +75,17 @@ export interface FeedMarketIdentity {
   sequenceBase?: number;
 }
 
+export interface ReferenceTimes {
+  sourceAt?: number;
+  expiresAt?: number;
+  clockSource?: "exchange" | "received" | "mixed";
+}
+
+export const REFERENCE_FRESH_MAX_SEC = 5;
+
 export type FeedEvent =
-  | { kind: "btc"; asset?: string; tsUnix: number; price: number }
-  | { kind: "oracle"; asset?: string; tsUnix: number; price: number }
+  | ({ kind: "btc"; asset?: string; tsUnix: number; price: number } & ReferenceTimes)
+  | ({ kind: "oracle"; asset?: string; tsUnix: number; price: number } & ReferenceTimes)
   | { kind: "book"; snapshot: BookSnapshot }
   | { kind: "tickSize"; token: string; tickSize: number; tsUnix: number }
   | {
@@ -85,7 +96,7 @@ export type FeedEvent =
       takerSide: string;
       tsUnix: number;
     }
-  | {
+  | ({
       kind: "venue";
       asset?: string;
       venue: number;
@@ -94,7 +105,7 @@ export type FeedEvent =
       ask: number;
       bidSz: number;
       askSz: number;
-    }
+    } & ReferenceTimes)
   | { kind: "user"; event: UserFeedEvent; receivedAtMonoMs?: number }
   | { kind: "userStatus"; healthy: boolean; tsUnix: number }
   | ({ kind: "bookStatus"; healthy: boolean; connected?: boolean;
@@ -159,6 +170,11 @@ function regressed(next: number | undefined, previous: number | undefined): bool
   return previous != null && (next == null || next < previous);
 }
 
+type ReferenceEvent = Extract<FeedEvent, { kind: "btc" | "oracle" }>;
+function referenceExpiry(event: ReferenceEvent): number {
+  return Math.min(event.expiresAt ?? Infinity, (event.sourceAt ?? event.tsUnix) + REFERENCE_FRESH_MAX_SEC);
+}
+
 /** Async queue feeds push into; orchestrator drains. */
 export class FeedQueue {
   private priority: FeedEvent[] = [];
@@ -167,6 +183,7 @@ export class FeedQueue {
   private telemetry: FeedEvent[] = [];
   private waiters: Array<() => void> = [];
   private readonly acceptedBooks = new Map<string, BookWatermark>();
+  private readonly acceptedReferences = new Map<string, number>();
   private nextPruneAt = 0;
   private static readonly MAX_TELEMETRY_EVENTS = 256;
 
@@ -221,11 +238,15 @@ export class FeedQueue {
       this.decisions.set(key, event);
     } else if (event.kind === "btc" || event.kind === "oracle") {
       if (!Number.isFinite(event.tsUnix) || event.tsUnix <= 0
-        || !Number.isFinite(event.price) || event.price <= 0) return;
-      const key = JSON.stringify([event.kind, event.asset?.trim().toLowerCase() || "btc"]);
-      const previous = this.decisions.get(key);
-      if (previous && (previous.kind === "btc" || previous.kind === "oracle")
-        && event.tsUnix < previous.tsUnix) return;
+        || !Number.isFinite(event.price) || event.price <= 0 || event.tsUnix > now + 1
+        || (event.sourceAt != null && (!Number.isFinite(event.sourceAt) || event.sourceAt <= 0 || event.sourceAt > event.tsUnix))
+        || (event.expiresAt != null && !Number.isFinite(event.expiresAt)) || referenceExpiry(event) <= now) return;
+      const asset = event.asset?.trim().toLowerCase() ?? "btc";
+      if (!/^[a-z0-9]+$/.test(asset) || (event.kind === "btc" && asset !== "btc")) return;
+      const key = JSON.stringify([event.kind, asset]);
+      const previous = this.acceptedReferences.get(key);
+      if (previous != null && event.tsUnix < previous) return;
+      this.acceptedReferences.set(key, event.tsUnix);
       this.decisions.set(key, event);
     } else {
       // Trades are useful telemetry, but they must never delay a decision
@@ -244,7 +265,9 @@ export class FeedQueue {
     if (priority) return priority;
     for (const [key, event] of this.decisions) {
       this.decisions.delete(key);
-      if (event.kind !== "book" || bookExpiry(event.snapshot) > now) return event;
+      if (event.kind === "book" && bookExpiry(event.snapshot) <= now) continue;
+      if ((event.kind === "btc" || event.kind === "oracle") && referenceExpiry(event) <= now) continue;
+      return event;
     }
     for (const [key, event] of this.config) {
       this.config.delete(key);
@@ -256,6 +279,9 @@ export class FeedQueue {
   private prune(now: number): void {
     if (now < this.nextPruneAt) return;
     this.nextPruneAt = now + 1;
+    for (const [key, timestamp] of this.acceptedReferences) {
+      if (timestamp + REFERENCE_FRESH_MAX_SEC <= now) this.acceptedReferences.delete(key);
+    }
     for (const [key, watermark] of this.acceptedBooks) {
       if (watermark.retainUntil <= now) this.acceptedBooks.delete(key);
     }

@@ -238,16 +238,26 @@ starting, record `git status`, the active branch, and existing project PIDs.
 Afterward confirm no probe process remains. Do not put credentials in the
 command line, output, or repository.
 
-Latest post-cleanup read-only server result (34.242.206.196, 2026-09-24, no
-strategy or order process):
+Latest read-only server result (34.242.206.196, 2026-09-24, no strategy or
+order process):
 
 | Asset | Snapshots | Five levels | Recovery | Processing P50 / P99 | Regressions |
 | --- | ---: | --- | ---: | ---: | --- |
-| BTC | 495 | YES + NO | 74 ms | 0.0125 / 0.2432 ms | sequence 0, source 0 |
+| BTC | 537 accepted fresh pairs | observed complete depth | 252 ms recovery | probe result reported no sequence/source regressions |
+| SOL | 390 accepted fresh pairs | observed complete depth | 168 ms recovery | probe result reported no sequence/source regressions |
+| ETH | 14 accepted pairs | incomplete/one-sided raw books; no complete five-level pair | recovery failed in this 25s run | no fabricated quote accepted |
 
-Previous ETH parameterization check (2026-09-23) remains valid: 205 paired
-snapshots, YES + NO five-level depth, 261 ms recovery, 0.042 / 0.411 ms
-processing P50/P99, and zero sequence/source regressions.
+The latest ETH result is a venue-data availability finding, not a signal to
+fill missing levels. Raw ETH frames showed boundary-price one-sided books
+(NO bids without asks and YES asks without bids), so the adapter correctly
+kept the market incomplete and did not publish a paired executable snapshot.
+An earlier ETH run had complete paired depth, but it is not a substitute for
+the current server result; repeat the probe before enabling that asset.
+
+The probe was also changed so each asset owns an independent discovery loop.
+A slow ETH/SOL discovery request cannot delay a BTC feed that has already been
+discovered. `Promise.allSettled` remains only inside each asset loop to handle
+current-round and next-round prewarm independently.
 
 The raw-frame check also observed `book`, `price_changes`, and
 `best_bid_ask` events on the server. A first short BTC run started at a round

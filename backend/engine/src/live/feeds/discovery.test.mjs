@@ -65,3 +65,13 @@ test("parameterized discovery requests the selected asset slug", async t => {
   assert.equal(found?.asset, "eth");
   assert.equal(found?.roundId, "1800000000");
 });
+
+test("discovery requires an unambiguous binary outcome mapping without shifting malformed tokens", () => {
+  const slug = "sol-updown-5m-1800000000";
+  assert.equal(parseMarket(market(slug, ["Down", "Up"]), "sol").upToken, "no-token");
+  assert.equal(parseMarket(market(slug, ["No", "Yes"]), "sol").downToken, "yes-token");
+  assert.equal(parseMarket(market(slug, ["First", "Second"]), "sol"), undefined);
+  assert.equal(parseMarket(market(slug, []), "sol"), undefined);
+  assert.equal(parseMarket({ ...market(slug), clobTokenIds: [null, "yes-token", "no-token"] }, "sol"), undefined);
+  assert.equal(parseMarket({ ...market(slug), clobTokenIds: ["one", "two", "three"] }, "sol"), undefined);
+});

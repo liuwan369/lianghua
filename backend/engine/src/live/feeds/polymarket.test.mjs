@@ -171,6 +171,41 @@ test("zero-size and boundary-price snapshot levels cannot initialize depth", asy
   assert.equal(h.feed.isHealthy(), false);
 });
 
+test("non-executable boundary levels do not discard the valid L2 baseline", async t => {
+  const h = await harness(t), time = stamp();
+  const yes = book("yes", time);
+  yes.bids.push({ price: "0", size: "100" }, { price: "0.2", size: "0" });
+  yes.asks.push({ price: "1", size: "100" });
+  h.socket.frame([yes, book("no", time)]);
+  assert.deepEqual(h.books().at(-1).YES.bids, [[0.4, 10]]);
+  assert.deepEqual(h.books().at(-1).YES.asks, [[0.6, 12]]);
+});
+
+test("same-price fast quotes preserve fresh depth with its original L2 clock", async t => {
+  const h = await harness(t), time = Date.now();
+  h.socket.frame([book("yes", time), book("no", time)]);
+  t.mock.method(Date, "now", () => time + 300);
+  h.socket.frame([top("yes", time + 300, 0.4, 0.6), top("no", time + 300, 0.4, 0.6)]);
+  assert.equal(h.books().at(-1).YES.sourceAt, (time + 300) / 1000);
+  assert.equal(h.books().at(-1).YES.depthSourceAt, time / 1000);
+  assert.deepEqual(h.books().at(-1).YES.bids, [[0.4, 10]]);
+  t.mock.method(Date, "now", () => time + 2100);
+  h.socket.frame([top("yes", time + 2100, 0.4, 0.6), top("no", time + 2100, 0.4, 0.6)]);
+  assert.equal(h.books().at(-1).YES.bids, undefined);
+  assert.equal(h.books().at(-1).YES.depthSourceAt, undefined);
+  assert.equal(h.feed.isHealthy(), true);
+});
+
+test("a matching L2 baseline arriving just after a fast quote is published immediately", async t => {
+  const h = await harness(t), time = stamp();
+  h.socket.frame([top("yes", time), top("no", time)]);
+  assert.equal(h.books().at(-1).YES.bids, undefined);
+  h.socket.frame([book("yes", time, 0.45, 0.55), book("no", time, 0.45, 0.55)]);
+  assert.equal(h.books().length, 2);
+  assert.deepEqual(h.books().at(-1).YES.bids, [[0.45, 10]]);
+  assert.equal(h.books().at(-1).sourceAt, time / 1000);
+});
+
 test("no complete depth is published before an L2 baseline", async t => {
   const h = await harness(t), time = stamp();
   h.socket.frame([book("no", time), { event_type: "price_change", timestamp: String(time),
@@ -190,6 +225,30 @@ test("source age continues to increase after receipt", async t => {
   assert.equal(h.feed.isHealthy(), true);
   t.mock.method(Date, "now", () => now + 200);
   assert.equal(h.feed.isHealthy(), false);
+});
+
+test("wrong-market and future frames cannot poison token watermarks", async t => {
+  const h = await harness(t), time = stamp();
+  h.socket.frame([book("yes", time), book("no", time)]);
+  h.socket.frame({ ...book("yes", time + 1, 0.49), market: "other-market" });
+  h.socket.frame(top("yes", time + 60_000, 0.51));
+  assert.equal(h.books().length, 1);
+  h.socket.frame(top("yes", time + 2, 0.46));
+  assert.equal(h.books().at(-1).YES.bid, 0.46);
+  assert.equal(h.feed.isHealthy(), true);
+});
+
+test("boundary fast prices and crossed L2 invalidate an otherwise fresh pair", async t => {
+  const h = await harness(t), time = stamp();
+  h.socket.frame([book("yes", time), book("no", time)]);
+  h.socket.frame(top("yes", time + 1, 0, 1));
+  assert.equal(h.feed.isHealthy(), false);
+  assert.equal(h.books().length, 1);
+  h.socket.frame(book("yes", time + 2, 0.7, 0.6));
+  assert.equal(h.feed.isHealthy(), false);
+  assert.equal(h.books().length, 1);
+  h.socket.frame(book("yes", time + 3));
+  assert.equal(h.feed.isHealthy(), true);
 });
 
 test("an older side keeps its own source time and limits paired snapshot expiry", async t => {
@@ -234,6 +293,22 @@ test("equal-time reconnect snapshot rebuilds depth without refreshing quotes", a
   ] });
   assert.deepEqual(h.books().at(-1).YES.bids, [[0.45, 5], [0.4, 10]]);
   assert.deepEqual(h.books().at(-1).YES.asks, [[0.6, 12]]);
+  assert.equal(h.feed.isHealthy(), true);
+});
+
+test("reconnect publishes the first fully fresh bilateral pair even when prices are unchanged", async t => {
+  const h = await harness(t), time = stamp();
+  h.socket.frame([book("yes", time), book("no", time)]);
+  h.socket.terminate();
+  await delay(300);
+  const socket = Socket.instances.at(-1);
+  socket.frame([book("yes", time), book("no", time)]);
+  assert.equal(h.feed.isHealthy(), false);
+  const fresh = Date.now();
+  socket.frame([top("yes", fresh, 0.4, 0.6), top("no", fresh, 0.4, 0.6)]);
+  assert.equal(h.books().length, 2);
+  assert.equal(h.books().at(-1).YES.bid, 0.4);
+  assert.equal(h.books().at(-1).NO.ask, 0.6);
   assert.equal(h.feed.isHealthy(), true);
 });
 

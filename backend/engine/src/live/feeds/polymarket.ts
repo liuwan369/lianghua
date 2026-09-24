@@ -88,7 +88,9 @@ function levelList(v: unknown): [number, number][] | undefined {
     const o = lv as Record<string, unknown>;
     const p = num(o.price);
     const size = num(o.size);
-    if (p == null || p <= 0 || p >= 1 || size == null || size <= 0) return undefined;
+    if (p == null || p < 0 || p > 1 || size == null || size < 0) return undefined;
+    // Non-executable boundary/empty levels must not discard all valid L2 levels.
+    if (p === 0 || p === 1 || size === 0) continue;
     out.push([p, size]);
   }
   return out;
@@ -281,7 +283,14 @@ function bestBidAskChanges(
         else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
         continue;
       }
-      if (!(bid > 0 && bid < 1) || !(ask > 0 && ask < 1) || bid > ask) continue;
+      if (bid < 0 || ask > 1 || bid > ask) continue;
+      if (bid === 0 || ask === 1) {
+        if (!acceptsTimestamp(side, exchangeMs)) continue;
+        changes.push({ side: side ? "up" : "down", exchangeMs, order: candidateOrder, clear: true });
+        if (side) accepted.upMs = Math.max(accepted.upMs, exchangeMs);
+        else accepted.downMs = Math.max(accepted.downMs, exchangeMs);
+        continue;
+      }
       // Equal timestamps are ordered only within this frame so a delayed
       // duplicate from a later frame cannot replace a newer top-of-book frame.
       if (!acceptsTimestamp(side, exchangeMs)) continue;
@@ -397,6 +406,11 @@ export function runPolymarketFeed(
   deadline: number,
   identity: MarketFeedIdentity = {},
 ): { stop: () => void; isHealthy: (maxStaleMs?: number) => boolean } {
+  if (!upToken || !downToken || upToken === downToken) throw new Error("distinct outcome tokens are required");
+  const roundStart = identity.roundId && /^\d+$/.test(identity.roundId) ? Number(identity.roundId) : undefined;
+  if (roundStart != null && Number.isSafeInteger(roundStart) && roundStart % 300 === 0) {
+    deadline = Math.min(deadline, roundStart + 300);
+  }
   let alive = true;
   const stopSignal = new AbortController();
   let activeWs: WebSocket | undefined;
@@ -484,6 +498,7 @@ export function runPolymarketFeed(
         let publishedDownBid: number | undefined;
         let publishedDownAsk: number | undefined;
         let publishedAtMs = 0;
+        let publishedUpDepthReady = false, publishedDownDepthReady = false;
         let upDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
         let downDepth: { bids: [number, number][]; asks: [number, number][] } | undefined;
         let upDepthAtMs = 0;
@@ -557,13 +572,19 @@ export function runPolymarketFeed(
               return;
             }
             try {
-              for (const raw of (Array.isArray(v) ? v : [v])) {
-                if (!raw || typeof raw !== "object") continue;
+              // Reject contradictory market identities and future clocks before
+              // they can advance any per-token watermark.
+              v = (Array.isArray(v) ? v : [v]).filter(raw => {
+                if (!raw || typeof raw !== "object") return false;
                 const e = raw as Record<string, unknown>;
                 const id = e.market_id ?? e.market ?? e.condition_id;
+                if (resolvedMarketId && typeof id === "string" && id !== resolvedMarketId) return false;
+                const exchangeMs = exchangeTimeMs(e);
+                if (exchangeMs != null && exchangeMs > receivedAtUnix * 1000 + PM_WS_MAX_CLOCK_SKEW_MS) return false;
                 const knownAsset = e.asset_id === upToken || e.asset_id === downToken;
                 if (!resolvedMarketId && knownAsset && typeof id === "string" && id) resolvedMarketId = id;
-              }
+                return true;
+              });
               for (const change of tickSizeChanges(v)) {
                 const tsUnix = change.tsUnix ?? nowUnix();
                 const side = change.token === upToken ? "up" : change.token === downToken ? "down" : undefined;
@@ -574,7 +595,7 @@ export function runPolymarketFeed(
                 else tickSizes.down = change.tickSize;
               }
               for (const trade of marketTrades(v)) {
-                sink({ kind: "marketTrade", ...trade });
+                if (trade.token === upToken || trade.token === downToken) sink({ kind: "marketTrade", ...trade });
               }
               // Apply the full frame before producing one paired snapshot. The
               // fast top is authoritative until a newer L2 update catches up.
@@ -659,14 +680,19 @@ export function runPolymarketFeed(
               const upAsk = upTop?.ask ?? ua![0];
               const downBid = downTop?.bid ?? db![0];
               const downAsk = downTop?.ask ?? da![0];
+              if (upBid > upAsk || downBid > downAsk) {
+                hasCompleteBook = false;
+                reportHealth(false, "incomplete_book");
+                return;
+              }
               const upDepthMatches = upDepth != null
+                && atMs - upDepthAtMs <= PM_WS_SOURCE_FRESH_MAX_MS
                 && (upFastClearedAtMs === 0 || upDepthAtMs > upFastClearedAtMs)
-                && (upTop == null || (upDepthAtMs >= upTop.exchangeMs
-                  && upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk));
+                && upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk;
               const downDepthMatches = downDepth != null
+                && atMs - downDepthAtMs <= PM_WS_SOURCE_FRESH_MAX_MS
                 && (downFastClearedAtMs === 0 || downDepthAtMs > downFastClearedAtMs)
-                && (downTop == null || (downDepthAtMs >= downTop.exchangeMs
-                  && downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk));
+                && downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk;
               const outputUpDepth = upDepthMatches ? upDepth : undefined;
               const outputDownDepth = downDepthMatches ? downDepth : undefined;
               const upBidSz = outputUpDepth?.bids.find(([price]) => price === upBid)?.[1];
@@ -709,7 +735,8 @@ export function runPolymarketFeed(
               const topChanged = publishedUpBid !== upBid || publishedUpAsk !== upAsk
                 || publishedDownBid !== downBid || publishedDownAsk !== downAsk;
               const refreshDue = atMs - publishedAtMs >= PM_WS_DEPTH_REFRESH_MS;
-              if (!topChanged && !refreshDue && !healthChanged) return;
+              const depthReadinessChanged = upDepthMatches !== publishedUpDepthReady || downDepthMatches !== publishedDownDepthReady;
+              if (!topChanged && !refreshDue && !healthChanged && !depthReadinessChanged) return;
               const snapshotSequence = ++sequence;
               const expiresAt = Math.min(deadline,
                 (Math.min(upExchangeMs, downExchangeMs) + PM_WS_SOURCE_FRESH_MAX_MS) / 1000);
@@ -721,6 +748,8 @@ export function runPolymarketFeed(
                 askSize: upAskSz,
                 bids: outputUpDepth?.bids,
                 asks: outputUpDepth?.asks,
+                depthSourceAt: outputUpDepth ? upDepthAtMs / 1000 : undefined,
+                depthExpiresAt: outputUpDepth ? Math.min(deadline, upDepthAtMs / 1000 + PM_WS_SOURCE_FRESH_MAX_MS / 1000) : undefined,
                 sourceAt: upExchangeMs / 1000,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -733,6 +762,8 @@ export function runPolymarketFeed(
                 askSize: downAskSz,
                 bids: outputDownDepth?.bids,
                 asks: outputDownDepth?.asks,
+                depthSourceAt: outputDownDepth ? downDepthAtMs / 1000 : undefined,
+                depthExpiresAt: outputDownDepth ? Math.min(deadline, downDepthAtMs / 1000 + PM_WS_SOURCE_FRESH_MAX_MS / 1000) : undefined,
                 sourceAt: downExchangeMs / 1000,
                 expiresAt,
                 sequence: snapshotSequence,
@@ -786,6 +817,8 @@ export function runPolymarketFeed(
               publishedDownBid = downBid;
               publishedDownAsk = downAsk;
               publishedAtMs = atMs;
+              publishedUpDepthReady = upDepthMatches;
+              publishedDownDepthReady = downDepthMatches;
               sink({ kind: "book", snapshot: snap });
             } catch (error) {
               hasCompleteBook = false;
