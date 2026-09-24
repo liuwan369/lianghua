@@ -75,8 +75,10 @@ subprocess.run([shutil.which("npm.cmd") or "npm", "run", "build"], cwd=engine_pr
 for path in (BUILD / "backend/engine/dist").rglob("*"):
     if path.is_file():
         CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
+baseline = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=ROOT,
+                          text=True, capture_output=True, check=True).stdout.splitlines()[-1]
 deleted = subprocess.check_output(
-    ["git", "diff", "--diff-filter=D", "--name-only", "1edb1e0", REV], cwd=ROOT, text=True
+    ["git", "diff", "--diff-filter=D", "--name-only", baseline, REV], cwd=ROOT, text=True
 ).splitlines()
 REMOVED = sorted(name for source in deleted if (name := target_name(source)) and release_path(name) and name not in CONTENT)
 MANIFEST = {"revision": REV, "release": RELEASE,
