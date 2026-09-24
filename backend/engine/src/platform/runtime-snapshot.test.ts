@@ -43,6 +43,7 @@ function paired(sequence: number, at: number, yesAsk: number, noAsk: number): Ma
   assert.equal(platform.ingestSnapshot(first), true);
   assert.deepEqual(observed, first, "listeners receive the paired snapshot");
   assert.deepEqual(strategyObserved, first, "strategy receives the same paired shape");
+  assert.deepEqual(platform.market.snapshots()[0], first, "status snapshots preserve the accepted paired object");
   const status = strategy.getStatus();
   assert.equal(status.rounds[0]?.roundId, "1000", "strategy status exposes the explicit round identity");
   assert.equal(status.currentRound?.roundId, "1000", "strategy status exposes the current round identity");

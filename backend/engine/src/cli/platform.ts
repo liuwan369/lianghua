@@ -126,9 +126,13 @@ export function validateMarkets(input: unknown): MarketInfo[] {
   const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
   for (const market of input) {
     if (!market || !nonempty(market.id) || marketIds.has(market.id) || !nonempty(market.name)
-      || !number(market.startsAt) || !number(market.endsAt) || market.startsAt < 0 || market.endsAt <= market.startsAt
+      || !/^btc-updown-5m(?:-|$)/i.test(market.name)
+      || (market.asset !== undefined && (typeof market.asset !== "string" || market.asset.toLowerCase() !== "btc"))
+      || !nonempty(market.roundId) || !/^\d+$/.test(market.roundId) || market.roundId !== String(market.startsAt)
+      || !number(market.startsAt) || !number(market.endsAt) || market.startsAt < 0
+      || market.startsAt % MARKET_WINDOW_SEC !== 0 || market.endsAt - market.startsAt !== MARKET_WINDOW_SEC
       || !Array.isArray(market.instruments) || market.instruments.length !== 2) {
-      throw new CliInputError("each Polymarket market needs a unique id, name, ordered timestamps and two instruments");
+      throw new CliInputError("each market must be a BTC five-minute market with unique identity, aligned timestamps and two instruments");
     }
     marketIds.add(market.id);
     for (const instrument of market.instruments) {
@@ -265,7 +269,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   };
   const marketIdentity = (tokenId: string) => {
     const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === tokenId));
-    return { market_slug: market?.name ?? null,
+    return { market_id: market?.id ?? null, round_id: market?.roundId ?? null, market_slug: market?.name ?? null,
       side: market?.instruments.find(instrument => instrument.tokenId === tokenId)?.outcome ?? null };
   };
   const record = (event: TradingEvent) => {
@@ -276,7 +280,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         token_id: order.tokenId, strategy_id: order.strategyId, status: order.status,
         venue_status: order.venueStatus ?? null,
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
-        price: order.price, shares: order.shares, direction: order.direction, ...marketIdentity(order.tokenId),
+        price: order.price, shares: order.shares, direction: order.direction, created_at: order.createdAt,
+        market_id: event.marketId ?? order.marketId ?? marketIdentity(order.tokenId).market_id,
+        round_id: event.roundId ?? order.roundId ?? marketIdentity(order.tokenId).round_id,
+        market_slug: marketIdentity(order.tokenId).market_slug, side: marketIdentity(order.tokenId).side,
         sign_latency_ms: order.signLatencyMs ?? null, risk_metadata_latency_ms: order.riskMetadataLatencyMs ?? null,
         l2_header_latency_ms: order.l2HeaderLatencyMs ?? null, post_latency_ms: order.postLatencyMs ?? null,
         response_headers_latency_ms: order.responseHeadersLatencyMs ?? null,
@@ -301,8 +308,11 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal?.write("fill", { trade_id: fill.tradeId, order_id: fill.orderId, token_id: fill.tokenId,
         strategy_id: order?.strategyId ?? null, price: fill.price, shares: fill.shares,
         fee: fill.feeUsd, fee_source: fill.feeSource ?? null, trade_status: fill.status ?? "CONFIRMED",
-        is_maker: fill.isMaker, direction: fill.direction, ...marketIdentity(fill.tokenId),
-        engine_ts: fill.ts }, `fill:${JSON.stringify([fill.tradeId, fill.orderId])}${fill.status ? `:${fill.status}:${fill.feeSource ?? "estimate"}:${fill.feeUsd}` : ""}`);
+        is_maker: fill.isMaker, direction: fill.direction,
+        market_id: event.marketId ?? fill.marketId ?? order?.marketId ?? marketIdentity(fill.tokenId).market_id,
+        round_id: event.roundId ?? fill.roundId ?? order?.roundId ?? marketIdentity(fill.tokenId).round_id,
+        market_slug: marketIdentity(fill.tokenId).market_slug, side: marketIdentity(fill.tokenId).side,
+        created_at: fill.ts, engine_ts: fill.ts }, `fill:${JSON.stringify([fill.tradeId, fill.orderId])}${fill.status ? `:${fill.status}:${fill.feeSource ?? "estimate"}:${fill.feeUsd}` : ""}`);
     } else if (event.kind === "latency") {
       const fields = { metric: event.metric, duration_ms: event.durationMs,
         market_id: event.marketId ?? null, token_id: event.tokenId ?? null,
@@ -325,12 +335,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal?.write("platform_stopped", { reason: signalReason ?? "run_complete" });
     } else if (event.kind === "settlement") {
       const market = selectedMarkets.find(item => item.id === event.result.marketId);
-      journal?.write("platform_settlement", { market_id: event.result.marketId, market_slug: market?.name ?? null,
+      journal?.write("platform_settlement", { market_id: event.result.marketId, round_id: event.result.roundId ?? market?.roundId ?? null,
+        created_at: Date.now() / 1000, market_slug: market?.name ?? null,
         state: event.result.state, transaction_id: event.result.transactionId ?? null,
         payout_verified: event.result.payoutVerified === true,
         credited_usd: event.result.creditedUsd ?? null, expected_payout_usd: event.result.expectedPayoutUsd ?? null,
         cash_before_usd: event.result.cashBeforeUsd ?? null, cash_after_usd: event.result.cashAfterUsd ?? null },
-      `settlement:${JSON.stringify([event.result.marketId, event.result.state, event.result.transactionId ?? null])}`);
+      `settlement:${JSON.stringify([event.result.marketId, event.result.roundId ?? market?.roundId ?? null,
+        event.result.state, event.result.transactionId ?? null])}`);
     }
   };
   const summary = (status: "starting" | "running" | "stopped" | "failed") => {
@@ -380,6 +392,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: platform?.market.list() ?? selectedMarkets,
+      // This is the accepted paired snapshot projection. It is cloned by the
+      // platform API and is not rebuilt from legacy single-token books.
+      snapshots: platform?.market.snapshots() ?? [],
       books: (platform?.market.books() ?? []).map(book => {
         const receivedAt = book.receivedAt ?? book.ts;
         const ageMs = Number.isFinite(receivedAt) ? Math.max(0, (now - receivedAt) * 1000) : null;
@@ -394,6 +409,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       strategy: strategy?.id ?? null, markets: runtime.markets.map(market => market.id),
       cashUsd: runtime.cash_usd, positions: runtime.positions_count, orders: runtime.orders_count,
       activeOrders: runtime.active_orders, fills: runtime.fills_count, risk: runtime.risk,
+      snapshots: runtime.snapshots,
       journal: runtime.journal,
       telemetry: platform?.telemetry.snapshot() ?? null, capabilities: platform?.capabilities() ?? null,
       reason: signalReason ?? null }));
