@@ -21,7 +21,7 @@
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">面向平台支持加密货币的五分钟反转策略控制平台。</p>
       <nav aria-label="设置导航">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待连接</small></div>
+      <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待后端连接</small></div>
     </aside>
 
     <main class="settings-main">
@@ -41,7 +41,7 @@
       </div>
 
       <section class="settings-pane active" data-settings-pane="diagnostics" role="tabpanel">
-        <div class="pane-heading"><div><p class="eyebrow">HEALTH OVERVIEW</p><h2>系统诊断</h2><p>显示当前服务健康和交易链路状态，全部为只读信息。</p></div><div class="pane-actions"><span class="live-chip"><i></i><b data-diagnostic-state>等待服务器</b></span><button type="button" class="action-button" data-refresh-diagnostics><span>↻</span>刷新诊断</button></div></div>
+        <div class="pane-heading"><div><p class="eyebrow">HEALTH OVERVIEW</p><h2>系统诊断</h2><p>显示当前服务健康和交易链路状态，全部为只读信息。</p></div><div class="pane-actions"><span class="live-chip"><i></i><b data-diagnostic-state>后端未连接</b></span><button type="button" class="action-button" data-refresh-diagnostics><span>↻</span>刷新诊断</button></div></div>
 
         <section class="diagnostic-panel connection-panel">
           <div class="panel-heading"><div><p class="eyebrow">CONNECTIONS</p><h3>连接状态</h3></div><span class="panel-meta" data-diagnostic-time>最后检查 --:--:--</span></div>
@@ -53,7 +53,7 @@
           </div>
         </section>
 
-        <div class="diagnostic-note"><span class="note-icon">i</span><span>服务器资源与服务进程在总览查看，交易速度在自动交易查看；这里仅保留连接与版本诊断。</span><span class="note-time" data-note-time>等待服务器连接</span></div>
+        <div class="diagnostic-note"><span class="note-icon">i</span><span>服务器资源与服务进程在总览查看，交易速度在自动交易查看；这里仅保留连接与版本诊断。</span><span class="note-time" data-note-time>后端未连接</span></div>
       </section>
 
       <section class="settings-pane" data-settings-pane="account" role="tabpanel" hidden>
@@ -242,7 +242,6 @@
   };
   const runAccountAction = async (save, useSaved = false) => {
     if (accountBusy || controlBusy || closed) return;
-    if (window.PolyPreview.config.mode === "local-preview") { text("[data-account-message]", "服务器未连接，无法检查或保存账户。"); return; }
     if (!accountRequestAllowed()) { text("[data-account-message]", "账户密钥只允许通过受保护的 HTTPS 同源页面提交；当前页面未发送任何输入。"); return; }
     const payload = useSaved ? {} : Object.fromEntries(accountFields.map((field) => [field.dataset.accountField, field.value.trim()]).filter(([, value]) => value));
     if (!useSaved && !validateAccount(payload)) return;
@@ -268,7 +267,8 @@
     } catch (error) {
       if (!closed) text("[data-account-message]", `${safeMessage(error?.message || "账户操作失败", payload)}；未确认保存成功，输入已保留。`);
     } finally {
-      submitted.forEach((item) => { item.value = ""; });
+      // Only the success path clears submitted password fields. Keep every
+      // value after a failed request so the operator can correct and retry.
       Object.keys(payload).forEach((key) => { delete payload[key]; });
       accountBusy = false;
       pendingAccountAction = "";
@@ -285,7 +285,6 @@
   });
   controlButton.addEventListener("click", async () => {
     if (accountBusy || controlBusy || closed || !controlInput.value.trim()) return;
-    if (window.PolyPreview.config.mode === "local-preview") { text("[data-control-message]", "服务器未连接，无法建立控制会话。"); return; }
     if (!accountRequestAllowed()) { text("[data-control-message]", "控制密码只允许通过受保护的 HTTPS 同源页面提交；当前未发送输入。"); return; }
     let token = controlInput.value.trim();
     if (token.length > 1024) { text("[data-control-message]", "控制密码长度超出限制；未发送输入。"); return; }
@@ -317,6 +316,6 @@
   });
   window.addEventListener("pageshow", () => { closed = false; syncAccountButtons(); });
   syncAccountButtons();
-  if (window.PolyPreview.config.mode !== "local-preview") void refreshDiagnostics();
+  void refreshDiagnostics();
 })();
 

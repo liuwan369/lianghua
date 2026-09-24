@@ -19,14 +19,14 @@
       <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">\u9762\u5411 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
-      <nav aria-label="\u7B56\u7565\u8BBE\u8BA1\u7A3F\u5BFC\u822A">${navMarkup}</nav>
-      <div class="sidebar-status"><i></i><span>\u539F\u578B\u9884\u89C8</span><small>\u6570\u636E\u5F85\u63A5\u5165</small></div>
+      <nav aria-label="\u7B56\u7565\u5BFC\u822A">${navMarkup}</nav>
+      <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待后端连接</small></div>
     </aside>
 
     <main class="preview-main strategy-main">
       <header class="preview-header strategy-header">
         <div class="hero-copy"><p class="eyebrow">STRATEGY CONFIGURATION</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip">CRYPTO \xB7 5m</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
-        <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>\u8BBE\u8BA1\u7A3F \xB7 \u672A\u8FDE\u63A5</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>btc-reversal</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>未来未创建场次</strong></article></div></div>
+        <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>后端未连接</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>btc-reversal</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>未来未创建场次</strong></article></div></div>
       </header>
 
       <section class="strategy-identity-panel">
@@ -39,21 +39,17 @@
           <div class="strategy-tabs" role="tablist"><button type="button" class="strategy-tab active" data-strategy-tab="parameters" role="tab" aria-selected="true">\u7B56\u7565\u53C2\u6570</button><button type="button" class="strategy-tab" data-strategy-tab="runtime" role="tab" aria-selected="false">\u8FD0\u884C\u8BBE\u7F6E</button></div>
 
           <div class="strategy-pane" data-strategy-pane="parameters">
-            <div class="preset-row"><div><strong>\u5FEB\u901F\u53C2\u8003</strong><small>参考参数接口尚未提供，当前不可用。</small></div><div class="preset-actions" data-preset-list><div class="preset-item" data-preset-item><button type="button" class="preset-choice" data-preset data-preset-trigger="67" data-preset-confirm="70" data-preset-max="70" data-preset-stages="5,18,54,130">70 \u7F8E\u5206\u53C2\u8003</button><button type="button" class="preset-remove" data-remove-preset aria-label="\u5220\u9664 70 \u7F8E\u5206\u53C2\u8003">\xD7</button></div><div class="preset-item" data-preset-item><button type="button" class="preset-choice" data-preset data-preset-trigger="70" data-preset-confirm="75" data-preset-max="75" data-preset-stages="5,22,75,236">75 \u7F8E\u5206\u53C2\u8003</button><button type="button" class="preset-remove" data-remove-preset aria-label="\u5220\u9664 75 \u7F8E\u5206\u53C2\u8003">\xD7</button></div><button type="button" class="add-preset" data-add-preset>\uFF0B \u6DFB\u52A0\u53C2\u8003</button></div></div>
-            <div class="preset-editor" data-preset-editor hidden><div><strong>\u6DFB\u52A0\u53C2\u8003\u53C2\u6570</strong><small>\u4FDD\u5B58\u5230\u672C\u5730\u8BBE\u8BA1\u7A3F\u5217\u8868\uFF0C\u540E\u7EED\u53EF\u7EE7\u7EED\u5220\u9664\u3002</small></div><div class="preset-editor-fields"><label>\u540D\u79F0<input type="text" value="\u65B0\u53C2\u8003" data-preset-new-name></label><label>\u89E6\u53D1\u4EF7<input type="number" value="67" data-preset-new-trigger></label><label>\u786E\u8BA4\u4EF7<input type="number" value="70" data-preset-new-confirm></label><label>\u6700\u9AD8\u4E70\u5165<input type="number" value="70" data-preset-new-max></label></div><div class="preset-editor-actions"><button type="button" class="secondary-button" data-cancel-preset>\u53D6\u6D88</button><button type="button" class="save-button" data-create-preset>\u6DFB\u52A0\u5230\u5217\u8868</button></div></div>
+            <div class="preset-row"><div><strong>\u5FEB\u901F\u53C2\u8003</strong><small>服务器尚未提供参考参数，当前不可用。</small></div><div class="preset-actions" data-preset-list><span class="muted-text">等待后端能力</span></div></div>
+            <div class="preset-editor" data-preset-editor hidden><div><strong>\u6DFB\u52A0\u53C2\u8003\u53C2\u6570</strong><small>服务器参考参数接口接入后，可保存并复用参数。</small></div><div class="preset-editor-fields"><label>\u540D\u79F0<input type="text" value="\u65B0\u53C2\u8003" data-preset-new-name></label><label>\u89E6\u53D1\u4EF7<input type="number" value="67" data-preset-new-trigger></label><label>\u786E\u8BA4\u4EF7<input type="number" value="70" data-preset-new-confirm></label><label>\u6700\u9AD8\u4E70\u5165<input type="number" value="70" data-preset-new-max></label></div><div class="preset-editor-actions"><button type="button" class="secondary-button" data-cancel-preset>\u53D6\u6D88</button><button type="button" class="save-button" data-create-preset>\u6DFB\u52A0\u5230\u5217\u8868</button></div></div>
             <div class="config-section"><div class="config-section-heading"><div><span class="section-number">01</span><div><h3>\u89E6\u53D1\u4E0E\u4E70\u5165\u4EF7\u683C</h3><p>\u63A7\u5236\u4EC0\u4E48\u65F6\u5019\u8FDB\u5165\u53CD\u8F6C\u3001\u786E\u8BA4\u65B9\u5411\uFF0C\u4EE5\u53CA\u6700\u9AD8\u9650\u4EF7\u3002</p></div></div><span class="section-state">\u4EF7\u683C\u5355\u4F4D \xB7 \u7F8E\u5206</span></div><div class="field-grid three-fields">
-              <label class="strategy-field"><span>\u89E6\u53D1\u4EF7</span><div><input type="number" step="1" value="67" data-field="trigger"><b>\xA2</b></div><small>\u5356\u4E00\u4ECE\u4E0B\u65B9\u8DE8\u8FC7\u6B64\u4EF7\u683C\u65F6\u89E6\u53D1\u3002</small></label>
-              <label class="strategy-field"><span>\u53CD\u8F6C\u786E\u8BA4\u4EF7</span><div><input type="number" step="1" value="70" data-field="confirm"><b>\xA2</b></div><small>\u7528\u4E8E\u8BB0\u5F55\u65B9\u5411\u786E\u8BA4\uFF0C\u4E0D\u5EF6\u8FDF\u4E0B\u4E00\u9636\u6BB5\u3002</small></label>
-              <label class="strategy-field"><span>\u6700\u9AD8\u4E70\u5165\u4EF7</span><div><input type="number" step="1" value="70" data-field="maxPrice"><b>\xA2</b></div><small>\u9650\u4EF7\u4E0D\u8FFD\u9AD8\uFF0C\u672A\u6210\u4EA4\u4F59\u91CF\u7EE7\u7EED\u6302\u5355\u3002</small></label>
+              <label class="strategy-field"><span>\u89E6\u53D1\u4EF7</span><div><input type="number" step="1" placeholder="--" data-field="trigger"><b>\xA2</b></div><small>\u5356\u4E00\u4ECE\u4E0B\u65B9\u8DE8\u8FC7\u6B64\u4EF7\u683C\u65F6\u89E6\u53D1\u3002</small></label>
+              <label class="strategy-field"><span>\u53CD\u8F6C\u786E\u8BA4\u4EF7</span><div><input type="number" step="1" placeholder="--" data-field="confirm"><b>\xA2</b></div><small>\u7528\u4E8E\u8BB0\u5F55\u65B9\u5411\u786E\u8BA4\uFF0C\u4E0D\u5EF6\u8FDF\u4E0B\u4E00\u9636\u6BB5\u3002</small></label>
+              <label class="strategy-field"><span>\u6700\u9AD8\u4E70\u5165\u4EF7</span><div><input type="number" step="1" placeholder="--" data-field="maxPrice"><b>\xA2</b></div><small>\u9650\u4EF7\u4E0D\u8FFD\u9AD8\uFF0C\u672A\u6210\u4EA4\u4F59\u91CF\u7EE7\u7EED\u6302\u5355\u3002</small></label>
             </div></div>
 
-            <div class="config-section stages-config"><div class="config-section-heading"><div><span class="section-number">02</span><div><h3>\u6BCF\u9636\u6BB5\u65B0\u589E\u4EFD\u989D</h3><p>\u65B0\u65B9\u5411\u53CD\u8F6C\u65F6\u8FDB\u5165\u4E0B\u4E00\u9636\u6BB5\uFF0C\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3\u3002</p></div></div><label class="stage-count"><span>\u9636\u6BB5\u6570</span><input type="number" min="1" max="100" step="1" value="4" data-stage-count></label></div><label class="stage-count"><span>执行阶段上限</span><input type="number" min="1" max="100" step="1" value="4" data-max-stages></label><div class="stage-input-grid" data-stage-inputs>
-              <label class="stage-input stage-one"><span><i>1</i>\u7B2C\u4E00\u9636\u6BB5</span><div><input type="number" value="5" data-stage="1"><b>\u4EFD</b></div><small>\u9996\u6B21\u8FDB\u5165\u89E6\u53D1\u533A</small></label>
-              <label class="stage-input stage-two"><span><i>2</i>\u7B2C\u4E8C\u9636\u6BB5</span><div><input type="number" value="18" data-stage="2"><b>\u4EFD</b></div><small>\u7B2C\u4E00\u6B21\u53CD\u8F6C\u786E\u8BA4</small></label>
-              <label class="stage-input stage-three"><span><i>3</i>\u7B2C\u4E09\u9636\u6BB5</span><div><input type="number" value="54" data-stage="3"><b>\u4EFD</b></div><small>\u7B2C\u4E8C\u6B21\u53CD\u8F6C\u786E\u8BA4</small></label>
-              <label class="stage-input stage-four"><span><i>4</i>\u7B2C\u56DB\u9636\u6BB5</span><div><input type="number" value="130" data-stage="4"><b>\u4EFD</b></div><small>\u7B2C\u4E09\u6B21\u53CD\u8F6C\u786E\u8BA4</small></label>
+            <div class="config-section stages-config"><div class="config-section-heading"><div><span class="section-number">02</span><div><h3>\u6BCF\u9636\u6BB5\u65B0\u589E\u4EFD\u989D</h3><p>\u65B0\u65B9\u5411\u53CD\u8F6C\u65F6\u8FDB\u5165\u4E0B\u4E00\u9636\u6BB5\uFF0C\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3\u3002</p></div></div><label class="stage-count"><span>\u9636\u6BB5\u6570</span><input type="number" min="1" max="100" step="1" placeholder="--" data-stage-count></label></div><label class="stage-count"><span>执行阶段上限</span><input type="number" min="1" max="100" step="1" placeholder="--" data-max-stages></label><div class="stage-input-grid" data-stage-inputs>
             </div></div>
-            <div class="budget-hint" data-budget-hint><span class="info-dot">i</span><span>\u6309\u6700\u9AD8\u4E70\u5165\u4EF7\u8BA1\u7B97\u7684执行阶段名义成本 <strong>$1.45</strong>\u3002\u4EA4\u6613\u8D39\u7528\u53E6\u8BA1\u3002</span></div>
+            <div class="budget-hint" data-budget-hint><span class="info-dot">i</span><span>按服务器返回的最高买入价计算执行阶段名义成本 <strong>--</strong>。交易费用另计。</span></div>
           </div>
 
           <div class="strategy-pane" data-strategy-pane="runtime" hidden>
@@ -70,7 +66,7 @@
         </div>
 
         <aside class="strategy-aside">
-          <section class="preview-card"><div class="panel-heading"><div><p class="eyebrow">STRATEGY PARAMETERS</p><h2>\u53C2\u6570\u9884\u89C8</h2></div><span class="preview-dot"><i></i>\u5F85\u4FDD\u5B58</span></div><div class="preview-price"><span>\u89E6\u53D1\u4EF7</span><strong data-preview-trigger>-- <em>USD</em></strong><span class="preview-arrow">\u2192</span><div><span>\u6700\u9AD8\u4E70\u5165</span><strong data-preview-max>-- <em>USD</em></strong></div></div><div class="preview-steps"><div class="preview-step-heading"><span>\u5206\u9636\u6BB5\u4E70\u5165\u8BA1\u5212</span><b data-preview-total>--</b></div><ol><li><i>1</i><span>\u8FDB\u5165\u89E6\u53D1\u533A</span><strong data-preview-stage="1">--</strong></li><li><i>2</i><span>\u7B2C\u4E00\u6B21\u786E\u8BA4</span><strong data-preview-stage="2">--</strong></li><li><i>3</i><span>\u7B2C\u4E8C\u6B21\u786E\u8BA4</span><strong data-preview-stage="3">--</strong></li><li><i>4</i><span>\u7B2C\u4E09\u6B21\u786E\u8BA4</span><strong data-preview-stage="4">--</strong></li></ol></div></section>
+          <section class="preview-card"><div class="panel-heading"><div><p class="eyebrow">LIVE PREVIEW</p><h2>\u53C2\u6570\u9884\u89C8</h2></div><span class="preview-dot"><i></i>\u5F85\u4FDD\u5B58</span></div><div class="preview-price"><span>\u89E6\u53D1\u4EF7</span><strong data-preview-trigger>0.67 <em>USD</em></strong><span class="preview-arrow">\u2192</span><div><span>\u6700\u9AD8\u4E70\u5165</span><strong data-preview-max>0.70 <em>USD</em></strong></div></div><div class="preview-steps"><div class="preview-step-heading"><span>\u5206\u9636\u6BB5\u4E70\u5165\u8BA1\u5212</span><b data-preview-total>207 \u4EFD</b></div><ol><li><i>1</i><span>\u8FDB\u5165\u89E6\u53D1\u533A</span><strong data-preview-stage="1">5 \u4EFD</strong></li><li><i>2</i><span>\u7B2C\u4E00\u6B21\u786E\u8BA4</span><strong data-preview-stage="2">18 \u4EFD</strong></li><li><i>3</i><span>\u7B2C\u4E8C\u6B21\u786E\u8BA4</span><strong data-preview-stage="3">54 \u4EFD</strong></li><li><i>4</i><span>\u7B2C\u4E09\u6B21\u786E\u8BA4</span><strong data-preview-stage="4">130 \u4EFD</strong></li></ol></div></section>
           <section class="activation-card"><div class="activation-heading"><span class="activation-icon">\u25F7</span><div><h3>\u751F\u6548\u89C4\u5219</h3><p>\u4E0D\u4F1A\u7ACB\u5373\u6539\u53D8\u5F53\u524D\u8FD0\u884C</p></div></div><div class="activation-line"><i class="done"></i><div><strong>保存策略草稿</strong><small>仅保存，不发布、不启动</small></div></div><div class="activation-line"><i></i><div><strong>另行激活草稿</strong><small>当前和已预热场次配置保持不变</small></div></div><div class="activation-line"><i></i><div><strong>\u81EA\u52A8\u4EA4\u6613\u8BFB\u53D6</strong><small>激活后仅影响未来未创建场次</small></div></div></section>
           <section class="guardrail-card"><div class="guardrail-heading"><span>\u7B56\u7565\u7EA6\u675F</span><b>4 \u9879</b></div><ul><li><i>\u2713</i>\u5355\u4E00 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565</li><li><i>\u2713</i>\u4EF7\u683C\u4F7F\u7528\u9650\u4EF7\uFF0C\u4E0D\u8FFD\u9AD8</li><li><i>\u2713</i>\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3</li><li><i>\u2713</i>\u4FDD\u5B58\u4E0D\u4F1A\u81EA\u52A8\u542F\u52A8\u4EA4\u6613</li></ul></section>
         </aside>
@@ -111,6 +107,7 @@
   let baselineRevision = null;
   let formConfig = null;
   let formKey = null;
+  const legacyMode = core.config.apiFlavor === "legacy";
   const published = () => resource?.data?.config || null;
   const draft = () => resource?.draft || null;
   const validDraft = () => {
@@ -123,20 +120,20 @@
     || formConfig?.assetId || published()?.assetId;
   const setMessage = (message) => text("[data-save-state]", message);
   const controls = () => {
-    const available = Boolean(published()) || core.config.mode === "local-preview";
+    const available = Boolean(published());
     root.querySelectorAll("[data-field], [data-stage], [data-stage-count], [data-max-stages], [data-runtime-field]")
       .forEach((input) => { input.disabled = busy || !available; });
     root.querySelector("[data-save]").disabled = busy || !available;
     root.querySelector("[data-reset]").disabled = busy || !published();
     root.querySelector("[data-reload]").disabled = busy;
-    root.querySelector("[data-activate]").disabled = busy || dirty || !validDraft() || resource.status !== "ready";
+    root.querySelector("[data-activate]").disabled = legacyMode || busy || dirty || !validDraft() || resource.status !== "ready";
   };
   const updatePreview = () => {
-    const trigger = Number(field("trigger").value);
-    const max = Number(field("maxPrice").value);
-    const stages = stageInputs().map((input) => Number(input.value));
+    const trigger = field("trigger").value.trim() === "" ? null : Number(field("trigger").value);
+    const max = field("maxPrice").value.trim() === "" ? null : Number(field("maxPrice").value);
+    const stages = stageInputs().map((input) => input.value.trim() === "" ? null : Number(input.value));
     const limit = Number(root.querySelector("[data-max-stages]").value);
-    const total = stages.slice(0, Number.isInteger(limit) ? limit : 0).reduce((sum, value) => sum + value, 0);
+    const total = stages.length && Number.isInteger(limit) && limit > 0 ? stages.slice(0, limit).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0) : null;
     text("[data-preview-trigger]", Number.isFinite(trigger) ? `${trigger / 100} USD` : "--");
     text("[data-preview-max]", Number.isFinite(max) ? `${max / 100} USD` : "--");
     text("[data-preview-total]", `${Number.isFinite(total) ? total : "--"} 份`);
@@ -179,7 +176,7 @@
     resource = next;
     text("[data-strategy-revision]", resource.revision == null ? "--" : `REV-${resource.revision}`);
     text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布 REV-${resource.revision}`);
-    text(".strategy-state-chip", resource.status === "ready" ? "服务器配置已读取" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : core.config.mode === "local-preview" ? "服务器未连接 · 不发布策略" : "配置待接入");
+    text(".strategy-state-chip", resource.status === "ready" ? "服务器配置已读取" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
     const savedDraft = draft();
     text("[data-draft-state]", validDraft()
       ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于 REV-${savedDraft.expectedRevision} · 未激活`
@@ -194,6 +191,18 @@
     }
     if (!busy && resource.status === "stale") setMessage("策略接口断开，保留上次配置和未保存输入。");
     if (!busy && resource.status === "unavailable") setMessage("策略配置不可用，等待接口恢复。");
+    if (!dirty && !busy && !published() && !validDraft()) {
+      field("trigger").value = "";
+      field("confirm").value = "";
+      field("maxPrice").value = "";
+      renderStages([]);
+      root.querySelector("[data-stage-count]").value = "";
+      root.querySelector("[data-max-stages]").value = "";
+      root.querySelectorAll("[data-runtime-field]").forEach((input) => { input.value = ""; });
+      formConfig = null;
+      formKey = "unavailable";
+      updatePreview();
+    }
     controls();
   };
   root.querySelector("[data-stage-count]").addEventListener("input", (event) => {
@@ -257,6 +266,15 @@
     busy = true; controls(); setMessage("正在保存草稿，尚未发布…");
     try {
       const result = await adapter.saveStrategy(payload);
+      if (result?.published === true) {
+        resource = store.getState().strategy;
+        dirty = false;
+        formConfig = { ...result.config, stageShares: [...result.config.stageShares] };
+        baselineRevision = result.revision;
+        formKey = `revision:${result.revision}`;
+        setMessage("旧版策略接口已保存并发布；启动时使用该服务器版本。现代草稿接口接入后可恢复单独激活。");
+        return;
+      }
       if (result?.accepted === false || typeof result?.draftId !== "string" || !Number.isInteger(result.expectedRevision) || !result.config) throw new Error(result?.message || "接口没有确认草稿已保存；输入已保留。");
       resource = store.getState().strategy;
       dirty = false;
@@ -280,7 +298,8 @@
     } catch (error) { setMessage(error.message || "激活失败，草稿已保留。"); }
     finally { busy = false; controls(); }
   });
+  if (legacyMode) root.querySelector("[data-activate]").hidden = true;
   updatePreview();
   store.subscribe("strategy", receive);
-  void adapter.loadStrategy();
+  void adapter.loadMarkets().then(() => adapter.loadStrategy());
 })();
