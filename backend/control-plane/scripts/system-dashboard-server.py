@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import uuid
+import re
 from http.cookies import SimpleCookie
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -83,6 +84,7 @@ _modern_response_cache: OrderedDict = OrderedDict()
 _market_pool_cache: dict = {}
 
 _BTC_POOL_ID = "btc"
+_ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 
 _CONTROL_SESSION_COOKIE = "pm_control_session"
 _CONTROL_SESSION_VERSION = "v1"
@@ -163,8 +165,8 @@ def _pool_ids(value, *, field: str) -> list[str]:
         if not isinstance(item, str) or not item.strip():
             raise ValueError(f"{field} 包含无效市场 ID")
         normalized = item.strip().lower()
-        if normalized != _BTC_POOL_ID:
-            raise ValueError("运行池只允许 BTC 五分钟市场")
+        if not _ASSET_ID_RE.fullmatch(normalized):
+            raise ValueError(f"{field} 包含无效资产 ID")
         if normalized not in result:
             result.append(normalized)
     return result
@@ -469,6 +471,7 @@ def _account_values() -> dict[str, str]:
     """Load only supported account fields; never return them through the API."""
     names = {
         "POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER",
+        "POLY_SIGNATURE_TYPE",
         "POLYMARKET_OWNER_PRIVATE_KEY", "POLYMARKET_PRIVATE_KEY",
         "POLYMARKET_SESSION_PRIVATE_KEY", "RELAYER_API_KEY",
         "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY",
@@ -1273,7 +1276,9 @@ def _trading_environment() -> dict:
         env.pop(name, None)
     # Pin the exact checked wallet; blank also prevents dotenv restoring overrides.
     env["POLY_FUNDER"] = env.get("POLYMARKET_WALLET_ADDRESS") or env.get("POLY_FUNDER", "")
-    env["POLY_SIGNATURE_TYPE"] = ""
+    # Preserve an explicitly configured legacy signature mode. An empty value
+    # remains empty for deployments whose runtime selects the default.
+    env["POLY_SIGNATURE_TYPE"] = env.get("POLY_SIGNATURE_TYPE", "")
     return env
 
 
@@ -1385,6 +1390,12 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                         or row.get("_collector_online") is False
                         or (isinstance(book_status, dict) and book_status.get("healthy") is False))
     snapshot = canonical_snapshot(row)
+    asset_id = row.get("assetId") or row.get("asset_id") or row.get("asset")
+    if isinstance(snapshot, dict):
+        asset_id = snapshot.get("assetId") or snapshot.get("asset_id") or asset_id
+    asset_id = asset_id.strip().lower() if isinstance(asset_id, str) and _ASSET_ID_RE.fullmatch(asset_id.strip().lower()) else None
+    symbol = row.get("symbol") if isinstance(row.get("symbol"), str) else (asset_id.upper() if asset_id else None)
+    cycle = row.get("cycle") if isinstance(row.get("cycle"), str) else "5m"
     slug = str(row.get("slug") or "")
     start, end = _epoch(row.get("start")), _epoch(row.get("end"))
     if not isinstance(snapshot, dict):
@@ -1402,9 +1413,9 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                       else None)
         market_id = market_id if isinstance(market_id, str) and market_id else None
         round_id = round_id if isinstance(round_id, str) and round_id else None
-        return {"assetId": "btc", "symbol": "BTC", "name": str(row.get("name") or slug or "BTC 五分钟反转"),
+        return {"assetId": asset_id, "symbol": symbol, "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
                 "marketId": market_id, "roundId": round_id, "market_id": market_id, "round_id": round_id,
-                "cycle": "5m", "startAt": start, "endAt": end, "yes": yes, "no": no,
+                "cycle": cycle, "startAt": start, "endAt": end, "yes": yes, "no": no,
                 "yesToken": yes["assetId"], "noToken": no["assetId"], "yesBid": yes["bid"],
                 "yesAsk": yes["ask"], "noBid": no["bid"], "noAsk": no["ask"],
                 "volume": row.get("volume"), "liquidity": row.get("liquidity"),
@@ -1449,14 +1460,14 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     depth_available = all(isinstance(side.get(key), list) and len(side[key]) >= 5
                           for side in (yes, no) for key in ("bids", "asks"))
     return {
-        "assetId": "btc",
-        "symbol": "BTC",
-        "name": str(row.get("name") or slug or "BTC 五分钟反转"),
+        "assetId": asset_id,
+        "symbol": symbol,
+        "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
         "marketId": market_id,
         "roundId": round_id,
         "market_id": market_id,
         "round_id": round_id,
-        "cycle": "5m",
+        "cycle": cycle,
         "startAt": start,
         "endAt": end,
         "yes": yes,
@@ -1489,7 +1500,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     }
 
 
-def _modern_markets() -> dict:
+def _modern_markets(query: dict | None = None) -> dict:
     """Read accepted runtime pairs; retain the last complete pair on failure."""
     global _modern_market_cache
     raw = _running_engine_market_status()
@@ -1502,6 +1513,7 @@ def _modern_markets() -> dict:
                              **({"_collector_online": raw.get("collector_online") is True}
                                 if "collector_online" in raw else {})})
              for row in rows if isinstance(row, dict)]
+    all_items = items
     stale = (raw.get("collector_online") is not True or not items or bool(raw.get("stale_reason"))
              or any(item["stale"] for item in items))
     value = {"schemaVersion": 1, "items": items, "markets": items,
@@ -1516,7 +1528,8 @@ def _modern_markets() -> dict:
         # modern snapshot used after the fallback itself disappears.
         has_canonical = any(canonical_snapshot(row) is not None for row in rows if isinstance(row, dict))
         if not stale and has_canonical:
-            _modern_market_cache = value
+            _modern_market_cache = {**value, "items": all_items, "markets": all_items,
+                                    "available": bool(all_items)}
         elif _modern_market_cache:
             retained = [{**item, "stale": True} for item in _modern_market_cache["items"]]
             value = {**_modern_market_cache, "items": retained, "markets": retained,
@@ -1525,6 +1538,14 @@ def _modern_markets() -> dict:
             value["items"] = None
             value["markets"] = None
             value["available"] = False
+    if query:
+        requested = query.get("assetId", [])
+        if not requested and query.get("asset") and query.get("asset") != ["crypto"]:
+            requested = query.get("asset")
+        if requested:
+            wanted = {str(value).strip().lower() for value in requested if isinstance(value, str)}
+            filtered = [item for item in (value.get("items") or []) if item.get("assetId") in wanted]
+            value = {**value, "items": filtered, "markets": filtered, "available": bool(filtered)}
     return value
 
 
@@ -1593,7 +1614,8 @@ def _event_dto(event: dict) -> dict:
                  (market if isinstance(market, str) and market.startswith("0x") else None))
     round_id = event.get("roundId") or event.get("round_id")
     severity = "error" if kind == "error" else "warning" if kind == "unresolved" else "info"
-    result = {**event, "kind": kind, "marketId": market_id, "roundId": round_id,
+    asset_id = event.get("assetId") or event.get("asset_id")
+    result = {**event, "assetId": asset_id, "asset_id": asset_id, "kind": kind, "marketId": market_id, "roundId": round_id,
             "time": _epoch(event.get("time")), "severity": severity,
             "message": event.get("message") or event.get("reason") or kind}
     if kind == "settlement":
@@ -1610,7 +1632,9 @@ def _order_dto(order: dict) -> dict:
     market_id = order.get("marketId") or order.get("market_id") or (
         market if isinstance(market, str) and market.startswith("0x") else None)
     round_id = order.get("roundId") or order.get("round_id")
-    result.update({"clientOrderId": order.get("client_order_id"), "orderId": order.get("order_id"),
+    asset_id = order.get("assetId") or order.get("asset_id")
+    result.update({"assetId": asset_id, "asset_id": asset_id,
+                   "clientOrderId": order.get("client_order_id"), "orderId": order.get("order_id"),
                    "marketId": market_id, "roundId": round_id,
                    "filledShares": order.get("filled_shares"), "updatedAt": _epoch(order.get("updated_at") or order.get("time")),
                    "createdAt": _epoch(order.get("created_at")),
@@ -1625,8 +1649,12 @@ def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
+    requested_asset = (query.get("assetId") or [None])[0]
     result = _api_ledger().events(run_id, before_id=int(cursor) if cursor else None,
-                                  limit=int(query.get("limit", ["50"])[0]), kinds=kinds)
+                                  limit=int(query.get("limit", ["50"])[0]), kinds=kinds,
+                                  asset_id=requested_asset,
+                                  market_id=(query.get("marketId") or [None])[0],
+                                  round_id=(query.get("roundId") or [None])[0])
     items = [_event_dto(event) for event in result["events"]]
     return {"schemaVersion": 1, "items": items, "events": items,
             "cursor": result.get("next_before_id"), "runId": run_id,
@@ -1639,8 +1667,12 @@ def _modern_settlements(run_id: str | None, query: dict) -> dict:
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
+    requested_asset = (query.get("assetId") or [None])[0]
     result = _api_ledger().settlements_page(run_id, before_id=int(cursor) if cursor else None,
-                                            limit=int(query.get("limit", ["50"])[0]))
+                                            limit=int(query.get("limit", ["50"])[0]),
+                                            asset_id=requested_asset,
+                                            market_id=(query.get("marketId") or [None])[0],
+                                            round_id=(query.get("roundId") or [None])[0])
     available = result.get("available", True)
     items = [_event_dto(item) for item in result.get("settlements", [])] if available else None
     metadata = _ledger_metadata(run_id)
@@ -1687,7 +1719,7 @@ def make_handler(root: Path):
                 }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/markets":
-                self._send_json(json.dumps(_modern_markets(), ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                self._send_json(json.dumps(_modern_markets(query), ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path.startswith("/api/markets/") and path.endswith("/snapshot"):
                 market_id = path[len("/api/markets/"):-len("/snapshot")].strip("/")
@@ -1757,7 +1789,15 @@ def make_handler(root: Path):
                 run_id = _api_run_id()
                 if not run_id:
                     raise KeyError("run")
-                stats = _api_ledger().summary(run_id, range=query.get("range", ["today"])[0])
+                asset_id = (query.get("assetId") or [None])[0]
+                market_id = (query.get("marketId") or [None])[0]
+                round_id_filter = (query.get("roundId") or [None])[0]
+                if asset_id is None and market_id is None and round_id_filter is None:
+                    stats = _api_ledger().summary(run_id, range=query.get("range", ["today"])[0])
+                else:
+                    stats = _api_ledger().metrics_summary(run_id, range=query.get("range", ["today"])[0],
+                                                          asset_id=asset_id, market_id=market_id,
+                                                          round_id=round_id_filter)
                 metadata = _ledger_metadata(run_id)
                 value = {"schemaVersion": 1, **stats, **metadata,
                          "pnl": stats.get("settled_pnl"),
@@ -1784,7 +1824,11 @@ def make_handler(root: Path):
                     return
                 try:
                     result = _api_ledger().orders_page(run_id, limit=int(query.get("limit", ["50"])[0]),
-                                                       offset=int(query.get("offset", ["0"])[0]), market=round_id)
+                                                       offset=int(query.get("offset", ["0"])[0]),
+                                                       market=None if query.get("marketId") or query.get("roundId") else round_id,
+                                                       asset_id=(query.get("assetId") or [None])[0],
+                                                       market_id=(query.get("marketId") or [None])[0],
+                                                       round_id=(query.get("roundId") or [round_id])[0])
                     result["orders"] = [_order_dto(order) for order in result.get("orders", [])]
                     self._send_json(json.dumps({"schemaVersion": 1, "roundId": round_id,
                         **result, **_ledger_metadata(run_id)},
@@ -1801,7 +1845,10 @@ def make_handler(root: Path):
                              "error": "当前没有运行记录", "roundId": round_id}
                 else:
                     try:
-                        value = {"schemaVersion": 1, "source": "ledger", **_api_ledger().position(run_id, round_id)}
+                        value = {"schemaVersion": 1, "source": "ledger", **_api_ledger().position(
+                            run_id, (query.get("roundId") or [round_id])[0],
+                            asset_id=(query.get("assetId") or [None])[0],
+                            market_id=(query.get("marketId") or [None])[0])}
                         metadata = _ledger_metadata(run_id)
                         value["stale"] = value.get("stale", True) or metadata["stale"]
                         value["error"] = value.get("error") or metadata["error"]

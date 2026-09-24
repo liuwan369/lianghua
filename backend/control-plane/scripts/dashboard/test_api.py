@@ -304,7 +304,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(market["expiresAt"], now + 30)
         self.assertEqual(market["error"], "market_snapshot_unhealthy")
 
-    def test_market_pool_reads_saved_state_and_rejects_non_btc(self):
+    def test_market_pool_reads_saved_state_and_accepts_normalized_assets(self):
         path = self.root / "results" / "dashboard" / "market_pool.json"
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"desiredIds": ["btc"], "currentIds": ["btc"],
@@ -316,9 +316,9 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(value["asOf"], 1234.5)
         self.assertEqual(value["updatedAt"], 1234.5)
         with patch.object(server_module, "_control_request_error", return_value=None):
-            code, rejected = self.request("/api/runtime/market-pool", {"desiredIds": ["eth"]}, method="PUT")
-            self.assertEqual(code, 400)
-            self.assertIn("BTC", rejected["error"])
+            code, saved_eth = self.request("/api/runtime/market-pool", {"desiredIds": [" ETH ", "btc", "eth"]}, method="PUT")
+            self.assertEqual(code, 200)
+            self.assertEqual(saved_eth["desiredIds"], ["eth", "btc"])
             code, saved = self.request("/api/runtime/market-pool", {"desiredIds": ["btc"]}, method="PUT")
         self.assertEqual(code, 200)
         self.assertEqual(saved["desiredIds"], ["btc"])

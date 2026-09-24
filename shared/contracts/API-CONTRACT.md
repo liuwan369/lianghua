@@ -1,6 +1,6 @@
 # 后端接口契约
 
-当前仅支持 BTC 五分钟反转策略。以下列出已提供的接口及尚未接通的能力；前端以 `/api/bootstrap` 的 `capabilityDetails` 判断能力是否可用。
+系统按服务器运行池中的资产提供 BTC 五分钟反转策略所需的账本和 API 投影。`btc` 仍是默认资产和旧接口别名；资产是否可交易由交易运行时能力和配置决定，市场目录可发现不等于策略已启用。以下列出已提供的接口及尚未接通的能力；前端以 `/api/bootstrap` 的 `capabilityDetails` 判断能力是否可用。
 
 ## 现有服务可复用接口
 
@@ -14,7 +14,7 @@
 - `GET /api/v1/system-metrics`：CPU、内存、磁盘、负载和服务进程。
 - `GET /api/strategy-config`、`PUT /api/strategy-config`：策略读取和保存。
 
-旧接口保留既有字段和时间格式。系统只运行 BTC，不扩展多币种运行池。交易控制响应表示请求处理状态，最终运行状态由 `/api/runtime/status` 和事件查询确认，不能只根据 `accepted` 判断执行完成。
+旧接口保留既有字段和时间格式。运行池由服务器配置的规范化资产 ID 列表决定，默认列表可只有 `btc`；不能因为目录发现了其他资产就宣称它们可交易。交易控制响应表示请求处理状态，最终运行状态由 `/api/runtime/status` 和事件查询确认，不能只根据 `accepted` 判断执行完成。
 
 ## REST
 
@@ -25,25 +25,25 @@
 | 用途 | 方法 | 路径 | 频率/说明 |
 |---|---|---|---|
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
-| BTC 五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 运行时 accepted snapshot 优先；采集器 canonical paired snapshot 只读展示 |
+| 市场目录 | GET | `/api/markets?assetId=btc&asset=crypto&duration=5m` | `assetId` 可选过滤；运行时 accepted snapshot 优先；采集器 canonical paired snapshot 只读展示 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
-| 固定运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化 BTC 状态；PUT 只接受 `btc`，当前/下一场由运行时维护 |
+| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前/下一场由运行时维护。`btc` 是兼容别名，不能用未知资产 ID 绕过校验 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载 |
 | 保存策略草稿 | POST | `/api/strategy/drafts` | 独立持久化，不发布、不自动启动 |
 | 激活策略 | POST | `/api/strategy/activate` | `{ expectedRevision, draftId, effectiveRoundId?: null }` |
 | 策略参考参数 | GET/POST/DELETE | `/api/strategy/presets` | 尚未提供，`presets=false` |
-| 本场持仓 | GET | `/api/rounds/{roundId}/position` | 首次加载/切场 |
-| 本场订单 | GET | `/api/rounds/{roundId}/orders` | 分页历史 |
+| 本场持仓 | GET | `/api/rounds/{roundId}/position?assetId=btc&marketId=...` | 首次加载/切场；按 `assetId + marketId + roundId` 精确匹配，旧 URL 仅作为兼容入口 |
+| 本场订单 | GET | `/api/rounds/{roundId}/orders?assetId=btc&marketId=...` | 分页历史；按复合市场身份过滤，不能跨资产或跨市场合并 |
 | 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 尚未接通，返回 501 和 `accepted=false` |
 | 账户快照 | GET | `/api/account/snapshot` | 15 秒；不返回秘密 |
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
 | 系统诊断 | GET | `/api/diagnostics/health` | 15 秒，资源和进程 |
-| 汇总统计 | GET | `/api/metrics/summary?range=today` | `run/today/all`，低频 |
-| 事件历史 | GET | `/api/events?runId=...&cursor=...&limit=50` | 按事件 ID 游标分页，低频 |
-| 成交记录 | GET | `/api/fills?runId=...&cursor=...&limit=50` | 同一账本的成交 journal 记录 |
-| 结算记录 | GET | `/api/settlements?runId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏 |
+| 汇总统计 | GET | `/api/metrics/summary?range=today&assetId=btc&marketId=...&roundId=...` | `run/today/all`，低频；过滤条件按账户和复合市场身份生效 |
+| 事件历史 | GET | `/api/events?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 按事件 ID 游标分页，低频 |
+| 成交记录 | GET | `/api/fills?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 同一账本的成交 journal 修订记录，按复合身份过滤 |
+| 结算记录 | GET | `/api/settlements?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏，按复合身份过滤 |
 
 账本统计响应提供 `fills`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
 
@@ -88,7 +88,7 @@
 
 控制命令、草稿保存和策略激活使用服务器现有控制认证。响应只代表命令处理状态；最终结果由运行状态和事件查询确认。服务状态使用 `stopped/starting/running/paused/failed` 等运行时实际状态，不能用进程存在推断所有交易动作已完成。控制响应还返回 `commandStatus=accepted|executing|confirmed|failed`；暂停最终以 `strategyRuntime.paused=true` 确认，停止后的远端订单以 `remoteOrdersState=unconfirmed` 表示尚未通过账户查询确认。
 
-账户状态只返回 `wallet` 摘要、`accountCheckState`、`accountCheckReady`、`executionCredentialsReady`、`liveStartReady`、`walletKind`、`signatureType` 和 `settlementCredentialsReady` 等非秘密诊断字段。最近检查必须匹配当前钱包且未过期；链上余额检查与异步 CLOB 可用余额分开，未知时为 `null`。Builder/Relayer 凭据是否可用于结算只在运行时明确返回时标记为布尔值，否则为 `null`。
+账户状态只返回 `wallet` 摘要、`accountCheckState`、`accountCheckReady`、`executionCredentialsReady`、`liveStartReady`、`walletKind`、`signatureType` 和 `settlementCredentialsReady` 等非秘密诊断字段。服务器仍兼容读取既有 `POLYMARKET_SESSION_PRIVATE_KEY`、`POLY_FUNDER`、`POLY_SIGNATURE_TYPE` 环境/profile 字段；profile 成为来源时也不得静默丢弃这些字段。最近检查必须匹配当前钱包且未过期；链上余额检查与异步 CLOB 可用余额分开，未知时为 `null`。Builder/Relayer 凭据是否可用于结算只在运行时明确返回时标记为布尔值，否则为 `null`。`account/save` 在交易运行中拒绝，任何 API 响应、日志或文档都不得返回密钥、Token 或 Secret。
 
 资金投影分开返回可用余额、已预留资金、持仓成本、估算手续费和已确认手续费；撤单请求或进程停止都不表示交易所已经释放资金。结算 `confirmed` 只有在 `payout_verified`、交易回执和到账金额同时核实时才可进入已确认盈亏；未决订单、未确认结算和费用缺失保持 `null`，不计入最终胜率。
 
