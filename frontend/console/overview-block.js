@@ -105,9 +105,9 @@
       start.title = reason;
     }
     if (stop) {
-      const idle = !runtime.stale && ["stopped", "failed", "unavailable"].includes(runtime.status);
-      stop.disabled = idle;
-      stop.title = idle ? "当前运行已停止" : "提交停止请求；最终状态以服务器确认为准";
+      const stoppable = !runtime.stale && ["running", "starting", "paused", "stopping"].includes(runtime.status);
+      stop.disabled = !stoppable;
+      stop.title = stoppable ? "提交停止请求；最终状态以服务器确认为准" : "没有服务器确认的可停止运行";
     }
   };
   document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", async () => {
@@ -186,7 +186,7 @@
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);
     ["current", "today", "month"].forEach((period) => {
       const suffix = period === "current" ? "current" : period;
-      setMetric(`orders-${suffix}`, formatMetric(periodValue(data, period, ["orders", "orderCount", "order_count", "ordersCount"], ["orders", "orderCount", "order_count"])));
+      setMetric(`orders-${suffix}`, formatMetric(periodValue(data, period, ["orders", "orderCount", "order_count", "ordersCount", "fill_count", "fillCount", "count"], ["orders", "orderCount", "order_count", "fill_count", "fillCount", "count"])));
       setMetric(`wins-${suffix}`, formatMetric(periodValue(data, period, ["settled_wins", "wins", "winCount", "win_count"])));
       setMetric(`losses-${suffix}`, formatMetric(periodValue(data, period, ["settled_losses", "losses", "lossCount", "loss_count"])));
       const rate = finite(periodValue(data, period, ["winRate", "win_rate", "rate"], ["winRate", "win_rate", "rate"]));
