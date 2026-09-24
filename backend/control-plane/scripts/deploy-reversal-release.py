@@ -94,7 +94,7 @@ with tarfile.open(ARCHIVE, "w:gz") as bundle:
 
 REMOTE_SCRIPT = r'''
 from pathlib import Path
-import hashlib, json, os, sys, tarfile, urllib.request, subprocess
+import grp, hashlib, json, os, sys, tarfile, urllib.request, subprocess
 root=Path('/root/pm-system').resolve()
 release=Path(sys.argv[1]).resolve()
 manifest=json.loads((release/'manifest.json').read_text())
@@ -221,8 +221,18 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
         else:
             nginx_before['link']={'type': 'absent'}
         (release/'nginx-state-before.json').write_text(json.dumps(nginx_before))
-    if not nginx_auth_file.is_file():
-        raise RuntimeError('Dashboard password file is missing; refusing to install a public console')
+    if not nginx_auth_file.is_file() or nginx_auth_file.stat().st_size < 12:
+        raise RuntimeError('Dashboard password file is missing or empty; refusing to install a public console')
+    auth_mode=nginx_auth_file.stat().st_mode & 0o777
+    auth_group=nginx_auth_file.stat().st_gid
+    if not ((auth_group == grp.getgrnam('www-data').gr_gid and auth_mode & 0o040)
+            or auth_mode & 0o004):
+        raise RuntimeError('Dashboard password file is not readable by nginx workers')
+    auth_lines=[line for line in nginx_auth_file.read_text().splitlines() if line and not line.startswith('#')]
+    if not auth_lines or any(':' not in line or not line.split(':',1)[0] or
+                             not line.split(':',1)[1].startswith(('$apr1$','$2y$','$2b$','$5$','$6$','{SHA}'))
+                             for line in auth_lines):
+        raise RuntimeError('Dashboard password file has no supported password hash entries')
     with tarfile.open(release/'before.tar.gz','w:gz') as backup:
         for name in backup_names:
             backup.add(root/name,arcname=name,recursive=False)
