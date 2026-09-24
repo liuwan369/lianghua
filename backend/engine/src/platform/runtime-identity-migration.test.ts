@@ -67,10 +67,15 @@ const legacySettlement: LiveSettlementState = {
 };
 const settle = await createLiveSettlementAdapter({ backend, restore: legacySettlement,
   persist: state => { persisted = state; } });
-const settlement = await settle({ marketId: settlementMarketId, roundId: "2000", tokenIds: ["5001", "5002"] });
+const settlement = await settle({ marketId: settlementMarketId, assetId: "btc", roundId: "2000", tokenIds: ["5001", "5002"] });
 assert.equal(settlement.state, "confirmed");
 assert.equal(settlement.roundId, "2000");
-assert.ok(persisted?.records[JSON.stringify([settlementMarketId, "2000"])]);
+assert.equal(settlement.assetId, "btc");
+assert.ok(persisted?.records[JSON.stringify(["btc", settlementMarketId, "2000"])]);
 assert.equal(persisted?.records[settlementMarketId], undefined);
+
+const ethAttempt = await settle({ marketId: settlementMarketId, assetId: "eth", roundId: "2000", tokenIds: ["5001", "5002"] });
+assert.equal(ethAttempt.state, "unsupported");
+assert.equal(ethAttempt.reason, "settlement_asset_identity_changed");
 
 console.log("runtime-identity-migration.test: PASS");
