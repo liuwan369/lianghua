@@ -55,6 +55,20 @@ class ApiTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_console_static_route_uses_published_frontend_tree(self):
+        console = self.root / "frontend" / "console"
+        console.mkdir(parents=True)
+        (console / "index.html").write_text("<html>console</html>", encoding="utf-8")
+
+        client = HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            client.request("GET", "/console/")
+            response = client.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(), b"<html>console</html>")
+        finally:
+            client.close()
+
     def assert_metadata(self, value):
         self.assertTrue({"schemaVersion", "source", "asOf", "stale", "error"} <= set(value))
         self.assertTrue(value["asOf"] is None or type(value["asOf"]) in (int, float))

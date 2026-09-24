@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import paramiko
 
 if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
@@ -17,58 +18,69 @@ if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
 if len(sys.argv) != 1:
     raise SystemExit("deploy-reversal-release.py accepts no options; use --help for usage")
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 REV = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 RELEASE = "reversal-" + REV[:7] + "-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-PROGRAM_PREFIXES = ("_external/btc-5m-market-trading-bot/src/", "web/src/", "scripts/dashboard/")
-ENGINE_ROOT = "_external/btc-5m-market-trading-bot/"
+ENGINE_ROOT = "backend/engine/"
+FRONTEND_ROOT = "frontend/console/"
+CONTROL_SCRIPTS_ROOT = "scripts/"
+CONTROL_CONFIG_ROOT = "config/"
+PROGRAM_PREFIXES = (ENGINE_ROOT + "src/", FRONTEND_ROOT, "backend/control-plane/scripts/", "shared/contracts/")
 ENGINE_METADATA = {ENGINE_ROOT + name for name in (".env.example", "README.md", "package.json", "package-lock.json")}
-GENERATED_PREFIXES = (ENGINE_ROOT + "dist/", "docs/console/")
+GENERATED_PREFIXES = (ENGINE_ROOT + "dist/",)
+
+
+def target_name(source: str) -> str | None:
+    if source.startswith("backend/control-plane/scripts/"):
+        return CONTROL_SCRIPTS_ROOT + source.removeprefix("backend/control-plane/scripts/")
+    if source.startswith("backend/control-plane/config/"):
+        return CONTROL_CONFIG_ROOT + source.removeprefix("backend/control-plane/config/")
+    if source.startswith(ENGINE_ROOT) or source.startswith(FRONTEND_ROOT) or source.startswith("shared/contracts/"):
+        return source
+    return None
 
 
 def release_path(name: str) -> bool:
-    return (name.startswith(PROGRAM_PREFIXES) or name.startswith("docs/") or name in ENGINE_METADATA
+    return (name.startswith(PROGRAM_PREFIXES) or name.startswith(FRONTEND_ROOT)
+            or name.startswith("shared/contracts/") or name in ENGINE_METADATA
             or name in {"README.md", "scripts/system-dashboard-server.py",
-                                                        "scripts/dashboard_account.py",
-                                                        "scripts/deploy-reversal-release.py",
-                                                        "config/pm-system-dashboard-dublin.service",
-                                                        "config/pm-clob-market-snapshot.service"}
-            )
+                        "scripts/dashboard_account.py", "scripts/deploy-reversal-release.py",
+                        "config/pm-system-dashboard-dublin.service",
+                        "config/pm-clob-market-snapshot.service"})
 
 
-NAMES = set(subprocess.check_output(["git", "diff", "--name-only", "1edb1e0", REV], cwd=ROOT, text=True).splitlines())
-NAMES.update(name for name in subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
-             if name.startswith(PROGRAM_PREFIXES))
-NAMES.update(ENGINE_METADATA)
+SOURCES = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
 CONTENT = {}
-for name in sorted(NAMES):
-    if not release_path(name):
+for source in sorted(SOURCES):
+    name = target_name(source)
+    if name is None:
         continue
-    # A release is built from the target commit. Deleted paths remain in the
-    # diff for audit purposes but must not be looked up in that commit.
-    exists = subprocess.run(["git", "cat-file", "-e", REV + ":" + name], cwd=ROOT,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    if exists:
-        CONTENT[name] = subprocess.check_output(["git", "show", REV + ":" + name], cwd=ROOT)
+    CONTENT[name] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+for source in ("README.md", "backend/control-plane/scripts/deploy-reversal-release.py"):
+    target = source if source == "README.md" else "scripts/deploy-reversal-release.py"
+    CONTENT[target] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+for source in ("backend/control-plane/scripts/system-dashboard-server.py", "backend/control-plane/scripts/dashboard_account.py"):
+    CONTENT["scripts/" + Path(source).name] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
 # Build the chosen commit in a separate directory: workers may keep editing and
 # building their shared checkout while this immutable program is deployed.
 BUILD = ROOT / ".deploy" / (RELEASE + "-build")
+BUILD.parent.mkdir(parents=True, exist_ok=True)
 BUILD.mkdir()
-sources = subprocess.check_output(["git", "archive", REV, "web", "_external/btc-5m-market-trading-bot"], cwd=ROOT)
+sources = subprocess.check_output(["git", "archive", REV, "backend/engine", "frontend/console", "backend/control-plane", "shared/contracts"], cwd=ROOT)
 with tarfile.open(fileobj=io.BytesIO(sources)) as source_archive:
     source_archive.extractall(BUILD, filter="data")
-for relative in ("_external/btc-5m-market-trading-bot", "web"):
-    project = BUILD / relative
-    os.symlink(ROOT / relative / "node_modules", project / "node_modules", target_is_directory=True)
-    subprocess.run([shutil.which("npm.cmd") or "npm", "run", "build"], cwd=project, check=True)
-for folder in ("_external/btc-5m-market-trading-bot/dist", "docs/console"):
-    for path in (BUILD / folder).rglob("*"):
-        if path.is_file():
-            CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
+engine_project = BUILD / "backend/engine"
+os.symlink(ROOT / "backend/engine" / "node_modules", engine_project / "node_modules", target_is_directory=True)
+subprocess.run([shutil.which("npm.cmd") or "npm", "run", "build"], cwd=engine_project, check=True)
+for path in (BUILD / "backend/engine/dist").rglob("*"):
+    if path.is_file():
+        CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
+baseline = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=ROOT,
+                          text=True, capture_output=True, check=True).stdout.splitlines()[-1]
 deleted = subprocess.check_output(
-    ["git", "diff", "--diff-filter=D", "--name-only", "1edb1e0", REV], cwd=ROOT, text=True
+    ["git", "diff", "--diff-filter=D", "--name-only", baseline, REV], cwd=ROOT, text=True
 ).splitlines()
-REMOVED = sorted(name for name in deleted if release_path(name) and name not in CONTENT)
+REMOVED = sorted(name for source in deleted if (name := target_name(source)) and release_path(name) and name not in CONTENT)
 MANIFEST = {"revision": REV, "release": RELEASE,
             "files": {name: hashlib.sha256(data).hexdigest() for name, data in CONTENT.items()},
             "removed": REMOVED, "generatedPrefixes": list(GENERATED_PREFIXES)}
@@ -82,11 +94,11 @@ with tarfile.open(ARCHIVE, "w:gz") as bundle:
 
 REMOTE_SCRIPT = r'''
 from pathlib import Path
-import hashlib, json, os, sys, tarfile, urllib.request, subprocess
+import grp, hashlib, json, os, sys, tarfile, urllib.request, subprocess
 root=Path('/root/pm-system').resolve()
 release=Path(sys.argv[1]).resolve()
 manifest=json.loads((release/'manifest.json').read_text())
-allowed_prefixes=('_external/btc-5m-market-trading-bot/','web/src/','scripts/dashboard/','docs/')
+allowed_prefixes=('backend/engine/','frontend/console/','scripts/','config/','shared/contracts/','docs/')
 allowed_exact={'README.md','scripts/system-dashboard-server.py','scripts/dashboard_account.py',
                'scripts/deploy-reversal-release.py','config/pm-system-dashboard-dublin.service',
                'config/pm-clob-market-snapshot.service'}
@@ -98,8 +110,17 @@ def checked_target(name):
         raise RuntimeError('Release path outside program allowlist: '+name)
     return target
 def status():
-    with urllib.request.urlopen('http://127.0.0.1:18766/api/v1/status',timeout=15) as response:
-        return json.load(response)
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:18766/api/v1/status',timeout=15) as response:
+            return json.load(response)
+    except urllib.error.URLError as error:
+        # The first deployment may not have installed the dashboard unit yet.
+        # Only a local connection refusal is treated as an absent service; all
+        # other failures remain deployment errors.
+        reason=str(getattr(error,'reason',error)).lower()
+        if 'connection refused' in reason or '[errno 111]' in reason:
+            return {'running':False,'live_unlocked':False,'bootstrap':True}
+        raise
 def unit_state(unit):
     def query(action):
         completed=subprocess.run(['systemctl', action, unit], capture_output=True, text=True, check=False)
@@ -111,6 +132,10 @@ if before.get('running') is not False or type(before.get('live_unlocked')) is no
 changed=[]
 unit_names={'config/pm-system-dashboard-dublin.service':'pm-system-dashboard-dublin.service',
             'config/pm-clob-market-snapshot.service':'pm-clob-market-snapshot.service'}
+nginx_specs={
+    'config/pm-system-dashboard-dublin-public.conf': '/etc/nginx/sites-available/pm-dashboard-public',
+    'config/pm-system-dashboard-dublin-renew-http.conf': '/etc/nginx/sites-available/pm-dashboard-renew-http',
+}
 obsolete=set(manifest.get('removed',[]))
 retired_units_from_manifest={unit_names[name] for name in obsolete if name in unit_names}
 for prefix in manifest.get('generatedPrefixes',[]):
@@ -139,12 +164,22 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
     backup_names=sorted({name for name in changed if name not in missing}|set(obsolete))
     changed_units=[unit_names[name] for name in changed if name in unit_names]
     removed_units=sorted(retired_units_from_manifest | {unit_names[name] for name in obsolete if name in unit_names})
+    nginx_public_link=Path('/etc/nginx/sites-enabled/pm-dashboard-public')
+    nginx_auth_file=Path('/etc/nginx/pm-dashboard.htpasswd')
+    nginx_needs_update=any(name in changed for name in nginx_specs)
+    nginx_public_target=Path(nginx_specs['config/pm-system-dashboard-dublin-public.conf'])
+    if (any(not Path(target_name).is_file() for target_name in nginx_specs.values())
+            or not nginx_public_link.is_symlink() or not nginx_auth_file.is_file()):
+        nginx_needs_update=True
+    elif os.readlink(nginx_public_link) != str(nginx_public_target):
+        nginx_needs_update=True
     collector_unit='pm-clob-market-snapshot.service'
     dashboard_unit='pm-system-dashboard-dublin.service'
     collector_changed=collector_unit in changed_units or any(
-        name.startswith('_external/btc-5m-market-trading-bot/dist/') for name in changed+obsolete)
+        name.startswith('backend/engine/dist/') for name in changed+obsolete)
     dashboard_changed=(dashboard_unit in changed_units
-                       or any(name.startswith('scripts/') and name.endswith('.py')
+                       or any((name.startswith('scripts/') or name.startswith('frontend/console/'))
+                              and name.endswith(('.py', '.js', '.html', '.css'))
                               for name in changed+obsolete))
     affected_units=set(changed_units)|set(removed_units)
     if collector_changed:
@@ -161,6 +196,43 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
             saved=release/'units-before'/unit
             saved.parent.mkdir(exist_ok=True)
             saved.write_bytes(installed_units[unit][0])
+    nginx_before={}
+    if nginx_needs_update:
+        nginx_backup=release/'nginx-before'
+        nginx_backup.mkdir(exist_ok=True)
+        for name,target_name in nginx_specs.items():
+            target=Path(target_name)
+            if target.is_symlink():
+                nginx_before[target_name]={'type': 'symlink', 'target': os.readlink(target)}
+            elif target.is_file():
+                saved=nginx_backup/Path(target_name).name
+                saved.write_bytes(target.read_bytes())
+                nginx_before[target_name]={'type': 'file', 'mode': target.stat().st_mode & 0o777}
+            else:
+                nginx_before[target_name]={'type': 'absent'}
+        if nginx_public_link.is_symlink():
+            nginx_before['link']={'type': 'symlink', 'target': os.readlink(nginx_public_link)}
+        elif nginx_public_link.is_file():
+            saved=nginx_backup/'enabled-public-file'
+            saved.write_bytes(nginx_public_link.read_bytes())
+            nginx_before['link']={'type': 'file', 'mode': nginx_public_link.stat().st_mode & 0o777}
+        elif nginx_public_link.exists():
+            raise RuntimeError('Expected nginx enabled-site path to be a file or symlink')
+        else:
+            nginx_before['link']={'type': 'absent'}
+        (release/'nginx-state-before.json').write_text(json.dumps(nginx_before))
+    if not nginx_auth_file.is_file() or nginx_auth_file.stat().st_size < 12:
+        raise RuntimeError('Dashboard password file is missing or empty; refusing to install a public console')
+    auth_mode=nginx_auth_file.stat().st_mode & 0o777
+    auth_group=nginx_auth_file.stat().st_gid
+    if not ((auth_group == grp.getgrnam('www-data').gr_gid and auth_mode & 0o040)
+            or auth_mode & 0o004):
+        raise RuntimeError('Dashboard password file is not readable by nginx workers')
+    auth_lines=[line for line in nginx_auth_file.read_text().splitlines() if line and not line.startswith('#')]
+    if not auth_lines or any(':' not in line or not line.split(':',1)[0] or
+                             not line.split(':',1)[1].startswith(('$apr1$','$2y$','$2b$','$5$','$6$','{SHA}'))
+                             for line in auth_lines):
+        raise RuntimeError('Dashboard password file has no supported password hash entries')
     with tarfile.open(release/'before.tar.gz','w:gz') as backup:
         for name in backup_names:
             backup.add(root/name,arcname=name,recursive=False)
@@ -199,6 +271,17 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
                 subprocess.run(['systemctl','enable',collector_unit],check=True)
             if collector_unit in changed_units or unit_before[collector_unit]['active']=='active':
                 subprocess.run(['systemctl','restart',collector_unit],check=True)
+        if dashboard_unit in changed_units and (Path('/etc/systemd/system')/dashboard_unit).is_file():
+            subprocess.run(['systemctl','enable',dashboard_unit],check=True)
+        if nginx_needs_update:
+            for name,target_name in nginx_specs.items():
+                source=root/name
+                subprocess.run(['install','-m','0644',str(source),target_name],check=True)
+            nginx_public_link.parent.mkdir(parents=True,exist_ok=True)
+            subprocess.run(['ln','-sfn',nginx_specs['config/pm-system-dashboard-dublin-public.conf'],
+                            str(nginx_public_link)],check=True)
+            subprocess.run(['nginx','-t'],check=True)
+            subprocess.run(['systemctl','reload','nginx'],check=True)
         mismatches=[name for name,digest in manifest['files'].items()
                     if hashlib.sha256(checked_target(name).read_bytes()).hexdigest()!=digest]
         if mismatches:
@@ -239,6 +322,34 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
             else:
                 path.write_bytes(saved[0])
                 path.chmod(saved[1])
+        if nginx_needs_update:
+            for target_name, state in nginx_before.items():
+                if target_name == 'link':
+                    continue
+                target=Path(target_name)
+                if state['type'] == 'file':
+                    saved=release/'nginx-before'/target.name
+                    target.write_bytes(saved.read_bytes())
+                    target.chmod(state['mode'])
+                elif state['type'] == 'symlink':
+                    target.unlink(missing_ok=True)
+                    target.parent.mkdir(parents=True,exist_ok=True)
+                    target.symlink_to(state['target'])
+                elif state['type'] == 'absent':
+                    target.unlink(missing_ok=True)
+            link_before=nginx_before.get('link', {'type': 'absent'})
+            if link_before['type'] == 'absent':
+                nginx_public_link.unlink(missing_ok=True)
+            elif link_before['type'] == 'symlink':
+                nginx_public_link.unlink(missing_ok=True)
+                nginx_public_link.symlink_to(link_before['target'])
+            elif link_before['type'] == 'file':
+                saved=release/'nginx-before'/'enabled-public-file'
+                nginx_public_link.unlink(missing_ok=True)
+                nginx_public_link.write_bytes(saved.read_bytes())
+                nginx_public_link.chmod(link_before['mode'])
+            subprocess.run(['nginx','-t'],check=False)
+            subprocess.run(['systemctl','reload','nginx'],check=False)
         if changed_units or removed_units:
             subprocess.run(['systemctl','daemon-reload'], check=False)
         for unit, previous in unit_before.items():
@@ -258,6 +369,7 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
         raise
 result={'revision':manifest['revision'],'release':str(release),'files_verified':len(manifest['files']),
         'files_changed':len(changed),'files_removed':len(obsolete),'dashboard_restarted':restarted,
+        'nginx_reloaded':nginx_needs_update,
         'status':{k:after.get(k) for k in ('running','mode','execution','strategy_id','live_unlocked')}}
 (release/'result.json').write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps(result))
