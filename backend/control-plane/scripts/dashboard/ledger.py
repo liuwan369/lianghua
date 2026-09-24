@@ -220,6 +220,11 @@ def _runtime_projection(value, mode):
     result = {key: value[key] for key in ("schemaVersion", "engine", "execution", "status", "mode")}
     result["strategy_id"] = _text(value.get("strategy_id"))
     result["strategy_runtime"] = _strategy_projection(value.get("strategy_runtime"))
+    snapshots = value.get("snapshots") if isinstance(value.get("snapshots"), list) else []
+    # Keep the accepted paired snapshot lossless enough for the read-only
+    # market DTO. Never rebuild it from the legacy token books below.
+    result["snapshots"] = [json.loads(json.dumps(snapshot, allow_nan=False))
+                            for snapshot in snapshots[:64] if isinstance(snapshot, dict)]
     positions = value.get("positions") if isinstance(value.get("positions"), list) else []
     result["positions"] = [{"tokenId": _text(p.get("tokenId")),
                             **{key: _number(p.get(key)) for key in ("shares", "costUsd", "realizedPnlUsd")}}

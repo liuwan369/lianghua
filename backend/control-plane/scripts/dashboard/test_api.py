@@ -31,6 +31,7 @@ class ApiTests(unittest.TestCase):
         self.engine_patch.start()
         server_module._modern_response_cache.clear()
         server_module._modern_market_cache = {}
+        server_module._market_pool_cache = {}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), server_module.make_handler(self.root))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -107,12 +108,66 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(market["roundId"], row["round_id"])
         self.assertIsNone(market["volume"])
         self.assertIsInstance(market["quoteAt"], float)
+        self.assertTrue(market["stale"])
+        self.assertFalse(market["depthAvailable"])
         with patch.object(server_module, "_running_engine_market_status", return_value=None), \
                 patch.object(server_module, "cached_live_status", return_value={"collector_online": False, "error": "offline"}):
             _, stale = self.request("/api/markets")
         self.assertTrue(stale["stale"])
-        self.assertEqual(stale["items"][0]["yesBid"], .4)
-        self.assertEqual(stale["asOf"], first["asOf"])
+        self.assertIsNone(stale["items"])
+        self.assertIsNone(stale["asOf"])
+
+    def test_modern_market_preserves_runtime_paired_snapshot(self):
+        levels = [[0.49 - i * 0.01, 10 - i] for i in range(5)]
+        asks = [[0.51 + i * 0.01, 11 + i] for i in range(5)]
+        now = time.time()
+        snapshot = {"marketId": "0xaccepted", "roundId": "1800000000", "sequence": 7,
+                    "sourceAt": now, "expiresAt": now + 1.5,
+                    "YES": {"assetId": "yes-token", "bid": .49, "ask": .51, "bids": levels, "asks": asks},
+                    "NO": {"assetId": "no-token", "bid": .49, "ask": .51, "bids": levels, "asks": asks}}
+        with patch.object(server_module, "_running_engine_market_status", return_value={
+                "collector_online": True, "source": "platform-runtime", "current_markets": [
+                    {"paired_snapshot": snapshot, "start": now - 1, "end": now + 299}]}), \
+                patch.object(server_module, "cached_live_status", side_effect=AssertionError("collector fallback")):
+            value = server_module._modern_markets()
+        market = value["items"][0]
+        self.assertEqual(market["roundId"], "1800000000")
+        self.assertEqual(market["round_id"], "1800000000")
+        self.assertEqual(market["yes"]["assetId"], "yes-token")
+        self.assertEqual(market["orderBook"]["yes"]["bids"], levels)
+        self.assertEqual(market["sequence"], 7)
+        self.assertEqual(market["sourceAt"], now)
+        self.assertEqual(market["expiresAt"], now + 1.5)
+        self.assertTrue(market["depthAvailable"])
+        self.assertFalse(market["stale"])
+
+    def test_market_pool_reads_saved_state_and_rejects_non_btc(self):
+        path = self.root / "results" / "dashboard" / "market_pool.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"desiredIds": ["btc"], "currentIds": ["btc"],
+                                    "nextRoundIds": [], "effectiveRoundId": "1800000000",
+                                    "updatedAt": 1234.5}), encoding="utf-8")
+        code, value = self.request("/api/runtime/market-pool")
+        self.assertEqual(code, 200)
+        self.assertEqual(value["desiredIds"], ["btc"])
+        self.assertEqual(value["asOf"], 1234.5)
+        self.assertEqual(value["updatedAt"], 1234.5)
+        with patch.object(server_module, "_control_request_error", return_value=None):
+            code, rejected = self.request("/api/runtime/market-pool", {"desiredIds": ["eth"]}, method="PUT")
+            self.assertEqual(code, 400)
+            self.assertIn("BTC", rejected["error"])
+            code, saved = self.request("/api/runtime/market-pool", {"desiredIds": ["btc"]}, method="PUT")
+        self.assertEqual(code, 200)
+        self.assertEqual(saved["desiredIds"], ["btc"])
+
+    def test_bootstrap_does_not_fabricate_a_fresh_clock(self):
+        with patch.object(server_module, "trading_status", return_value={
+                "running": False, "exit_code": None, "stats": {}}):
+            code, body = self.request("/api/bootstrap")
+        self.assertEqual(code, 200)
+        self.assertIsNone(body["asOf"])
+        self.assertTrue(body["stale"])
+        self.assertFalse(body["capabilityDetails"]["streams"])
 
     def test_read_failure_keeps_data_and_clock(self):
         good = {"items": [{"id": 1}], "source": "ledger", "asOf": 1234., "stale": False, "error": None}
@@ -252,9 +307,8 @@ class SnapshotTests(unittest.TestCase):
         self.assertIsNone(server_module._running_engine_market_status(status))
         for book in books:
             book["receivedAt"] = time.time()
-        row = server_module._running_engine_market_status(status)["current_markets"][0]
-        self.assertEqual(row["condition_id"], "0xcondition")
-        self.assertEqual(row["round_id"], "1800000000")
+        self.assertIsNone(server_module._running_engine_market_status(status),
+                          "legacy token books must not be rebuilt into modern market snapshots")
 
     def test_incomplete_projection_never_fresh(self):
         with tempfile.TemporaryDirectory() as directory:

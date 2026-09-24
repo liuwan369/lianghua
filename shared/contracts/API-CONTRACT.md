@@ -27,7 +27,7 @@
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
 | BTC 五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 复用运行时/采集器已有快照 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
-| 固定运行池 | GET | `/api/runtime/market-pool` | BTC 当前状态，只读；PUT 不支持 |
+| 固定运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化 BTC 状态；PUT 只接受 `btc`，当前/下一场由运行时维护 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载 |
@@ -67,7 +67,7 @@
 
 以下为预留能力，当前 `capabilityDetails.streams=false`，尚未提供，不能以这些流确认控制命令完成：
 
-- `/api/stream/markets`：报价、五档 depth、场次切换；按 marketId 订阅。
+- `/api/stream/markets`：报价、五档 depth、场次切换；按 marketId 订阅。当前仍未接通，不能宣称可用。
 - `/api/stream/runtime`：启动/暂停/停止状态、策略阶段、错误、服务事件。
 - `/api/stream/orders`：订单状态、成交、撤单、结算。
 

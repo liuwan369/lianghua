@@ -75,10 +75,10 @@ schemaVersion, source, asOf, stale, error
 
 | 接口 | 关键字段和语义 |
 |---|---|
-| `GET /api/markets` | `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/quoteAt/sourceAt/expiresAt/enabled/nextRound`；运行时快照优先，采集器缓存回退，过期报价保留但标记 stale |
-| `GET /api/markets/{marketId}/snapshot` | 市场 DTO 加 `orderBook`；当前只承诺已有最优 bid/ask，五档和实时流尚未提供 |
+| `GET /api/markets` | 运行时 accepted `snapshots[]` 优先，保留 `marketId/roundId/YES/NO/assetId/bids/asks/sequence/sourceAt/expiresAt/stale`；无 accepted snapshot 时仅保留采集器 best bid/ask 展示，`depthAvailable=false`、`strategyEligible=false`、`stale=true` |
+| `GET /api/markets/{marketId}/snapshot` | 市场 DTO 加同一份 `orderBook`；accepted snapshot 可提供五档和 freshness 字段，旧采集器回退不伪造深度 |
 | `GET /api/runtime/status` | `status/state/serviceState/commandStatus/remoteOrdersState/runId/strategyId/execution/markets/projection/asOf/stale/error` |
-| `GET /api/runtime/market-pool` | BTC 五分钟固定运行池的只读状态；编辑 PUT 返回 501，不接受浏览器自行改变运行池 |
+| `GET/PUT /api/runtime/market-pool` | 服务器持久化 BTC 五分钟运行池；读取 `market_pool.json` 的 `desired/current/next/effective/updatedAt`，写入只接受 `btc`，当前/下一场仍由运行时确认 |
 | `GET /api/rounds/{roundId}/position` | `available/runId/marketId/roundId/yesShares/noShares/averagePrice/occupiedUsd/outcomePnl/updatedAt/expiresAt/stale/error` |
 | `GET /api/rounds/{roundId}/orders` | 分页订单、`clientOrderId/orderId/marketId/roundId/status/filledShares/updatedAt/fills`，支持快照游标避免分页漂移 |
 | `GET /api/fills?runId=...` | 成交生命周期事件；同一经济成交可能有修订，前端不能直接逐行累加 |
@@ -126,14 +126,15 @@ schemaVersion, source, asOf, stale, error
 4. `account-check` 的 `settlement_credentials_ready` 需要由交易运行时 CLI 输出；账本只透传三态，控制面实盘启动要求明确为 `true`。交易运行时仍负责根据钱包类型验证 Builder/Relayer，并在 redeem 前结合真实回执确认。
 5. 运行时 CLI 仍需直接在 order/fill/settlement journal 写入 `market_id/round_id` 和订单 `created_at`；在此之前账本依赖状态映射回填，前端可能看不到完整的首条事件身份。
 6. 尚未完成服务器实测：真实下单、撤单、成交回报、资金释放、重启恢复、连续场次切换和链上 redeem。
-7. 集成会话需要组合最新 `codex/market-data`、`codex/trading-runtime` 和本分支最新提交，生成组合部署提交号并执行真实联调；本会话没有权限伪造该提交号。
+7. `/api/stream/markets` 本轮仍未接通，bootstrap 保持 `capabilityDetails.streams=false`；集成会话不能把 404 当成已提供流。
+8. 集成会话需要组合最新 `codex/market-data`、`codex/trading-runtime` 和本分支最新提交，生成组合部署提交号并执行真实联调；本会话没有权限伪造该提交号。
 
 ## 验证
 
 当前分支已通过：
 
 ```text
-35 dashboard tests passed
+41 dashboard tests passed
 python -m compileall -q backend/control-plane/scripts
 git diff --check
 ```
