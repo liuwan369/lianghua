@@ -89,24 +89,26 @@ export class TradingPlatform {
     redeem: async (request: SettlementRequest) => {
       const market = this.markets.get(request.marketId);
       const roundId = request.roundId ?? market?.roundId;
-      if (!market || !roundId || roundId !== market.roundId) {
-        const result = { marketId: request.marketId, roundId, state: "unsupported" as const,
+      const assetId = request.assetId ?? market?.assetId;
+      if (!market || !roundId || roundId !== market.roundId
+        || request.assetId !== undefined && request.assetId !== market.assetId) {
+        const result = { marketId: request.marketId, roundId, assetId, state: "unsupported" as const,
           reason: "settlement market round identity unavailable or mismatched" };
         this.publish({ kind: "settlement", result });
         return clone(result);
       }
-      const scopedRequest = { ...clone(request), roundId };
+      const scopedRequest = { ...clone(request), roundId, assetId: market.assetId };
       const result = this.options.adapters.settle
         ? await this.options.adapters.settle(scopedRequest)
-        : { marketId: scopedRequest.marketId, roundId: scopedRequest.roundId, state: "unsupported" as const,
+        : { marketId: scopedRequest.marketId, roundId: scopedRequest.roundId, assetId: market.assetId, state: "unsupported" as const,
           reason: "no settlement adapter for this wallet" };
       if (result.marketId !== request.marketId || (result.roundId !== undefined && result.roundId !== roundId)) {
-        const invalid = { marketId: request.marketId, roundId, state: "unsupported" as const,
+        const invalid = { marketId: request.marketId, roundId, assetId: market.assetId, state: "unsupported" as const,
           reason: "settlement adapter returned mismatched market identity" };
         this.publish({ kind: "settlement", result: invalid });
         return clone(invalid);
       }
-      const scopedResult = { ...result, roundId: result.roundId ?? roundId };
+      const scopedResult = { ...result, roundId: result.roundId ?? roundId, assetId: result.assetId ?? market.assetId };
       // A broadcast receipt is not a cash credit; the account service reconciles actual proceeds.
       this.publish({ kind: "settlement", result: scopedResult });
       return clone(scopedResult);
@@ -142,13 +144,16 @@ export class TradingPlatform {
     }
     if (event.kind === "order" || event.kind === "account") throw new Error("use authenticated order/account service methods");
     if (event.kind === "market") {
-      if (!/^\d+$/.test(event.market.roundId) || event.market.roundId !== String(event.market.startsAt)
-        || !Number.isFinite(event.market.startsAt) || event.market.endsAt - event.market.startsAt !== 300) {
+      const inferredAsset = event.market.assetId ?? /^([a-z0-9_-]+)-updown-5m-\d+$/i.exec(event.market.name)?.[1]?.toLowerCase();
+      const market = inferredAsset ? { ...event.market, assetId: inferredAsset } : event.market;
+      if (!/^\d+$/.test(market.roundId) || market.roundId !== String(market.startsAt)
+        || !Number.isFinite(market.startsAt) || market.endsAt - market.startsAt !== 300) {
         throw new Error("market round identity is required");
       }
-      this.core.rememberMarket(event.market);
-      this.core.register(event.market.instruments);
-      this.markets.set(event.market.id, clone(event.market));
+      this.core.rememberMarket(market);
+      this.core.register(market.instruments);
+      this.markets.set(market.id, clone(market));
+      event = { kind: "market", market };
     }
     if (event.kind === "book") {
       if (event.snapshot) { this.ingestSnapshot(event.snapshot, event.marketId, event.roundId); return; }
@@ -188,11 +193,12 @@ export class TradingPlatform {
     // Keep the platform boundary closed even when a caller bypasses the feed
     // snapshot gate. A condition ID can be reused by an adapter bug while the
     // registered five-minute round has already advanced.
-    if (!market || market.roundId !== roundId) return false;
+    if (!market || market.roundId !== roundId
+      || snapshot.assetId !== undefined && snapshot.assetId !== market.assetId) return false;
     const yes = snapshot.YES;
     const no = snapshot.NO;
-    const yesInstrument = market?.instruments.find(item => item.outcome.toUpperCase() === "UP");
-    const noInstrument = market?.instruments.find(item => item.outcome.toUpperCase() === "DOWN");
+    const yesInstrument = market?.instruments.find(item => ["UP", "YES"].includes(item.outcome.toUpperCase()));
+    const noInstrument = market?.instruments.find(item => ["DOWN", "NO"].includes(item.outcome.toUpperCase()));
     if (!yes || !no || market.instruments.length !== 2 || !yesInstrument || !noInstrument
       || yes.assetId !== yesInstrument.tokenId || no.assetId !== noInstrument.tokenId) return false;
     const toBook = (asset: typeof yes): Book => ({
@@ -219,13 +225,14 @@ export class TradingPlatform {
     for (const book of books) this.books.set(book.tokenId, clone(book));
     const key = JSON.stringify([marketId, roundId]);
     this.snapshots.set(key, clone(snapshot));
-    const recordEvent: TradingEvent = { kind: "book", snapshot: clone(snapshot), marketId, roundId };
+    const recordEvent: TradingEvent = { kind: "book", snapshot: clone(snapshot), marketId, roundId,
+      assetId: market.assetId };
     queueMicrotask(() => {
       try { this.options.adapters.record?.(recordEvent); }
       catch { /* Background logging is outside the decision gate. */ }
     });
     const completedAt = performance.now();
-    this.publish({ kind: "book", snapshot: clone(snapshot), marketId, roundId });
+    this.publish({ kind: "book", snapshot: clone(snapshot), marketId, roundId, assetId: market.assetId });
     const ts = this.options.now?.() ?? Date.now() / 1000;
     this.publish({ kind: "latency", metric: "book_batch_apply", durationMs: completedAt - appliedAt, ts, marketId });
     if (snapshot.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "book_processing",

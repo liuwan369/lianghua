@@ -2,6 +2,8 @@
 export type Direction = "BUY" | "SELL";
 export type TimeInForce = "GTC" | "FOK" | "FAK";
 export type TradingMode = "live";
+/** Asset identity is carried by the runtime; the market-data layer owns the producer mapping. */
+export type AssetId = "btc" | "eth" | "sol" | (string & {});
 export type PriceLevel = [price: number, shares: number];
 export interface Instrument {
   tokenId: string;
@@ -15,6 +17,10 @@ export interface Instrument {
 }
 export interface MarketInfo {
   id: string;
+  /** Canonical selected asset for this market. Legacy callers may omit it only for BTC compatibility. */
+  assetId?: AssetId;
+  /** Non-secret producer identifier advertised by market-data for this asset. */
+  referenceProducer?: string;
   /** Explicit five-minute execution identity from market discovery. */
   roundId: string;
   name: string;
@@ -56,6 +62,7 @@ export interface RuntimeMarketAssetSnapshot {
   sequence?: number;
 }
 export interface MarketBookSnapshot {
+  assetId?: AssetId;
   marketId?: string;
   roundId?: string;
   sequence?: number;
@@ -100,6 +107,7 @@ export interface OrderRequest {
   /** Optional caller assertion; the platform fills it from the registered market. */
   marketId?: string;
   roundId?: string;
+  assetId?: AssetId;
   tokenId: string;
   direction: Direction;
   price: number;
@@ -173,6 +181,7 @@ export interface TradeFill {
   /** Market identity carried through authenticated fills. */
   marketId?: string;
   roundId?: string;
+  assetId?: AssetId;
   tokenId: string;
   direction: Direction;
   price: number;
@@ -323,12 +332,14 @@ export interface SettlementRequest {
   marketId: string;
   /** Explicit market round when the caller already has it. */
   roundId?: string;
+  assetId?: AssetId;
   tokenIds: string[];
 }
 export interface SettlementResult {
   marketId: string;
   /** Resolved only from the registered market identity, never from time or slug. */
   roundId?: string;
+  assetId?: AssetId;
   state: "confirmed" | "pending" | "unsupported";
   transactionId?: string;
   reason?: string;
@@ -359,10 +370,10 @@ export interface PlatformAdapters {
 export type TradingEvent =
   | { kind: "market"; market: MarketInfo }
   | { kind: "book"; book: Book; snapshot?: undefined }
-  | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; book?: undefined }
-  | { kind: "reference"; symbol: string; price: number; ts: number }
-  | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string }
-  | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string }
+  | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; assetId?: AssetId; book?: undefined }
+  | { kind: "reference"; assetId: AssetId; symbol: string; price: number; ts: number }
+  | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string; assetId?: AssetId }
+  | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string; assetId?: AssetId }
   | { kind: "account"; snapshot: AccountSnapshot }
   | { kind: "settlement"; result: SettlementResult }
   | { kind: "timer"; ts: number }
