@@ -102,9 +102,9 @@
         return store.setSlice("marketPool", { ...next, status, stale: status === "stale", error: raw?.error || null });
       });
     },
-    async loadMarketSnapshot(marketId) {
+    async loadMarketSnapshot(marketId, context = {}) {
       if (demoMode()) return null;
-      try { return await core.api.marketSnapshot(marketId); }
+      try { return await core.api.marketSnapshot(marketId, context); }
       catch (error) {
         if (error?.status !== 404) throw error;
         const fallback = store.getState().marketCatalog.items.find((item) => item.marketId === marketId);
@@ -112,16 +112,29 @@
         throw error;
       }
     },
-    async loadPosition(roundId) {
+    async loadPosition(roundId, context = {}) {
       if (demoMode() || !roundId) return null;
-      return core.api.position(roundId);
+      return core.api.position(roundId, context);
     },
-    async loadOrders(roundId) {
+    async loadOrders(roundId, context = {}) {
       if (demoMode() || !roundId) return null;
-      return core.api.orders(roundId);
+      return core.api.orders(roundId, context);
     },
-    async loadRuntime() {
+    async loadRuntime(context = null) {
       if (demoMode()) return store.getState().runtime;
+      if (context) {
+        try {
+          const raw = await core.api.runtimeStatus(context);
+          const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+          const markets = Array.isArray(data?.markets) ? data.markets : [];
+          const scoped = markets.find((item) => vm.matchesIdentity(item, context));
+          if (scoped) return { ...vm.runtime({ ...data, ...scoped }), status: resourceStatus(data), stale: resourceStatus(data) === "stale" };
+          if (vm.matchesIdentity(data, context)) return vm.runtime(data);
+          throw new Error("运行状态身份与所选资产不匹配");
+        } catch (error) {
+          return { status: "unavailable", stale: true, error: errorText(error), assetId: context.assetId, marketId: context.marketId, roundId: context.roundId };
+        }
+      }
       if (runtimeRequest) return runtimeRequest;
       runtimeRequest = readSlice("runtime", async () => {
         const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
@@ -158,8 +171,12 @@
     },
     async checkAccount(payload = {}) {
       if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户检查接口尚未连接" };
-      const raw = await modernOrLegacy(() => core.api.accountCheck(payload), () => core.api.accountCheck(payload));
+      const raw = await core.api.accountCheck(payload);
       return raw || { ok: true, status: "checked" };
+    },
+    async saveAccount(payload = {}) {
+      if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户保存接口尚未连接" };
+      return core.api.accountSave(payload);
     },
     async loadDiagnostics() {
       if (demoMode()) return store.getState().diagnostics;
@@ -191,17 +208,17 @@
     async saveMarketPool(payload) {
       const next = vm.pool(payload, store.getState().marketCatalog.items);
       if (demoMode()) return store.setMarketPool(next);
+      const current = store.getState().marketPool;
+      const catalog = new Map(store.getState().marketCatalog.items.map((item) => [item.assetId, item]));
+      for (const id of next.desiredIds) {
+        const item = catalog.get(id);
+        if (!item) throw new Error("资产 " + id + " 不在服务器市场目录中");
+        if (!current.desiredIds.includes(id) && !item.canEnable) throw new Error(item.symbol + " 当前由服务器标记为 unsupported/unavailable，未提交运行池");
+      }
       const raw = await core.api.marketPool({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ desiredIds: next.desiredIds, effectiveRoundId: next.effectiveRoundId }) });
       const hasPoolFields = raw && typeof raw === "object" && ["desiredIds", "enabledIds", "enabled_ids", "currentIds", "runningIds", "current_ids", "nextRoundIds", "next_round_ids"].some((key) => key in raw);
-      const current = store.getState().marketPool;
-      const result = hasPoolFields ? raw : {
-        ...current,
-        desiredIds: next.desiredIds,
-        effectiveRoundId: next.effectiveRoundId ?? current.effectiveRoundId ?? null,
-        source: raw?.source || current.source || "backend",
-        updatedAt: raw?.updatedAt || raw?.updated_at || current.updatedAt || null
-      };
-      return store.setMarketPool(result);
+      if (hasPoolFields) return store.setMarketPool(raw);
+      return store.setSlice("marketPool", { ...current, status: "stale", stale: true, pendingDesiredIds: next.desiredIds, error: "已提交运行池变更，等待服务器确认；当前仍显示最近确认状态" });
     },
     async commandRuntime(payload) {
       if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：运行控制接口尚未连接" };

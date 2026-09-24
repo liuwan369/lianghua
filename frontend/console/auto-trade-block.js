@@ -10,6 +10,7 @@
     return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone };
   });
   var marketPool = store.getState().marketPool;
+  var selectedAssetId = store.getState().marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId || null;
   var assetById = function(id) { return marketAssets.find(function(asset) { return asset.id === id; }); };
   var marketIdsForCommand = function() { return marketPool.desiredIds.map(assetById).filter(function(asset) { return asset && asset.marketId; }).map(function(asset) { return asset.marketId; }); };
   var navItems = [
@@ -79,6 +80,7 @@
           <div><p class="eyebrow">ENABLED MARKET POOL</p><h2 id="market-pool-title">\u5F53\u524D\u8FD0\u884C\u6C60</h2></div>
           <a class="pool-link" href="market.html">\u7BA1\u7406\u5E02\u573A <span>↗</span></a>
         </div>
+        <label class="market-selector"><span>详情市场</span><select data-market-selector><option value="">等待市场目录</option></select></label>
         <div class="market-pool-row" data-market-pool-row></div>
         <p class="market-pool-note" data-market-pool-note>\u5F53\u524D\u573A\u6B21\u7EE7\u7EED\u8FD0\u884C\uFF0C\u5E02\u573A\u9875\u65B0\u542F\u7528\u7684\u5E01\u79CD\u4ECE\u4E0B\u4E00\u573A\u52A0\u5165\u3002</p>
       </section>
@@ -157,7 +159,15 @@
     const node = document.querySelector(selector);
     if (node) node.textContent = value;
   };
+  var renderMarketSelector = function() {
+    var selector = document.querySelector("[data-market-selector]");
+    if (!selector) return;
+    selector.innerHTML = marketAssets.length ? marketAssets.map(function(asset) { return `<option value="${window.PolyPreview.format.escape(asset.id)}">${window.PolyPreview.format.escape(asset.symbol)} · ${window.PolyPreview.format.escape(asset.name)}</option>`; }).join("") : '<option value="">等待市场目录</option>';
+    selector.value = assetById(selectedAssetId) ? selectedAssetId : "";
+    selector.disabled = !assetById(selectedAssetId);
+  };
   var renderMarketPool = function() {
+    renderMarketSelector();
     var enabledAssets = marketPool.desiredIds.map(assetById).filter(Boolean);
     var runningAssets = marketPool.currentIds.map(assetById).filter(Boolean);
     var visibleAssets = [...new Map([...runningAssets, ...enabledAssets].map((asset) => [asset.id, asset])).values()];
@@ -173,6 +183,13 @@
     text("[data-active-market]", activeMarket);
     text("[data-market-pool-note]", visibleAssets.length ? `已启用 ${enabledAssets.length} 个币种；当前场次继续运行，新增币种从下一场加入。` : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
+  var marketSelector = document.querySelector("[data-market-selector]");
+  marketSelector?.addEventListener("change", function(event) {
+    selectedAssetId = event.target.value || null;
+    store.setSelectedMarket(selectedAssetId);
+    syncMarketContext();
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
+  });
   var snapshotWatermarks = new Map();
   var snapshotExpiryTimer = null;
   var snapshotRefreshTimer = null;
@@ -207,7 +224,9 @@
     var model = vm.market(source);
     var marketId = model.marketId;
     var roundId = model.roundId;
-    if (expectedContextKey != null && `${String(marketId || "")}\u0000${String(roundId || "")}` !== expectedContextKey) return false;
+    var context = currentContext();
+    if (expectedContextKey != null && `${String(model.assetId || "")}\u0000${String(marketId || "")}\u0000${String(roundId || "")}` !== expectedContextKey) return false;
+    if (!vm.matchesIdentity(source, context)) { markSnapshotStale("盘口身份与所选资产不匹配 · 保留最近快照"); return false; }
     var book = source.book || source.orderBook || source.orderbook || model.orderBook || {};
     var bookSide = function(side) { return book[side] || book[side.toUpperCase()] || {}; };
     var hasDepth = ["yes", "no"].every(function(side) {
@@ -251,9 +270,9 @@
   };
   var streams = [];
   var currentContext = function() {
-    var id = marketPool.currentIds[0] || marketPool.desiredIds[0];
+    var id = selectedAssetId || (marketPool.currentIds.length + marketPool.desiredIds.length === 1 ? marketPool.currentIds[0] || marketPool.desiredIds[0] : null);
     var asset = assetById(id);
-    return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { marketId: null, roundId: null };
+    return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { assetId: null, marketId: null, roundId: null };
   };
   var payloadOf = function(frame) { return frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame || {}; };
   var frameMatches = function(frame, requireRound) {
@@ -262,9 +281,9 @@
     var marketId = payload.marketId || payload.market_id || frame?.marketId || frame?.market_id;
     var roundId = payload.roundId || payload.round_id || frame?.roundId || frame?.round_id;
     if (!marketId && !requireRound) return true;
-    if (!context.marketId || marketId !== context.marketId) return false;
-    if (requireRound && !context.roundId) return false;
-    return !context.roundId || roundId === context.roundId;
+    var assetId = payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id;
+    if (!context.assetId || !context.marketId || !context.roundId || !marketId || !roundId || !assetId) return false;
+    return String(assetId) === String(context.assetId) && marketId === context.marketId && roundId === context.roundId;
   };
   var streamUrl = function(name) {
     var configured = window.PolyPreview.config.streams?.[name];
@@ -292,19 +311,16 @@
     if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>新场次数据读取中</strong><small>等待后端返回当前 roundId 的持仓和策略阶段</small></div><time>--</time></li>';
   };
   var itemMatchesContext = function(item, asset) {
-    var value = item?.data && typeof item.data === "object" ? item.data : item;
-    var marketId = value?.marketId ?? value?.market_id;
-    var roundId = value?.roundId ?? value?.round_id;
-    return (!marketId || marketId === asset.marketId) && (!roundId || roundId === asset.roundId);
+    return vm.matchesIdentity(item, { assetId: asset?.id, marketId: asset?.marketId, roundId: asset?.roundId });
   };
   var syncMarketContext = function() {
     var context = currentContext();
-    var contextKey = `${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
+    var contextKey = `${String(context.assetId || "")}\u0000${String(context.marketId || "")}\u0000${String(context.roundId || "")}`;
     if (contextKey === currentMarketContextKey) return contextKey;
     currentMarketContextKey = contextKey;
     loadedRoundContextKey = null;
     resetRoundPanels();
-    text("[data-round-identity]", context.marketId ? (context.roundId ? `marketId ${context.marketId} · roundId ${context.roundId}` : `marketId ${context.marketId} · 当前轮次标识待后端提供`) : "当前市场和轮次待后端提供");
+    text("[data-round-identity]", context.assetId && context.marketId && context.roundId ? `${context.assetId} · marketId ${context.marketId} · roundId ${context.roundId}` : "所选资产的 marketId + roundId 待后端提供");
     return contextKey;
   };
   var renderPosition = function(raw) {
@@ -386,7 +402,7 @@
         text("[data-book-live-state]", "连接中断 · 保留快照");
       }
     });
-    make("orders", true, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); var asset = assetById(marketPool.currentIds[0] || marketPool.desiredIds[0]); if (payload.position && asset && itemMatchesContext(payload.position, asset)) renderPosition(payload.position); if (payload.order) renderOrders([payload.order], asset); else if (payload.orders || payload.items) renderOrders(payload.orders || payload, asset); }, function() {});
+    make("orders", true, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); var asset = assetById(currentContext().assetId); if (payload.position && asset && itemMatchesContext(payload.position, asset)) renderPosition(payload.position); if (payload.order) renderOrders([payload.order], asset); else if (payload.orders || payload.items) renderOrders(payload.orders || payload, asset); }, function() {});
     make("runtime", false, function(frame) { if (!currentLifecycle()) return; var payload = payloadOf(frame); if (payload.status == null && payload.state == null && payload.running == null) return; var runtime = vm.runtime(payload); store.setSlice("runtime", { ...runtime, connectionStatus: "ready", stale: false, error: null }); }, function(state) {
       if (!currentLifecycle()) return;
       var current = store.getState().runtime;
@@ -397,18 +413,18 @@
   var loadCurrentMarket = async function() {
     if (window.PolyPreview.config.mode === "local-preview") return null;
     syncMarketContext();
-    var id = marketPool.currentIds[0] || marketPool.desiredIds[0];
+    var id = selectedAssetId || (marketPool.currentIds.length + marketPool.desiredIds.length === 1 ? marketPool.currentIds[0] || marketPool.desiredIds[0] : null);
     var asset = assetById(id);
     if (!asset?.marketId) { markSnapshotStale("当前市场身份待接入 · 保留最近快照"); return null; }
-    var contextKey = `${asset.marketId}\u0000${asset.roundId || ""}`;
+    var contextKey = `${asset.id}\u0000${asset.marketId}\u0000${asset.roundId || ""}`;
     var contextChanged = contextKey !== loadedRoundContextKey;
-    text("[data-round-identity]", asset.roundId ? `marketId ${asset.marketId} · roundId ${asset.roundId}` : `marketId ${asset.marketId} · \u5F53\u524D\u8F6E\u6B21\u6807\u8BC6\u5F85\u540E\u7AEF\u63D0\u4F9B`);
+    text("[data-round-identity]", asset.roundId ? `${asset.id} · marketId ${asset.marketId} · roundId ${asset.roundId}` : `${asset.id} · marketId ${asset.marketId} · 当前轮次标识待后端提供`);
     try {
-      var raw = await adapter.loadMarketSnapshot(asset.marketId);
+      var raw = await adapter.loadMarketSnapshot(asset.marketId, { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId });
       if (currentMarketContextKey !== contextKey) return contextKey;
       renderSnapshot(raw, false, contextKey);
       if (contextChanged && asset.roundId) {
-        var results = await Promise.allSettled([adapter.loadPosition(asset.roundId), adapter.loadOrders(asset.roundId)]);
+        var results = await Promise.allSettled([adapter.loadPosition(asset.roundId, { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId }), adapter.loadOrders(asset.roundId, { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId })]);
         if (currentMarketContextKey !== contextKey) return contextKey;
         var position = results[0].status === "fulfilled" ? results[0].value : null;
         var orders = results[1].status === "fulfilled" ? results[1].value : null;
@@ -478,7 +494,14 @@
   });
   store.subscribe("marketCatalog", function(value) {
     marketAssets = value.items.map(function(item) { return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone }; });
+    selectedAssetId = value.selectedId || null;
     renderMarketPool();
+    syncMarketContext();
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
+  });
+  document.querySelector("[data-market-selector]")?.addEventListener("change", function(event) {
+    selectedAssetId = event.target.value || null;
+    store.setSelectedMarket(selectedAssetId);
     syncMarketContext();
     if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
   });

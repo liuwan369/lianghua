@@ -70,13 +70,50 @@
     money(value) { return Number.isFinite(value) ? `$${value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toFixed(0)}` : "--"; },
     escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); }
   };
-  const navigate = (target) => { if (target) window.location.assign(target); };
+  const selectedAssetFromUrl = new URLSearchParams(window.location.search).get("assetId");
+  const setSelectedAssetUrl = (assetId) => {
+    const url = new URL(window.location.href);
+    if (assetId) url.searchParams.set("assetId", assetId);
+    else url.searchParams.delete("assetId");
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  };
+  const navigate = (target) => {
+    if (!target) return;
+    const url = new URL(target, window.location.href);
+    const selected = new URLSearchParams(window.location.search).get("assetId");
+    if (selected && !url.searchParams.has("assetId")) url.searchParams.set("assetId", selected);
+    window.location.assign(`${url.pathname}${url.search}${url.hash}`);
+  };
+  const scopedQuery = (context = {}) => {
+    const params = new URLSearchParams();
+    if (context.assetId) params.set("assetId", context.assetId);
+    if (context.marketId) params.set("marketId", context.marketId);
+    if (context.roundId) params.set("roundId", context.roundId);
+    const query = params.toString();
+    return query ? `?${query}` : "";
+  };
+  const accountPost = async (path, payload = {}) => {
+    const base = new URL(config.apiBase || window.location.origin, window.location.href);
+    if (window.location.protocol !== "https:" || base.origin !== window.location.origin) {
+      throw new Error("账户密钥只允许通过 HTTPS 同源页面提交");
+    }
+    try {
+      const result = await request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "same-origin", cache: "no-store", timeout: 55000 });
+      if (result?.ok !== true || !result.report || typeof result.report !== "object" || Array.isArray(result.report)) throw new Error("账户接口未确认检查或保存成功");
+      return result;
+    } catch (error) {
+      let message = error?.message || "账户请求失败，输入尚未保存";
+      for (const value of Object.values(payload)) if (typeof value === "string" && value) message = message.split(value).join("[已隐藏]");
+      message = message.replace(/(?:0x)?[a-fA-F0-9]{64}/g, "[已隐藏]").slice(0, 240);
+      throw new Error(message);
+    }
+  };
   const api = {
     bootstrap: () => request("/api/bootstrap"),
     markets: (query = "asset=crypto&duration=5m") => request(`/api/markets?${query}`),
-    marketSnapshot: (marketId) => request(`/api/markets/${encodeURIComponent(marketId)}/snapshot`),
+    marketSnapshot: (marketId, context = {}) => request(`/api/markets/${encodeURIComponent(marketId)}/snapshot${scopedQuery({ ...context, marketId })}`),
     marketPool: (options) => request("/api/runtime/market-pool", options),
-    runtimeStatus: () => request("/api/runtime/status"),
+    runtimeStatus: (context = {}) => request(`/api/runtime/status${scopedQuery(context)}`),
     runtimeCommand: (payload) => request("/api/runtime/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     legacyRuntimeCommand: (payload) => request("/api/trading/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyConfig: () => request("/api/strategy/config"),
@@ -84,13 +121,14 @@
     legacyStrategySave: (payload) => request("/api/strategy-config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyActivate: (payload) => request("/api/strategy/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     presets: (options) => request("/api/strategy/presets", options),
-    position: (roundId) => request(`/api/rounds/${encodeURIComponent(roundId)}/position`),
-    orders: (roundId) => request(`/api/rounds/${encodeURIComponent(roundId)}/orders`),
+    position: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/position${scopedQuery({ ...context, roundId })}`),
+    orders: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/orders${scopedQuery({ ...context, roundId })}`),
     cancelOrder: (orderId) => request(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" }),
     flatten: () => request("/api/runtime/flatten", { method: "POST" }),
     accountSnapshot: () => request("/api/account/snapshot"),
     accountStatus: () => request("/api/account/status"),
-    accountCheck: (payload = {}) => request("/api/account/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+    accountCheck: (payload = {}) => accountPost("/api/account/check", payload),
+    accountSave: (payload = {}) => accountPost("/api/account/save", payload),
     diagnostics: () => request("/api/diagnostics/health"),
     metrics: (range = "today") => request(`/api/metrics/summary?range=${encodeURIComponent(range)}`),
     events: (cursor = "") => request(`/api/events${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
@@ -105,8 +143,8 @@
     legacyStrategyConfig: () => request("/api/strategy-config")
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  const config = { apiBase: "", mode: "local-preview", apiFlavor: "contract", demo: true, marketCycle: "5m", strategyId: "btc-reversal", streams: {}, ...runtimeConfig };
-  window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, on, emit });
+  const config = { apiBase: "", mode: "local-preview", apiFlavor: "contract", demo: true, marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, ...runtimeConfig };
+  window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, setSelectedAssetUrl, on, emit });
   window.addEventListener("storage", (event) => {
     if (config.mode === "local-preview" && event.key) emit(`storage:${event.key}`, storage.read(event.key, null));
   });
