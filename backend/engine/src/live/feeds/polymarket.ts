@@ -37,6 +37,7 @@ export interface AppliedBookTimes {
 export interface MarketFeedIdentity {
   marketId?: string;
   roundId?: string;
+  sequenceBase?: number;
 }
 
 function num(value: unknown): number | undefined {
@@ -405,7 +406,9 @@ export function runPolymarketFeed(
   let lastDownAtMs = 0;
   let lastFreshBilateralAtMs = 0;
   let lastBothStaleAtMs = 0;
-  let sequence = 0;
+  const sequenceBase = identity.sequenceBase ?? 0;
+  if (!Number.isSafeInteger(sequenceBase) || sequenceBase < 0) throw new Error("sequenceBase must be a non-negative safe integer");
+  let sequence = sequenceBase;
   let reconnectAttempt = 0;
   let connectingWs: Promise<WebSocket> | undefined;
   // Keep venue watermarks across reconnects so a replayed frame from the

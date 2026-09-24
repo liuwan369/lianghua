@@ -5,7 +5,8 @@ import { pathToFileURL } from "node:url";
 import { findMarket, type Market } from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
-import { ClobMarketProjection, publishSnapshot, type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
+import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
+  type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
 
 const MARKET_WINDOW_SEC = 300;
 const DISCOVERY_PREWARM_MS = 10_000;
@@ -52,8 +53,7 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
 export interface MarketSnapshotDependencies {
   now: () => number;
   discover: (at: number, directOnly?: boolean, signal?: AbortSignal) => Promise<Market | undefined>;
-  feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number,
-    identity?: FeedMarketIdentity) => { stop: () => void };
+  feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number, identity?: FeedMarketIdentity) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
 }
 
@@ -68,6 +68,8 @@ const defaults: MarketSnapshotDependencies = {
 export async function runMarketSnapshot(options: MarketSnapshotOptions, dependencies: Partial<MarketSnapshotDependencies> = {}, signal?: AbortSignal): Promise<void> {
   const deps = { ...defaults, ...dependencies };
   const active = new Map<string, { market: Market; projection: ClobMarketProjection; stop: () => void }>();
+  let lastPublished = readPublishedSnapshot(options.output);
+  if (lastPublished) lastPublished = stalePublishedSnapshot(lastPublished, deps.now(), "Collector restarted; waiting for a fresh paired quote");
   let stopped = false;
   let failure: unknown;
   let discoveryJob: Promise<void> | undefined;
@@ -93,11 +95,15 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     }
     const current = [...active.values()].filter(item => item.market.start <= now && now < item.market.end)
       .sort((a, b) => b.market.start - a.market.start)[0];
-    const value = current?.projection.snapshot(now) ?? {
+    let value = current?.projection.snapshot(now) ?? {
       checked_at: new Date(now * 1000).toISOString(), collector_online: false, collector_connected: false,
-      stale_after_ms: options.staleAfterMs, source: "polymarket-ws" as const, current_markets: [],
+      strategyEligible: false as const, stale_after_ms: options.staleAfterMs,
+      source: "polymarket-ws" as const, current_markets: [],
       stale_reason: "Waiting for the current BTC market and its CLOB WebSocket quotes",
     };
+    if (value.current_markets.length) lastPublished = value;
+    else if (lastPublished) value = stalePublishedSnapshot(lastPublished, now,
+      value.stale_reason ?? "Waiting for a fresh paired quote", current?.projection.isConnected() ?? false);
     deps.publish(options.output, value);
   };
   const safePublish = () => {
@@ -117,6 +123,10 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
         const market = result.status === "fulfilled" ? result.value : undefined;
         if (!market || market.end <= deps.now() || active.has(market.slug)) continue;
         const projection = new ClobMarketProjection({ ...market, staleAfterMs: options.staleAfterMs });
+        const previous = lastPublished?.current_markets.find(row => row.marketId === market.conditionId
+          && row.roundId === market.roundId && row.snapshot.marketId === market.conditionId
+          && row.snapshot.roundId === market.roundId && row.snapshot.YES.assetId === market.upToken
+          && row.snapshot.NO.assetId === market.downToken);
         const control = deps.feed(event => {
           if (stopped) return;
           if (event.kind === "book") projection.applySnapshot(event.snapshot);
@@ -125,10 +135,10 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
             else if (event.connected) { projection.markConnected(true); projection.invalidateBook(); }
             else projection.disconnect();
           }
-        }, market.upToken, market.downToken, market.end, {
-          marketId: market.conditionId, roundId: market.roundId,
+        }, market.upToken, market.downToken, market.end,
+        { marketId: market.conditionId, roundId: market.roundId,
           yesAssetId: market.upToken, noAssetId: market.downToken,
-        });
+          sequenceBase: previous?.snapshot.sequence });
         active.set(market.slug, { market, projection, stop: control.stop });
       }
       safePublish();

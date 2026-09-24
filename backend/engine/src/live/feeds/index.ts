@@ -69,6 +69,7 @@ export interface FeedMarketIdentity {
   roundId?: string;
   yesAssetId?: string;
   noAssetId?: string;
+  sequenceBase?: number;
 }
 
 export type FeedEvent =
