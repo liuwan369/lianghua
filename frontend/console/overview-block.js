@@ -78,13 +78,46 @@
       if (target) window.PolyPreview.navigate(target);
     });
   });
+  const overviewStartReason = () => {
+    const state = store.getState();
+    const assetId = state.marketPool.desiredIds[0];
+    const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
+    if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";
+    if (item.canEnable !== true || item.strategyEligible !== true) return "服务器尚未确认该市场符合策略条件";
+    if (item.stale === true || state.marketCatalog.stale) return "行情目录或行情已过期，暂不允许启动";
+    if (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)) return "请先在市场页面确认运行池";
+    const strategy = state.strategy || {};
+    if (strategy.status !== "ready" || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
+    const account = state.accountStatus?.data || {};
+    const liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
+      : typeof account.liveStartReady === "boolean" ? account.liveStartReady
+        : account.execution_credentials_ready === true && account.account_check_ready === true;
+    if (liveReady !== true) return "服务器尚未确认账户可启动交易";
+    return "";
+  };
+  const updateOverviewControls = () => {
+    const start = document.querySelector('[data-overview-action="start"]');
+    const stop = document.querySelector('[data-overview-action="exit"]');
+    const runtime = store.getState().runtime || {};
+    if (start) {
+      const reason = overviewStartReason();
+      start.disabled = Boolean(reason);
+      start.title = reason;
+    }
+    if (stop) {
+      const idle = !runtime.stale && ["stopped", "failed", "unavailable"].includes(runtime.status);
+      stop.disabled = idle;
+      stop.title = idle ? "当前运行已停止" : "提交停止请求；最终状态以服务器确认为准";
+    }
+  };
   document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", async () => {
     const action = button.dataset.overviewAction;
     if (action === "start" || action === "exit") {
+      if (button.disabled) return;
       const state = store.getState();
       const assetId = state.marketPool.desiredIds[0];
       const item = state.marketCatalog.items.find((item) => item.assetId === assetId);
-      if (action === "start" && (!item?.marketId || !item.roundId || item.canEnable !== true || item.strategyEligible !== true || item.stale === true || state.marketCatalog.stale || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId))) { text("[data-overview-runtime]", "请先在市场页面确认币种资格、启用运行池，并等待行情与轮次确认"); return; }
+      if (action === "start" && overviewStartReason()) { text("[data-overview-runtime]", overviewStartReason()); return; }
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
       const marketIds = item?.marketId ? [item.marketId] : [];
       if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
@@ -97,15 +130,15 @@
       command()
       .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "运行控制待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
-        .finally(() => { document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = false; }); void adapter.loadRuntime(); });
+        .finally(() => { void adapter.loadRuntime().catch(() => null).finally(updateOverviewControls); });
       return;
     }
     if (action === "strategy") return window.PolyPreview?.navigate("strategy.html");
     if (action === "refresh") {
       button.disabled = true;
-      Promise.allSettled([adapter.loadMarkets(), adapter.loadRuntime(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadAccount(), adapter.loadEvents()])
+      Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime(), adapter.loadStrategy(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadAccount(), adapter.loadAccountStatus(), adapter.loadEvents()])
         .then((results) => {
-          const disconnected = results.some((result) => result.status === "fulfilled" && ["stale", "unavailable"].includes(result.value?.status));
+          const disconnected = results.some((result) => result.status === "rejected" || ["stale", "unavailable", "error", "degraded"].includes(result.value?.status));
           text(".server-expired", disconnected ? "连接中断 · 保留上次成功数据" : "状态已刷新 · 数据源已更新");
         })
         .finally(() => { button.disabled = false; });
@@ -135,7 +168,7 @@
   const periodValue = (data, period, fields, rootFields = fields) => {
     const root = data?.summary || data || {};
     const bucket = data?.[period] || data?.periods?.[period] || root?.[period] || {};
-    return read(bucket, fields);
+    return read(bucket, fields, read(root, rootFields));
   };
   const renderMetrics = (resource) => {
     const data = resource?.data;
@@ -217,7 +250,12 @@
     const states = { running: "运行中", stopped: "已停止", paused: "已暂停新增", starting: "启动中", stopping: "停止中", failed: "运行失败" };
     const label = runtime.status === "unavailable" ? "运行状态待接入" : runtime.stale ? `状态过期 · ${states[runtime.runtimeState] || runtime.runtimeState || "保留上次状态"}` : states[runtime.status] || runtime.status;
     text("[data-overview-runtime]", label);
+    updateOverviewControls();
   });
+  store.subscribe("marketCatalog", updateOverviewControls);
+  store.subscribe("marketPool", updateOverviewControls);
+  store.subscribe("strategy", updateOverviewControls);
+  store.subscribe("accountStatus", updateOverviewControls);
   text('[data-overview-action="exit"]', "停止交易");
   text('[data-overview-action="strategy"]', "配置策略");
   text(".sidebar-status span", "服务器数据");
@@ -240,7 +278,7 @@
     adapter.loadMarkets(), adapter.loadRuntime()
   ]).finally(() => { fastRequest = null; }));
   const refreshSlow = () => slowRequest || (slowRequest = Promise.allSettled([
-    adapter.loadMarketPool(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadEvents()
+    adapter.loadMarketPool(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadEvents(), adapter.loadStrategy(), adapter.loadAccountStatus()
   ]).finally(() => { slowRequest = null; }));
   const refreshAccount = () => accountRequest || (accountRequest = Promise.allSettled([
     adapter.loadAccount()
@@ -292,5 +330,6 @@
   document.addEventListener("visibilitychange", refreshAllOnVisible);
   window.addEventListener("pagehide", clearRefreshTimers);
   refreshAllOnVisible();
+  updateOverviewControls();
 })();
 
