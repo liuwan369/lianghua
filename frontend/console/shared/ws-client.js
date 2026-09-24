@@ -3,7 +3,7 @@
   const createStream = (name, options = {}) => {
     let socket = null;
     let closed = false;
-    let lastSequence = -1;
+    const sequenceWatermarks = new Map();
     let reconnectTimer = null;
     let reconnectAttempt = 0;
     let subscription = null;
@@ -27,7 +27,6 @@
       catch (error) { options.onError?.(error); scheduleReconnect(); return false; }
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
-        lastSequence = -1;
         options.onState?.("connected");
         if (subscription) socket.send(JSON.stringify({ type: "subscribe", stream: name, ...subscription }));
       });
@@ -36,10 +35,16 @@
       socket.addEventListener("message", (event) => {
         try {
           const frame = JSON.parse(event.data);
-          const sequence = Number(frame.sequence);
-          if (Number.isFinite(sequence) && sequence <= lastSequence) return;
-          if (Number.isFinite(sequence)) lastSequence = sequence;
+          const payload = frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame;
+          const marketId = payload?.marketId ?? payload?.market_id ?? frame?.marketId ?? frame?.market_id ?? "";
+          const roundId = payload?.roundId ?? payload?.round_id ?? frame?.roundId ?? frame?.round_id ?? "";
+          const sequenceValue = payload?.sequence ?? frame?.sequence;
+          const sequence = Number(sequenceValue);
+          const watermarkKey = `${String(marketId)}\u0000${String(roundId)}`;
+          const previous = sequenceWatermarks.get(watermarkKey);
+          if (Number.isFinite(sequence) && previous != null && sequence <= previous) return;
           if (typeof options.acceptFrame === "function" && !options.acceptFrame(frame)) return;
+          if (Number.isFinite(sequence)) sequenceWatermarks.set(watermarkKey, sequence);
           options.onMessage?.(frame);
         } catch (error) { options.onError?.(error); }
       });

@@ -82,7 +82,9 @@
     const action = button.dataset.overviewAction;
     if (action === "start" || action === "exit") {
       button.disabled = true;
-      const marketIds = store.getState().marketPool.desiredIds.map((assetId) => store.getState().marketCatalog.items.find((item) => item.assetId === assetId)?.marketId || assetId);
+      const marketIds = store.getState().marketPool.desiredIds
+        .map((assetId) => store.getState().marketCatalog.items.find((item) => item.assetId === assetId)?.marketId)
+        .filter(Boolean);
       adapter.commandRuntime({ action: action === "start" ? "start" : "stop", marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
         .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "设计稿 · 待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))

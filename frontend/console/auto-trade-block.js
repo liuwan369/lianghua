@@ -11,7 +11,7 @@
   });
   var marketPool = store.getState().marketPool;
   var assetById = function(id) { return marketAssets.find(function(asset) { return asset.id === id; }); };
-  var marketIdsForCommand = function() { return marketPool.desiredIds.map(assetById).filter(Boolean).map(function(asset) { return asset.marketId || asset.id; }); };
+  var marketIdsForCommand = function() { return marketPool.desiredIds.map(assetById).filter(function(asset) { return asset && asset.marketId; }).map(function(asset) { return asset.marketId; }); };
   var navItems = [
     ["\u25C8", "\u603B\u89C8", "overview.html"],
     ["\u25C7", "\u5E02\u573A", "market.html"],
@@ -94,7 +94,7 @@
         <article class="trade-panel orderbook-panel" aria-labelledby="orderbook-title">
           <div class="panel-heading">
             <div><p class="eyebrow">LIVE ORDER BOOK</p><h2 id="orderbook-title">\u5F53\u524D\u76D8\u53E3</h2></div>
-            <div class="book-live"><i></i><span>\u5F85\u63A5\u5165</span><small data-book-age>--</small></div>
+            <div class="book-live"><i></i><span data-book-live-state>\u5F85\u63A5\u5165</span><small data-book-age>--</small></div>
           </div>
           <div class="quote-strip">
             <div class="quote-box up-quote"><span><i></i>YES \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="yes-bid">--</b><em>/</em><b data-quote="yes-ask">--</b></strong></div>
@@ -173,10 +173,44 @@
     text("[data-active-market]", activeMarket);
     text("[data-market-pool-note]", visibleAssets.length ? `已启用 ${enabledAssets.length} 个币种；当前场次继续运行，新增币种从下一场加入。` : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
-  var renderSnapshot = function(raw) {
+  var snapshotWatermarks = new Map();
+  var snapshotExpiryTimer = null;
+  var timestampMs = function(value) {
+    if (value == null || value === "") return null;
+    var numeric = Number(value);
+    if (Number.isFinite(numeric)) return Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
+    var parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  var markSnapshotStale = function(message) {
+    text("[data-book-source]", message || "行情已过期 · 保留最近快照");
+    text("[data-book-live-state]", "已过期 · 保留快照");
+  };
+  var renderSnapshot = function(raw, fromStream) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     if (!raw) return;
-    var model = vm.market(raw.market || raw);
+    var source = raw.market && typeof raw.market === "object" ? { ...raw, ...raw.market } : raw;
+    var sequence = Number(source.sequence);
+    var sourceAt = timestampMs(source.sourceAt ?? source.source_at);
+    var expiresAt = timestampMs(source.expiresAt ?? source.expires_at);
+    var now = Date.now();
+    var model = vm.market(source);
+    var marketId = model.marketId;
+    var roundId = model.roundId;
+    var watermarkKey = `${String(marketId || "")}\u0000${String(roundId || "")}`;
+    var previousSequence = snapshotWatermarks.get(watermarkKey);
+    var valid = Boolean(marketId && roundId) && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
+      && sourceAt <= now + 5000 && expiresAt > now && source.stale !== true && raw.stale !== true
+      && (previousSequence == null || sequence > previousSequence);
+    if (!valid) {
+      markSnapshotStale(raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期或序列落后 · 保留最近快照");
+      return false;
+    }
+    snapshotWatermarks.set(watermarkKey, sequence);
+    if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
+    snapshotExpiryTimer = window.setTimeout(function() {
+      markSnapshotStale("行情快照已过期 · 保留最近快照");
+    }, Math.max(0, expiresAt - Date.now()));
     var quote = function(key, value) { text(`[data-quote="${key}"]`, Number.isFinite(value) ? value.toFixed(3) : "--"); };
     quote("yes-bid", model.yesBid); quote("yes-ask", model.yesAsk); quote("no-bid", model.noBid); quote("no-ask", model.noAsk);
     var book = raw.book || raw.orderBook || raw.orderbook || {};
@@ -192,8 +226,10 @@
       if (bidNode) bidNode.innerHTML = render(bids, "bid");
       if (askNode) askNode.innerHTML = render(asks, "ask");
     });
-    text("[data-book-source]", model.sourceAt || model.quoteAt ? `实时快照 · ${window.PolyPreview.format.time(model.sourceAt || model.quoteAt)}` : "快照时间未知");
-    text("[data-book-age]", model.sourceAt || model.quoteAt ? window.PolyPreview.format.time(model.sourceAt || model.quoteAt) : "--");
+    text("[data-book-source]", `${fromStream ? "实时流" : "REST 快照"} · ${window.PolyPreview.format.time(sourceAt)}`);
+    text("[data-book-live-state]", fromStream ? "实时流 · 已连接" : "REST 快照 · 已更新");
+    text("[data-book-age]", window.PolyPreview.format.time(sourceAt));
+    return true;
   };
   var streams = [];
   var currentContext = function() {
@@ -247,19 +283,33 @@
     if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
     var context = currentContext();
     var hasMarketStream = Boolean(streamUrl("markets"));
-    if (!hasMarketStream) text("[data-book-source]", "实时流未配置 · 保留最近快照");
+    if (!hasMarketStream) markSnapshotStale("实时流未配置 · 保留最近快照");
     var make = function(name, requireRound, onMessage, onState) {
       var url = streamUrl(name); if (!url) return;
-      var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { text("[data-book-source]", error.message || "实时流不可用 · 保留最近快照"); } });
+      var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
       stream.connect();
       stream.subscribe({ marketIds: context.marketId ? [context.marketId] : [], marketId: context.marketId, roundId: context.roundId || undefined });
       streams.push(stream);
     };
     make("markets", true, function(frame) {
-      var payload = payloadOf(frame); var snapshot = payload.snapshot || payload;
+      var payload = payloadOf(frame); var sourceSnapshot = payload.snapshot && typeof payload.snapshot === "object" ? payload.snapshot : payload;
+      var snapshot = {
+        ...sourceSnapshot,
+        sequence: sourceSnapshot.sequence ?? payload.sequence ?? frame.sequence,
+        sourceAt: sourceSnapshot.sourceAt ?? sourceSnapshot.source_at ?? payload.sourceAt ?? payload.source_at ?? frame.sourceAt ?? frame.source_at,
+        expiresAt: sourceSnapshot.expiresAt ?? sourceSnapshot.expires_at ?? payload.expiresAt ?? payload.expires_at ?? frame.expiresAt ?? frame.expires_at,
+        stale: sourceSnapshot.stale ?? payload.stale ?? frame.stale,
+        marketId: sourceSnapshot.marketId ?? sourceSnapshot.market_id ?? payload.marketId ?? payload.market_id ?? frame.marketId ?? frame.market_id,
+        roundId: sourceSnapshot.roundId ?? sourceSnapshot.round_id ?? payload.roundId ?? payload.round_id ?? frame.roundId ?? frame.round_id
+      };
       var hasQuote = ["yesBid", "yesAsk", "noBid", "noAsk", "yes_bid", "yes_ask", "no_bid", "no_ask"].some(function(key) { return snapshot[key] != null; });
-      if (snapshot.book || snapshot.orderBook || snapshot.orderbook || hasQuote) { renderSnapshot(snapshot); text("[data-book-source]", "实时流 · 已连接"); }
-    }, function(state) { if (state !== "connected") text("[data-book-source]", `实时流${state === "error" ? "错误" : "断开"} · 保留最近快照`); });
+      if (snapshot.book || snapshot.orderBook || snapshot.orderbook || hasQuote) renderSnapshot(snapshot, true);
+    }, function(state) {
+      if (state !== "connected") {
+        text("[data-book-source]", `实时流${state === "error" ? "错误" : "断开"} · 保留最近快照`);
+        text("[data-book-live-state]", "连接中断 · 保留快照");
+      }
+    });
     make("orders", true, function(frame) { var payload = payloadOf(frame); if (payload.position) renderPosition(payload.position); if (payload.order) renderOrders([payload.order]); else if (payload.orders || payload.items) renderOrders(payload.orders || payload); }, function() {});
     make("runtime", false, function(frame) { var payload = payloadOf(frame); if (payload.status == null && payload.state == null && payload.running == null) return; var runtime = vm.runtime(payload); store.setSlice("runtime", { ...runtime, connectionStatus: "ready", stale: false, error: null }); }, function(state) {
       var current = store.getState().runtime;

@@ -5,6 +5,7 @@
   const payloadOf = (value) => value?.data && typeof value.data === "object" ? value.data : value;
   const assetIdFrom = (raw, index = 0) => String(first(raw.assetId, raw.asset_id, raw.asset, raw.symbol, raw.slug, `market-${index}`)).toLowerCase();
   const symbolFrom = (raw, assetId) => String(first(raw.symbol, raw.ticker, assetId.split("-")[0])).toUpperCase();
+  const isBtc = (item) => item?.symbol === "BTC" || item?.assetId === "btc" || item?.assetId.startsWith("btc-");
   const market = (raw = {}, index = 0) => {
     const assetId = assetIdFrom(raw, index);
     const symbol = symbolFrom(raw, assetId);
@@ -16,8 +17,8 @@
       icon: String(first(raw.icon, symbol.slice(0, 1))),
       tone: String(first(raw.tone, assetId)),
       cycle: String(first(raw.cycle, raw.duration, "5m")),
-      marketId: String(first(raw.marketId, raw.market_id, raw.id, raw.slug, `${assetId}-5m`)),
-      roundId: String(first(raw.roundId, raw.round_id, raw.round) ?? ""),
+      marketId: first(raw.marketId, raw.market_id) == null ? null : String(first(raw.marketId, raw.market_id)),
+      roundId: first(raw.roundId) == null ? null : String(first(raw.roundId)),
       startAt: first(raw.startAt, raw.start, null),
       endAt: first(raw.endAt, raw.end, null),
       yesBid: finite(first(raw.yesBid, raw.yes_bid, raw.up_bid)),
@@ -42,7 +43,7 @@
     payload = payloadOf(payload) || {};
     const list = Array.isArray(payload) ? payload : first(payload.items, payload.markets, payload.current_markets, []);
     return {
-      items: list.map((item, index) => market(item, index)),
+      items: list.map((item, index) => market(item, index)).filter(isBtc),
       source: String(first(payload.source, payload.node_label, "backend")),
       asOf: first(payload.asOf, payload.as_of, null),
       stale: payload.stale === true || payload.collector_online === false,
@@ -55,7 +56,9 @@
     const desired = first(payload.desiredIds, payload.enabledIds, payload.enabled_ids, []);
     const current = first(payload.currentIds, payload.runningIds, payload.current_ids, []);
     const next = first(payload.nextRoundIds, payload.next_round_ids, []);
-    const clean = (values) => Array.isArray(values) ? [...new Set(values.map(String).filter((id) => !known.size || known.has(id)))] : [];
+    const clean = (values) => Array.isArray(values) ? [...new Set(values.map(String).filter((id) =>
+      (id.toLowerCase() === "btc" || id.toLowerCase().startsWith("btc-")) && (!known.size || known.has(id))
+    ))] : [];
     return { desiredIds: clean(desired), currentIds: clean(current), nextRoundIds: clean(next), effectiveRoundId: first(payload.effectiveRoundId, payload.effective_round_id, null), source: String(first(payload.source, "backend")), updatedAt: first(payload.updatedAt, payload.updated_at, null) };
   };
   const runtime = (payload = {}) => {
