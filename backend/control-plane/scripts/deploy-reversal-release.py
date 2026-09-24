@@ -17,58 +17,66 @@ if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
 if len(sys.argv) != 1:
     raise SystemExit("deploy-reversal-release.py accepts no options; use --help for usage")
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 REV = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 RELEASE = "reversal-" + REV[:7] + "-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-PROGRAM_PREFIXES = ("_external/btc-5m-market-trading-bot/src/", "web/src/", "scripts/dashboard/")
-ENGINE_ROOT = "_external/btc-5m-market-trading-bot/"
+ENGINE_ROOT = "backend/engine/"
+FRONTEND_ROOT = "frontend/console/"
+CONTROL_SCRIPTS_ROOT = "scripts/"
+CONTROL_CONFIG_ROOT = "config/"
+PROGRAM_PREFIXES = (ENGINE_ROOT + "src/", FRONTEND_ROOT, "backend/control-plane/scripts/", "shared/contracts/")
 ENGINE_METADATA = {ENGINE_ROOT + name for name in (".env.example", "README.md", "package.json", "package-lock.json")}
-GENERATED_PREFIXES = (ENGINE_ROOT + "dist/", "docs/console/")
+GENERATED_PREFIXES = (ENGINE_ROOT + "dist/",)
+
+
+def target_name(source: str) -> str | None:
+    if source.startswith("backend/control-plane/scripts/"):
+        return CONTROL_SCRIPTS_ROOT + source.removeprefix("backend/control-plane/scripts/")
+    if source.startswith("backend/control-plane/config/"):
+        return CONTROL_CONFIG_ROOT + source.removeprefix("backend/control-plane/config/")
+    if source.startswith(ENGINE_ROOT) or source.startswith(FRONTEND_ROOT) or source.startswith("shared/contracts/"):
+        return source
+    return None
 
 
 def release_path(name: str) -> bool:
-    return (name.startswith(PROGRAM_PREFIXES) or name.startswith("docs/") or name in ENGINE_METADATA
+    return (name.startswith(PROGRAM_PREFIXES) or name.startswith(FRONTEND_ROOT)
+            or name.startswith("shared/contracts/") or name in ENGINE_METADATA
             or name in {"README.md", "scripts/system-dashboard-server.py",
-                                                        "scripts/dashboard_account.py",
-                                                        "scripts/deploy-reversal-release.py",
-                                                        "config/pm-system-dashboard-dublin.service",
-                                                        "config/pm-clob-market-snapshot.service"}
-            )
+                        "scripts/dashboard_account.py", "scripts/deploy-reversal-release.py",
+                        "config/pm-system-dashboard-dublin.service",
+                        "config/pm-clob-market-snapshot.service"})
 
 
-NAMES = set(subprocess.check_output(["git", "diff", "--name-only", "1edb1e0", REV], cwd=ROOT, text=True).splitlines())
-NAMES.update(name for name in subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
-             if name.startswith(PROGRAM_PREFIXES))
-NAMES.update(ENGINE_METADATA)
+SOURCES = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
 CONTENT = {}
-for name in sorted(NAMES):
-    if not release_path(name):
+for source in sorted(SOURCES):
+    name = target_name(source)
+    if name is None:
         continue
-    # A release is built from the target commit. Deleted paths remain in the
-    # diff for audit purposes but must not be looked up in that commit.
-    exists = subprocess.run(["git", "cat-file", "-e", REV + ":" + name], cwd=ROOT,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
-    if exists:
-        CONTENT[name] = subprocess.check_output(["git", "show", REV + ":" + name], cwd=ROOT)
+    CONTENT[name] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+for source in ("README.md", "backend/control-plane/scripts/deploy-reversal-release.py"):
+    target = source if source == "README.md" else "scripts/deploy-reversal-release.py"
+    CONTENT[target] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+for source in ("backend/control-plane/scripts/system-dashboard-server.py", "backend/control-plane/scripts/dashboard_account.py"):
+    CONTENT["scripts/" + Path(source).name] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
 # Build the chosen commit in a separate directory: workers may keep editing and
 # building their shared checkout while this immutable program is deployed.
 BUILD = ROOT / ".deploy" / (RELEASE + "-build")
 BUILD.mkdir()
-sources = subprocess.check_output(["git", "archive", REV, "web", "_external/btc-5m-market-trading-bot"], cwd=ROOT)
+sources = subprocess.check_output(["git", "archive", REV, "backend/engine", "frontend/console", "backend/control-plane", "shared/contracts"], cwd=ROOT)
 with tarfile.open(fileobj=io.BytesIO(sources)) as source_archive:
     source_archive.extractall(BUILD, filter="data")
-for relative in ("_external/btc-5m-market-trading-bot", "web"):
-    project = BUILD / relative
-    os.symlink(ROOT / relative / "node_modules", project / "node_modules", target_is_directory=True)
-    subprocess.run([shutil.which("npm.cmd") or "npm", "run", "build"], cwd=project, check=True)
-for folder in ("_external/btc-5m-market-trading-bot/dist", "docs/console"):
-    for path in (BUILD / folder).rglob("*"):
-        if path.is_file():
-            CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
+engine_project = BUILD / "backend/engine"
+os.symlink(ROOT / "backend/engine" / "node_modules", engine_project / "node_modules", target_is_directory=True)
+subprocess.run([shutil.which("npm.cmd") or "npm", "run", "build"], cwd=engine_project, check=True)
+for path in (BUILD / "backend/engine/dist").rglob("*"):
+    if path.is_file():
+        CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
 deleted = subprocess.check_output(
     ["git", "diff", "--diff-filter=D", "--name-only", "1edb1e0", REV], cwd=ROOT, text=True
 ).splitlines()
-REMOVED = sorted(name for name in deleted if release_path(name) and name not in CONTENT)
+REMOVED = sorted(name for source in deleted if (name := target_name(source)) and release_path(name) and name not in CONTENT)
 MANIFEST = {"revision": REV, "release": RELEASE,
             "files": {name: hashlib.sha256(data).hexdigest() for name, data in CONTENT.items()},
             "removed": REMOVED, "generatedPrefixes": list(GENERATED_PREFIXES)}
@@ -86,7 +94,7 @@ import hashlib, json, os, sys, tarfile, urllib.request, subprocess
 root=Path('/root/pm-system').resolve()
 release=Path(sys.argv[1]).resolve()
 manifest=json.loads((release/'manifest.json').read_text())
-allowed_prefixes=('_external/btc-5m-market-trading-bot/','web/src/','scripts/dashboard/','docs/')
+allowed_prefixes=('backend/engine/','frontend/console/','scripts/','config/','shared/contracts/','docs/')
 allowed_exact={'README.md','scripts/system-dashboard-server.py','scripts/dashboard_account.py',
                'scripts/deploy-reversal-release.py','config/pm-system-dashboard-dublin.service',
                'config/pm-clob-market-snapshot.service'}
@@ -142,9 +150,10 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
     collector_unit='pm-clob-market-snapshot.service'
     dashboard_unit='pm-system-dashboard-dublin.service'
     collector_changed=collector_unit in changed_units or any(
-        name.startswith('_external/btc-5m-market-trading-bot/dist/') for name in changed+obsolete)
+        name.startswith('backend/engine/dist/') for name in changed+obsolete)
     dashboard_changed=(dashboard_unit in changed_units
-                       or any(name.startswith('scripts/') and name.endswith('.py')
+                       or any((name.startswith('scripts/') or name.startswith('frontend/console/'))
+                              and name.endswith(('.py', '.js', '.html', '.css'))
                               for name in changed+obsolete))
     affected_units=set(changed_units)|set(removed_units)
     if collector_changed:
