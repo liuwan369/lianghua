@@ -186,6 +186,8 @@ def market_pool() -> dict:
         desired = _pool_ids(value.get("desiredIds"), field="desiredIds")
         current = _pool_ids(value.get("currentIds"), field="currentIds")
         next_ids = _pool_ids(value.get("nextRoundIds"), field="nextRoundIds")
+        if any(len(ids) > 1 for ids in (desired, current, next_ids)):
+            raise ValueError("单实例交易运行池只能包含一个资产")
         updated = value.get("updatedAt")
         if type(updated) not in (int, float) or not math.isfinite(updated) or updated <= 0:
             raise ValueError("market pool updatedAt is unavailable")
@@ -213,6 +215,8 @@ def save_market_pool(payload: dict) -> dict:
         raise ValueError("运行池字段不正确")
     current = market_pool()
     desired = _pool_ids(payload.get("desiredIds", current["desiredIds"]), field="desiredIds")
+    if len(desired) != 1:
+        raise ValueError("单实例交易运行池必须且只能选择一个资产")
     # Current and next membership are runtime-owned. The request can assert
     # their IDs only as compatibility input, but cannot rewrite live state.
     if "currentIds" in payload:
@@ -1140,6 +1144,13 @@ def strategy_control(payload: dict) -> dict:
         if not saved["savedRevision"]:
             raise ValueError("请先保存策略参数")
         config = saved["config"]
+        selected_asset = config.get("assetId", "btc")
+        pool = market_pool()
+        if pool.get("error") == "market_pool_invalid":
+            raise ValueError("运行池配置无效，请先选择一个资产")
+        desired_assets = pool.get("desiredIds") or []
+        if desired_assets and desired_assets[0] != selected_asset:
+            raise ValueError("运行池资产与策略 assetId 不一致，请先统一配置")
         return start_trading({"mode": config["mode"], "confirm_live": True,
                               "duration_min": config["durationMinutes"]},
                              config_revision=saved["savedRevision"], request_id=request_id,
