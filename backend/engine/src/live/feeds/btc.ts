@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { type FeedEvent, type FeedSink, nowUnix, num, sleep } from "./index.js";
+import { type FeedSink, nowUnix, num, sleep } from "./index.js";
 
 interface Quote {
   bid: number;
@@ -7,7 +7,6 @@ interface Quote {
   bidSz: number;
   askSz: number;
 }
-
 function micro(q: Quote): number {
   if (q.bidSz > 0 && q.askSz > 0) {
     return (q.bid * q.askSz + q.ask * q.bidSz) / (q.bidSz + q.askSz);
@@ -15,7 +14,7 @@ function micro(q: Quote): number {
   return (q.bid + q.ask) / 2;
 }
 
-export function venueName(i: number): string {
+function venueName(i: number): string {
   return (
     ["binance-spot", "binance-perp", "coinbase", "okx", "bybit-perp"][i] ?? "?"
   );
@@ -288,5 +287,3 @@ export function runBtcFeed(sink: FeedSink): { stop: () => void } {
     sockets.clear();
   } };
 }
-
-export type { FeedEvent };
