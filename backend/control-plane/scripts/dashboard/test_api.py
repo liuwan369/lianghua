@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from unittest.mock import Mock, patch
@@ -140,6 +141,51 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(market["expiresAt"], now + 1.5)
         self.assertTrue(market["depthAvailable"])
         self.assertFalse(market["stale"])
+
+    def test_collector_canonical_snapshot_is_lossless_but_not_strategy_eligible(self):
+        now = time.time()
+        levels = [[0.49 - i * 0.01, 10 - i] for i in range(5)]
+        asks = [[0.51 + i * 0.01, 11 + i] for i in range(5)]
+        snapshot = {"marketId": "0xcollector", "roundId": "1800000000", "sequence": 4,
+                    "sourceAt": now - .1, "expiresAt": now + 1.9,
+                    "YES": {"assetId": "collector-yes", "bid": .49, "ask": .51,
+                            "sourceAt": now - .1, "bids": levels, "asks": asks},
+                    "NO": {"assetId": "collector-no", "bid": .49, "ask": .51,
+                           "sourceAt": now - .1, "bids": levels, "asks": asks}}
+        raw = {"checked_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+               "collector_online": True, "collector_connected": True,
+               "source": "polymarket-ws", "stale_after_ms": 2000,
+               "current_markets": [{"snapshot": snapshot, "slug": "btc-updown-5m-1800000000",
+                                     "name": "BTC", "start": now - 1, "end": now + 299}]}
+        validated = server_module.validate_snapshot(raw, now=now)
+        self.assertTrue(validated["collector_online"])
+        with patch.object(server_module, "_running_engine_market_status", return_value=None), \
+                patch.object(server_module, "cached_live_status", return_value=validated):
+            value = server_module._modern_markets()
+        market = value["items"][0]
+        self.assertEqual(market["marketId"], "0xcollector")
+        self.assertEqual(market["roundId"], "1800000000")
+        self.assertEqual(market["orderBook"]["yes"]["bids"], levels)
+        self.assertEqual(market["sequence"], 4)
+        self.assertEqual(market["sourceAt"], now - .1)
+        self.assertEqual(market["expiresAt"], now + 1.9)
+        self.assertTrue(market["depthAvailable"])
+        self.assertFalse(market["strategyEligible"])
+        self.assertFalse(market["stale"])
+
+    def test_expired_collector_canonical_snapshot_is_retained_and_marked_stale(self):
+        now = time.time()
+        snapshot = {"marketId": "0xcollector", "roundId": "1800000000", "sequence": 4,
+                    "sourceAt": now - 3, "expiresAt": now - 1,
+                    "YES": {"assetId": "collector-yes", "bid": .49, "ask": .51},
+                    "NO": {"assetId": "collector-no", "bid": .49, "ask": .51}}
+        raw = {"checked_at": datetime.fromtimestamp(now, timezone.utc).isoformat(),
+               "collector_online": True, "collector_connected": True,
+               "source": "polymarket-ws", "stale_after_ms": 2000,
+               "current_markets": [{"snapshot": snapshot}]}
+        validated = server_module.validate_snapshot(raw, now=now)
+        self.assertFalse(validated["collector_online"])
+        self.assertEqual(validated["current_markets"][0]["snapshot"], snapshot)
 
     def test_market_pool_reads_saved_state_and_rejects_non_btc(self):
         path = self.root / "results" / "dashboard" / "market_pool.json"

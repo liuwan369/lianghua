@@ -75,7 +75,7 @@ schemaVersion, source, asOf, stale, error
 
 | 接口 | 关键字段和语义 |
 |---|---|
-| `GET /api/markets` | 运行时 accepted `snapshots[]` 优先，保留 `marketId/roundId/YES/NO/assetId/bids/asks/sequence/sourceAt/expiresAt/stale`；无 accepted snapshot 时仅保留采集器 best bid/ask 展示，`depthAvailable=false`、`strategyEligible=false`、`stale=true` |
+| `GET /api/markets` | 运行时 accepted `snapshots[]` 优先；采集器 `current_markets[*].snapshot`（兼容 `paired_snapshot`）也可无损展示 `marketId/roundId/YES/NO/assetId/bids/asks/sequence/sourceAt/expiresAt`，但固定 `strategyEligible=false`；仅 legacy row 时 `depthAvailable=false`、`strategyEligible=false`、`stale=true` |
 | `GET /api/markets/{marketId}/snapshot` | 市场 DTO 加同一份 `orderBook`；accepted snapshot 可提供五档和 freshness 字段，旧采集器回退不伪造深度 |
 | `GET /api/runtime/status` | `status/state/serviceState/commandStatus/remoteOrdersState/runId/strategyId/execution/markets/projection/asOf/stale/error` |
 | `GET/PUT /api/runtime/market-pool` | 服务器持久化 BTC 五分钟运行池；读取 `market_pool.json` 的 `desired/current/next/effective/updatedAt`，写入只接受 `btc`，当前/下一场仍由运行时确认 |
@@ -127,7 +127,8 @@ schemaVersion, source, asOf, stale, error
 5. 运行时 CLI 仍需直接在 order/fill/settlement journal 写入 `market_id/round_id` 和订单 `created_at`；在此之前账本依赖状态映射回填，前端可能看不到完整的首条事件身份。
 6. 尚未完成服务器实测：真实下单、撤单、成交回报、资金释放、重启恢复、连续场次切换和链上 redeem。
 7. `/api/stream/markets` 本轮仍未接通，bootstrap 保持 `capabilityDetails.streams=false`；集成会话不能把 404 当成已提供流。
-8. 集成会话需要组合最新 `codex/market-data`、`codex/trading-runtime` 和本分支最新提交，生成组合部署提交号并执行真实联调；本会话没有权限伪造该提交号。
+8. 行情会话仍需在 collector serializer 写入 `current_markets[*].snapshot` canonical 对象；控制面已兼容 `snapshot`、`paired_snapshot` 和直接 canonical row，未提供该对象时只能使用 legacy 展示回退。
+9. 集成会话需要组合最新 `codex/market-data`、`codex/trading-runtime` 和本分支最新提交，生成组合部署提交号并执行真实联调；本会话没有权限伪造该提交号。
 
 ## 验证
 

@@ -34,7 +34,7 @@ from dashboard.config import ConfigConflictError
 from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID
 from dashboard.ledger import Ledger
 from dashboard.read_model import ReadModel
-from dashboard.market_snapshot import validate_snapshot
+from dashboard.market_snapshot import canonical_snapshot, validate_snapshot
 from dashboard.account_data import AccountData
 from dashboard.system_metrics import SystemMetrics
 
@@ -1361,7 +1361,7 @@ def _epoch(value):
 def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
     """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
-    snapshot = row.get("paired_snapshot") if isinstance(row, dict) else None
+    snapshot = canonical_snapshot(row)
     slug = str(row.get("slug") or "")
     start, end = _epoch(row.get("start")), _epoch(row.get("end"))
     if not isinstance(snapshot, dict):
@@ -1442,7 +1442,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "expiresAt": expires_at,
         "sequence": sequence if type(sequence) is int else None,
         "depthAvailable": depth_available,
-        "strategyEligible": complete and not stale,
+        "strategyEligible": bool(row.get("source") == "platform-runtime") and complete and not stale,
         "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
                       "sequence": sequence if type(sequence) is int else None,
                       "sourceAt": source_at, "expiresAt": expires_at, "stale": stale},
@@ -1475,7 +1475,8 @@ def _modern_markets() -> dict:
         # A collector fallback is display-only because it lacks the runtime
         # acceptance watermark/depth. It must not become the last successful
         # modern snapshot used after the fallback itself disappears.
-        if not stale:
+        has_canonical = any(canonical_snapshot(row) is not None for row in rows if isinstance(row, dict))
+        if not stale and has_canonical:
             _modern_market_cache = value
         elif _modern_market_cache:
             retained = [{**item, "stale": True} for item in _modern_market_cache["items"]]

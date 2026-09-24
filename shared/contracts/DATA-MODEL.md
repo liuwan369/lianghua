@@ -28,7 +28,7 @@
 
 `{ marketId, roundId, yes: { bids, asks }, no: { bids, asks }, sequence, sourceAt, expiresAt, stale }`
 
-这是预留深度模型。当前 REST 市场快照只提供已有 bid/ask，不能将最优报价伪造成五档；实时流能力尚未提供。未来五档应使用独立高频快照，并携带来源时间及过期状态。
+采集器持久化的 canonical paired snapshot 可提供同一对象的五档和 freshness 字段，但它只用于只读展示，`strategyEligible=false`；只有交易运行时 accepted snapshot 才能作为策略可用输入。缺少 canonical snapshot 时，legacy best bid/ask 不能伪造成五档；实时流能力尚未提供。
 
 ### RoundPositionViewModel
 

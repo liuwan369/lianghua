@@ -14,6 +14,46 @@ def number(value):
         return None
 
 
+def canonical_snapshot(row: dict):
+    """Return the lossless paired snapshot embedded by the public collector."""
+    if not isinstance(row, dict):
+        return None
+    for key in ("snapshot", "paired_snapshot", "pairedSnapshot"):
+        value = row.get(key)
+        if isinstance(value, dict):
+            return value
+    if all(key in row for key in ("marketId", "roundId", "YES", "NO")):
+        return row
+    return None
+
+
+def _canonical_side(value: dict) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("assetId"), str) or not value["assetId"]:
+        return False
+    bid, ask = number(value.get("bid")), number(value.get("ask"))
+    if bid is None or ask is None or not 0 < bid <= ask < 1:
+        return False
+    for key in ("sourceAt", "expiresAt"):
+        if value.get(key) is not None and number(value.get(key)) is None:
+            return False
+    return True
+
+
+def canonical_snapshot_fresh(value: dict, now: float) -> bool:
+    """Validate collector identity and freshness without making it executable."""
+    if not isinstance(value, dict):
+        return False
+    market_id, round_id = value.get("marketId"), value.get("roundId")
+    sequence = value.get("sequence")
+    source_at, expires_at = number(value.get("sourceAt")), number(value.get("expiresAt"))
+    return (isinstance(market_id, str) and bool(market_id)
+            and isinstance(round_id, str) and bool(round_id)
+            and type(sequence) is int and sequence >= 0
+            and source_at is not None and source_at <= now + 1
+            and expires_at is not None and expires_at > now
+            and _canonical_side(value.get("YES")) and _canonical_side(value.get("NO")))
+
+
 def validate_snapshot(value: dict, now: float | None = None) -> dict:
     """Reading a stale file must never give its contents a new market clock."""
     if not isinstance(value, dict):
@@ -32,6 +72,17 @@ def validate_snapshot(value: dict, now: float | None = None) -> dict:
         limit = number(value.get("stale_after_ms"))
         rows = value.get("current_markets")
         try:
+            canonical_rows = [canonical_snapshot(row) for row in rows or []
+                              if isinstance(row, dict) and canonical_snapshot(row) is not None]
+            if canonical_rows:
+                quotes_fresh = (value.get("collector_connected") is True
+                                and bool(rows) and all(canonical_snapshot_fresh(row, now) for row in canonical_rows))
+                if not quotes_fresh or value.get("collector_online") is not True:
+                    # Keep the last canonical object so the API can expose its
+                    # sourceAt/expiresAt and mark it stale instead of clearing it.
+                    value.update(collector_online=False)
+                    value.setdefault("stale_reason", "CLOB canonical paired snapshot 过期或连接不可用")
+                return value
             quotes_fresh = (limit is not None and 0 < limit <= 15_000
                             and value.get("collector_connected") is True
                             and isinstance(rows, list) and bool(rows)
