@@ -41,6 +41,15 @@
       throw error;
     }
   };
+  const uuid = (value) => {
+    if (typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) return value;
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+      const random = Math.random() * 16 | 0;
+      const value = char === "x" ? random : random & 3 | 8;
+      return value.toString(16);
+    });
+  };
   const commandResult = (raw = {}) => {
     const nested = raw.status && typeof raw.status === "object" ? raw.status : raw;
     const accepted = raw.accepted ?? raw.ok ?? nested.accepted;
@@ -159,7 +168,20 @@
     },
     async commandRuntime(payload) {
       if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：运行控制接口尚未连接" };
-      const raw = await modernOrLegacy(() => core.api.runtimeCommand(payload), () => core.api.legacyRuntimeCommand(payload));
+      const command = { ...(payload || {}) };
+      if (command.action === "start" && !Number.isInteger(command.revision)) {
+        await adapter.loadStrategy();
+        const revision = store.getState().strategy.revision;
+        if (Number.isInteger(revision)) command.revision = revision;
+      }
+      const legacyPayload = {
+        action: command.action,
+        strategy_id: command.strategyId || core.config.strategyId,
+        request_id: uuid(command.requestId),
+        ...(Number.isInteger(command.revision) ? { revision: command.revision } : {}),
+        ...(command.mode ? { mode: command.mode } : {})
+      };
+      const raw = await modernOrLegacy(() => core.api.runtimeCommand(command), () => core.api.legacyRuntimeCommand(legacyPayload));
       return commandResult(raw);
     },
     async saveStrategy(payload) {
