@@ -221,6 +221,8 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
                 subprocess.run(['systemctl','enable',collector_unit],check=True)
             if collector_unit in changed_units or unit_before[collector_unit]['active']=='active':
                 subprocess.run(['systemctl','restart',collector_unit],check=True)
+        if dashboard_unit in changed_units and (Path('/etc/systemd/system')/dashboard_unit).is_file():
+            subprocess.run(['systemctl','enable',dashboard_unit],check=True)
         mismatches=[name for name,digest in manifest['files'].items()
                     if hashlib.sha256(checked_target(name).read_bytes()).hexdigest()!=digest]
         if mismatches:
