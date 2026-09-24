@@ -17,7 +17,7 @@ Environment=PM_MARKET_SNAPSHOT_PATH=/root/pm-system/data/dashboard/market-snapsh
 Environment=PM_LIVE_URL=http://127.0.0.1:18766/api/live
 Environment=POLYMARKET_WALLET_ADDRESS=0xA693a0E0e40BDeC3d9d4a40bD4D087A5cECFD7cd
 EnvironmentFile=-/root/pm-system/config/dashboard-secret.env
-ExecStart=/root/pm-system/.venv/bin/python /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
+ExecStart=/usr/bin/python3 /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
