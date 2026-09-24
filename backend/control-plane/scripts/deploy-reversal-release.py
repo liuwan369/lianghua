@@ -132,6 +132,10 @@ if before.get('running') is not False or type(before.get('live_unlocked')) is no
 changed=[]
 unit_names={'config/pm-system-dashboard-dublin.service':'pm-system-dashboard-dublin.service',
             'config/pm-clob-market-snapshot.service':'pm-clob-market-snapshot.service'}
+nginx_specs={
+    'config/pm-system-dashboard-dublin-public.conf': '/etc/nginx/sites-available/pm-dashboard-public',
+    'config/pm-system-dashboard-dublin-renew-http.conf': '/etc/nginx/sites-available/pm-dashboard-renew-http',
+}
 obsolete=set(manifest.get('removed',[]))
 retired_units_from_manifest={unit_names[name] for name in obsolete if name in unit_names}
 for prefix in manifest.get('generatedPrefixes',[]):
@@ -160,6 +164,14 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
     backup_names=sorted({name for name in changed if name not in missing}|set(obsolete))
     changed_units=[unit_names[name] for name in changed if name in unit_names]
     removed_units=sorted(retired_units_from_manifest | {unit_names[name] for name in obsolete if name in unit_names})
+    nginx_public_link=Path('/etc/nginx/sites-enabled/pm-dashboard-public')
+    nginx_needs_update=any(name in changed for name in nginx_specs)
+    nginx_public_target=Path(nginx_specs['config/pm-system-dashboard-dublin-public.conf'])
+    if (any(not Path(target_name).is_file() for target_name in nginx_specs.values())
+            or not nginx_public_link.is_symlink()):
+        nginx_needs_update=True
+    elif os.readlink(nginx_public_link) != str(nginx_public_target):
+        nginx_needs_update=True
     collector_unit='pm-clob-market-snapshot.service'
     dashboard_unit='pm-system-dashboard-dublin.service'
     collector_changed=collector_unit in changed_units or any(
@@ -183,6 +195,22 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
             saved=release/'units-before'/unit
             saved.parent.mkdir(exist_ok=True)
             saved.write_bytes(installed_units[unit][0])
+    nginx_before={}
+    if nginx_needs_update:
+        nginx_backup=release/'nginx-before'
+        nginx_backup.mkdir(exist_ok=True)
+        for name,target_name in nginx_specs.items():
+            target=Path(target_name)
+            if target.is_symlink():
+                nginx_before[target_name]={'type': 'symlink', 'target': os.readlink(target)}
+            elif target.is_file():
+                saved=nginx_backup/Path(target_name).name
+                saved.write_bytes(target.read_bytes())
+                nginx_before[target_name]={'type': 'file', 'mode': target.stat().st_mode & 0o777}
+            else:
+                nginx_before[target_name]={'type': 'absent'}
+        nginx_before['link']=os.readlink(nginx_public_link) if nginx_public_link.is_symlink() else None
+        (release/'nginx-state-before.json').write_text(json.dumps(nginx_before))
     with tarfile.open(release/'before.tar.gz','w:gz') as backup:
         for name in backup_names:
             backup.add(root/name,arcname=name,recursive=False)
@@ -223,6 +251,15 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
                 subprocess.run(['systemctl','restart',collector_unit],check=True)
         if dashboard_unit in changed_units and (Path('/etc/systemd/system')/dashboard_unit).is_file():
             subprocess.run(['systemctl','enable',dashboard_unit],check=True)
+        if nginx_needs_update:
+            for name,target_name in nginx_specs.items():
+                source=root/name
+                subprocess.run(['install','-m','0644',str(source),target_name],check=True)
+            nginx_public_link.parent.mkdir(parents=True,exist_ok=True)
+            subprocess.run(['ln','-sfn',nginx_specs['config/pm-system-dashboard-dublin-public.conf'],
+                            str(nginx_public_link)],check=True)
+            subprocess.run(['nginx','-t'],check=True)
+            subprocess.run(['systemctl','reload','nginx'],check=True)
         mismatches=[name for name,digest in manifest['files'].items()
                     if hashlib.sha256(checked_target(name).read_bytes()).hexdigest()!=digest]
         if mismatches:
@@ -263,6 +300,28 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
             else:
                 path.write_bytes(saved[0])
                 path.chmod(saved[1])
+        if nginx_needs_update:
+            for target_name, state in nginx_before.items():
+                if target_name == 'link':
+                    continue
+                target=Path(target_name)
+                if state['type'] == 'file':
+                    saved=release/'nginx-before'/target.name
+                    target.write_bytes(saved.read_bytes())
+                    target.chmod(state['mode'])
+                elif state['type'] == 'symlink':
+                    target.unlink(missing_ok=True)
+                    target.parent.mkdir(parents=True,exist_ok=True)
+                    target.symlink_to(state['target'])
+                elif state['type'] == 'absent':
+                    target.unlink(missing_ok=True)
+            link_before=nginx_before.get('link')
+            if link_before is None:
+                nginx_public_link.unlink(missing_ok=True)
+            else:
+                subprocess.run(['ln','-sfn',link_before,str(nginx_public_link)],check=False)
+            subprocess.run(['nginx','-t'],check=False)
+            subprocess.run(['systemctl','reload','nginx'],check=False)
         if changed_units or removed_units:
             subprocess.run(['systemctl','daemon-reload'], check=False)
         for unit, previous in unit_before.items():
@@ -282,6 +341,7 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
         raise
 result={'revision':manifest['revision'],'release':str(release),'files_verified':len(manifest['files']),
         'files_changed':len(changed),'files_removed':len(obsolete),'dashboard_restarted':restarted,
+        'nginx_reloaded':nginx_needs_update,
         'status':{k:after.get(k) for k in ('running','mode','execution','strategy_id','live_unlocked')}}
 (release/'result.json').write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps(result))
