@@ -48,6 +48,7 @@
       });
       const body = await response.json().catch(() => null);
       if (!response.ok) { const error = new Error((body && body.error) || `请求失败（HTTP ${response.status}）`); error.status = response.status; throw error; }
+      if (!body || typeof body !== "object") throw new Error("接口未返回有效 JSON 数据，保留上次成功数据");
       return body;
     } catch (error) {
       if (controller.signal.aborted) throw new Error("请求超时，页面保留上次成功数据");
@@ -72,6 +73,7 @@
   };
   const selectedAssetFromUrl = new URLSearchParams(window.location.search).get("assetId");
   const setSelectedAssetUrl = (assetId) => {
+    config.selectedAssetId = assetId || null;
     const url = new URL(window.location.href);
     if (assetId) url.searchParams.set("assetId", assetId);
     else url.searchParams.delete("assetId");
@@ -98,7 +100,7 @@
       throw new Error("账户密钥只允许通过 HTTPS 同源页面提交");
     }
     try {
-      const result = await request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "same-origin", cache: "no-store", timeout: 55000 });
+      const result = await request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "same-origin", redirect: "error", cache: "no-store", timeout: 55000 });
       if (result?.ok !== true || !result.report || typeof result.report !== "object" || Array.isArray(result.report)) throw new Error("账户接口未确认检查或保存成功");
       return result;
     } catch (error) {
@@ -110,6 +112,15 @@
   };
   const api = {
     bootstrap: () => request("/api/bootstrap"),
+    controlSession: async (token) => {
+      const base = new URL(config.apiBase || window.location.origin, window.location.href);
+      if (window.location.protocol !== "https:" || base.origin !== window.location.origin) throw new Error("控制会话仅允许通过 HTTPS 同源页面连接");
+      try {
+        const result = await request("/api/trading/auth/session", { method: "POST", headers: { "Content-Type": "application/json", "X-PM-Control-Token": token }, body: "{}", redirect: "error" });
+        if (result.ok !== true) throw new Error("控制会话未获服务器确认");
+        return result;
+      } catch { throw new Error("控制会话连接失败，请检查控制密码及服务器部署配置"); }
+    },
     markets: (query = "asset=crypto&duration=5m") => request(`/api/markets?${query}`),
     marketSnapshot: (marketId, context = {}) => request(`/api/markets/${encodeURIComponent(marketId)}/snapshot${scopedQuery({ ...context, marketId })}`),
     marketPool: (options) => request("/api/runtime/market-pool", options),
@@ -143,7 +154,8 @@
     legacyStrategyConfig: () => request("/api/strategy-config")
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  const config = { apiBase: "", mode: "local-preview", apiFlavor: "contract", demo: true, marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, ...runtimeConfig };
+  const config = { apiBase: "", mode: window.location.protocol === "file:" ? "local-preview" : "backend", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, ...runtimeConfig };
+  config.demo = config.mode === "local-preview";
   window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, setSelectedAssetUrl, on, emit });
   window.addEventListener("storage", (event) => {
     if (config.mode === "local-preview" && event.key) emit(`storage:${event.key}`, storage.read(event.key, null));

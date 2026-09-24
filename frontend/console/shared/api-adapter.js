@@ -7,7 +7,7 @@
   const demoMode = () => core.config.mode === "local-preview";
   const errorText = (error) => error?.message || "接口暂时不可用，页面保留上次成功数据";
   const resourceStatus = (raw, fallback = "ready") => {
-    if (["stale", "unavailable", "error"].includes(raw?.status)) return raw.status;
+    if (["stale", "unavailable", "error", "degraded"].includes(raw?.status)) return raw.status;
     if (raw?.stale === true || raw?.collector_online === false || raw?.depthUnavailable === true || raw?.depth_unavailable === true) return "stale";
     if (raw?.available === false) return "unavailable";
     return fallback;
@@ -15,7 +15,7 @@
   const hasSnapshot = (slice, resource) => {
     if (!resource) return false;
     if (slice === "marketCatalog") return Array.isArray(resource.items) && resource.items.length > 0;
-    if (slice === "marketPool") return [resource.desiredIds, resource.currentIds, resource.nextRoundIds].some((items) => Array.isArray(items) && items.length > 0) || resource.effectiveRoundId != null;
+    if (slice === "marketPool") return resource.receivedAt > 0;
     if (slice === "events") return resource.data != null || Array.isArray(resource.items) && resource.items.length > 0;
     if (slice === "runtime") return resource.status !== "unavailable" && (resource.asOf != null || resource.runId != null || Array.isArray(resource.markets) && resource.markets.length > 0);
     return resource.data != null;
@@ -82,8 +82,7 @@
         const current = store.getState().marketPool;
         const hasCurrent = hasSnapshot("marketPool", current);
         const hasPoolFields = poolPayload && typeof poolPayload === "object" && ["desiredIds", "enabledIds", "enabled_ids", "currentIds", "runningIds", "current_ids", "nextRoundIds", "next_round_ids", "effectiveRoundId", "effective_round_id"].some((key) => key in poolPayload);
-        const hasPoolData = [next.desiredIds, next.currentIds, next.nextRoundIds].some((items) => items.length > 0) || next.effectiveRoundId != null;
-        if (!hasPoolFields || !hasPoolData) {
+        if (!hasPoolFields) {
           return store.setSlice("marketPool", {
             ...current,
             status: hasCurrent ? "stale" : "unavailable",
@@ -99,7 +98,7 @@
             error: raw?.error || "运行池快照已过期，保留上次成功数据"
           });
         }
-        return store.setSlice("marketPool", { ...next, status, stale: status === "stale", error: raw?.error || null });
+        return store.setSlice("marketPool", { ...next, status, stale: status !== "ready", receivedAt: Date.now(), pendingDesiredIds: status === "ready" ? null : current.pendingDesiredIds, error: raw?.error || null });
       });
     },
     async loadMarketSnapshot(marketId, context = {}) {
@@ -127,8 +126,8 @@
           const raw = await core.api.runtimeStatus(context);
           const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
           const markets = Array.isArray(data?.markets) ? data.markets : [];
-          const scoped = markets.find((item) => vm.matchesIdentity(item, context));
-          if (scoped) return { ...vm.runtime({ ...data, ...scoped }), status: resourceStatus(data), stale: resourceStatus(data) === "stale" };
+          const scoped = markets.map((item) => ({ ...item, assetId: item.assetId ?? item.asset_id ?? data.assetId })).find((item) => vm.matchesIdentity(item, context));
+          if (scoped) return { ...vm.runtime({ ...data, ...scoped, status: data.status || data.state }), connectionStatus: resourceStatus(data), stale: resourceStatus(data) !== "ready" };
           if (vm.matchesIdentity(data, context)) return vm.runtime(data);
           throw new Error("运行状态身份与所选资产不匹配");
         } catch (error) {
@@ -139,7 +138,8 @@
       runtimeRequest = readSlice("runtime", async () => {
         const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
         const model = vm.runtime(raw);
-        return store.setSlice("runtime", { ...model, runtimeState: model.status, connectionStatus: "ready", stale: false, error: null });
+        const connectionStatus = resourceStatus(raw);
+        return store.setSlice("runtime", { ...model, runtimeState: model.status, connectionStatus, stale: connectionStatus !== "ready" });
       });
       try { return await runtimeRequest; }
       finally { runtimeRequest = null; }
@@ -149,7 +149,7 @@
       return readSlice("strategy", async () => {
         const raw = await modernOrLegacy(() => core.api.strategyConfig(), () => core.api.legacyStrategyConfig());
         const data = raw || {};
-        return store.setSlice("strategy", { status: resourceStatus(data), stale: resourceStatus(data) === "stale", data, revision: data.savedRevision ?? data.revision ?? null, error: data.error || null });
+        return store.setSlice("strategy", { status: resourceStatus(data), stale: resourceStatus(data) !== "ready", data, draft: data.draft || null, revision: data.savedRevision ?? data.revision ?? null, error: data.error || null });
       });
     },
     async loadAccount() {
@@ -161,22 +161,26 @@
     });
   },
     async loadAccountStatus() {
-      if (demoMode()) return store.getState().account;
-      return readSlice("account", async () => {
+      if (demoMode()) return store.getState().accountStatus;
+      return readSlice("accountStatus", async () => {
         const raw = await core.api.accountStatus();
-        const current = store.getState().account;
         const status = resourceStatus(raw);
-        return store.setSlice("account", { ...current, status, stale: status === "stale", data: { ...(current.data || {}), ...(raw || {}) }, error: raw?.error || null });
+        return store.setSlice("accountStatus", { status, stale: status !== "ready", data: raw, error: raw?.error || null });
       });
     },
     async checkAccount(payload = {}) {
       if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户检查接口尚未连接" };
       const raw = await core.api.accountCheck(payload);
-      return raw || { ok: true, status: "checked" };
+      return raw;
     },
     async saveAccount(payload = {}) {
       if (demoMode()) return { ok: false, status: "preview", message: "设计稿演示：账户保存接口尚未连接" };
       return core.api.accountSave(payload);
+    },
+    async openControlSession(token) {
+      if (demoMode()) throw new Error("演示模式不能连接交易控制会话");
+      if (!token?.trim()) throw new Error("请输入交易控制密码");
+      return core.api.controlSession(token.trim());
     },
     async loadDiagnostics() {
       if (demoMode()) return store.getState().diagnostics;
@@ -189,20 +193,33 @@
     async loadMetrics(runId) {
       if (demoMode()) return store.getState().metrics;
       return readSlice("metrics", async () => {
-        let activeRunId = runId || store.getState().runtime.runId;
-        if (!activeRunId) activeRunId = (await adapter.loadRuntime()).runId;
-        const raw = await modernOrLegacy(() => core.api.metrics(), () => activeRunId ? core.api.legacySummary(activeRunId) : Promise.reject(new Error("run id missing")));
-        return store.setSlice("metrics", { status: "ready", stale: false, data: raw, error: null });
+        const results = await Promise.allSettled([core.api.metrics("today"), modernOrLegacy(() => core.api.metrics("run"), async () => {
+          const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
+          if (!activeRunId) throw new Error("当前运行标识尚未提供");
+          return core.api.legacySummary(activeRunId);
+        })]);
+        const data = { ...(store.getState().metrics.data || {}), periodStatus: {} };
+        ["today", "current"].forEach((period, index) => {
+          const result = results[index];
+          data.periodStatus[period] = result.status === "fulfilled" ? resourceStatus(result.value) : "stale";
+          if (result.status === "fulfilled") data[period] = result.value;
+        });
+        if (results.every((result) => result.status === "rejected")) throw results[0].reason;
+        const stale = Object.values(data.periodStatus).some((status) => status !== "ready");
+        return store.setSlice("metrics", { status: stale ? "stale" : "ready", stale, data, error: stale ? "部分统计未更新，保留最近结果" : null });
       });
     },
     async loadEvents(runId) {
       if (demoMode()) return store.getState().events;
       return readSlice("events", async () => {
-        let activeRunId = runId || store.getState().runtime.runId;
-        if (!activeRunId) activeRunId = (await adapter.loadRuntime()).runId;
-        const raw = await modernOrLegacy(() => core.api.events(), () => activeRunId ? core.api.legacyEvents(activeRunId) : Promise.reject(new Error("run id missing")));
+        const raw = await modernOrLegacy(() => core.api.events(), async () => {
+          const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
+          if (!activeRunId) throw new Error("当前运行标识尚未提供");
+          return core.api.legacyEvents(activeRunId);
+        });
         const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.events) ? raw.events : [];
-        return store.setSlice("events", { status: "ready", stale: false, items, cursor: raw?.cursor ?? raw?.next_before_id ?? null, data: raw, error: null });
+        const status = resourceStatus(raw);
+        return store.setSlice("events", { status, stale: status !== "ready", items, cursor: raw?.cursor ?? raw?.next_before_id ?? null, data: raw, error: raw?.error || null });
       });
     },
     async saveMarketPool(payload) {
@@ -216,6 +233,7 @@
         if (!current.desiredIds.includes(id) && !item.canEnable) throw new Error(item.symbol + " 当前由服务器标记为 unsupported/unavailable，未提交运行池");
       }
       const raw = await core.api.marketPool({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ desiredIds: next.desiredIds, effectiveRoundId: next.effectiveRoundId }) });
+      if (raw?.accepted === false || resourceStatus(raw) !== "ready") throw new Error(raw?.error || "运行池变更未获服务器确认");
       const hasPoolFields = raw && typeof raw === "object" && ["desiredIds", "enabledIds", "enabled_ids", "currentIds", "runningIds", "current_ids", "nextRoundIds", "next_round_ids"].some((key) => key in raw);
       if (hasPoolFields) return store.setMarketPool(raw);
       return store.setSlice("marketPool", { ...current, status: "stale", stale: true, pendingDesiredIds: next.desiredIds, error: "已提交运行池变更，等待服务器确认；当前仍显示最近确认状态" });
@@ -228,11 +246,14 @@
         const revision = store.getState().strategy.revision;
         if (Number.isInteger(revision)) command.revision = revision;
       }
+      if (command.action === "start" && !(command.revision > 0)) throw new Error("请先在策略页面保存草稿并激活发布，再启动交易");
       command.requestId = uuid(command.requestId);
       const legacyPayload = {
         action: command.action,
         strategy_id: command.strategyId || core.config.strategyId,
         request_id: command.requestId,
+        ...(command.assetId ? { asset_id: command.assetId } : {}),
+        ...(command.marketIds ? { market_ids: command.marketIds } : {}),
         ...(Number.isInteger(command.revision) ? { revision: command.revision } : {}),
         ...(command.mode ? { mode: command.mode } : {})
       };
@@ -255,42 +276,41 @@
         strategyData?.config?.asset_id
       ].find((value) => value !== undefined && value !== null && String(value).trim() !== "");
       if (!assetId) throw new Error("当前未选择资产，无法保存策略");
+      const values = { ...(payload?.config || {}), ...Object.fromEntries(Object.entries(payload).filter(([key, value]) => key !== "config" && value !== undefined)) };
       const config = {
-        ...(payload?.config || {}),
-        triggerPrice: payload.triggerPrice,
-        confirmationPrice: payload.confirmationPrice,
-        maxBuyPrice: payload.maxBuyPrice,
-        stageShares: payload.stageShares,
-        roundBudgetUsd: payload.roundBudgetUsd ?? null,
-        totalBudgetUsd: payload.totalBudgetUsd ?? null,
-        dailyLossUsd: payload.dailyLossUsd ?? null,
-        durationMinutes: payload.durationMinutes ?? 0,
-        mode: payload.mode || "live",
-        maxQuoteAgeSeconds: payload.maxQuoteAgeSeconds ?? 2,
-        maxQuoteSkewSeconds: payload.maxQuoteSkewSeconds ?? 1.5,
+        triggerPrice: values.triggerPrice,
+        confirmationPrice: values.confirmationPrice,
+        maxBuyPrice: values.maxBuyPrice,
+        stageShares: values.stageShares,
+        maxStages: values.maxStages ?? values.stageShares?.length,
+        roundBudgetUsd: values.roundBudgetUsd ?? null,
+        totalBudgetUsd: values.totalBudgetUsd ?? null,
+        dailyLossUsd: values.dailyLossUsd ?? null,
+        durationMinutes: values.durationMinutes ?? 0,
+        mode: values.mode || "live",
+        maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
+        maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
         assetId: String(assetId).trim()
       };
       const strategyId = payload?.strategyId || strategyData?.strategyId || core.config.strategyId;
       const modernPayload = {
-        ...payload,
         strategyId,
-        expectedRevision: state.strategy.revision,
+        expectedRevision: Number.isInteger(payload.expectedRevision) ? payload.expectedRevision : state.strategy.revision,
         assetId: String(assetId).trim(),
         config
       };
-      const legacyPayload = {
-        expectedRevision: state.strategy.revision,
-        config: { ...config, maxStages: payload.stageShares?.length || 0 }
-      };
-      const raw = await modernOrLegacy(() => core.api.strategyDraft(modernPayload), () => core.api.legacyStrategySave(legacyPayload));
-      const data = raw || {};
-      store.setSlice("strategy", { status: resourceStatus(data), stale: resourceStatus(data) === "stale", data, revision: data.savedRevision ?? data.revision ?? null, error: data.error || null });
-      return data;
+      const raw = await core.api.strategyDraft(modernPayload);
+      if (raw.accepted !== true || !raw.draftId || !raw.config || !Number.isInteger(raw.expectedRevision)) throw new Error("服务器未返回有效策略草稿回执，尚未发布");
+      store.setSlice("strategy", { draft: raw });
+      return raw;
     },
     async activateStrategy(payload) {
       if (demoMode()) return { accepted: false, status: "preview", message: "设计稿演示：策略激活接口尚未连接" };
       const raw = await core.api.strategyActivate(payload);
-      return raw || { accepted: true, status: "accepted" };
+      if (raw?.accepted !== true || !Number.isInteger(raw.revision) || raw.revision <= 0) throw new Error(raw?.error || "策略激活未获服务器确认，草稿仍未发布");
+      store.setSlice("strategy", { draft: null });
+      await adapter.loadStrategy();
+      return raw;
     }
   };
   window.PolyPreviewAdapter = Object.freeze(adapter);
