@@ -247,12 +247,12 @@
       const assetId = [
         payload?.assetId,
         payload?.config?.assetId,
-        strategyData?.assetId,
-        strategyData?.config?.assetId,
-        strategyData?.config?.asset_id,
         state.marketCatalog?.selectedId,
         core.config.selectedAssetId,
-        urlAssetId
+        urlAssetId,
+        strategyData?.assetId,
+        strategyData?.config?.assetId,
+        strategyData?.config?.asset_id
       ].find((value) => value !== undefined && value !== null && String(value).trim() !== "");
       if (!assetId) throw new Error("当前未选择资产，无法保存策略");
       const config = {
@@ -270,7 +270,14 @@
         maxQuoteSkewSeconds: payload.maxQuoteSkewSeconds ?? 1.5,
         assetId: String(assetId).trim()
       };
-      const modernPayload = { ...payload, assetId: String(assetId).trim(), config };
+      const strategyId = payload?.strategyId || strategyData?.strategyId || core.config.strategyId;
+      const modernPayload = {
+        ...payload,
+        strategyId,
+        expectedRevision: state.strategy.revision,
+        assetId: String(assetId).trim(),
+        config
+      };
       const legacyPayload = {
         expectedRevision: state.strategy.revision,
         config: { ...config, maxStages: payload.stageShares?.length || 0 }
