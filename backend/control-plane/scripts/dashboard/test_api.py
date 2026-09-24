@@ -318,8 +318,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(value["updatedAt"], 1234.5)
         with patch.object(server_module, "_control_request_error", return_value=None):
             code, saved_eth = self.request("/api/runtime/market-pool", {"desiredIds": [" ETH ", "btc", "eth"]}, method="PUT")
+            self.assertEqual(code, 400)
+            self.assertIn("只能选择一个", saved_eth["error"])
+            code, saved_eth = self.request("/api/runtime/market-pool", {"desiredIds": [" ETH "]}, method="PUT")
             self.assertEqual(code, 200)
-            self.assertEqual(saved_eth["desiredIds"], ["eth", "btc"])
+            self.assertEqual(saved_eth["desiredIds"], ["eth"])
             code, saved = self.request("/api/runtime/market-pool", {"desiredIds": ["btc"]}, method="PUT")
         self.assertEqual(code, 200)
         self.assertEqual(saved["desiredIds"], ["btc"])
