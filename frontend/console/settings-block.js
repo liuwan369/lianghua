@@ -242,7 +242,7 @@
   };
   const runAccountAction = async (save, useSaved = false) => {
     if (accountBusy || controlBusy || closed) return;
-    if (window.PolyPreview.config.mode === "local-preview") { text("[data-account-message]", "当前为演示模式，未连接账户接口；未检查或保存，输入已保留。"); return; }
+    if (window.PolyPreview.config.mode === "local-preview") { text("[data-account-message]", "服务器未连接，无法检查或保存账户。"); return; }
     if (!accountRequestAllowed()) { text("[data-account-message]", "账户密钥只允许通过受保护的 HTTPS 同源页面提交；当前页面未发送任何输入。"); return; }
     const payload = useSaved ? {} : Object.fromEntries(accountFields.map((field) => [field.dataset.accountField, field.value.trim()]).filter(([, value]) => value));
     if (!useSaved && !validateAccount(payload)) return;
@@ -285,7 +285,7 @@
   });
   controlButton.addEventListener("click", async () => {
     if (accountBusy || controlBusy || closed || !controlInput.value.trim()) return;
-    if (window.PolyPreview.config.mode === "local-preview") { text("[data-control-message]", "演示模式未连接服务器；控制密码未发送，输入已保留。"); return; }
+    if (window.PolyPreview.config.mode === "local-preview") { text("[data-control-message]", "服务器未连接，无法建立控制会话。"); return; }
     if (!accountRequestAllowed()) { text("[data-control-message]", "控制密码只允许通过受保护的 HTTPS 同源页面提交；当前未发送输入。"); return; }
     let token = controlInput.value.trim();
     if (token.length > 1024) { text("[data-control-message]", "控制密码长度超出限制；未发送输入。"); return; }

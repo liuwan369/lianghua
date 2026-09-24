@@ -179,7 +179,7 @@
     resource = next;
     text("[data-strategy-revision]", resource.revision == null ? "--" : `REV-${resource.revision}`);
     text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布 REV-${resource.revision}`);
-    text(".strategy-state-chip", resource.status === "ready" ? "服务器配置已读取" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : core.config.mode === "local-preview" ? "演示模式 · 不发布策略" : "配置待接入");
+    text(".strategy-state-chip", resource.status === "ready" ? "服务器配置已读取" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : core.config.mode === "local-preview" ? "服务器未连接 · 不发布策略" : "配置待接入");
     const savedDraft = draft();
     text("[data-draft-state]", validDraft()
       ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于 REV-${savedDraft.expectedRevision} · 未激活`

@@ -190,10 +190,10 @@
     const local = window.PolyPreview.config.mode === "local-preview";
     const status = resource?.status;
     const incompleteIdentity = !local && resource?.items?.some((item) => !item.marketId || !item.roundId);
-    const textValue = local ? "公开行情 · 演示数据" : status === "error" ? "行情读取失败 · 保留上次快照" : status === "stale" ? "行情连接中断 · 保留上次快照" : status === "unavailable" ? "行情待接入" : incompleteIdentity ? "行情已读取 · 轮次标识待接入" : "公开行情 · 已连接";
+    const textValue = local ? "服务器未连接" : status === "error" ? "行情读取失败 · 保留上次快照" : status === "stale" ? "行情连接中断 · 保留上次快照" : status === "unavailable" ? "行情待接入" : incompleteIdentity ? "行情已读取 · 轮次标识待接入" : "公开行情 · 已连接";
     text("[data-market-source]", textValue);
     text("[data-sidebar-state]", local ? "原型预览" : status === "ready" ? (incompleteIdentity ? "轮次标识待接入" : "行情已连接") : status === "error" ? "行情读取失败" : "数据连接");
-    text("[data-sidebar-detail]", local ? "演示数据" : status === "error" ? "保留最近成功数据" : status === "stale" ? "保留最近成功数据" : status === "unavailable" ? "等待后端" : incompleteIdentity ? "目录/报价可用，持仓订单等待 roundId" : "五分钟市场");
+    text("[data-sidebar-detail]", local ? "服务器未连接" : status === "error" ? "保留最近成功数据" : status === "stale" ? "保留最近成功数据" : status === "unavailable" ? "等待后端" : incompleteIdentity ? "目录/报价可用，持仓订单等待 roundId" : "五分钟市场");
     if (!local && ["error", "stale", "unavailable"].includes(status)) text("[data-market-refresh-note]", status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : status === "unavailable" ? "行情待接入 · 保留上次数据" : `连接中断 · ${resource.error || "保留上次数据"}`);
   };
 
