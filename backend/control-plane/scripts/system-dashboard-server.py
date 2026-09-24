@@ -79,6 +79,9 @@ _system_metrics_lock = threading.Lock()
 _modern_cache_lock = threading.Lock()
 _modern_market_cache: dict = {}
 _modern_response_cache: OrderedDict = OrderedDict()
+_market_pool_cache: dict = {}
+
+_BTC_POOL_ID = "btc"
 
 _CONTROL_SESSION_COOKIE = "pm_control_session"
 _CONTROL_SESSION_VERSION = "v1"
@@ -143,6 +146,92 @@ def _live_config() -> dict:
 
 def _state_path() -> Path:
     return TRADING_ROOT / "results" / "dashboard-state.json"
+
+
+def _market_pool_path() -> Path:
+    return TRADING_ROOT / "results" / "dashboard" / "market_pool.json"
+
+
+def _pool_ids(value, *, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} 必须是数组")
+    result = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{field} 包含无效市场 ID")
+        normalized = item.strip().lower()
+        if normalized != _BTC_POOL_ID:
+            raise ValueError("运行池只允许 BTC 五分钟市场")
+        if normalized not in result:
+            result.append(normalized)
+    return result
+
+
+def market_pool() -> dict:
+    """Read the server-owned pool without using request time as its clock."""
+    global _market_pool_cache
+    default = {"schemaVersion": 1, "available": False, "desiredIds": [], "currentIds": [],
+               "nextRoundIds": [], "effectiveRoundId": None, "updatedAt": None,
+               "source": "control-plane", "asOf": None, "stale": True,
+               "error": "market_pool_unavailable"}
+    try:
+        value = json.loads(_market_pool_path().read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("market pool must be an object")
+        desired = _pool_ids(value.get("desiredIds"), field="desiredIds")
+        current = _pool_ids(value.get("currentIds"), field="currentIds")
+        next_ids = _pool_ids(value.get("nextRoundIds"), field="nextRoundIds")
+        updated = value.get("updatedAt")
+        if type(updated) not in (int, float) or not math.isfinite(updated) or updated <= 0:
+            raise ValueError("market pool updatedAt is unavailable")
+        result = {"schemaVersion": 1, "available": True, "desiredIds": desired,
+                  "currentIds": current, "nextRoundIds": next_ids,
+                  "effectiveRoundId": value.get("effectiveRoundId") if isinstance(value.get("effectiveRoundId"), str) else None,
+                  "updatedAt": updated, "source": "control-plane", "asOf": updated,
+                  "stale": False, "error": None}
+        with _modern_cache_lock:
+            _market_pool_cache = result
+        return result
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        with _modern_cache_lock:
+            if _market_pool_cache:
+                return {**_market_pool_cache, "stale": True,
+                        "error": "market_pool_unavailable"}
+        return {**default, "error": "market_pool_invalid" if isinstance(exc, ValueError) else default["error"]}
+
+
+def save_market_pool(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("运行池请求必须是对象")
+    allowed = {"desiredIds", "currentIds", "nextRoundIds", "effectiveRoundId"}
+    if set(payload) - allowed:
+        raise ValueError("运行池字段不正确")
+    current = market_pool()
+    desired = _pool_ids(payload.get("desiredIds", current["desiredIds"]), field="desiredIds")
+    # Current and next membership are runtime-owned. The request can assert
+    # their IDs only as compatibility input, but cannot rewrite live state.
+    if "currentIds" in payload:
+        _pool_ids(payload["currentIds"], field="currentIds")
+    if "nextRoundIds" in payload:
+        _pool_ids(payload["nextRoundIds"], field="nextRoundIds")
+    effective = current.get("effectiveRoundId")
+    if "effectiveRoundId" in payload and payload["effectiveRoundId"] is not None:
+        if not isinstance(payload["effectiveRoundId"], str) or not payload["effectiveRoundId"].strip():
+            raise ValueError("effectiveRoundId 无效")
+        effective = payload["effectiveRoundId"].strip()
+    value = {"schemaVersion": 1, "desiredIds": desired,
+             "currentIds": current.get("currentIds", []),
+             "nextRoundIds": current.get("nextRoundIds", []),
+             "effectiveRoundId": effective, "source": "control-plane",
+             "updatedAt": time.time()}
+    path = _market_pool_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    temporary.replace(path)
+    return market_pool()
 
 
 def control_source() -> dict:
@@ -715,15 +804,7 @@ def cached_live_status() -> dict:
 
 
 def _running_engine_market_status(status: dict | None = None) -> dict | None:
-    """Project the engine's current complete pair into the public market shape.
-
-    While a live platform run is active, the engine's paired WS frame is the
-    decision source. The standalone collector can be a few milliseconds behind
-    at a five-minute boundary, so using it for the console would show a stale
-    wait state while the strategy already has a valid pair. Return ``None``
-    unless both sides are present and fresh; callers can then use the normal
-    collector snapshot without ever fabricating a quote.
-    """
+    """Expose accepted runtime pairs without rebuilding them from token books."""
     if status is None:
         # The status endpoint is polled beside markets. Do not run the full
         # status/analytics path a second time just to render the same quote;
@@ -742,61 +823,43 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
         return None
     stats = status.get("stats")
     runtime = stats.get("runtime") if isinstance(stats, dict) else None
-    if (not isinstance(runtime, dict) or runtime.get("engine") != "platform"
-            or runtime.get("status") != "running" or runtime.get("stale") is True):
+    if not isinstance(runtime, dict) or runtime.get("engine") != "platform":
         return None
     markets = runtime.get("markets") if isinstance(runtime.get("markets"), list) else []
-    books = runtime.get("books") if isinstance(runtime.get("books"), list) else []
-    now = time.time()
-    book_by_token = {str(book.get("tokenId")): book for book in books
-                     if isinstance(book, dict) and book.get("tokenId")}
+    snapshots = runtime.get("snapshots") if isinstance(runtime.get("snapshots"), list) else []
+    market_by_id = {str(market.get("id")): market for market in markets
+                    if isinstance(market, dict) and market.get("id")}
     rows = []
-    for market in markets:
-        if not isinstance(market, dict):
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
             continue
-        start, end = market.get("startsAt"), market.get("endsAt")
-        if not all(type(value) in (int, float) and math.isfinite(value) for value in (start, end)) or not start <= now < end:
+        market_id = snapshot.get("marketId") or snapshot.get("market_id")
+        round_id = snapshot.get("roundId") or snapshot.get("round_id")
+        yes, no = snapshot.get("YES"), snapshot.get("NO")
+        sequence = snapshot.get("sequence")
+        source_at = _epoch(snapshot.get("sourceAt") if snapshot.get("sourceAt") is not None
+                           else snapshot.get("source_at"))
+        expires_at = _epoch(snapshot.get("expiresAt") if snapshot.get("expiresAt") is not None
+                            else snapshot.get("expires_at"))
+        if (not isinstance(market_id, str) or not market_id or not isinstance(round_id, str) or not round_id
+                or not isinstance(yes, dict) or not isinstance(no, dict)
+                or type(sequence) is not int or sequence < 0
+                or source_at is None or expires_at is None):
             continue
-        instruments = market.get("instruments") if isinstance(market.get("instruments"), list) else []
-        by_outcome = {str(item.get("outcome", "")).upper(): item for item in instruments if isinstance(item, dict)}
-        up, down = by_outcome.get("UP"), by_outcome.get("DOWN")
-        if not isinstance(up, dict) or not isinstance(down, dict):
+        if not isinstance(yes.get("assetId"), str) or not yes.get("assetId") \
+                or not isinstance(no.get("assetId"), str) or not no.get("assetId"):
             continue
-        up_book, down_book = book_by_token.get(str(up.get("tokenId"))), book_by_token.get(str(down.get("tokenId")))
-        if not isinstance(up_book, dict) or not isinstance(down_book, dict):
-            continue
-        paired = []
-        valid = True
-        for book in (up_book, down_book):
-            bid, ask = book.get("bid"), book.get("ask")
-            received = book.get("receivedAt", book.get("ts"))
-            age = book.get("received_age_ms")
-            if not all(type(value) in (int, float) and math.isfinite(value) for value in (bid, ask, received)):
-                valid = False
-                break
-            if (not 0 < bid <= ask < 1 or not -1 <= now - received <= 2
-                    or type(age) not in (int, float) or not math.isfinite(age) or age > 2_000
-                    or book.get("stale") or book.get("market_expired")):
-                valid = False
-                break
-            paired.append((bid, ask, received))
-        if not valid or abs(paired[0][2] - paired[1][2]) > 1.5:
-            continue
-        quote_at = min(pair[2] for pair in paired)
-        rows.append({"slug": str(market.get("id")), "name": str(market.get("name", market.get("id"))),
-                     "condition_id": market.get("id"), "round_id": market.get("roundId") or market.get("round_id"),
-                     "legacy_round_id": market.get("name"), "stale_after_ms": 2000,
-                     "start": start, "end": end, "up_token": str(up.get("tokenId")),
-                     "down_token": str(down.get("tokenId")), "up_bid": paired[0][0], "up_ask": paired[0][1],
-                     "down_bid": paired[1][0], "down_ask": paired[1][1], "ask_sum": paired[0][1] + paired[1][1],
-                     "quote_at": datetime.fromtimestamp(quote_at, timezone.utc).isoformat(),
-                     "source": "platform-runtime"})
+        market = market_by_id.get(market_id, {})
+        rows.append({"slug": market.get("name") or market_id, "name": market.get("name") or market_id,
+                     "condition_id": market_id, "round_id": round_id,
+                     "start": _epoch(market.get("startsAt")), "end": _epoch(market.get("endsAt")),
+                     "paired_snapshot": snapshot, "source": "platform-runtime"})
     if not rows:
         return None
-    return {"collector_online": True, "collector_connected": True, "current_markets": rows,
-            "cache_age_seconds": max(0, now - max(datetime.fromisoformat(row["quote_at"]).timestamp() for row in rows)),
-            "checked_at": datetime.now(timezone.utc).isoformat(), "source": "platform-runtime",
-            "stale_reason": None, "node_label": _live_config()["node_label"]}
+    return {"collector_online": status.get("running") is True and runtime.get("status") == "running",
+            "current_markets": rows, "source": "platform-runtime",
+            "stale_reason": runtime.get("error") or ("runtime_snapshot_stale" if runtime.get("stale") else None),
+            "asOf": _epoch(runtime.get("source_at"))}
 
 
 def refresh_live_background(stop: threading.Event) -> None:
@@ -1296,68 +1359,129 @@ def _epoch(value):
 
 
 def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
-    """Map the collector's paired UP/DOWN row to the shared YES/NO DTO."""
+    """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
+    snapshot = row.get("paired_snapshot") if isinstance(row, dict) else None
     slug = str(row.get("slug") or "")
     start, end = _epoch(row.get("start")), _epoch(row.get("end"))
-    quote_at = _epoch(row.get("quote_at"))
-    stale_after = _epoch(row.get("stale_after_ms", stale_after_ms))
-    expires_at = min(end, quote_at + stale_after / 1000) if (
-        end is not None and quote_at is not None and stale_after is not None and 0 < stale_after <= 15000) else None
-    market_id = row.get("condition_id") or row.get("conditionId") or row.get("marketId")
+    if not isinstance(snapshot, dict):
+        quote_at = _epoch(row.get("quote_at") or row.get("quoteAt"))
+        market_id = row.get("condition_id") or row.get("conditionId") or row.get("marketId") or row.get("market_id")
+        round_id = row.get("roundId") or row.get("round_id")
+        yes = {"assetId": row.get("up_token") or row.get("yesToken"),
+               "bid": row.get("up_bid", row.get("yesBid")),
+               "ask": row.get("up_ask", row.get("yesAsk"))}
+        no = {"assetId": row.get("down_token") or row.get("noToken"),
+              "bid": row.get("down_bid", row.get("noBid")),
+              "ask": row.get("down_ask", row.get("noAsk"))}
+        stale_after = _epoch(row.get("stale_after_ms", stale_after_ms))
+        expires_at = (quote_at + stale_after / 1000 if quote_at is not None and stale_after is not None
+                      and 0 < stale_after <= 15000 else None)
+        market_id = market_id if isinstance(market_id, str) and market_id else None
+        round_id = round_id if isinstance(round_id, str) and round_id else None
+        return {"assetId": "btc", "symbol": "BTC", "name": str(row.get("name") or slug or "BTC 五分钟反转"),
+                "marketId": market_id, "roundId": round_id, "market_id": market_id, "round_id": round_id,
+                "cycle": "5m", "startAt": start, "endAt": end, "yes": yes, "no": no,
+                "yesToken": yes["assetId"], "noToken": no["assetId"], "yesBid": yes["bid"],
+                "yesAsk": yes["ask"], "noBid": no["bid"], "noAsk": no["ask"],
+                "volume": row.get("volume"), "liquidity": row.get("liquidity"),
+                "quoteAt": quote_at, "sourceAt": quote_at, "expiresAt": expires_at, "sequence": None,
+                "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
+                              "sequence": None, "sourceAt": quote_at, "expiresAt": expires_at, "stale": True},
+                "depthAvailable": False, "strategyEligible": False, "enabled": True,
+                "current": isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= now < end,
+                "stale": True, "source": row.get("source") or "collector",
+                "error": "accepted_runtime_snapshot_unavailable", "nextRound": False}
+    market_id = snapshot.get("marketId") or snapshot.get("market_id")
     market_id = market_id if isinstance(market_id, str) and market_id else None
-    round_id = row.get("round_id") or row.get("roundId")
+    round_id = snapshot.get("roundId") or snapshot.get("round_id")
     round_id = round_id if isinstance(round_id, str) and round_id else None
+    yes, no = snapshot.get("YES"), snapshot.get("NO")
+    yes = dict(yes) if isinstance(yes, dict) else None
+    no = dict(no) if isinstance(no, dict) else None
+    sequence = snapshot.get("sequence")
+    source_at = _epoch(snapshot.get("sourceAt") if snapshot.get("sourceAt") is not None
+                       else snapshot.get("source_at"))
+    expires_at = _epoch(snapshot.get("expiresAt") if snapshot.get("expiresAt") is not None
+                        else snapshot.get("expires_at"))
+    complete = (market_id is not None and round_id is not None and yes is not None and no is not None
+                and isinstance(yes.get("assetId"), str) and isinstance(no.get("assetId"), str)
+                and type(sequence) is int and sequence >= 0 and source_at is not None and expires_at is not None)
+    expired = expires_at is None or expires_at <= now
+    stale = not complete or expired or source_at is None or source_at > now + 1
+    quote_times = [_epoch(value.get("sourceAt")) for value in (yes, no) if value]
+    quote_times = [value for value in quote_times if value is not None]
+    quote_at = min(quote_times, default=source_at)
+    yes = yes or {}
+    no = no or {}
+    depth_available = all(isinstance(side.get(key), list) and len(side[key]) >= 5
+                          for side in (yes, no) for key in ("bids", "asks"))
     return {
         "assetId": "btc",
         "symbol": "BTC",
         "name": str(row.get("name") or slug or "BTC 五分钟反转"),
         "marketId": market_id,
         "roundId": round_id,
+        "market_id": market_id,
+        "round_id": round_id,
         "cycle": "5m",
         "startAt": start,
         "endAt": end,
-        "yesToken": row.get("up_token"),
-        "noToken": row.get("down_token"),
-        "yesBid": row.get("up_bid"),
-        "yesAsk": row.get("up_ask"),
-        "noBid": row.get("down_bid"),
-        "noAsk": row.get("down_ask"),
+        "yes": yes,
+        "no": no,
+        "yesToken": yes.get("assetId"),
+        "noToken": no.get("assetId"),
+        "yesBid": yes.get("bid"),
+        "yesAsk": yes.get("ask"),
+        "noBid": no.get("bid"),
+        "noAsk": no.get("ask"),
         "volume": row.get("volume"),
         "liquidity": row.get("liquidity"),
         "quoteAt": quote_at,
-        "sourceAt": quote_at,
+        "sourceAt": source_at,
         "expiresAt": expires_at,
+        "sequence": sequence if type(sequence) is int else None,
+        "depthAvailable": depth_available,
+        "strategyEligible": complete and not stale,
+        "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
+                      "sequence": sequence if type(sequence) is int else None,
+                      "sourceAt": source_at, "expiresAt": expires_at, "stale": stale},
         "enabled": True,
         "current": isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= now < end,
-        "stale": expires_at is None or now >= expires_at or quote_at > now + 1,
-        "source": row.get("source") or "collector",
-        "error": "market_id_unavailable" if not market_id else None,
+        "stale": stale,
+        "source": row.get("source") or "platform-runtime",
+        "error": "accepted_snapshot_incomplete" if not complete else ("market_snapshot_expired" if expired else None),
         "nextRound": False,
     }
 
 
 def _modern_markets() -> dict:
-    """Read the already cached market feed; never perform a collector probe."""
+    """Read accepted runtime pairs; retain the last complete pair on failure."""
     global _modern_market_cache
-    raw = _running_engine_market_status() or cached_live_status()
+    raw = _running_engine_market_status()
+    if raw is None:
+        raw = cached_live_status()
     rows = raw.get("current_markets") if isinstance(raw.get("current_markets"), list) else []
-    stale_after = raw.get("stale_after_ms") if isinstance(raw.get("stale_after_ms"), (int, float)) else None
-    items = [_modern_market(row, stale_after_ms=stale_after) for row in rows if isinstance(row, dict)]
-    stale = raw.get("collector_online") is not True or any(item["stale"] for item in items)
+    items = [_modern_market(row) for row in rows if isinstance(row, dict)]
+    stale = (raw.get("collector_online") is not True or not items or bool(raw.get("stale_reason"))
+             or any(item["stale"] for item in items))
     value = {"schemaVersion": 1, "items": items, "markets": items,
-            "source": raw.get("source") or raw.get("node_label") or "collector",
-            "asOf": min((item["sourceAt"] for item in items if item["sourceAt"] is not None), default=None), "stale": stale,
+            "source": raw.get("source") or "platform-runtime",
+            "asOf": min((item["sourceAt"] for item in items if item["sourceAt"] is not None), default=raw.get("asOf")),
+            "stale": stale,
             "error": raw.get("error") or raw.get("stale_reason") or ("market_snapshot_stale" if stale else None),
-            "collector_online": raw.get("collector_online") is True, "available": raw.get("collector_online") is True}
+            "collector_online": raw.get("collector_online") is True, "available": bool(items)}
     with _modern_cache_lock:
+        # A collector fallback is display-only because it lacks the runtime
+        # acceptance watermark/depth. It must not become the last successful
+        # modern snapshot used after the fallback itself disappears.
         if not stale:
             _modern_market_cache = value
         elif _modern_market_cache:
             retained = [{**item, "stale": True} for item in _modern_market_cache["items"]]
             value = {**_modern_market_cache, "items": retained, "markets": retained,
                      "stale": True, "collector_online": False, "error": value["error"]}
-        elif stale:
+        elif stale and not items:
             value["items"] = None
             value["markets"] = None
             value["available"] = False
@@ -1374,15 +1498,16 @@ def _modern_runtime(status: dict) -> dict:
         state = "paused" if (runtime.get("strategy_runtime") or {}).get("paused") else runtime.get("status") or "starting"
     else:
         state = "failed" if status.get("exit_code") not in (None, 0) else "stopped"
-    stale = bool(status.get("running") and (not runtime or projection.get("stale") or runtime.get("stale")
-                 or projection.get("state") in {"incomplete", "catching_up", "waiting", "unavailable"}))
+    source_at = _epoch(runtime.get("source_at"))
+    expires_at = _epoch(runtime.get("expires_at"))
+    stale = bool(not runtime or source_at is None or expires_at is None or expires_at <= time.time())
     stop_result = status.get("stop_result") if isinstance(status.get("stop_result"), dict) else {}
     return {"schemaVersion": 1, "status": state, "state": state,
             "serviceState": status.get("service_state") or state,
             "commandStatus": status.get("command_status") or ("executing" if status.get("running") else "confirmed"),
             "remoteOrdersState": stop_result.get("remote_orders_state"),
             "source": "platform-runtime" if runtime else "control-plane",
-            "asOf": runtime.get("source_at") or projection.get("as_of"),
+            "asOf": source_at,
             "stale": stale, "runId": status.get("run_id"),
             "strategyId": status.get("strategy_id") or "btc-reversal",
             "execution": status.get("execution"), "markets": [
@@ -1504,16 +1629,18 @@ def make_handler(root: Path):
             path = unquote(self.path.split("?", 1)[0])
             query = parse_qs(urlsplit(self.path).query)
             if path == "/api/bootstrap":
-                status = trading_status(include_stats=False)
+                status = trading_status()
+                runtime = _modern_runtime(status)
                 self._send_json(json.dumps({
                     "schemaVersion": 1, "app": "polymarket-btc-reversal",
                     "strategyId": "btc-reversal", "cycle": "5m",
-                    "source": "control-plane", "asOf": time.time(), "stale": False,
+                    "source": "control-plane", "asOf": runtime["asOf"], "stale": runtime["stale"],
+                    "error": runtime["error"],
                     "capabilities": ["markets", "runtime", "orders", "positions", "metrics", "events"],
                     "capabilityDetails": {"fills": True, "settlements": True, "strategyDrafts": True,
                         "strategyActivate": True, "activateAtRound": False, "cancelOrder": False,
-                        "flatten": False, "editMarketPool": False, "presets": False, "streams": False},
-                    "runtime": _modern_runtime({**status, "stats": {}}),
+                        "flatten": False, "editMarketPool": True, "presets": False, "streams": False},
+                    "runtime": runtime,
                 }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/markets":
@@ -1523,18 +1650,15 @@ def make_handler(root: Path):
                 market_id = path[len("/api/markets/"):-len("/snapshot")].strip("/")
                 catalog = _modern_markets()
                 market = next((item for item in (catalog.get("items") or [])
-                               if market_id in {item["marketId"], item["roundId"]}), None)
+                               if market_id in {item.get("marketId"), item.get("roundId"),
+                                                item.get("market_id"), item.get("round_id")}), None)
                 if market is None:
                     self._send_json(json.dumps({"available": False, "market": None, "error": "market not found",
                                                  "source": catalog["source"], "asOf": catalog["asOf"],
                                                  "stale": catalog["stale"]}).encode("utf-8"), 404)
                     return
                 self._send_json(json.dumps({"schemaVersion": 1, **market,
-                    "orderBook": {"marketId": market["marketId"], "roundId": market["roundId"],
-                                  "yes": {"bid": market["yesBid"], "ask": market["yesAsk"]},
-                                  "no": {"bid": market["noBid"], "ask": market["noAsk"]},
-                                  "sourceAt": market["sourceAt"], "expiresAt": market["expiresAt"],
-                                  "stale": market["stale"]},
+                    "orderBook": market["orderBook"],
                     "source": catalog["source"], "asOf": catalog["asOf"],
                     "stale": catalog["stale"], "error": catalog["error"]},
                     ensure_ascii=False, allow_nan=False).encode("utf-8"))
@@ -1544,12 +1668,7 @@ def make_handler(root: Path):
                 self._send_json(json.dumps(_modern_runtime(status), ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/runtime/market-pool":
-                catalog = _modern_markets()
-                current = [item["assetId"] for item in (catalog.get("items") or []) if item.get("current")]
-                self._send_json(json.dumps({"schemaVersion": 1, "desiredIds": current,
-                    "currentIds": current, "nextRoundIds": [], "effectiveRoundId": None,
-                    "source": "control-plane", "updatedAt": catalog["asOf"], "asOf": catalog["asOf"], "stale": catalog["stale"],
-                    "error": catalog["error"]}, ensure_ascii=False).encode("utf-8"))
+                self._send_json(json.dumps(market_pool(), ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/strategy/config":
                 config = strategy_config_status()
@@ -1795,9 +1914,7 @@ def make_handler(root: Path):
         def do_PUT(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
             if path == "/api/runtime/market-pool":
-                self._send_json(json.dumps({"accepted": False, "status": "unsupported",
-                    "source": "control-plane", "asOf": time.time(), "stale": False,
-                    "error": "当前系统只运行 BTC 五分钟策略，运行池由服务器固定"}, ensure_ascii=False).encode("utf-8"), 501)
+                self.do_POST()
                 return
             if path != "/api/strategy-config":
                 self._send_json(b'{"error":"not found"}', 404)
@@ -1809,7 +1926,8 @@ def make_handler(root: Path):
             modern_order_path = path.startswith("/api/orders/") and path.endswith("/cancel")
             if path not in {"/api/account/check", "/api/account/save", "/api/strategy-config",
                             "/api/trading/control", "/api/trading/auth/session", "/api/runtime/commands",
-                            "/api/strategy/drafts", "/api/strategy/activate", "/api/runtime/flatten"} and not modern_order_path:
+                            "/api/strategy/drafts", "/api/strategy/activate", "/api/runtime/flatten",
+                            "/api/runtime/market-pool"} and not modern_order_path:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
@@ -1820,7 +1938,8 @@ def make_handler(root: Path):
                 payload = json.loads(raw.decode("utf-8") or "{}") if raw else {}
                 if not isinstance(payload, dict):
                     raise ValueError("request body must be an object")
-                if path in {"/api/runtime/commands", "/api/strategy/drafts", "/api/strategy/activate", "/api/runtime/flatten"} or modern_order_path:
+                if path in {"/api/runtime/commands", "/api/strategy/drafts", "/api/strategy/activate",
+                            "/api/runtime/flatten", "/api/runtime/market-pool"} or modern_order_path:
                     auth_error = _control_request_error(self.headers, "live")
                     if auth_error:
                         code, message = auth_error
@@ -1858,6 +1977,10 @@ def make_handler(root: Path):
                         json.dumps({"ok": True, "expires_in": _control_session_ttl(), "persistent": True}, ensure_ascii=False).encode("utf-8"),
                         response_headers={"Set-Cookie": _control_cookie_header(session, self.headers)},
                     )
+                    return
+                if path == "/api/runtime/market-pool":
+                    self._send_json(json.dumps(save_market_pool(payload), ensure_ascii=False,
+                                                allow_nan=False).encode("utf-8"))
                     return
                 if path == "/api/runtime/commands":
                     action = payload.get("action")
