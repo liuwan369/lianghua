@@ -139,11 +139,15 @@
   };
   const renderMetrics = (resource) => {
     const data = resource?.data;
-    text("[data-metrics-state]", resource?.status === "stale" ? "部分统计未更新，保留上次结果。" : resource?.status === "unavailable" ? "统计数据待接入。" : "主值为当前运行；今日按 UTC 统计。当前接口不提供月度统计，显示 --。");
+    const error = String(resource?.error || "");
+    const noRun = /run not found|没有运行记录|当前运行标识尚未提供/i.test(error);
+    text("[data-metrics-state]", resource?.status === "stale"
+      ? `部分统计未更新，保留上次结果。${error ? ` ${error}` : ""}`
+      : resource?.status === "unavailable"
+        ? noRun ? "暂无已登记运行记录，统计暂不可用；账户配置和行情连接状态独立显示。"
+          : error ? `统计读取失败：${error}` : "统计接口待接入。"
+        : "主值为当前运行；今日按 UTC 统计。当前接口不提供月度统计，显示 --。");
     if (!data) {
-      const list = document.querySelector("[data-server-services]");
-      if (list) list.innerHTML = '<div><span>控制台</span><strong>待服务器确认</strong><small>--</small></div><div><span>行情采集</span><strong>待接入</strong><small>--</small></div><div><span>交易进程</span><strong>待服务器确认</strong><small>--</small></div><div><span>账本投影</span><strong>待接入</strong><small>--</small></div>';
-      text(".server-expired", resource?.status === "stale" ? "连接中断 · 等待新采样" : "后端未连接");
       return;
     }
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);
@@ -226,14 +230,67 @@
     const market = catalog.items.find((item) => item.assetId === catalog.selectedId);
     text(".header-status strong", market ? `${market.symbol} · 5 分钟 YES / NO` : "等待市场目录");
   });
-  {
-    void adapter.loadMarkets();
-    void adapter.loadMarketPool();
-    void adapter.loadRuntime();
-    void adapter.loadDiagnostics();
-    void adapter.loadMetrics();
-    void adapter.loadAccount();
-    void adapter.loadEvents();
-  }
+  let fastRequest = null;
+  let slowRequest = null;
+  let accountRequest = null;
+  let fastTimer = null;
+  let slowTimer = null;
+  let accountTimer = null;
+  const refreshFast = () => fastRequest || (fastRequest = Promise.allSettled([
+    adapter.loadMarkets(), adapter.loadRuntime()
+  ]).finally(() => { fastRequest = null; }));
+  const refreshSlow = () => slowRequest || (slowRequest = Promise.allSettled([
+    adapter.loadMarketPool(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadEvents()
+  ]).finally(() => { slowRequest = null; }));
+  const refreshAccount = () => accountRequest || (accountRequest = Promise.allSettled([
+    adapter.loadAccount()
+  ]).finally(() => { accountRequest = null; }));
+  const clearRefreshTimers = () => {
+    ["fastTimer", "slowTimer", "accountTimer"].forEach((name) => {
+      if (name === "fastTimer" && fastTimer) window.clearTimeout(fastTimer);
+      if (name === "slowTimer" && slowTimer) window.clearTimeout(slowTimer);
+      if (name === "accountTimer" && accountTimer) window.clearTimeout(accountTimer);
+    });
+    fastTimer = null;
+    slowTimer = null;
+    accountTimer = null;
+  };
+  const scheduleRefresh = (kind, delay) => {
+    if (document.hidden) return;
+    const timer = kind === "fast" ? fastTimer : kind === "slow" ? slowTimer : accountTimer;
+    if (timer) window.clearTimeout(timer);
+    const run = async () => {
+      if (document.hidden) return;
+      if (kind === "fast") {
+        fastTimer = null;
+        await refreshFast();
+        scheduleRefresh("fast", 3000);
+      } else if (kind === "slow") {
+        slowTimer = null;
+        await refreshSlow();
+        scheduleRefresh("slow", 15000);
+      } else {
+        accountTimer = null;
+        await refreshAccount();
+        scheduleRefresh("account", 30000);
+      }
+    };
+    if (kind === "fast") fastTimer = window.setTimeout(run, delay);
+    else if (kind === "slow") slowTimer = window.setTimeout(run, delay);
+    else accountTimer = window.setTimeout(run, delay);
+  };
+  const refreshAllOnVisible = () => {
+    clearRefreshTimers();
+    if (document.hidden) return;
+    void refreshFast();
+    void refreshSlow();
+    void refreshAccount();
+    scheduleRefresh("fast", 3000);
+    scheduleRefresh("slow", 15000);
+    scheduleRefresh("account", 30000);
+  };
+  document.addEventListener("visibilitychange", refreshAllOnVisible);
+  window.addEventListener("pagehide", clearRefreshTimers);
+  refreshAllOnVisible();
 })();
 

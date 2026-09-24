@@ -158,8 +158,8 @@ legacy 模式实际使用的 DTO 边界如下：
 | 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 明确返回 command 状态 |
 | 账户快照 | GET | `/api/account/snapshot` | 15 秒；不返回秘密 |
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
-| 系统诊断 | GET | `/api/diagnostics/health` | 15 秒，资源和进程 |
-| 汇总统计 | GET | `/api/metrics/summary?range=today` | 页面加载/手动刷新 |
+| 系统诊断 | GET | `/api/diagnostics/health` | 总览约 15 秒，设置页手动刷新 |
+| 汇总统计 | GET | `/api/metrics/summary?range=today` | 总览约 15 秒/手动刷新；legacy 使用当前 run 汇总回退 |
 | 事件历史 | GET | `/api/events?cursor=...` | 分页，低频 |
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。`marketId` 和 `roundId` 在生产数据中都必须是非空字符串；不要让页面直接使用旧的 `up_bid/down_bid` 字段。
