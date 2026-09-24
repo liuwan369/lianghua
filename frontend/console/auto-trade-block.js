@@ -175,6 +175,10 @@
   };
   var snapshotWatermarks = new Map();
   var snapshotExpiryTimer = null;
+  var snapshotRefreshTimer = null;
+  var snapshotRefreshInFlight = null;
+  var currentMarketContextKey = null;
+  var lastSnapshotValid = false;
   var timestampMs = function(value) {
     if (value == null || value === "") return null;
     var numeric = Number(value);
@@ -183,6 +187,7 @@
     return Number.isFinite(parsed) ? parsed : null;
   };
   var markSnapshotStale = function(message) {
+    lastSnapshotValid = false;
     text("[data-book-source]", message || "行情已过期 · 保留最近快照");
     text("[data-book-live-state]", "已过期 · 保留快照");
   };
@@ -212,6 +217,7 @@
       markSnapshotStale(model.depthUnavailable ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
       return false;
     }
+    lastSnapshotValid = true;
     snapshotWatermarks.set(watermarkKey, sequence);
     if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
     snapshotExpiryTimer = window.setTimeout(function() {
@@ -288,7 +294,7 @@
     if (window.PolyPreview.config.mode === "local-preview" || !window.PolyPreviewStreams?.createStream) return;
     var context = currentContext();
     var hasMarketStream = Boolean(streamUrl("markets"));
-    if (!hasMarketStream) markSnapshotStale("实时流未配置 · 保留最近快照");
+    if (!hasMarketStream && !lastSnapshotValid) markSnapshotStale("实时流未配置 · 保留最近快照");
     var make = function(name, requireRound, onMessage, onState) {
       var url = streamUrl(name); if (!url) return;
       var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
@@ -323,33 +329,62 @@
     });
   };
   var loadCurrentMarket = async function() {
-    if (window.PolyPreview.config.mode === "local-preview") return;
+    if (window.PolyPreview.config.mode === "local-preview") return null;
     var id = marketPool.currentIds[0] || marketPool.desiredIds[0];
     var asset = assetById(id);
-    if (!asset?.marketId) return;
+    if (!asset?.marketId) { markSnapshotStale("当前市场身份待接入 · 保留最近快照"); return null; }
+    var contextKey = `${asset.marketId}\u0000${asset.roundId || ""}`;
+    var contextChanged = contextKey !== currentMarketContextKey;
+    currentMarketContextKey = contextKey;
     text("[data-round-identity]", asset.roundId ? `marketId ${asset.marketId} · roundId ${asset.roundId}` : `marketId ${asset.marketId} · \u5F53\u524D\u8F6E\u6B21\u6807\u8BC6\u5F85\u540E\u7AEF\u63D0\u4F9B`);
     try {
       var raw = await adapter.loadMarketSnapshot(asset.marketId);
       renderSnapshot(raw);
-      if (asset.roundId) {
+      if (contextChanged && asset.roundId) {
         var results = await Promise.allSettled([adapter.loadPosition(asset.roundId), adapter.loadOrders(asset.roundId)]);
         var position = results[0].status === "fulfilled" ? results[0].value : null;
         var orders = results[1].status === "fulfilled" ? results[1].value : null;
         if (position) renderPosition(position);
         if (orders) renderOrders(orders);
       }
-    } catch (error) { text("[data-book-source]", error.message || "实时快照不可用"); }
+    } catch (error) { markSnapshotStale(error.message || "实时快照不可用 · 保留最近快照"); }
+    return contextKey;
   };
+  var scheduleSnapshotRefresh = function(delay = 1000) {
+    if (window.PolyPreview.config.mode === "local-preview" || document.hidden) return;
+    if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
+    snapshotRefreshTimer = window.setTimeout(function() {
+      snapshotRefreshTimer = null;
+      void refreshCurrentMarket();
+    }, Math.max(0, delay));
+  };
+  var refreshCurrentMarket = function() {
+    if (snapshotRefreshInFlight) return snapshotRefreshInFlight;
+    snapshotRefreshInFlight = Promise.resolve(loadCurrentMarket()).finally(function() {
+      snapshotRefreshInFlight = null;
+      scheduleSnapshotRefresh();
+    });
+    return snapshotRefreshInFlight;
+  };
+  document.addEventListener("visibilitychange", function() {
+    if (document.hidden) {
+      if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
+      snapshotRefreshTimer = null;
+    } else {
+      scheduleSnapshotRefresh(0);
+    }
+  });
   var streamLifecycleReady = false;
   renderMarketPool();
   store.subscribe("marketPool", function(value) {
     marketPool = value;
     renderMarketPool();
-    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void loadCurrentMarket(); startStreams(); }
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
   });
   store.subscribe("marketCatalog", function(value) {
     marketAssets = value.items.map(function(item) { return { id: item.assetId, marketId: item.marketId, roundId: item.roundId, symbol: item.symbol, name: item.name, icon: item.icon, tone: item.tone }; });
     renderMarketPool();
+    if (streamLifecycleReady && window.PolyPreview.config.mode !== "local-preview") { void refreshCurrentMarket(); startStreams(); }
   });
   store.subscribe("runtime", function(runtime) {
     const local = window.PolyPreview.config.mode === "local-preview";
@@ -392,7 +427,7 @@
     text("[data-live-status]", "演示操作 · 后端未接入");
   }));
   if (window.PolyPreview.config.mode !== "local-preview") {
-    Promise.all([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime()]).then(function() { streamLifecycleReady = true; return loadCurrentMarket(); }).then(startStreams).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
+    Promise.all([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime()]).then(function() { streamLifecycleReady = true; return refreshCurrentMarket(); }).then(startStreams).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
   }
 })();
 
