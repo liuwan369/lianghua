@@ -84,11 +84,13 @@
       const state = store.getState();
       const assetId = state.marketPool.desiredIds[0];
       const item = state.marketCatalog.items.find((item) => item.assetId === assetId);
+      const strategy = state.strategy;
+      if (action === "start" && (strategy.status !== "ready" || !(strategy.revision > 0))) { text("[data-overview-runtime]", "请先在策略页面保存并激活有效版本"); return; }
       if (action === "start" && (!item?.marketId || !item.roundId || item.canEnable !== true || item.strategyEligible !== true || item.stale === true || state.marketCatalog.stale || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId))) { text("[data-overview-runtime]", "请先在市场页面确认币种资格、启用运行池，并等待行情与轮次确认"); return; }
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
       const marketIds = item?.marketId ? [item.marketId] : [];
       if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
-      adapter.commandRuntime({ action: action === "start" ? "start" : "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` })
+      adapter.commandRuntime({ action: action === "start" ? "start" : "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, revision: action === "start" ? strategy.revision : undefined, requestId: `overview-${Date.now()}` })
       .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "运行控制待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
         .finally(() => { document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = false; }); void adapter.loadRuntime(); });
