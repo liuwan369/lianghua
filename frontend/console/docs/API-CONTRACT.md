@@ -164,6 +164,26 @@ legacy 模式实际使用的 DTO 边界如下：
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。`marketId` 和 `roundId` 在生产数据中都必须是非空字符串；不要让页面直接使用旧的 `up_bid/down_bid` 字段。
 
+如 `/api/markets` 同时返回可展示盘口，盘口字段使用以下形状；Adapter/ViewModel 会原样保留 `orderBook` 和来源元数据：
+
+```json
+{
+  "marketId": "btc-market-id",
+  "roundId": "btc-round-id",
+  "orderBook": {
+    "yes": { "bids": [[0.48, 10]], "asks": [[0.49, 8]] },
+    "no": { "bids": [[0.51, 9]], "asks": [[0.52, 11]] }
+  },
+  "sequence": 42,
+  "sourceAt": "2026-09-24T12:00:00.000Z",
+  "expiresAt": "2026-09-24T12:00:02.000Z",
+  "stale": false,
+  "depthUnavailable": false
+}
+```
+
+`bids`/`asks` 也可使用 `{ price, size }` level 对象。`depthUnavailable: true`、`stale: true`、缺少身份或缺少 sequence/sourceAt/expiresAt 时，前端保留上一份盘口并显示待接入/过期，不显示实时已连接。stale 市场目录没有新条目时，Store 保留最后一次成功目录。
+
 运行池 GET/PUT 的语义如下：
 
 - `desiredIds` 是用户希望启用的资产 ID，由市场页提交。

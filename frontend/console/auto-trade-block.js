@@ -197,13 +197,19 @@
     var model = vm.market(source);
     var marketId = model.marketId;
     var roundId = model.roundId;
+    var book = source.book || source.orderBook || source.orderbook || model.orderBook || {};
+    var bookSide = function(side) { return book[side] || book[side.toUpperCase()] || {}; };
+    var hasDepth = ["yes", "no"].every(function(side) {
+      var sideBook = bookSide(side);
+      return Array.isArray(sideBook.bids || sideBook.bid) && Array.isArray(sideBook.asks || sideBook.ask);
+    });
     var watermarkKey = `${String(marketId || "")}\u0000${String(roundId || "")}`;
     var previousSequence = snapshotWatermarks.get(watermarkKey);
-    var valid = Boolean(marketId && roundId) && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
+    var valid = Boolean(marketId && roundId) && hasDepth && !model.depthUnavailable && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
       && sourceAt <= now + 5000 && expiresAt > now && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence > previousSequence);
     if (!valid) {
-      markSnapshotStale(raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期或序列落后 · 保留最近快照");
+      markSnapshotStale(model.depthUnavailable ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
       return false;
     }
     snapshotWatermarks.set(watermarkKey, sequence);
@@ -213,9 +219,8 @@
     }, Math.max(0, expiresAt - Date.now()));
     var quote = function(key, value) { text(`[data-quote="${key}"]`, Number.isFinite(value) ? value.toFixed(3) : "--"); };
     quote("yes-bid", model.yesBid); quote("yes-ask", model.yesAsk); quote("no-bid", model.noBid); quote("no-ask", model.noAsk);
-    var book = raw.book || raw.orderBook || raw.orderbook || {};
     var levels = function(side, kind) {
-      var source = book[side] || book[side.toUpperCase()] || {};
+      var source = bookSide(side);
       var list = Array.isArray(source) ? source : source[kind] || source[`${kind}s`] || [];
       return Array.isArray(list) ? list.map(function(level) { return Array.isArray(level) ? { price: Number(level[0]), size: Number(level[1]) } : { price: Number(level.price), size: Number(level.size ?? level.quantity ?? level.shares) }; }).filter(function(level) { return Number.isFinite(level.price) && Number.isFinite(level.size); }) : [];
     };

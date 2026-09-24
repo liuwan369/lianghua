@@ -37,10 +37,12 @@
   };
   const setMarketCatalog = (value) => {
     const next = vm.catalog(value);
-    const selected = next.items.some((item) => item.assetId === state.marketCatalog.selectedId) ? state.marketCatalog.selectedId : next.items[0]?.assetId || null;
-    update("marketCatalog", { ...next, status: next.error ? "error" : next.stale ? "stale" : "ready", selectedId: selected, receivedAt: Date.now() });
-    update("marketPool", { ...vm.pool(state.marketPool, next.items), status: state.marketPool.status, stale: state.marketPool.stale, error: state.marketPool.error || null });
-    return next;
+    const items = next.items.length || !next.stale ? next.items : state.marketCatalog.items;
+    const selected = items.some((item) => item.assetId === state.marketCatalog.selectedId) ? state.marketCatalog.selectedId : items[0]?.assetId || null;
+    const result = { ...next, items, status: next.error ? "error" : next.stale ? "stale" : "ready", selectedId: selected, receivedAt: Date.now() };
+    update("marketCatalog", result);
+    update("marketPool", { ...vm.pool(state.marketPool, items), status: state.marketPool.status, stale: state.marketPool.stale, error: state.marketPool.error || null });
+    return result;
   };
   const setSelectedMarket = (assetId) => update("marketCatalog", { selectedId: state.marketCatalog.items.some((item) => item.assetId === assetId) ? assetId : state.marketCatalog.selectedId });
   const setSlice = (slice, value) => update(slice, value);

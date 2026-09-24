@@ -80,7 +80,13 @@
     },
     async loadMarketSnapshot(marketId) {
       if (demoMode()) return null;
-      return core.api.marketSnapshot(marketId);
+      try { return await core.api.marketSnapshot(marketId); }
+      catch (error) {
+        if (error?.status !== 404) throw error;
+        const fallback = store.getState().marketCatalog.items.find((item) => item.marketId === marketId);
+        if (fallback?.orderBook || fallback?.depthUnavailable || fallback?.sequence != null) return fallback;
+        throw error;
+      }
     },
     async loadPosition(roundId) {
       if (demoMode() || !roundId) return null;
