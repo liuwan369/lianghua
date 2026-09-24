@@ -86,13 +86,18 @@
     if (item.canEnable !== true || item.strategyEligible !== true) return "服务器尚未确认该市场符合策略条件";
     if (item.stale === true || state.marketCatalog.stale) return "行情目录或行情已过期，暂不允许启动";
     if (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)) return "请先在市场页面确认运行池";
+    const now = Date.now();
+    const snapshotFresh = item.depthAvailable === true && item.stale !== true
+      && Number.isFinite(Number(item.sequence)) && item.sourceAt != null && item.expiresAt != null
+      && Number(item.expiresAt) > now;
+    if (!snapshotFresh) return "当前盘口快照未新鲜确认，暂不允许启动";
     const strategy = state.strategy || {};
-    if (strategy.status !== "ready" || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
+    if (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
     const account = state.accountStatus?.data || {};
     const liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
       : typeof account.liveStartReady === "boolean" ? account.liveStartReady
         : account.execution_credentials_ready === true && account.account_check_ready === true;
-    if (liveReady !== true) return "服务器尚未确认账户可启动交易";
+    if (state.accountStatus?.status !== "ready" || state.accountStatus?.stale === true || state.accountStatus?.error || liveReady !== true) return "服务器尚未确认账户可启动交易";
     return "";
   };
   const updateOverviewControls = () => {
@@ -105,7 +110,7 @@
       start.title = reason;
     }
     if (stop) {
-      const stoppable = !runtime.stale && ["running", "starting", "paused", "stopping"].includes(runtime.status);
+      const stoppable = !runtime.stale && ["running", "starting", "paused"].includes(runtime.status);
       stop.disabled = !stoppable;
       stop.title = stoppable ? "提交停止请求；最终状态以服务器确认为准" : "没有服务器确认的可停止运行";
     }

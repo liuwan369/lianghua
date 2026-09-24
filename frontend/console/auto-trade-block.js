@@ -151,7 +151,7 @@
       </section>
 
       <section class="activity-panel trade-panel" aria-labelledby="activity-title">
-        <div class="panel-heading"><div><p class="eyebrow">RUN ACTIVITY</p><h2 id="activity-title">\u6700\u8FD1\u52A8\u4F5C</h2></div><span class="panel-meta">\u5F53\u524D\u8FD0\u884C\u4E8B\u4EF6</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">RUN ACTIVITY</p><h2 id="activity-title">\u6700\u8FD1\u52A8\u4F5C</h2></div><span class="panel-meta" data-activity-state>\u5F53\u524D\u8FD0\u884C\u4E8B\u4EF6</span></div>
         <ol class="activity-list" data-activity-list aria-live="polite"><li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE\u8FD0\u884C\u4E8B\u4EF6</strong><small>\u5B9E\u65F6\u4E8B\u4EF6\u5C06\u6309 marketId + roundId \u8FFD\u52A0</small></div><b class="activity-tag info-tag">\u5F85\u63A5\u5165</b></li></ol>
       </section>
     </main>
@@ -425,9 +425,10 @@
     return true;
   };
   var renderEvents = function(raw) {
-    raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+    var resource = raw || {};
+    var payload = resource?.data && typeof resource.data === "object" ? resource.data : resource;
     var context = currentContext();
-    var events = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.events) ? raw.events : [];
+    var events = Array.isArray(resource?.items) ? resource.items : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.events) ? payload.events : [];
     var scoped = events.filter(function(event) {
       var marketId = event.marketId ?? event.market_id;
       var roundId = event.roundId ?? event.round_id;
@@ -439,7 +440,13 @@
         && (assetId == null || String(assetId) === String(context.assetId));
     });
     var list = document.querySelector("[data-activity-list]");
-    if (!list || raw?.stale || raw?.error || raw?.available === false) return;
+    var stale = resource.stale === true || ["stale", "unavailable", "error", "degraded"].includes(resource.status) || payload?.stale === true || payload?.available === false;
+    if (!list) return;
+    if (stale || resource.error || payload?.error) {
+      text("[data-activity-state]", resource.status === "unavailable" ? "事件待接入" : "事件连接中断 · 保留最近事件");
+      return;
+    }
+    text("[data-activity-state]", "事件已更新");
     if (!scoped.length) {
       list.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>当前场次暂无运行事件</strong><small>事件接口已连接，等待服务器返回当前 marketId + roundId 事件</small></div><b class="activity-tag info-tag">暂无</b></li>';
       return;
@@ -600,7 +607,8 @@
       var strategy = store.getState().strategy;
       var reason = commandPending ? "控制指令处理中" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "stop" && !running) reason = "没有服务器确认的可停止运行";
-      if (!reason && action === "start" && (strategy.status !== "ready" || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
+      if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
+      if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
       if (!reason && action === "start") {
         var account = accountStatus?.data || {};
         var liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready

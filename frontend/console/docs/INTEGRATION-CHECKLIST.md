@@ -9,6 +9,7 @@
 - [ ] runtime command 支持 requestId 幂等，响应和最终状态分开；前端只在当前市场有服务器确认的可停止状态时开放 stop，状态 stale/unavailable 或缺少市场身份时保留按钮禁用并等待刷新；`remoteOrdersState` 为 `unconfirmed` 时不能显示为撤单已完成。
 - [ ] `streams.markets`、`streams.runtime`、`streams.orders` 均配置真实 WebSocket 地址；未配置时使用独立 REST 轮询，页面标明轮询/待接入并保留快照，不生成实时假数据。
 - [ ] WS 帧有 sequence/sourceAt/expiresAt；行情和订单帧有 marketId/roundId，旧帧不会覆盖新帧，断线保留最后成功快照并显示 stale。
+- [ ] 启动按钮只有在当前市场目录/盘口快照具备完整身份、有效期、递增 sequence 和可用 YES/NO 深度时开放；未收到新鲜盘口时保持禁用。
 - [ ] 多币种每个 marketId 独立显示盘口、持仓、订单和阶段。
 - [ ] 策略保存有服务端校验、完整 `maxStages`、`draftId`、`expectedRevision` 和已发布 revision。
 - [ ] 策略草稿保存与策略激活分离；激活请求带 `strategyId`、`draftId`、`expectedRevision`，服务端确认正 revision 后才允许启动；不把草稿提示成已生效。
