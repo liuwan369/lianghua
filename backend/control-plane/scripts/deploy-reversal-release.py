@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import urllib.error
 import paramiko
 
 if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
@@ -106,8 +107,17 @@ def checked_target(name):
         raise RuntimeError('Release path outside program allowlist: '+name)
     return target
 def status():
-    with urllib.request.urlopen('http://127.0.0.1:18766/api/v1/status',timeout=15) as response:
-        return json.load(response)
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:18766/api/v1/status',timeout=15) as response:
+            return json.load(response)
+    except urllib.error.URLError as error:
+        # The first deployment may not have installed the dashboard unit yet.
+        # Only a local connection refusal is treated as an absent service; all
+        # other failures remain deployment errors.
+        reason=str(getattr(error,'reason',error)).lower()
+        if 'connection refused' in reason or '[errno 111]' in reason:
+            return {'running':False,'live_unlocked':False,'bootstrap':True}
+        raise
 def unit_state(unit):
     def query(action):
         completed=subprocess.run(['systemctl', action, unit], capture_output=True, text=True, check=False)
