@@ -197,17 +197,25 @@ test("non-executable boundary levels do not discard the valid L2 baseline", asyn
   assert.deepEqual(h.books().at(-1).YES.asks, [[0.6, 12]]);
 });
 
-test("same-price fast quotes preserve fresh depth with its original L2 clock", async t => {
+test("fast BBO changes preserve fresh L2 until its own expiry", async t => {
   const h = await harness(t), time = Date.now();
   h.socket.frame([book("yes", time), book("no", time)]);
   t.mock.method(Date, "now", () => time + 300);
-  h.socket.frame([top("yes", time + 300, 0.4, 0.6), top("no", time + 300, 0.4, 0.6)]);
+  h.socket.frame([top("yes", time + 300, 0.41, 0.59), top("no", time + 300, 0.42, 0.58)]);
+  const fresh = h.books().at(-1);
+  assert.equal(fresh.YES.bid, 0.41);
+  assert.equal(fresh.NO.ask, 0.58);
   assert.equal(h.books().at(-1).YES.sourceAt, (time + 300) / 1000);
   assert.equal(h.books().at(-1).YES.depthSourceAt, time / 1000);
+  assert.equal(h.books().at(-1).YES.depthExpiresAt, (time + 2000) / 1000);
   assert.deepEqual(h.books().at(-1).YES.bids, [[0.4, 10]]);
+  assert.deepEqual(h.books().at(-1).YES.asks, [[0.6, 12]]);
+  assert.equal(fresh.YES.bidSize, undefined, "stale L2 top size is not attached to the newer BBO");
+  assert.equal(fresh.YES.askSize, undefined, "stale L2 top size is not attached to the newer BBO");
   t.mock.method(Date, "now", () => time + 2100);
-  h.socket.frame([top("yes", time + 2100, 0.4, 0.6), top("no", time + 2100, 0.4, 0.6)]);
+  h.socket.frame([top("yes", time + 2100, 0.41, 0.59), top("no", time + 2100, 0.42, 0.58)]);
   assert.equal(h.books().at(-1).YES.bids, undefined);
+  assert.equal(h.books().at(-1).NO.asks, undefined);
   assert.equal(h.books().at(-1).YES.depthSourceAt, undefined);
   assert.equal(h.feed.isHealthy(), true);
 });

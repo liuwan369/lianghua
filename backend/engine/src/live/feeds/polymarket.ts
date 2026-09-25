@@ -690,20 +690,25 @@ export function runPolymarketFeed(
                 reportHealth(false, "incomplete_book");
                 return;
               }
-              const upDepthMatches = upDepth != null
+              const upDepthAvailable = upDepth != null
                 && atMs - upDepthAtMs <= PM_WS_SOURCE_FRESH_MAX_MS
-                && (upFastClearedAtMs === 0 || upDepthAtMs > upFastClearedAtMs)
-                && upDepth.bids[0]?.[0] === upBid && upDepth.asks[0]?.[0] === upAsk;
-              const downDepthMatches = downDepth != null
+                && (upFastClearedAtMs === 0 || upDepthAtMs > upFastClearedAtMs);
+              const downDepthAvailable = downDepth != null
                 && atMs - downDepthAtMs <= PM_WS_SOURCE_FRESH_MAX_MS
-                && (downFastClearedAtMs === 0 || downDepthAtMs > downFastClearedAtMs)
-                && downDepth.bids[0]?.[0] === downBid && downDepth.asks[0]?.[0] === downAsk;
-              const outputUpDepth = upDepthMatches ? upDepth : undefined;
-              const outputDownDepth = downDepthMatches ? downDepth : undefined;
-              const upBidSz = outputUpDepth?.bids.find(([price]) => price === upBid)?.[1];
-              const upAskSz = outputUpDepth?.asks.find(([price]) => price === upAsk)?.[1];
-              const downBidSz = outputDownDepth?.bids.find(([price]) => price === downBid)?.[1];
-              const downAskSz = outputDownDepth?.asks.find(([price]) => price === downAsk)?.[1];
+                && (downFastClearedAtMs === 0 || downDepthAtMs > downFastClearedAtMs);
+              const upDepthMatchesTop = upDepthAvailable
+                && upDepth!.bids[0]?.[0] === upBid && upDepth!.asks[0]?.[0] === upAsk;
+              const downDepthMatchesTop = downDepthAvailable
+                && downDepth!.bids[0]?.[0] === downBid && downDepth!.asks[0]?.[0] === downAsk;
+              // BBO and L2 are independent venue channels. Keep real, fresh
+              // L2 visible while the faster BBO moves ahead of its top level;
+              // only expose top sizes when both channels still agree exactly.
+              const outputUpDepth = upDepthAvailable ? upDepth : undefined;
+              const outputDownDepth = downDepthAvailable ? downDepth : undefined;
+              const upBidSz = upDepthMatchesTop ? upDepth!.bids[0]?.[1] : undefined;
+              const upAskSz = upDepthMatchesTop ? upDepth!.asks[0]?.[1] : undefined;
+              const downBidSz = downDepthMatchesTop ? downDepth!.bids[0]?.[1] : undefined;
+              const downAskSz = downDepthMatchesTop ? downDepth!.asks[0]?.[1] : undefined;
               const processedAtMonoMs = performance.now();
               if (fastChanges.some(change => change.side === "up") && fastUp) fastUp.processedAtMonoMs = processedAtMonoMs;
               if (fastChanges.some(change => change.side === "down") && fastDown) fastDown.processedAtMonoMs = processedAtMonoMs;
@@ -740,7 +745,7 @@ export function runPolymarketFeed(
               const topChanged = publishedUpBid !== upBid || publishedUpAsk !== upAsk
                 || publishedDownBid !== downBid || publishedDownAsk !== downAsk;
               const refreshDue = atMs - publishedAtMs >= PM_WS_DEPTH_REFRESH_MS;
-              const depthReadinessChanged = upDepthMatches !== publishedUpDepthReady || downDepthMatches !== publishedDownDepthReady;
+              const depthReadinessChanged = upDepthAvailable !== publishedUpDepthReady || downDepthAvailable !== publishedDownDepthReady;
               if (!topChanged && !refreshDue && !healthChanged && !depthReadinessChanged) return;
               const snapshotSequence = ++sequence;
               const expiresAt = Math.min(deadline,
@@ -822,8 +827,8 @@ export function runPolymarketFeed(
               publishedDownBid = downBid;
               publishedDownAsk = downAsk;
               publishedAtMs = atMs;
-              publishedUpDepthReady = upDepthMatches;
-              publishedDownDepthReady = downDepthMatches;
+              publishedUpDepthReady = upDepthAvailable;
+              publishedDownDepthReady = downDepthAvailable;
               sink({ kind: "book", snapshot: snap });
             } catch (error) {
               hasCompleteBook = false;
