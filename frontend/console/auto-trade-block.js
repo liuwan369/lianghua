@@ -207,6 +207,7 @@
   var selectedRuntime = null;
   var commandPending = false;
   var commandCooldownUntil = 0;
+  var commandCooldownAction = null;
   var currentMarketContextKey = null;
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
@@ -310,9 +311,10 @@
   var frameMatches = function(frame, requireRound) {
     var context = currentContext();
     var payload = payloadOf(frame);
-    var marketId = payload.marketId || payload.market_id || frame?.marketId || frame?.market_id;
-    var roundId = payload.roundId || payload.round_id || frame?.roundId || frame?.round_id;
-    var assetId = payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id;
+    var snapshot = payload.snapshot && typeof payload.snapshot === "object" ? payload.snapshot : {};
+    var marketId = snapshot.marketId ?? snapshot.market_id ?? payload.marketId ?? payload.market_id ?? frame?.marketId ?? frame?.market_id;
+    var roundId = snapshot.roundId ?? snapshot.round_id ?? payload.roundId ?? payload.round_id ?? frame?.roundId ?? frame?.round_id;
+    var assetId = snapshot.assetId ?? snapshot.asset_id ?? payload.assetId ?? payload.asset_id ?? frame?.assetId ?? frame?.asset_id;
     if (!requireRound && !marketId && !roundId && !assetId) return true;
     if (!context.assetId || !context.marketId || !context.roundId || !marketId || !roundId || !assetId) return false;
     return String(assetId) === String(context.assetId) && String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId);
@@ -600,13 +602,18 @@
   var updateControls = function() {
     var context = currentContext();
     var asset = assetById(context.assetId);
-    var running = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused"].includes(selectedRuntime.state || selectedRuntime.status);
+    var runtimeState = selectedRuntime?.state || selectedRuntime?.status;
+    var runtimeActive = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused", "stopping"].includes(runtimeState);
+    var running = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused"].includes(runtimeState);
     var catalog = store.getState().marketCatalog;
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
       var strategy = store.getState().strategy;
-      var reason = commandPending || commandCooldownUntil > Date.now() ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
-      if (!reason && action === "stop" && !running) reason = "没有服务器确认的可停止运行";
+      var cooldownActive = commandCooldownUntil > Date.now();
+      var sameActionCooldown = cooldownActive && commandCooldownAction === action;
+      var stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop";
+      var reason = commandPending || sameActionCooldown ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
+      if (!reason && action === "stop" && !running && !stopAfterAcceptedStart) reason = "没有服务器确认的可停止运行";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
       if (!reason && action === "start") reason = vm.strategyAssetStartReason(strategy, context.assetId);
       if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
@@ -618,7 +625,7 @@
         if (accountStatus.status !== "ready" || liveReady !== true) reason = "服务器尚未确认账户可启动交易";
       }
       if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
-      if (!reason && action === "start" && running) reason = "所选市场正在运行";
+      if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
       if (!reason && action === "pause" && !running) reason = "所选市场运行状态尚未确认";
       if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";
       button.disabled = Boolean(reason);
@@ -735,9 +742,9 @@
       try {
         const command = { action, ...(context.assetId ? { assetId: context.assetId } : {}), ...(context.marketId ? { marketIds: [context.marketId] } : {}), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
         const result = await adapter.commandRuntime(command);
-        if (version !== contextVersion) return;
         const accepted = result?.accepted === true && result.commandStatus !== "failed";
         acceptedResult = accepted;
+        if (version !== contextVersion) return;
         const remoteOrdersState = result?.remoteOrdersState ?? result?.remote_orders_state;
         if (action === "stop") {
           const remoteText = remoteOrdersState === "confirmed" || remoteOrdersState === "cancelled" ? "远端挂单撤销已确认" : remoteOrdersState === "unconfirmed" ? "远端挂单撤销尚未确认" : "远端挂单状态待确认";
@@ -755,10 +762,19 @@
       }
       finally {
         commandPending = false;
-        if (acceptedResult) commandCooldownUntil = Date.now() + 5000;
+        if (acceptedResult) {
+          commandCooldownUntil = Date.now() + 5000;
+          commandCooldownAction = action;
+        }
         updateControls();
         scheduleRuntimeRefresh(500);
-        if (commandCooldownUntil > Date.now()) window.setTimeout(updateControls, commandCooldownUntil - Date.now() + 10);
+        if (commandCooldownUntil > Date.now()) window.setTimeout(function() {
+          if (commandCooldownUntil <= Date.now()) {
+            commandCooldownUntil = 0;
+            commandCooldownAction = null;
+          }
+          updateControls();
+        }, commandCooldownUntil - Date.now() + 10);
       }
     });
   });

@@ -81,6 +81,9 @@
   const overviewStartReason = () => {
     const state = store.getState();
     const assetId = state.marketPool.desiredIds[0];
+    const runtime = state.runtime || {};
+    const runtimeState = runtime.status || runtime.runtimeState;
+    if (["running", "starting", "paused", "stopping"].includes(runtimeState)) return "服务器仍有运行状态，请先停止或等待状态确认";
     const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
     if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";
     if (item.canEnable !== true) return "服务器尚未确认该市场可加入运行池";
@@ -98,6 +101,14 @@
         : account.execution_credentials_ready === true && account.account_check_ready === true;
     if (state.accountStatus?.status !== "ready" || state.accountStatus?.stale === true || state.accountStatus?.error || liveReady !== true) return "服务器尚未确认账户可启动交易";
     return "";
+  };
+  const overviewEventContext = () => {
+    const state = store.getState();
+    const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId;
+    const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
+    const runId = state.runtime?.runId || state.runtime?.run_id || null;
+    const context = { assetId, marketId: item?.marketId, roundId: item?.roundId, runId };
+    return Object.fromEntries(Object.entries(context).filter(([, value]) => value != null && value !== ""));
   };
   const updateOverviewControls = () => {
     const start = document.querySelector('[data-overview-action="start"]');
@@ -142,7 +153,8 @@
     if (action === "strategy") return window.PolyPreview?.navigate("strategy.html");
     if (action === "refresh") {
       button.disabled = true;
-      Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime(), adapter.loadStrategy(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadAccount(), adapter.loadAccountStatus(), adapter.loadEvents()])
+      const eventContext = overviewEventContext();
+      Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadRuntime(), adapter.loadStrategy(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadAccount(), adapter.loadAccountStatus(), adapter.loadEvents(eventContext.runId || null, eventContext)])
         .then((results) => {
           const disconnected = results.some((result) => result.status === "rejected" || ["stale", "unavailable", "error", "degraded"].includes(result.value?.status));
           text(".server-expired", disconnected ? "连接中断 · 保留上次成功数据" : "状态已刷新 · 数据源已更新");
@@ -270,7 +282,7 @@
   document.querySelector("[data-account-total]").previousElementSibling.textContent = "账户资产 / 抵押余额";
   const controlAssetId = () => {
     const state = store.getState();
-    return state.marketPool.currentIds[0] || state.marketPool.desiredIds[0] || state.marketCatalog.selectedId;
+    return state.marketPool.desiredIds[0] || state.marketCatalog.selectedId;
   };
   const currentMarket = store.getState().marketCatalog.items.find((item) => item.assetId === controlAssetId());
   text(".header-status strong", currentMarket ? `${currentMarket.symbol} · 5 分钟 YES / NO` : "等待市场目录");
@@ -291,7 +303,7 @@
     adapter.loadMarkets(), adapter.loadRuntime()
   ]).finally(() => { fastRequest = null; }));
   const refreshSlow = () => slowRequest || (slowRequest = Promise.allSettled([
-    adapter.loadMarketPool(), adapter.loadDiagnostics(), adapter.loadMetrics(), adapter.loadEvents(), adapter.loadStrategy(), adapter.loadAccountStatus()
+    adapter.loadMarketPool(), adapter.loadDiagnostics(), adapter.loadMetrics(), (() => { const context = overviewEventContext(); return adapter.loadEvents(context.runId || null, context); })(), adapter.loadStrategy(), adapter.loadAccountStatus()
   ]).finally(() => { slowRequest = null; }));
   const refreshAccount = () => accountRequest || (accountRequest = Promise.allSettled([
     adapter.loadAccount()

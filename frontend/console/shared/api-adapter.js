@@ -245,7 +245,8 @@
     },
     async loadEvents(runId, context = {}) {
       return readSlice("events", async () => {
-        const raw = await modernOrLegacy(() => core.api.events("", context), async () => {
+        const eventContext = { ...context, ...(runId && !context.runId ? { runId } : {}) };
+        const raw = await modernOrLegacy(() => core.api.events("", eventContext), async () => {
           const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
           if (!activeRunId) throw new Error("当前运行标识尚未提供");
           return core.api.legacyEvents(activeRunId);

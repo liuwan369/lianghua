@@ -98,6 +98,7 @@
     if (context.assetId) params.set("assetId", context.assetId);
     if (context.marketId) params.set("marketId", context.marketId);
     if (context.roundId) params.set("roundId", context.roundId);
+    if (context.runId) params.set("runId", context.runId);
     if (context.cursor) params.set("cursor", context.cursor);
     const query = params.toString();
     return query ? `?${query}` : "";

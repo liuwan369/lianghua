@@ -51,6 +51,11 @@ load(path.join(root, "shared", "api-adapter.js"));
   assert.strictEqual(url.searchParams.get("marketId"), "market-btc", "events request is scoped by market");
   assert.strictEqual(url.searchParams.get("roundId"), "round-2", "events request is scoped by round");
   assert.strictEqual(url.searchParams.get("cursor"), "cursor-2", "events cursor is retained");
+  await window.PolyPreviewAdapter.loadEvents("run-7", { assetId: "btc", marketId: "market-btc", roundId: "round-2" });
+  const runUrl = new URL(lastRequestUrl, "https://console.test");
+  assert.strictEqual(runUrl.searchParams.get("runId"), "run-7", "events request is scoped by active run");
+  const previewCoreSource = fs.readFileSync(path.join(root, "shared", "preview-core.js"), "utf8");
+  assert.match(previewCoreSource, /context\.runId\) params\.set\("runId", context\.runId\)/, "scoped query retains run identity");
   console.log("adapter-boundaries: PASS");
 })().catch((error) => {
   console.error(error);
