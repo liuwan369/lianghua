@@ -49,6 +49,8 @@ assert.match(autoTradeSource, /const accepted = result\?\.accepted === true[\s\S
 assert.match(autoTradeSource, /var commandCooldownAction = null;/, "command cooldown records the accepted action");
 assert.match(autoTradeSource, /sameActionCooldown = cooldownActive && commandCooldownAction === action/, "cooldown blocks only repeated commands of the same action");
 assert.match(autoTradeSource, /stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop"/, "accepted start leaves stop available during confirmation window");
+assert.match(autoTradeSource, /var commandCooldownContextKey = null;/, "command cooldown records accepted command identity");
+assert.match(autoTradeSource, /commandCooldownContextKey === identityKey\(context\)/, "stop bypass is limited to the accepted start identity");
 assert.match(autoTradeSource, /\["running", "starting", "paused", "stopping"\]\.includes\(runtimeState\)/, "stopping runtime blocks a new start until confirmed");
 
 const depth = {

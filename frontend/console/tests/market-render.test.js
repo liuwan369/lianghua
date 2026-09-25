@@ -91,6 +91,7 @@ assert.match(overviewSource, /const overviewEventContext = \(\) =>[\s\S]*marketI
 assert.match(overviewSource, /adapter\.loadEvents\(eventContext\.runId \|\| null, eventContext\)/, "overview refresh scopes events to the active run context");
 assert.match(overviewSource, /return state\.marketPool\.desiredIds\[0\] \|\| state\.marketCatalog\.selectedId/, "overview title follows the desired control asset");
 assert.match(overviewSource, /\["running", "starting", "paused", "stopping"\]\.includes\(runtimeState\)/, "overview start is blocked while the server reports an active transition or run");
+assert.match(overviewSource, /const runtimeState = runtime\.runtimeState \|\| runtime\.status/, "overview start prefers retained runtime state when status is stale");
 assert.match(marketSource, /resource\?\.status === "partial"/, "market refresh keeps partial status visible");
 assert.match(window.PolyPreviewViewModel.strategyAssetStartReason({ data: { config: { assetId: "btc" } } }, "eth"), /策略与所选市场不一致/, "strategy mismatch disables start");
 assert.strictEqual(window.PolyPreviewViewModel.strategyAssetStartReason({ data: { config: { assetId: "btc" } } }, "btc"), "", "matching strategy asset permits this gate");
