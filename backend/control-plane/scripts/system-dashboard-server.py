@@ -1894,9 +1894,23 @@ def _event_dto(event: dict) -> dict:
     round_id = event.get("roundId") or event.get("round_id")
     severity = "error" if kind == "error" else "warning" if kind == "unresolved" else "info"
     asset_id = event.get("assetId") or event.get("asset_id")
+    trade_id = event.get("tradeId") or event.get("trade_id")
+    order_id = event.get("orderId") or event.get("order_id")
+    client_order_id = event.get("clientOrderId") or event.get("client_order_id")
+    token_id = event.get("tokenId") or event.get("token_id")
+    trade_status = event.get("tradeStatus") or event.get("trade_status")
+    fee_source = event.get("feeSource") or event.get("fee_source")
     result = {**event, "assetId": asset_id, "asset_id": asset_id, "kind": kind, "marketId": market_id, "roundId": round_id,
             "time": _epoch(event.get("time")), "severity": severity,
             "message": event.get("message") or event.get("reason") or kind}
+    # Journal projection stores canonical snake_case fields. Modern clients
+    # consume camelCase DTOs, so expose both without changing revision rows or
+    # inventing identifiers that were absent from the journal.
+    result.update({"tradeId": trade_id, "orderId": order_id,
+                   "clientOrderId": client_order_id, "tokenId": token_id,
+                   "tradeStatus": trade_status, "feeSource": fee_source,
+                   "feeUsd": _money(event.get("fee")),
+                   "status": event.get("status") or (trade_status if kind == "fill" else None)})
     if kind == "settlement":
         result.update({"payoutVerified": event.get("payout_verified") is True,
                        "accountingState": event.get("accounting_state"),
@@ -1925,7 +1939,7 @@ def _order_dto(order: dict) -> dict:
 def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
     if not run_id:
         return {"schemaVersion": 1, "status": "unavailable", "available": False,
-                "items": None, "cursor": None, "runId": None,
+                "items": None, "events": None, "cursor": None, "runId": None,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
