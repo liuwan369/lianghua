@@ -361,6 +361,11 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["asOf"])
         self.assertTrue(body["stale"])
         self.assertFalse(body["capabilityDetails"]["streams"])
+        self.assertTrue(body["capabilityDetails"]["restRefresh"])
+        self.assertFalse(body["streams"]["available"])
+        self.assertEqual(body["streams"]["fallbackTransport"], "rest")
+        self.assertIsNone(body["streams"]["endpoints"]["markets"])
+        self.assertEqual(body["streams"]["restEndpoints"]["orders"], "/api/rounds/{roundId}/orders")
 
     def test_read_failure_keeps_data_and_clock(self):
         good = {"items": [{"id": 1}], "source": "ledger", "asOf": 1234., "stale": False, "error": None}
@@ -448,12 +453,21 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(view["funds"]["reservedUsd"], 1.0)
         self.assertEqual(view["funds"]["positionCostUsd"], 2.5)
         self.assertIsNone(view["funds"]["estimatedFeesUsd"])
+
+    def test_runtime_status_propagates_ledger_projection_staleness(self):
+        now = time.time()
+        view = server_module._modern_runtime({"running": True, "run_id": "run", "stats": {
+            "runtime": {"source_at": now, "expires_at": now + 5, "stale": True},
+            "projection": {"state": "ready", "stale": True}}})
+        self.assertTrue(view["stale"])
+        self.assertEqual(view["error"], "ledger_projection_incomplete")
         self.assertIsNone(view["funds"]["confirmedFeesUsd"])
 
     def test_metrics_summary_without_run_is_unavailable_not_not_found(self):
         with patch.object(server_module, "_api_run_id", return_value=None):
             code, body = self.request("/api/metrics/summary?range=today")
         self.assertEqual(code, 200)
+        self.assertEqual(body["status"], "unavailable")
         self.assertFalse(body["available"])
         self.assertTrue(body["stale"])
         self.assertEqual(body["completeness"], "unavailable")
@@ -462,6 +476,53 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["pnl"])
         self.assertIsNone(body["win_rate"])
         self.assertIsNone(body["fill_count"])
+
+    def test_metrics_summary_projection_waiting_is_unavailable_not_not_found(self):
+        with patch.object(server_module, "_api_run_id", return_value="run"), \
+                patch.object(server_module, "_api_ledger") as ledger:
+            ledger.return_value.summary.side_effect = KeyError("run")
+            code, body = self.request("/api/metrics/summary?range=today")
+        self.assertEqual(code, 200)
+        self.assertEqual(body["status"], "unavailable")
+        self.assertFalse(body["available"])
+        self.assertEqual(body["runId"], "run")
+        self.assertEqual(body["completeness"], "waiting")
+        self.assertIsNone(body["fill_count"])
+        self.assertIsNone(body["settled_pnl"])
+
+    def test_metrics_summary_maps_real_order_and_result_counts_for_console(self):
+        with patch.object(server_module, "_api_run_id", return_value="run"), \
+                patch.object(server_module, "_api_ledger") as ledger, \
+                patch.object(server_module, "_ledger_metadata", return_value={
+                    "source": "ledger", "asOf": 12., "stale": False, "error": None}):
+            ledger.return_value.summary.return_value = {
+                "fill_count": 2, "order_count": 3, "settled_wins": 1,
+                "settled_losses": 1, "settled_pnl": 2.5, "completeness": "caught_up"}
+            code, body = self.request("/api/metrics/summary?range=today")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["available"])
+        self.assertEqual(body["status"], "ready")
+        self.assertEqual(body["order_count"], 3)
+        self.assertEqual(body["orders"], 3)
+        self.assertEqual(body["fills"], 2)
+        self.assertEqual(body["wins"], 1)
+        self.assertEqual(body["losses"], 1)
+        self.assertEqual(body["pnl"], 2.5)
+
+    def test_order_fill_and_settlement_queries_wait_for_projection_registration(self):
+        with patch.object(server_module, "_api_run_id", return_value="run"), \
+                patch.object(server_module, "_api_ledger") as ledger:
+            ledger.return_value.events.side_effect = KeyError("run")
+            ledger.return_value.settlements_page.side_effect = KeyError("run")
+            ledger.return_value.orders_page.side_effect = KeyError("run")
+            for path in ("/api/fills", "/api/settlements", "/api/rounds/1800000000/orders"):
+                with self.subTest(path=path):
+                    code, body = self.request(path)
+                    self.assertEqual(code, 200)
+                    self.assertEqual(body["status"], "unavailable")
+                    self.assertFalse(body["available"])
+                    self.assertEqual(body["runId"], "run")
+                    self.assertTrue(body["stale"])
 
     def test_metrics_summary_without_run_rejects_invalid_range(self):
         with patch.object(server_module, "_api_run_id", return_value=None):
@@ -476,9 +537,14 @@ class ApiTests(unittest.TestCase):
                 patch.object(server_module, "_ledger_metadata", return_value={"source": "ledger", "asOf": 10., "stale": False, "error": None}), \
                 patch.object(server_module, "live_status", side_effect=AssertionError("collector probe")), \
                 patch.object(server_module, "_activate_projection", side_effect=AssertionError("ingestion")):
-            ledger.return_value.summary.return_value = {"settled_pnl": 1., "completeness": "caught_up"}
+            ledger.return_value.summary.return_value = {"settled_pnl": 1., "fill_count": 2,
+                "order_count": 3, "settled_wins": 1, "settled_losses": 0,
+                "completeness": "caught_up"}
             code, body = self.request("/api/metrics/summary?range=today")
             self.assertEqual(code, 200)
+            self.assertTrue(body["available"])
+            self.assertEqual(body["orders"], 3)
+            self.assertEqual(body["fills"], 2)
             self.assertEqual(body["pnl"], 1.)
             ledger.return_value.summary.assert_called_once_with("run", range="today")
 
@@ -558,6 +624,19 @@ class ApiTests(unittest.TestCase):
             self.assertIsNone(result["settlement_credentials_ready"])
             self.assertEqual(result["check_error"], code)
             save.assert_called_once()
+
+    def test_account_save_keeps_http_report_separate_from_readiness(self):
+        report = {"saved": True, "account_check_state": "failed", "account_check_ready": False,
+                  "live_start_ready": False, "settlement_credentials_ready": None,
+                  "check_error": "account_rpc_failed"}
+        with patch.object(server_module, "_account_request_error", return_value=None), \
+                patch.object(server_module, "account_action", return_value=report):
+            code, body = self.request("/api/account/save", {})
+        self.assertEqual(code, 200)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["report"], report)
+        self.assertFalse(body["report"]["account_check_ready"])
+        self.assertFalse(body["report"]["live_start_ready"])
 
 
 class SnapshotTests(unittest.TestCase):

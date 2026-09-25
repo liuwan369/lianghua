@@ -1558,8 +1558,9 @@ class Ledger:
                           estimated_fees=estimated_fees,
                           settled_pnl=run["known_settled_pnl"] if run["settled_markets"] and not run["missing_pnl"] else None,
                           pnl_semantics="engine_settlement_net_of_fees; not_wallet_reconciliation",
-                          order_lifecycle_available=self._has_table(db, "order_details") and bool(db.execute(
-                              "SELECT 1 FROM order_details WHERE run_id=? LIMIT 1", (run_id,)).fetchone()),
+                          order_count=(db.execute("SELECT COUNT(*) FROM order_details WHERE run_id=?", (run_id,)).fetchone()[0]
+                                       if self._has_table(db, "order_details") else None),
+                          order_lifecycle_available=self._has_table(db, "order_details"),
                           error=run["source_error"])
             settled = db.execute("""SELECT
                     SUM(CASE WHEN pnl > 0.000000001 THEN 1 ELSE 0 END) AS wins,
@@ -1615,6 +1616,36 @@ class Ledger:
                 if selected["account_id"] and range != "run" else [selected]
             run_ids = [row["run_id"] for row in runs]
             placeholders = ",".join("?" for _ in run_ids)
+            order_count = None
+            if self._has_table(db, "order_details"):
+                order_sql = ("SELECT run_id,client_order_id,asset_id,payload FROM order_details "
+                             f"WHERE run_id IN ({placeholders})")
+                order_args = list(run_ids)
+                if start is not None:
+                    order_sql += " AND updated_at>=? AND updated_at<=?"
+                    order_args.extend((start, now))
+                if asset_id is not None:
+                    order_sql += " AND asset_id=?"
+                    order_args.append(asset_id)
+                order_rows = db.execute(order_sql, order_args)
+                order_identities = set()
+                for row in order_rows:
+                    order = json.loads(row["payload"])
+                    order_asset = _asset_from(order) or row["asset_id"]
+                    order_market = order.get("market_id") or order.get("marketId")
+                    order_round = order.get("round_id") or order.get("roundId")
+                    if market_id is not None and order_market != market_id:
+                        continue
+                    if round_id is not None and order_round != round_id:
+                        continue
+                    order_id = order.get("order_id") or order.get("orderId")
+                    if order_id:
+                        identity = (order_asset, order_market, order_round, order_id)
+                    else:
+                        identity = (row["run_id"], order_asset, order_market, order_round,
+                                    row["client_order_id"])
+                    order_identities.add(identity)
+                order_count = len(order_identities)
             period = " AND COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))>=?" \
                 " AND COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))<=?" if start is not None else ""
             parameters = (*run_ids, start, now) if start is not None else tuple(run_ids)
@@ -1717,7 +1748,8 @@ class Ledger:
                 lag += pending or 0
             return {"run_id": run_id, "mode": "live", "account_id": selected["account_id"], "range": range,
                     "from": start, "to": now, "as_of": now, "run_count": len(runs),
-                    "fill_count": count, "fill_notional": None if missing_notional else notional,
+                    "order_count": order_count, "fill_count": count,
+                    "fill_notional": None if missing_notional else notional,
                     "known_fill_notional": notional, "fees": None if missing_fees else fees, "known_fees": fees,
                     "estimated_fees": estimated_fees,
                     "missing_fee_count": missing_fees, "settled_markets": len(pnl_values),

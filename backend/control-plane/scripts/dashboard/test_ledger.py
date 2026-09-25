@@ -149,6 +149,17 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(current["orders"][0]["fee"], .1)
         self.assertAlmostEqual(current["orders"][0]["created_at"], self.now - 1)
         self.assertAlmostEqual(current["orders"][0]["average_price"], .4)
+        self.assertEqual(self.ledger.summary("run-a")["order_count"], 1)
+
+    def test_account_order_count_deduplicates_restarted_order_identity(self):
+        order = {"event": "order", "client_order_id": "client-reused", "order_id": "order-reused",
+                 "status": "OPEN", "market_id": self.market_id, "round_id": self.round_id,
+                 "market_slug": self.slug, "updated_at": self.now}
+        self.write("run-a", [order])
+        self.write("run-b", [order])
+        summary = self.ledger.metrics_summary("run-a", range="all")
+        self.assertEqual(summary["order_count"], 1)
+        self.assertEqual(summary["fill_count"], 0)
 
     def test_composite_identity_filters_do_not_cross_assets(self):
         btc_order = {"event": "order", "assetId": "btc", "client_order_id": "btc-client",
