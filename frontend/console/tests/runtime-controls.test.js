@@ -16,11 +16,16 @@ assert.strictEqual(model.runtime({ status: "running", stale: true }).processRunn
 
 const autoTrade = fs.readFileSync(path.join(root, "auto-trade-block.js"), "utf8");
 const adapter = fs.readFileSync(path.join(root, "shared", "api-adapter.js"), "utf8");
+const overview = fs.readFileSync(path.join(root, "overview-block.js"), "utf8");
 assert.match(autoTrade, /runtimeIdentityMatches = Boolean\(selectedRuntime && vm\.matchesIdentity\(selectedRuntime, context\)\)/, "stop and pause controls require current market identity");
 assert.match(autoTrade, /action === "pause" && \(processRunning !== true \|\| selectedRuntime\?\.stale/, "stale runtime cannot pause or resume");
 assert.match(autoTrade, /var freshPaused = runtimeIdentityMatches && !selectedRuntime\.stale && processRunning === true/, "resume label requires fresh matching paused process state");
 assert.match(autoTrade, /const canResume = button\.dataset\.action === "pause"[\s\S]*selectedRuntime\?\.processRunning === true[\s\S]*runtimeStateForAction === "paused"/, "resume command requires fresh matching paused process state");
+assert.match(autoTrade, /if \(globalProcess\)[\s\S]*globalProcessRunning = runtime\?\.processRunning \?\? null[\s\S]*if \(!selectedRuntime\)/, "global runtime frames update independent process state without replacing selected runtime");
 assert.match(adapter, /const processOnly = vm\.runtime\(data\);[\s\S]*processRunning: processOnly\.processRunning[\s\S]*identityMismatch: true/, "identity mismatch keeps tri-state process fact without copying old market identity");
+assert.match(overview, /const overviewRuntimeControl[\s\S]*matchesIdentity\(runtime, context\)[\s\S]*identityMatches: false/, "overview controls require selected market identity");
+assert.match(overview, /const stoppable = control\.identityMatches && runtime\.processRunning === true/, "overview stop allows only matching process state, including stale projections");
+assert.match(overview, /action === "exit" && \(!control\.identityMatches \|\| control\.runtime\.processRunning !== true\)/, "overview stop rejects global, other-market, and old-round runtime frames");
 assert.match(autoTrade, /var activityList = document\.querySelector\("\[data-activity-list\]"\)/, "round reset clears activity events");
 assert.match(autoTrade, /新场次事件读取中/, "round reset shows a new-round activity loading state");
 

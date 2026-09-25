@@ -115,19 +115,41 @@
     const context = { runId };
     return Object.fromEntries(Object.entries(context).filter(([, value]) => value != null && value !== ""));
   };
+  const overviewRuntimeContext = () => {
+    const state = store.getState();
+    const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId;
+    const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
+    return Object.fromEntries(Object.entries({ assetId, marketId: item?.marketId, roundId: item?.roundId })
+      .filter(([, value]) => value != null && value !== ""));
+  };
+  const overviewRuntimeControl = (runtime = store.getState().runtime || {}) => {
+    const context = overviewRuntimeContext();
+    if (window.PolyPreviewViewModel.matchesIdentity(runtime, context)) return { context, runtime, identityMatches: true };
+    const nested = Array.isArray(runtime.markets)
+      ? runtime.markets.map((item) => ({
+        ...item,
+        assetId: item.assetId ?? item.asset_id ?? runtime.assetId ?? runtime.asset_id,
+        marketId: item.marketId ?? item.market_id ?? runtime.marketId ?? runtime.market_id,
+        roundId: item.roundId ?? item.round_id ?? runtime.roundId ?? runtime.round_id
+      })).find((item) => window.PolyPreviewViewModel.matchesIdentity(item, context))
+      : null;
+    if (nested) return { context, runtime: { ...runtime, ...nested, processRunning: runtime.processRunning ?? nested.processRunning }, identityMatches: true };
+    return { context, runtime, identityMatches: false };
+  };
   const updateOverviewControls = () => {
     const start = document.querySelector('[data-overview-action="start"]');
     const stop = document.querySelector('[data-overview-action="exit"]');
-    const runtime = store.getState().runtime || {};
+    const control = overviewRuntimeControl();
+    const runtime = control.runtime;
     if (start) {
       const reason = overviewStartReason();
       start.disabled = Boolean(reason);
       start.title = reason;
     }
     if (stop) {
-      const stoppable = runtime.processRunning === true;
+      const stoppable = control.identityMatches && runtime.processRunning === true;
       stop.disabled = !stoppable;
-      stop.title = stoppable ? "提交停止请求；最终状态以服务器确认为准" : runtime.processRunning == null ? "服务器进程状态未知，暂不允许停止" : "没有服务器确认的可停止运行";
+      stop.title = stoppable ? "提交停止请求；最终状态以服务器确认为准" : !control.identityMatches ? "当前市场没有匹配的服务器运行身份" : runtime.processRunning == null ? "服务器进程状态未知，暂不允许停止" : "没有服务器确认的可停止运行";
     }
   };
   document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", async () => {
@@ -135,11 +157,13 @@
     if (action === "start" || action === "exit") {
       if (button.disabled) return;
       const state = store.getState();
-      const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId;
+      const control = overviewRuntimeControl();
+      const assetId = control.context.assetId;
       const item = state.marketCatalog.items.find((item) => item.assetId === assetId);
       if (action === "start" && overviewStartReason()) { text("[data-overview-runtime]", overviewStartReason()); return; }
+      if (action === "exit" && (!control.identityMatches || control.runtime.processRunning !== true)) return;
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
-      const marketIds = item?.marketId ? [item.marketId] : [];
+      const marketIds = control.context.marketId ? [control.context.marketId] : [];
       if (assetId) window.PolyPreview.setSelectedAssetUrl(assetId);
       const command = async () => {
         if (action !== "start") return adapter.commandRuntime({ action: "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` });
@@ -152,7 +176,7 @@
       command()
       .then((result) => { text("[data-overview-runtime]", result.message || (result.accepted ? "等待确认" : "运行控制待接入")); if (action === "start" && result.accepted) window.PolyPreview.navigate("auto-trade.html"); })
         .catch((error) => text("[data-overview-runtime]", error.message || "控制请求失败"))
-        .finally(() => { void adapter.loadRuntime().catch(() => null).finally(updateOverviewControls); });
+        .finally(() => { void refreshFast().catch(() => null).finally(updateOverviewControls); });
       return;
     }
     if (action === "strategy") return window.PolyPreview?.navigate("strategy.html");
@@ -271,8 +295,9 @@
   store.subscribe("events", renderEvents);
   store.subscribe("runtime", (runtime) => {
     const states = { running: "运行中", stopped: "已停止", paused: "已暂停新增", starting: "启动中", stopping: "停止中", failed: "运行失败" };
-    const processLabel = runtime.processRunning === true ? "进程运行中" : runtime.processRunning === false ? "进程已停止" : "进程状态未知";
-    const label = runtime.status === "unavailable" ? `运行状态待接入 · ${processLabel}` : runtime.stale ? `状态过期 · ${processLabel}` : `${states[runtime.runtimeState] || runtime.runtimeState || runtime.status} · ${processLabel}`;
+    const control = overviewRuntimeControl(runtime);
+    const processLabel = control.identityMatches && runtime.processRunning === true ? "进程运行中" : control.identityMatches && runtime.processRunning === false ? "进程已停止" : "进程状态未知";
+    const label = !control.identityMatches ? `运行状态待接入 · ${processLabel}` : runtime.status === "unavailable" ? `运行状态待接入 · ${processLabel}` : runtime.stale ? `状态过期 · ${processLabel}` : `${states[runtime.runtimeState] || runtime.runtimeState || runtime.status} · ${processLabel}`;
     text("[data-overview-runtime]", label);
     updateOverviewControls();
   });
@@ -306,7 +331,13 @@
   let slowTimer = null;
   let accountTimer = null;
   const refreshFast = () => fastRequest || (fastRequest = Promise.allSettled([
-    adapter.loadMarkets(), adapter.loadRuntime()
+    adapter.loadMarkets().then(() => {
+      const context = overviewRuntimeControl().context;
+      if (context.assetId && context.marketId && context.roundId) {
+        return adapter.loadRuntime(context).then((runtime) => store.setSlice("runtime", { ...runtime, runtimeState: runtime.state || runtime.status }));
+      }
+      return adapter.loadRuntime();
+    })
   ]).finally(() => { fastRequest = null; }));
   const refreshSlow = () => slowRequest || (slowRequest = Promise.allSettled([
     adapter.loadMarketPool(), adapter.loadDiagnostics(), adapter.loadMetrics(), (() => { const context = overviewEventContext(); return adapter.loadEvents(context.runId || null, context); })(), adapter.loadStrategy(), adapter.loadAccountStatus()

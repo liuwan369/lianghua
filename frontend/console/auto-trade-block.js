@@ -205,6 +205,7 @@
   var runtimeRefreshInFlight = null;
   var contextVersion = 0;
   var selectedRuntime = null;
+  var globalProcessRunning = null;
   var commandPending = false;
   var commandCooldownUntil = 0;
   var commandCooldownAction = null;
@@ -653,7 +654,18 @@
     text("[data-strategy-revision]", Number.isInteger(revision) && revision > 0 ? `参数版本 REV-${revision}` : "参数版本待接入");
   };
   var renderRuntime = function(runtime, globalProcess = false) {
-    var matching = globalProcess ? runtime.processRunning !== null : vm.matchesIdentity(runtime, currentContext());
+    if (globalProcess) {
+      globalProcessRunning = runtime?.processRunning ?? null;
+      var globalProcessState = globalProcessRunning === true ? "进程运行中" : globalProcessRunning === false ? "进程已停止" : "进程状态未知";
+      if (!selectedRuntime) {
+        text("[data-strategy-status]", "所选市场状态待接入");
+        text("[data-live-status]", "所选市场状态待接入");
+        text("[data-connection-status]", `运行流已连接 · 全局${globalProcessState}`);
+        updateControls();
+      }
+      return;
+    }
+    var matching = vm.matchesIdentity(runtime, currentContext());
     var available = matching && runtime.status !== "unavailable" && !runtime.stale && !runtime.error;
     if (available) selectedRuntime = runtime;
     else if (matching && (runtime.processRunning === true || runtime.processRunning === false)) selectedRuntime = { ...runtime, stale: true };
