@@ -14,8 +14,10 @@ class FakeNode {
     this.dataset = {};
     this.classList = { toggle() {}, add() {}, remove() {} };
     this.children = [];
+    this.listeners = {};
   }
-  addEventListener() {}
+  addEventListener(type, listener) { this.listeners[type] = listener; }
+  async dispatch(type, event = {}) { return this.listeners[type]?.({ currentTarget: this, ...event }); }
   setAttribute() {}
   remove() {}
   replaceWith() {}
@@ -49,6 +51,10 @@ list.insertBefore = () => {};
 nodes.set("#market-block-root", root);
 nodes.set("[data-coin-list]", list);
 nodes.set("[data-detail-enable]", new FakeNode("[data-detail-enable]"));
+const refreshButton = new FakeNode("[data-refresh-markets]");
+const refreshNote = new FakeNode("[data-market-refresh-note]");
+nodes.set("[data-refresh-markets]", refreshButton);
+nodes.set("[data-market-refresh-note]", refreshNote);
 const document = global.document = {
   hidden: false,
   querySelector(selector) { return nodes.get(selector) || new FakeNode(selector); },
@@ -74,15 +80,20 @@ global.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
 const load = (file) => vm.runInThisContext(fs.readFileSync(file, "utf8"), { filename: file });
 const rootPath = require("path").resolve(__dirname, "..");
 const autoTradeSource = fs.readFileSync(`${rootPath}/auto-trade-block.js`, "utf8");
+const overviewSource = fs.readFileSync(`${rootPath}/overview-block.js`, "utf8");
+const marketSource = fs.readFileSync(`${rootPath}/market-block.js`, "utf8");
+(async () => {
 load(`${rootPath}/shared/preview-core.js`);
 load(`${rootPath}/shared/view-model.js`);
 assert.match(autoTradeSource, /strategyAssetStartReason\(strategy, context\.assetId\)/, "auto-trade start uses the shared strategy asset gate");
+assert.match(overviewSource, /strategyAssetStartReason\(strategy, assetId\)/, "overview start uses the shared strategy asset gate");
+assert.match(marketSource, /resource\?\.status === "partial"/, "market refresh keeps partial status visible");
 assert.match(window.PolyPreviewViewModel.strategyAssetStartReason({ data: { config: { assetId: "btc" } } }, "eth"), /策略与所选市场不一致/, "strategy mismatch disables start");
 assert.strictEqual(window.PolyPreviewViewModel.strategyAssetStartReason({ data: { config: { assetId: "btc" } } }, "btc"), "", "matching strategy asset permits this gate");
 load(`${rootPath}/shared/preview-store.js`);
 const store = window.PolyPreviewStore;
 window.PolyPreviewAdapter = {
-  async loadMarkets() { return store.getState().marketCatalog; },
+  async loadMarkets() { return { status: "partial" }; },
   async loadMarketPool() { return store.getState().marketPool; },
   async saveMarketPool() { return { accepted: true, status: "ready" }; }
 };
@@ -91,6 +102,8 @@ store.setSlice("marketPool", { desiredIds: ["btc", "eth"], currentIds: [], nextR
 
 assert.doesNotThrow(() => load(`${rootPath}/market-block.js`), "market directory and detail render do not throw");
 assert.strictEqual(nodes.get("[data-detail-enable]").disabled, false, "fresh detail remains operable when pool is ready");
+await refreshButton.dispatch("click");
+assert.match(refreshNote.textContent, /部分行情更新/, "manual refresh preserves partial status text");
 
 const previous = store.getState().marketCatalog.items;
 store.setMarketCatalog({
@@ -113,3 +126,4 @@ assert.strictEqual(store.getState().marketCatalog.items.find((item) => item.asse
 assert.strictEqual(store.getState().marketCatalog.status, "stale", "global catalog failure is marked stale");
 
 console.log("market-render: PASS");
+})().catch((error) => { console.error(error); process.exitCode = 1; });

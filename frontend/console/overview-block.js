@@ -110,6 +110,8 @@
     if (!snapshotFresh) return "当前盘口快照未新鲜确认，暂不允许启动";
     const strategy = state.strategy || {};
     if (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
+    const strategyAssetReason = window.PolyPreviewViewModel.strategyAssetStartReason(strategy, assetId);
+    if (strategyAssetReason) return strategyAssetReason;
     const account = state.accountStatus?.data || {};
     const liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
       : typeof account.liveStartReady === "boolean" ? account.liveStartReady
@@ -147,6 +149,8 @@
         if (action !== "start") return adapter.commandRuntime({ action: "stop", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, requestId: `overview-${Date.now()}` });
         const strategy = await adapter.loadStrategy();
         if (strategy.status !== "ready" || !(strategy.revision > 0)) throw new Error("请先在策略页面保存并激活有效版本");
+        const strategyAssetReason = window.PolyPreviewViewModel.strategyAssetStartReason(strategy, assetId);
+        if (strategyAssetReason) throw new Error(strategyAssetReason);
         return adapter.commandRuntime({ action: "start", assetId, marketIds, strategyId: window.PolyPreview.config.strategyId, revision: strategy.revision, requestId: `overview-${Date.now()}` });
       };
       command()
