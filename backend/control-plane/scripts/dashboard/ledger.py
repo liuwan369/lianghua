@@ -469,21 +469,13 @@ class Ledger:
                 db.execute("CREATE INDEX IF NOT EXISTS market_detail_asset ON market_details(run_id,asset_id,market)")
                 db.execute("CREATE INDEX IF NOT EXISTS alias_asset ON market_aliases(run_id,asset_id,market_id,market,round_id)")
                 db.execute("CREATE INDEX IF NOT EXISTS settlement_asset ON settlement_details(run_id,asset_id,market)")
-                # Older projections did not have round identity. Keep those
-                # rows unknown until a runtime snapshot supplies roundId.
-                db.execute("UPDATE markets SET round_id=(SELECT a.round_id FROM market_aliases a "
-                           "WHERE a.run_id=markets.run_id AND a.market=markets.market) "
-                           "WHERE round_id IS NULL")
-                db.execute("UPDATE market_details SET round_id=(SELECT a.round_id FROM market_aliases a "
-                           "WHERE a.run_id=market_details.run_id AND a.market=market_details.market) "
-                           "WHERE round_id IS NULL")
-                db.execute("UPDATE settlement_details SET round_id=(SELECT a.round_id FROM market_aliases a "
-                           "WHERE a.run_id=settlement_details.run_id AND a.market=settlement_details.market) "
-                           "WHERE round_id IS NULL")
                 # Keep identity backfill independent from the older settlement
                 # migration marker. Existing databases may already have the
                 # settlement marker while still lacking round_id projections.
-                if not db.execute("SELECT 1 FROM projection_migrations WHERE name='round_identity_v1'").fetchone():
+                # v2 is deliberately rerunnable for databases that already
+                # recorded v1 before its multi-asset repair was complete.
+                if (not db.execute("SELECT 1 FROM projection_migrations WHERE name='round_identity_v1'").fetchone()
+                        or not db.execute("SELECT 1 FROM projection_migrations WHERE name='round_identity_v2'").fetchone()):
                     for row in db.execute("SELECT run_id,payload FROM platform_runtime").fetchall():
                         runtime = json.loads(row["payload"])
                         identities = list(runtime.get("markets", []))
@@ -514,23 +506,52 @@ class Ledger:
                                     # backfill; the runtime-facing id is only
                                     # the unnamespaced lookup value.
                                     self._backfill_identity(db, row["run_id"], stored_id, market_asset)
-                    # Existing journals were already consumed; backfill only settlement projections once.
-                    for row in db.execute("SELECT run_id,payload FROM events WHERE kind='settlement' ORDER BY id").fetchall():
+                    # Existing settlement rows may have been keyed with the
+                    # legacy BTC default. Repair them from the runtime map
+                    # before replaying settlement events, so a second
+                    # projection is not created during event backfill.
+                    for row in db.execute("SELECT run_id,market,market_id,asset_id,round_id,source_at,payload "
+                                          "FROM settlement_details").fetchall():
+                        payload = json.loads(row["payload"])
+                        event = {**payload, "event": "settlement",
+                                 "market": payload.get("market") or row["market"],
+                                 "market_id": payload.get("market_id") or row["market_id"],
+                                 "round_id": payload.get("round_id") or row["round_id"],
+                                 # A pre-asset column defaulted to BTC. Treat
+                                 # that value as unknown unless the journal
+                                 # payload explicitly carried an asset.
+                                 "asset_id": payload.get("asset_id"),
+                                 "time": payload.get("time") or row["source_at"]}
+                        repaired = self._migration_identity(db, row["run_id"], event)
+                        if repaired is None or _asset_from(repaired) in (None, row["asset_id"]):
+                            continue
+                        self._record_settlement(db, row["run_id"], repaired)
+                        db.execute("DELETE FROM settlement_details WHERE run_id=? AND asset_id=? AND market=?",
+                                   (row["run_id"], row["asset_id"], row["market"]))
+
+                    # Existing journals were already consumed; backfill
+                    # settlement projections with explicit asset identity.
+                    for row in db.execute("SELECT run_id,byte_offset,payload FROM events WHERE kind='settlement' ORDER BY id").fetchall():
                         event = json.loads(row["payload"])
-                        event["market"] = event.get("market") or event.get("market_id")
-                        if event["market"]:
-                            alias = db.execute("SELECT market_id,round_id FROM market_aliases WHERE run_id=? AND market=?",
-                                               (row["run_id"], event["market"])).fetchone()
-                            if alias:
-                                event["market_id"] = event.get("market_id") or alias["market_id"]
-                                event["round_id"] = event.get("round_id") or alias["round_id"]
-                            db.execute("INSERT OR IGNORE INTO markets(run_id,market,round_id) VALUES(?,?,?)",
-                                       (row["run_id"], event["market"], event.get("round_id")))
-                            db.execute("INSERT OR IGNORE INTO market_details(run_id,market,round_id,last_time) VALUES(?,?,?,?)",
-                                       (row["run_id"], event["market"], event.get("round_id"), event.get("time") or 0))
+                        event["event"] = "settlement"
+                        event["market"] = event.get("market") or event.get("market_slug") or event.get("market_id")
+                        if "asset_id" not in event and "assetId" not in event:
+                            event["asset_id"] = None
+                        event = self._migration_identity(db, row["run_id"], event) or event
+                        asset_id = _asset_from(event)
+                        if event.get("market") and asset_id:
+                            market_key = _market_key(db, row["run_id"], event)
+                            db.execute("INSERT OR IGNORE INTO markets(run_id,market,asset_id,round_id) VALUES(?,?,?,?)",
+                                       (row["run_id"], market_key, asset_id, event.get("round_id")))
+                            db.execute("INSERT OR IGNORE INTO market_details(run_id,market,asset_id,round_id,last_time) VALUES(?,?,?,?,?)",
+                                       (row["run_id"], market_key, asset_id, event.get("round_id"), event.get("time") or 0))
                             self._record_settlement(db, row["run_id"], event)
+                            normalized = json.dumps(event, allow_nan=False)
+                            db.execute("UPDATE events SET payload=?,asset_id=? WHERE run_id=? AND byte_offset=?",
+                                       (normalized, asset_id, row["run_id"], row["byte_offset"]))
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('platform_settlements_v1')")
-                    db.execute("INSERT INTO projection_migrations VALUES('round_identity_v1')")
+                    db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('round_identity_v1')")
+                    db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('round_identity_v2')")
 
     @contextmanager
     def _connect(self):
@@ -574,6 +595,32 @@ class Ledger:
     def _has_table(db, name):
         # Read-only historical APIs can be opened before the new worker migrates a database.
         return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+    @staticmethod
+    def _migration_identity(db, run_id, event):
+        """Resolve an old projection/event through the runtime-owned alias map."""
+        asset_id = _asset_from(event)
+        market_id = event.get("market_id") or event.get("marketId")
+        market = event.get("market") or event.get("market_slug") or event.get("marketSlug")
+        candidates = []
+        for row in db.execute("SELECT market_id,market,asset_id,round_id FROM market_aliases WHERE run_id=?", (run_id,)):
+            if asset_id and row["asset_id"] != asset_id:
+                continue
+            matches_id = market_id and _identity_value(row["asset_id"], row["market_id"]) == market_id
+            matches_market = market and market in (row["market"], row["market_id"],
+                                                   _identity_value(row["asset_id"], row["market"]),
+                                                   _identity_value(row["asset_id"], row["market_id"]))
+            if matches_id or matches_market:
+                candidates.append(row)
+        if len(candidates) != 1:
+            return None
+        alias = candidates[0]
+        result = dict(event)
+        result["asset_id"] = result["assetId"] = alias["asset_id"]
+        result["market_id"] = _identity_value(alias["asset_id"], alias["market_id"])
+        result["market"] = _identity_value(alias["asset_id"], alias["market"])
+        result["round_id"] = result.get("round_id") or alias["round_id"]
+        return result
 
     @staticmethod
     def _apply_identity(db, run_id, event):
@@ -680,7 +727,8 @@ class Ledger:
             # can be moved safely. A bare condition id has no asset evidence,
             # so leave that row untouched rather than guessing its owner.
             legacy_keys = [value for value in (_identity_value(asset_id, canonical),)
-                           if isinstance(value, str) and value]
+                           if isinstance(value, str) and value
+                           and re.fullmatch(fr"{re.escape(asset_id)}-updown-5m-[0-9]+", value)]
             for table in ("markets", "market_details"):
                 candidates = db.execute(
                     f"SELECT * FROM {table} WHERE run_id=? AND asset_id='btc' "

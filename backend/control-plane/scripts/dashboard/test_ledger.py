@@ -241,7 +241,19 @@ class LedgerRegressionTests(unittest.TestCase):
                        ("run-eth", slug, "btc"))
             db.execute("INSERT INTO market_details(run_id,market,asset_id,last_time) VALUES(?,?,?,?)",
                        ("run-eth", slug, "btc", self.now))
-            db.execute("DELETE FROM projection_migrations WHERE name='round_identity_v1'")
+            settlement_payload = {"event": "settlement", "market_slug": slug,
+                                  "market_id": market_id, "state": "confirmed",
+                                  "payout_verified": True, "transaction_id": "0x" + "d" * 64,
+                                  "credited_usd": 1, "expected_payout_usd": 1, "time": self.now}
+            db.execute("INSERT INTO events(run_id,byte_offset,kind,asset_id,payload) VALUES(?,?,?,?,?)",
+                       ("run-eth", 10, "settlement", "btc", json.dumps(settlement_payload)))
+            db.execute("INSERT INTO settlement_details(run_id,market,market_id,asset_id,source_at,verified,payload) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                       ("run-eth", slug, market_id, "btc", self.now, 1, json.dumps(settlement_payload)))
+            # Simulate a database where v1 was recorded before the
+            # multi-asset repair was shipped. v1 must remain present while v2
+            # reruns the repair exactly once.
+            db.execute("DELETE FROM projection_migrations WHERE name='round_identity_v2'")
             db.commit()
         finally:
             db.close()
@@ -256,6 +268,20 @@ class LedgerRegressionTests(unittest.TestCase):
             db.close()
         self.assertEqual(market, ("eth::" + slug, "eth", round_id))
         self.assertEqual(detail, ("eth::" + slug, "eth", round_id))
+        db = sqlite3.connect(path)
+        try:
+            markers = {row[0] for row in db.execute("SELECT name FROM projection_migrations")}
+        finally:
+            db.close()
+        self.assertIn("round_identity_v1", markers)
+        self.assertIn("round_identity_v2", markers)
+        db = sqlite3.connect(path)
+        try:
+            settlements = db.execute("SELECT market,asset_id,round_id FROM settlement_details WHERE run_id=?",
+                                     ("run-eth",)).fetchall()
+        finally:
+            db.close()
+        self.assertEqual(settlements, [("eth::" + slug, "eth", round_id)])
 
     def test_unknown_round_identity_is_not_guessed(self):
         fill = self.fill(market_slug="unknown-old-slug", trade_id="unknown-round")
