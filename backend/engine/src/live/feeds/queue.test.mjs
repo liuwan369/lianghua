@@ -98,6 +98,44 @@ test("book expiry is checked on enqueue and dequeue, including each outcome", t 
   assert.equal(queue.tryPop()?.snapshot.sequence, 2);
 });
 
+test("expired optional depth is stripped while a fresh paired BBO remains usable", t => {
+  const setNow = clock(t);
+  const queue = new FeedQueue();
+  const event = book("btc", 12, {
+    YES: {
+      ...book("btc", 12).snapshot.YES,
+      bidSize: 10,
+      askSize: 11,
+      bids: [[0.4, 10]],
+      asks: [[0.5, 11]],
+      depthSourceAt: ROUND + 100,
+      depthExpiresAt: ROUND + 101,
+    },
+    NO: {
+      ...book("btc", 12).snapshot.NO,
+      bidSize: 12,
+      askSize: 13,
+      bids: [[0.4, 12]],
+      asks: [[0.5, 13]],
+      depthSourceAt: ROUND + 100,
+      depthExpiresAt: ROUND + 102,
+    },
+  });
+  const originalYes = structuredClone(event.snapshot.YES);
+  queue.push(event);
+
+  setNow(ROUND + 101.5);
+  const result = queue.tryPop();
+  assert.ok(result);
+  assert.equal(result.snapshot.YES.bid, 0.4);
+  assert.equal(result.snapshot.YES.ask, 0.5);
+  assert.equal(result.snapshot.YES.bidSize, undefined);
+  assert.equal(result.snapshot.YES.bids, undefined);
+  assert.equal(result.snapshot.YES.depthExpiresAt, undefined);
+  assert.equal(result.snapshot.NO.bidSize, 12);
+  assert.deepEqual(event.snapshot.YES, originalYes);
+});
+
 test("rejects nonfinite metadata without poisoning later valid updates", t => {
   clock(t);
   const queue = new FeedQueue();

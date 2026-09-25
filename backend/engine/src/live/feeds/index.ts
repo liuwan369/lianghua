@@ -142,6 +142,43 @@ function bookExpiry(snapshot: BookSnapshot): number {
   return expiresAt;
 }
 
+function omitExpiredDepth(event: Extract<FeedEvent, { kind: "book" }>, now: number): Extract<FeedEvent, { kind: "book" }> {
+  const { snapshot } = event;
+  const yesExpired = snapshot.YES?.depthExpiresAt != null && snapshot.YES.depthExpiresAt <= now;
+  const noExpired = snapshot.NO?.depthExpiresAt != null && snapshot.NO.depthExpiresAt <= now;
+  if (!yesExpired && !noExpired) return event;
+
+  const withoutDepth = (asset: MarketAssetSnapshot | undefined): MarketAssetSnapshot | undefined => asset && ({
+    ...asset,
+    bidSize: undefined,
+    askSize: undefined,
+    bids: undefined,
+    asks: undefined,
+    depthSourceAt: undefined,
+    depthExpiresAt: undefined,
+  });
+  return {
+    ...event,
+    snapshot: {
+      ...snapshot,
+      ...(yesExpired ? {
+        YES: withoutDepth(snapshot.YES),
+        upBidSz: undefined,
+        upAskSz: undefined,
+        upBidLevels: undefined,
+        upAskLevels: undefined,
+      } : {}),
+      ...(noExpired ? {
+        NO: withoutDepth(snapshot.NO),
+        downBidSz: undefined,
+        downAskSz: undefined,
+        downBidLevels: undefined,
+        downAskLevels: undefined,
+      } : {}),
+    },
+  };
+}
+
 function bookKey(identity: FeedMarketIdentity): string {
   // Both the condition id and outcome tokens change at each five-minute round.
   // Prefer the complete token pair so resolving marketId does not split a stream.
@@ -267,7 +304,7 @@ export class FeedQueue {
       this.decisions.delete(key);
       if (event.kind === "book" && bookExpiry(event.snapshot) <= now) continue;
       if ((event.kind === "btc" || event.kind === "oracle") && referenceExpiry(event) <= now) continue;
-      return event;
+      return event.kind === "book" ? omitExpiredDepth(event, now) : event;
     }
     for (const [key, event] of this.config) {
       this.config.delete(key);
