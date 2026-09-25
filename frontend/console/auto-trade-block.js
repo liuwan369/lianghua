@@ -599,9 +599,12 @@
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
       var strategy = store.getState().strategy;
+      var strategyAssetId = strategy?.data?.assetId ?? strategy?.data?.asset_id ?? strategy?.data?.config?.assetId ?? strategy?.data?.config?.asset_id ?? strategy?.config?.assetId ?? strategy?.config?.asset_id ?? null;
       var reason = commandPending ? "控制指令处理中" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "stop" && !running) reason = "没有服务器确认的可停止运行";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
+      if (!reason && action === "start" && !strategyAssetId) reason = "激活策略尚未确认目标币种";
+      if (!reason && action === "start" && String(strategyAssetId) !== String(context.assetId)) reason = "激活策略与所选市场不一致，请切换市场或重新激活策略";
       if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
       if (!reason && action === "start") {
         var account = accountStatus?.data || {};
