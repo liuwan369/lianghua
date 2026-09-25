@@ -643,6 +643,28 @@ def account_action(payload: dict, save: bool = False) -> dict:
         _account_check_lock.release()
 
 
+def _clear_account_run_selection() -> None:
+    """Drop the last account's default selection without deleting its ledger."""
+    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
+    global _trading_log, _trading_console_log, _trading_started_at, _trading_exit_code
+    global _trading_stop_result, _trading_engine
+    _trading_run_id = None
+    _trading_config_revision = None
+    _trading_account_id = None
+    _trading_request_id = None
+    _trading_log = None
+    _trading_console_log = None
+    _trading_started_at = None
+    _trading_exit_code = None
+    _trading_stop_result = None
+    _trading_engine = None
+    _projection_pending.clear()
+    _modern_market_cache.clear()
+    _modern_response_cache.clear()
+    _trade_cache.clear()
+    _persist_trading_state()
+
+
 def _checked_account_action(payload: dict, save: bool = False) -> dict:
     global _account_report, _account_report_identity, _account_check_error
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
@@ -670,9 +692,36 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
     try:
         report = account_store.check_account(TRADING_ROOT, values)
     except account_store.AccountCheckError as exc:
-        if candidate_identity == saved_identity:
+        # Local candidate_profile validation has already completed. A failed
+        # RPC/reader check must not discard a correctly formatted account, but
+        # it also must not be reported as a successful readiness check.
+        if (not save) or exc.code in {"invalid_account_config", "account_changed_during_check"}:
+            if candidate_identity == saved_identity:
+                _account_check_error = exc.code
+            raise
+        with _trading_lock:
+            if _account_identity(_account_values()) != saved_identity:
+                raise account_store.AccountCheckError("account_changed_during_check")
+            account_store.save_profile(values)
+            if _account_data is not None:
+                _account_data.invalidate()
+            if candidate_identity != saved_identity:
+                _clear_account_run_selection()
+            # Do not retain a readiness report for the prior credential set.
+            _account_report = None
+            _account_report_identity = candidate_identity
             _account_check_error = exc.code
-        raise
+            return {
+                "saved": True,
+                "wallet": values.get("POLYMARKET_WALLET_ADDRESS") or values.get("POLY_FUNDER", ""),
+                "read_only": True,
+                "account_check_state": "failed",
+                "account_check_ready": False,
+                "live_start_ready": False,
+                "settlement_credentials_ready": None,
+                "check_error": exc.code,
+                "error": str(exc),
+            }
     with _trading_lock:
         if _account_identity(_account_values()) != saved_identity:
             raise account_store.AccountCheckError("account_changed_during_check")
@@ -689,21 +738,7 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
                 # the previous credential set. Do not let default modern API
                 # queries select that run after an account switch or signer
                 # replacement; the SQLite projection remains untouched.
-                _trading_run_id = None
-                _trading_config_revision = None
-                _trading_account_id = None
-                _trading_request_id = None
-                _trading_log = None
-                _trading_console_log = None
-                _trading_started_at = None
-                _trading_exit_code = None
-                _trading_stop_result = None
-                _trading_engine = None
-                _projection_pending.clear()
-                _modern_market_cache.clear()
-                _modern_response_cache.clear()
-                _trade_cache.clear()
-                _persist_trading_state()
+                _clear_account_run_selection()
         # Readiness belongs to the exact credential set, never wallet alone.
         if save or candidate_identity == saved_identity:
             _account_report = report
