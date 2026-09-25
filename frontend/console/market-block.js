@@ -77,6 +77,8 @@
   const money = (value) => Number.isFinite(value) ? value >= 1e3 ? `$${(value / 1e3).toFixed(1)}K` : `$${value.toFixed(0)}` : "--";
   const selectedCoin = () => coins.find((coin) => coin.id === selectedId) || null;
   const escape = (value) => window.PolyPreview.format.escape(value);
+  const canInitializePool = (pool) => store.canInitializeMarketPool(pool);
+  const poolWritable = (pool) => (pool.status === "ready" && pool.stale !== true) || canInitializePool(pool);
 
   document.querySelectorAll("[data-preview-nav]").forEach((button) => button.addEventListener("click", () => {
     const target = button.dataset.previewTarget;
@@ -129,13 +131,14 @@
       const button = row.querySelector("[data-enable-coin]");
       const pool = store.getState().marketPool;
       const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
-      const waiting = poolSaving || Boolean(pool.pendingDesiredIds) || pool.status !== "ready" || pool.stale === true;
+      const canInitializeAsset = canInitializePool(pool) && coin.canEnable === true && completeIdentity;
+      const waiting = poolSaving || Boolean(pool.pendingDesiredIds) || !poolWritable(pool);
       const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
-      button.disabled = waiting || pool.stale === true || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      button.title = pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
+      button.disabled = waiting || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
+      button.title = canInitializeAsset ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
       button.classList.toggle("enabled", coin.enabled);
       button.setAttribute("aria-pressed", String(Boolean(coin.enabled)));
-      set("[data-enable-coin] span", waiting ? "等待确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
+      set("[data-enable-coin] span", canInitializeAsset && !coin.enabled ? "首次启用" : waiting ? "等待确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
     });
     if (!filtered.length) list.innerHTML = '<div class="market-empty"><span>⌕</span><strong>没有匹配的加密货币</strong><small>换一个币种名称或代码再试。</small></div>';
     text("[data-pool-caption]", query ? `匹配 ${filtered.length} 个币种` : `${coins.length} 个支持币种`);
@@ -187,19 +190,20 @@
     if (state) { state.className = `detail-state ${poolReady && (coin.enabled || coin.running) ? "enabled" : "disabled"}`; state.textContent = !poolReady ? (coin.enabled || coin.running ? "已确认 · 当前状态过期" : "运行池状态待确认") : !coin.canEnable && !coin.enabled ? "服务器未确认支持" : coin.running && !coin.enabled ? "本场继续 · 下场停用" : coin.running ? "已启用 · 运行中" : coin.enabled ? "已启用 · 待运行" : "未启用"; }
     const linkState = document.querySelector("[data-link-state]");
     if (linkState) { linkState.className = `link-state ${poolReady && (coin.enabled || coin.running) ? "linked" : "unlinked"}`; linkState.textContent = !poolReady ? "状态待确认" : coin.running && !coin.enabled ? "本场继续" : coin.running ? "运行中" : coin.enabled ? "下一场加入" : "未关联"; }
-    text("[data-link-copy]", !poolReady ? "运行池状态尚未确认；恢复连接后再显示启用和运行状态。" : coin.running && !coin.enabled ? "该币种本场继续执行，停用将在本场结束后生效。" : coin.running ? "该币种已在自动交易运行池中，当前场次正在执行。" : coin.enabled ? "该币种已启用，自动交易将在下一个可用五分钟场次加入。" : "启用后，该币种会加入自动交易的下一场候选运行池。");
-    text("[data-link-note]", !poolReady ? "没有服务器确认时不会修改运行池。" : coin.running ? "停用只影响后续场次，不撤销当前场次订单。" : "启用或停用只影响后续场次，不改变当前已运行订单。");
+    text("[data-link-copy]", canInitializePool(pool) ? "服务器确认运行池尚未初始化；选择此币种可创建首个运行池配置。" : !poolReady ? "运行池状态尚未确认；恢复连接后再显示启用和运行状态。" : coin.running && !coin.enabled ? "该币种本场继续执行，停用将在本场结束后生效。" : coin.running ? "该币种已在自动交易运行池中，当前场次正在执行。" : coin.enabled ? "该币种已启用，自动交易将在下一个可用五分钟场次加入。" : "启用后，该币种会加入自动交易的下一场候选运行池。");
+    text("[data-link-note]", canInitializePool(pool) ? "首次写入仍需已建立的服务器控制会话；未授权时会显示服务端错误。" : !poolReady ? "没有服务器确认时不会修改运行池。" : coin.running ? "停用只影响后续场次，不撤销当前场次订单。" : "启用或停用只影响后续场次，不改变当前已运行订单。");
     const action = document.querySelector("[data-detail-enable]");
     if (action) {
       const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
+      const canInitializeAsset = canInitializePool(pool) && coin.canEnable === true && completeIdentity;
       const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
-      action.disabled = poolSaving || pool.status !== "ready" || pool.stale === true || Boolean(pool.pendingDesiredIds) || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      action.title = pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : "";
-      action.textContent = poolSaving ? "提交中…" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个币种" : coin.enabled ? "停用（下一场生效）" : coin.canEnable && completeIdentity ? "启用此币种（替换待运行配置）" : "等待市场身份";
-      if (pool.stale === true) action.textContent = "等待运行池确认";
+      action.disabled = poolSaving || !poolWritable(pool) || Boolean(pool.pendingDesiredIds) || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
+      action.title = canInitializeAsset ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : "";
+      action.textContent = poolSaving ? "提交中…" : canInitializeAsset ? "首次启用此币种" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "停用（下一场生效）" : coin.canEnable && completeIdentity ? "启用此币种（替换待运行配置）" : "等待市场身份";
+      if (pool.stale === true && !canInitializePool(pool)) action.textContent = "等待运行池确认";
       action.classList.toggle("selected", coin.enabled);
     }
-    text("[data-selection-note]", !poolReady ? "运行池状态尚未确认；当前只显示市场目录和报价。" : !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
+      text("[data-selection-note]", canInitializeAsset ? "运行池尚未创建；可为一个服务端支持且具备完整场次身份的币种初始化。写入仍需服务器控制会话。" : !poolReady ? "运行池状态尚未确认；当前只显示市场目录和报价。" : !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
   const renderCatalogStatus = (resource) => {
     const status = resource?.status;
@@ -217,7 +221,8 @@
     const coin = coins.find((item) => item.id === id);
     if (!coin) return;
     const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
-    if (store.getState().marketPool.status !== "ready" || store.getState().marketPool.stale === true) {
+    const pool = store.getState().marketPool;
+    if (!poolWritable(pool)) {
       text("[data-selection-note]", "运行池状态不可用，恢复服务器连接后再修改。旧确认状态已保留。");
       return;
     }

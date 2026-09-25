@@ -6,6 +6,7 @@
 - [ ] bootstrap 返回版本、能力和固定 5m crypto 范围。
 - [ ] market DTO 有非空 assetId、marketId、roundId、YES/NO token 和有效期；旧 `/api/v1/markets` 缺 roundId 时只能用于目录/报价展示。
 - [ ] market-pool 支持 desired/current/nextRound/effectiveRoundId，停用不撤当前场次，PUT 不接受客户端覆盖 current/next。
+- [ ] 首次 GET 明确返回空池 `market_pool_unavailable` 时，且浏览器从未收到成功池快照，市场页才允许用一个完整且服务端支持的 `marketId + roundId` 资产发起首次 PUT；网络错误、已有池 stale 或非明确初始错误继续禁止写入。PUT 仍要求现有控制会话，认证失败如实显示。
 - [ ] runtime command 支持 requestId 幂等，响应和最终状态分开；前端只在当前市场有服务器确认的可停止状态时开放 stop，状态 stale/unavailable 或缺少市场身份时保留按钮禁用并等待刷新；`remoteOrdersState` 为 `unconfirmed` 时不能显示为撤单已完成。
 - [ ] `streams.markets`、`streams.runtime`、`streams.orders` 均配置真实 WebSocket 地址；未配置时使用独立 REST 轮询，页面标明轮询/待接入并保留快照，不生成实时假数据。
 - [ ] WS 帧有 sequence/sourceAt/expiresAt；行情和订单帧有 marketId/roundId，旧帧不会覆盖新帧，断线保留最后成功快照并显示 stale。

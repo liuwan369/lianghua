@@ -14,7 +14,7 @@
   const hasSnapshot = (slice, resource) => {
     if (!resource) return false;
     if (slice === "marketCatalog") return Array.isArray(resource.items) && resource.items.length > 0;
-    if (slice === "marketPool") return resource.receivedAt > 0;
+    if (slice === "marketPool") return resource.receivedAt > 0 && resource.initialUnavailable !== true;
     if (slice === "events") return resource.data != null || Array.isArray(resource.items) && resource.items.length > 0;
     if (slice === "runtime") return resource.status !== "unavailable" && (resource.asOf != null || resource.runId != null || Array.isArray(resource.markets) && resource.markets.length > 0);
     return resource.data != null;
@@ -27,6 +27,7 @@
       status: hasSnapshot(slice, current) ? "stale" : "unavailable",
       ...(retainedState ? { runtimeState: retainedState } : {}),
       stale: true,
+      ...(slice === "marketPool" ? { initialUnavailable: false } : {}),
       error: errorText(error),
       lastErrorAt: Date.now()
     });
@@ -84,6 +85,7 @@
             ...current,
             status: hasCurrent ? "stale" : "unavailable",
             stale: true,
+            initialUnavailable: false,
             error: poolPayload?.error || "运行池没有返回有效快照"
           });
         }
@@ -92,10 +94,25 @@
             ...current,
             status,
             stale: true,
+            initialUnavailable: false,
             error: raw?.error || "运行池快照已过期，保留上次成功数据"
           });
         }
-        return store.setSlice("marketPool", { ...next, status, stale: status !== "ready", receivedAt: Date.now(), pendingDesiredIds: status === "ready" ? null : current.pendingDesiredIds, error: raw?.error || null });
+        const initialUnavailable = !hasCurrent
+          && poolPayload?.available === false
+          && poolPayload?.error === "market_pool_unavailable"
+          && next.desiredIds.length === 0
+          && next.currentIds.length === 0
+          && next.nextRoundIds.length === 0;
+        return store.setSlice("marketPool", {
+          ...next,
+          status: initialUnavailable ? "unavailable" : status,
+          stale: status !== "ready",
+          receivedAt: status === "ready" ? Date.now() : current.receivedAt || 0,
+          initialUnavailable,
+          pendingDesiredIds: status === "ready" ? null : current.pendingDesiredIds,
+          error: raw?.error || poolPayload?.error || null
+        });
       });
     },
     async loadMarketSnapshot(marketId, context = {}) {
@@ -240,13 +257,17 @@
     async saveMarketPool(payload) {
       const next = vm.pool(payload, store.getState().marketCatalog.items);
       const current = store.getState().marketPool;
-      if (current.status !== "ready" || current.stale === true) throw new Error("运行池最近确认状态不可用，恢复服务器连接后再修改");
+      const initialUnavailable = store.canInitializeMarketPool(current);
+      if ((current.status !== "ready" || current.stale === true) && !initialUnavailable) throw new Error("运行池最近确认状态不可用，恢复服务器连接后再修改");
+      if (initialUnavailable && next.desiredIds.length !== 1) throw new Error("首次创建运行池必须选择一个币种");
+      const marketCatalog = store.getState().marketCatalog;
       const catalog = new Map(store.getState().marketCatalog.items.map((item) => [item.assetId, item]));
       for (const id of next.desiredIds) {
         const item = catalog.get(id);
         if (!item) throw new Error("资产 " + id + " 不在服务器市场目录中");
-        if (!current.desiredIds.includes(id) && !item.canEnable) throw new Error(item.symbol + " 当前由服务器标记为 unsupported/unavailable，未提交运行池");
+        if (!current.desiredIds.includes(id) && (!item.canEnable || !item.marketId || !item.roundId || item.cycle !== "5m" || initialUnavailable && (marketCatalog.status !== "ready" || marketCatalog.stale || item.stale))) throw new Error(item.symbol + " 缺少新鲜目录中的服务器运行资格或 marketId + roundId，未提交运行池");
       }
+      if (initialUnavailable) store.setSlice("marketPool", { ...current, status: "unavailable", stale: true, initialUnavailable: false, error: null });
       const raw = await core.api.marketPool({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ desiredIds: next.desiredIds, effectiveRoundId: next.effectiveRoundId }) });
       if (raw?.accepted === false || resourceStatus(raw) !== "ready") throw new Error(raw?.error || "运行池变更未获服务器确认");
       const hasPoolFields = raw && typeof raw === "object" && ["desiredIds", "enabledIds", "enabled_ids", "currentIds", "runningIds", "current_ids", "nextRoundIds", "next_round_ids"].some((key) => key in raw);
