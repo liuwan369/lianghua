@@ -48,6 +48,14 @@ def data_report():
                            "checked_at": stamp, "source": "test-source"}
     result["collateral"]["value"] = 14.5
     result["open_orders"]["items"] = [{"id": "old-order", "status": "OPEN"}]
+    # Public token identifiers are part of fee and transfer evidence. They
+    # must not be mistaken for credential echoes by contains_secret().
+    result["fees"] = {"available": True, "complete": False, "items": [
+        {"token": "0x" + "1" * 40, "amount": 0.01}
+    ], "checked_at": stamp, "source": "test-source"}
+    result["reconciliation"] = {"available": True, "complete": False, "items": [],
+                                 "transfers": [{"token": "0x" + "2" * 40, "amount": 1.0}],
+                                 "checked_at": stamp, "source": "test-source"}
     return result
 
 

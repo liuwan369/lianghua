@@ -170,7 +170,10 @@ def contains_secret(value, values: dict) -> bool:
     public = {"POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER", "POLY_SIGNATURE_TYPE", "RELAYER_API_KEY_ADDRESS"}
     secrets = [item.strip().strip("'\"").strip() for key, item in values.items()
                if key not in public and isinstance(item, str) and len(item.strip()) >= 8]
-    private_names = {"private_key", "privatekey", "owner_key", "session_private_key", "secret", "token",
+    # `token` is also a public chain-data field (for example, a token
+    # contract address in fee and transfer evidence).  Match credential
+    # fields explicitly while leaving public asset identifiers inspectable.
+    private_names = {"private_key", "privatekey", "owner_key", "session_private_key", "secret",
                      "api_key", "apikey", "passphrase", "authorization", "headers", "env"}
     environment_names = {*ACCOUNT_ENV_FIELDS, LEGACY_OWNER_FIELD, CONTROL_FIELD}
 
