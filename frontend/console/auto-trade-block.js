@@ -532,7 +532,9 @@
        if (!currentLifecycle()) return;
        var payload = payloadOf(frame);
        var hasIdentity = Boolean(payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id);
-       if (hasIdentity) renderRuntime(vm.runtime(payload));
+       var runtimeFrame = vm.runtime(payload);
+       if (hasIdentity) renderRuntime(runtimeFrame);
+       else if (runtimeFrame.processRunning !== null) renderRuntime(runtimeFrame, true);
        else text("[data-connection-status]", "运行流已连接 · 等待所选市场状态");
        scheduleRuntimeRefresh(0);
      }, function(state) {
@@ -604,8 +606,9 @@
     var context = currentContext();
     var asset = assetById(context.assetId);
     var runtimeState = selectedRuntime?.state || selectedRuntime?.status;
-    var runtimeActive = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused", "stopping"].includes(runtimeState);
-    var running = selectedRuntime && !selectedRuntime.stale && ["running", "starting", "paused"].includes(runtimeState);
+    var processRunning = selectedRuntime?.processRunning;
+    var runtimeActive = processRunning === true;
+    var running = processRunning === true;
     var catalog = store.getState().marketCatalog;
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
@@ -615,6 +618,9 @@
       var stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop" && commandCooldownContextKey === identityKey(context);
       var reason = commandPending || sameActionCooldown ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "stop" && !running && !stopAfterAcceptedStart) reason = "没有服务器确认的可停止运行";
+      if (!reason && action === "pause" && processRunning !== true) reason = "服务器未确认进程正在运行";
+      if (!reason && action === "start" && processRunning === true) reason = "服务器已确认进程正在运行";
+      if (!reason && action === "start" && processRunning !== false) reason = "服务器进程状态未知，暂不允许启动";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
       if (!reason && action === "start") reason = vm.strategyAssetStartReason(strategy, context.assetId);
       if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
@@ -631,7 +637,6 @@
         && asset?.cycle === "5m" && Boolean(asset?.marketId && asset?.roundId);
       if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || (!poolSelected && !initialPoolAsset))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
-      if (!reason && action === "pause" && !running) reason = "所选市场运行状态尚未确认";
       if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";
       button.disabled = Boolean(reason);
       button.title = reason;
@@ -641,17 +646,19 @@
     var revision = Number(resource?.revision);
     text("[data-strategy-revision]", Number.isInteger(revision) && revision > 0 ? `参数版本 REV-${revision}` : "参数版本待接入");
   };
-  var renderRuntime = function(runtime) {
-    var matching = vm.matchesIdentity(runtime, currentContext());
+  var renderRuntime = function(runtime, globalProcess = false) {
+    var matching = globalProcess ? runtime.processRunning !== null : vm.matchesIdentity(runtime, currentContext());
     var available = matching && runtime.status !== "unavailable" && !runtime.stale && !runtime.error;
     if (available) selectedRuntime = runtime;
-    else if (selectedRuntime) selectedRuntime = { ...selectedRuntime, stale: true };
+    else if (matching && (runtime.processRunning === true || runtime.processRunning === false)) selectedRuntime = { ...runtime, stale: true };
+    else if (selectedRuntime) selectedRuntime = { ...selectedRuntime, stale: true, processRunning: runtime?.processRunning ?? null };
     var state = available ? runtime.state || runtime.status : selectedRuntime ? `${selectedRuntime.state || selectedRuntime.status} · stale` : "所选市场状态 unavailable";
+    var processState = (available ? runtime : selectedRuntime)?.processRunning === true ? "进程运行中" : (available ? runtime : selectedRuntime)?.processRunning === false ? "进程已停止" : "进程状态未知";
     text("[data-strategy-status]", state);
     text("[data-live-status]", state);
     text("[data-status-age]", window.PolyPreview.format.time((available ? runtime : selectedRuntime)?.asOf));
-    text("[data-connection-status]", available ? "REST 独立刷新" : "运行状态待接入 · 行情独立刷新");
-    text("[data-sidebar-state]", available ? "所选市场已连接" : "所选市场状态待接入");
+    text("[data-connection-status]", available ? `REST 独立刷新 · ${processState}` : `运行投影过期 · ${processState} · 行情独立刷新`);
+    text("[data-sidebar-state]", available ? `所选市场已连接 · ${processState}` : `所选市场状态待接入 · ${processState}`);
     text("[data-sidebar-detail]", available ? "五分钟反转策略" : "保留本场最近成功数据");
     updateControls();
   };

@@ -168,7 +168,7 @@
         const connectionStatus = resourceStatus(raw);
         const current = store.getState().runtime;
         if (connectionStatus !== "ready" && hasSnapshot("runtime", current)) {
-          return store.setSlice("runtime", { ...current, status: connectionStatus, stale: true, connectionStatus, error: raw?.error || "运行状态已过期，保留最近成功数据" });
+          return store.setSlice("runtime", { ...current, status: connectionStatus, stale: true, connectionStatus, processRunning: model.processRunning, error: raw?.error || "运行状态已过期，保留最近成功数据" });
         }
         return store.setSlice("runtime", { ...model, runtimeState: model.status, connectionStatus, stale: connectionStatus !== "ready" });
       });

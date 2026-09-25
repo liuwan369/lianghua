@@ -114,9 +114,11 @@
   const runtime = (payload = {}) => {
     payload = payloadOf(payload) || {};
     const status = String(first(payload.status, payload.state, payload.running === true ? "running" : payload.running === false ? "stopped" : "unavailable"));
+    const processRunningValue = first(payload.processRunning, payload.process_running, payload.process?.running);
     return {
     status,
     state: status,
+    processRunning: typeof processRunningValue === "boolean" ? processRunningValue : null,
     source: String(first(payload.source, "backend")),
     stale: payload.stale === true,
     asOf: first(payload.asOf, payload.as_of, null),

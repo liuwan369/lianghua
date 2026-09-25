@@ -82,8 +82,10 @@
     const state = store.getState();
     const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId;
     const runtime = state.runtime || {};
+    if (runtime.processRunning === true) return "服务器已确认进程正在运行，请先停止或等待状态确认";
+    if (runtime.processRunning !== false) return "服务器进程状态未知，暂不允许启动";
     const runtimeState = runtime.runtimeState || runtime.status;
-    if (["running", "starting", "paused", "stopping"].includes(runtimeState)) return "服务器仍有运行状态，请先停止或等待状态确认";
+    if (!runtime.stale && ["running", "starting", "paused", "stopping"].includes(runtimeState)) return "服务器仍有运行状态，请先停止或等待状态确认";
     const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
     if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";
     if (item.canEnable !== true) return "服务器尚未确认该市场可加入运行池";
@@ -122,9 +124,9 @@
       start.title = reason;
     }
     if (stop) {
-      const stoppable = !runtime.stale && ["running", "starting", "paused"].includes(runtime.status);
+      const stoppable = runtime.processRunning === true;
       stop.disabled = !stoppable;
-      stop.title = stoppable ? "提交停止请求；最终状态以服务器确认为准" : "没有服务器确认的可停止运行";
+      stop.title = stoppable ? "提交停止请求；最终状态以服务器确认为准" : runtime.processRunning == null ? "服务器进程状态未知，暂不允许停止" : "没有服务器确认的可停止运行";
     }
   };
   document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", async () => {
@@ -268,7 +270,8 @@
   store.subscribe("events", renderEvents);
   store.subscribe("runtime", (runtime) => {
     const states = { running: "运行中", stopped: "已停止", paused: "已暂停新增", starting: "启动中", stopping: "停止中", failed: "运行失败" };
-    const label = runtime.status === "unavailable" ? "运行状态待接入" : runtime.stale ? `状态过期 · ${states[runtime.runtimeState] || runtime.runtimeState || "保留上次状态"}` : states[runtime.status] || runtime.status;
+    const processLabel = runtime.processRunning === true ? "进程运行中" : runtime.processRunning === false ? "进程已停止" : "进程状态未知";
+    const label = runtime.status === "unavailable" ? `运行状态待接入 · ${processLabel}` : runtime.stale ? `状态过期 · ${processLabel}` : `${states[runtime.runtimeState] || runtime.runtimeState || runtime.status} · ${processLabel}`;
     text("[data-overview-runtime]", label);
     updateOverviewControls();
   });

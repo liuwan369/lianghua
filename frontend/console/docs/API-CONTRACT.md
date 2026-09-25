@@ -46,7 +46,7 @@
 | `POST /api/trading/control` | 可用 | 启动、暂停、恢复、停止 | 使用 snake_case；`start` 的 `request_id` 必须是 UUID |
 | `/api/bootstrap` | 代码已实现 | 本轮未单独验证生产响应 | 由 Adapter 读取能力与版本；不可用时保留 `unavailable` |
 | `/api/markets` | 代码已实现 | 生产 HTTP 200；目录新鲜且有 `marketId + roundId`，但 `depthAvailable=false`、`strategyEligible=false` | 不因目录有报价就开放启动 |
-| `/api/runtime/*` | 代码已实现 | `market-pool` HTTP 200 但 `market_pool_unavailable`；status HTTP 200 但 `stopped/runtime_snapshot_stale`；控制命令本轮未调用 | 运行池和最终状态以服务器为准 |
+| `/api/runtime/*` | 代码已实现 | `market-pool` HTTP 200 但 `market_pool_unavailable`；status HTTP 200 但 `stopped/runtime_snapshot_stale`；控制命令本轮未调用 | 运行池和最终状态以服务器为准；runtime status 另提供不受 projection stale 影响的 `processRunning` 控制事实 |
 | `/api/rounds/*` | 代码已实现 | 本轮未验证真实持仓/订单响应 | 不声称真实订单、成交或结算已验证 |
 | `/api/account/snapshot`、`/api/diagnostics/health` | 代码已实现 | 两者生产 HTTP 200；诊断 `degraded/trading_runtime_unavailable`，账户快照 `available=false/stale=true/account_response_invalid` | `/api/account/status` 当前 `live_start_ready=false`、`account_check_ready=false` |
 | `/api/metrics/summary` | 代码已实现 | `range=today` 和 `range=run` 均生产 HTTP 200、`available=false`、`stale=true`、无运行记录 | 路由已部署；没有 `runId`，因此 legacy 按运行 ID 汇总无法调用 |
@@ -154,7 +154,7 @@ legacy 模式实际使用的 DTO 边界如下：
 | 加密货币五分钟目录 | GET | `/api/markets?asset=crypto&duration=5m` | 市场页约 1 秒一次；自动交易页约 10 秒一次重解析轮次；均为单请求完成后再排下一次，页面隐藏时暂停 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 自动交易页可见时约 1 秒一次；单请求完成后才排下一次，隐藏时暂停；`marketId + roundId` 变化时重新读取轮次数据；同一身份不重建 WebSocket |
 | 运行池 | GET/PUT | `/api/runtime/market-pool` | desired enabled + effectiveRoundId |
-| 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
+| 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复；响应应提供独立的 `processRunning` 布尔值 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载 |
 | 保存策略草稿 | POST | `/api/strategy/drafts` | 校验后保存，不自动启动 |
@@ -240,7 +240,7 @@ window.__POLY_PREVIEW_CONFIG__ = {
 }
 ```
 
-响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。控制台只在当前市场有服务器确认的可停止状态时开放停止；运行状态 stale/unavailable 或缺少市场身份时保持禁用并等待刷新，避免对未知运行发送控制命令。
+响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。`processRunning` 是服务器独立进程控制事实，不受运行投影 `stale` 影响：明确为 `true` 时前端禁止 start、允许 pause/stop；明确为 `false` 时才允许通过 start 门禁；缺失、null 或无法解析时显示“进程状态未知”并禁用可能重复启动的 start。行情 stale/过期门禁仍然独立生效，不能因 `processRunning` 明确而把行情显示为 ready。控制命令之后仍必须等待 API/status/event 的最终确认。
 
 ## 前端调用方式
 
