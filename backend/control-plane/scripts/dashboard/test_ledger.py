@@ -151,6 +151,12 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(current["orders"][0]["average_price"], .4)
         self.assertEqual(self.ledger.summary("run-a")["order_count"], 1)
 
+    def test_summary_counts_trade_without_order_projection(self):
+        self.write("run-a", [self.fill(order_id="fill-only-order", trade_id="fill-only-trade")])
+        summary = self.ledger.summary("run-a")
+        self.assertEqual(summary["fill_count"], 1)
+        self.assertEqual(summary["order_count"], 1)
+
     def test_account_order_count_deduplicates_restarted_order_identity(self):
         order = {"event": "order", "client_order_id": "client-reused", "order_id": "order-reused",
                  "status": "OPEN", "market_id": self.market_id, "round_id": self.round_id,

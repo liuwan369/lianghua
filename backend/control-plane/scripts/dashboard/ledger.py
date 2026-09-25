@@ -1558,8 +1558,7 @@ class Ledger:
                           estimated_fees=estimated_fees,
                           settled_pnl=run["known_settled_pnl"] if run["settled_markets"] and not run["missing_pnl"] else None,
                           pnl_semantics="engine_settlement_net_of_fees; not_wallet_reconciliation",
-                          order_count=(db.execute("SELECT COUNT(*) FROM order_details WHERE run_id=?", (run_id,)).fetchone()[0]
-                                       if self._has_table(db, "order_details") else None),
+                          order_count=self._run_order_count(db, run_id),
                           order_lifecycle_available=self._has_table(db, "order_details"),
                           error=run["source_error"])
             settled = db.execute("""SELECT
@@ -1599,6 +1598,29 @@ class Ledger:
                     "limit_reached": len(values) == LATENCY_LIMIT}
             result["latency"] = latency
             return result
+
+    def _run_order_count(self, db, run_id):
+        """Count unique economic orders, including fills whose order row was missed."""
+        identities = set()
+        if self._has_table(db, "order_details"):
+            rows = db.execute("SELECT asset_id,payload FROM order_details WHERE run_id=?", (run_id,))
+            for row in rows:
+                order = json.loads(row["payload"])
+                order_id = order.get("order_id") or order.get("orderId")
+                if order_id:
+                    identities.add((_asset_from(order) or row["asset_id"], order_id,
+                                    order.get("market_id") or order.get("marketId"),
+                                    order.get("round_id") or order.get("roundId")))
+        if self._has_table(db, "trade_details"):
+            rows = db.execute("SELECT asset_id,payload FROM trade_details WHERE run_id=?", (run_id,))
+            for row in rows:
+                trade = json.loads(row["payload"])
+                order_id = trade.get("order_id") or trade.get("orderId")
+                if order_id:
+                    identities.add((_asset_from(trade) or row["asset_id"], order_id,
+                                    trade.get("market_id") or trade.get("marketId"),
+                                    trade.get("round_id") or trade.get("roundId")))
+        return len(identities)
 
     def metrics_summary(self, run_id, *, range="today", asset_id=None, market_id=None, round_id=None):
         """Slow, read-only statistics scoped to one account and UTC calendar days."""
