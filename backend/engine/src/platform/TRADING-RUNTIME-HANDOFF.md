@@ -96,12 +96,6 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 - 服务器只读行情探针已验证 paired snapshot、五档 YES/NO、sequence/sourceAt 无回退和断线恢复；交易运行时仍需在集成分支部署后再做服务器验证。
 - BTC 行情探针验证了 paired snapshots、五档 YES/NO、sequence/sourceAt 无回退和断线恢复。
 
-行情模块的 Node 24 模块 mock 探针需要显式启用测试 mock：
-
-```text
-node --experimental-test-module-mocks --test src/live/feeds/polymarket.test.mjs
-```
-
 类型检查、构建和行情探针不能代替真实账户下的 CLOB 订单、User WebSocket 成交和链上结算验收。
 
 ## 尚未完成的真实验收
