@@ -10,7 +10,7 @@
 - [ ] runtime command 支持 requestId 幂等，响应和最终状态分开；前端只在当前市场有服务器确认的可停止状态时开放 stop，状态 stale/unavailable 或缺少市场身份时保留按钮禁用并等待刷新；`remoteOrdersState` 为 `unconfirmed` 时不能显示为撤单已完成。
 - [ ] `streams.markets`、`streams.runtime`、`streams.orders` 均配置真实 WebSocket 地址；未配置时使用独立 REST 轮询，页面标明轮询/待接入并保留快照，不生成实时假数据。
 - [ ] WS 帧有 sequence/sourceAt/expiresAt；行情和订单帧有 marketId/roundId，旧帧不会覆盖新帧，断线保留最后成功快照并显示 stale。
-- [ ] 启动按钮只有在当前市场目录/盘口快照具备完整身份、有效期、递增 sequence 和可用 YES/NO 深度时开放；未收到新鲜盘口时保持禁用。
+- [ ] 启动按钮只有在当前市场目录/盘口快照具备 `marketId + roundId`、有效期、递增 `sequence`、新鲜双边 BBO，并且策略、账户和运行池门禁均由服务器确认时开放；五档 YES/NO 深度缺失只影响深度展示（显示“深度暂不可用”），stale、过期或身份不匹配仍保持禁用。
 - [ ] 多币种每个 marketId 独立显示盘口、持仓、订单和阶段。
 - [ ] 策略保存有服务端校验、完整 `maxStages`、`draftId`、`expectedRevision` 和已发布 revision。
 - [ ] 策略草稿保存与策略激活分离；激活请求带 `strategyId`、`draftId`、`expectedRevision`，服务端确认正 revision 后才允许启动；不把草稿提示成已生效。
@@ -38,7 +38,7 @@
 ## 最近一次真实只读联调
 
 - 通过公网 Basic Auth 会话访问 `overview.html`、`market.html`、`auto-trade.html`、`strategy.html`、`settings.html`，五个入口均返回 HTTP 200。未认证访问返回 HTTP 401，符合部署保护；未在未认证页面上推断 DOM 或交易结果。
-- `/api/markets?asset=crypto&duration=5m` 返回 HTTP 200；当前 `collector_online=true`、`stale=false`，BTC/ETH/SOL 均有有效 `marketId`、`roundId`，连续请求中的 `sequence`、`sourceAt`、`expiresAt` 持续更新。生产当前 `depthAvailable=false`、`strategyEligible=false`，因此启动按钮保持禁用。
+- `/api/markets?asset=crypto&duration=5m` 返回 HTTP 200；当前 `collector_online=true`、`stale=false`，BTC/ETH/SOL 均有有效 `marketId`、`roundId`，连续请求中的 `sequence`、`sourceAt`、`expiresAt` 持续更新。生产当前 `depthAvailable=false`、`strategyEligible=false`；新鲜双边 BBO 可独立更新报价，五档区域显示“深度暂不可用”，启动仍需通过策略、账户、运行池和服务器运行时门禁。
 - `/api/runtime/market-pool` 返回 HTTP 200，但 `available=false`、`stale=true`、`error=market_pool_unavailable`；`/api/runtime/status` 返回 `status=stopped`、`stale=true`、`error=runtime_snapshot_stale`。
 - `/api/account/status` 可读取服务器配置状态，但当前 `live_start_ready=false`、`account_check_ready=false`；账户保存/检查另有已观测的 `account_response_invalid` 状态。前端不会把账户配置完成解释为可启动交易。
 - `/api/diagnostics/health` 当前为 `degraded`、`trading_runtime_unavailable`；`/api/metrics/summary?range=today` 生产返回 HTTP 404。生产 `streams=false`，因此页面使用 REST 轮询并保留最近成功快照，不创建 WebSocket。
