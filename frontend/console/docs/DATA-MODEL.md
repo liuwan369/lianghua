@@ -26,6 +26,12 @@ desired 是用户选择，current/next 是服务器确认结果。单实例运�
 
 `{ marketId, roundId, yes: { bids, asks }, no: { bids, asks }, sequence, sourceAt, expiresAt, stale }`
 
+### RuntimeViewModel
+
+`{ assetId, marketId, roundId, status, state, processRunning, runId, asOf, stale, error }`
+
+`processRunning: true | false | null` 是服务器独立控制事实，表示交易进程是否明确运行，不受运行投影 `stale` 影响。前端只有收到 `true` 才开放暂停/停止，只有收到明确 `false` 才允许启动；缺失、`null` 或无法解析时显示进程状态未知并禁止启动。运行投影、行情新鲜度和命令最终确认仍分别处理。
+
 五档是独立的高频快照；不能用定时器或演示数值生成。行情帧只允许更新相同 `marketId + roundId` 的盘口节点。
 
 ### RoundPositionViewModel
