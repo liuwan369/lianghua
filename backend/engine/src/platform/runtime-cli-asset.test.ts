@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { parsePlatformOptions, validateMarkets } from "../cli/platform.js";
+import { assertInitialMarketIdentity, parsePlatformOptions, validateMarkets } from "../cli/platform.js";
 import type { MarketInfo } from "./contracts.js";
 
 const eth: MarketInfo = {
@@ -15,6 +15,17 @@ const options = parsePlatformOptions(["--live", "--asset", "ETH"]);
 assert.equal(options?.assetId, "eth");
 assert.equal(options?.referenceFeed, false);
 assert.throws(() => parsePlatformOptions(["--live", "--asset", "xrp"]), /unsupported --asset xrp/);
+const selected = parsePlatformOptions(["--live", "--asset", "eth", "--expected-market-id", eth.id,
+  "--expected-round-id", eth.roundId]);
+assert.deepEqual(selected?.expectedMarketIdentity, { marketId: eth.id, roundId: eth.roundId });
+assert.throws(() => parsePlatformOptions(["--live", "--expected-market-id", eth.id]), /must be provided together/);
+assert.throws(() => parsePlatformOptions(["--live", "--expected-market-id", eth.id,
+  "--expected-round-id", "1800000001"]), /aligned five-minute round id/);
+assertInitialMarketIdentity(eth, selected?.expectedMarketIdentity);
+assert.throws(() => assertInitialMarketIdentity({ ...eth, id: "other-market" }, selected?.expectedMarketIdentity),
+  /does not match requested marketId and roundId/);
+assert.throws(() => assertInitialMarketIdentity({ ...eth, roundId: "1800000300" }, selected?.expectedMarketIdentity),
+  /does not match requested marketId and roundId/);
 assert.equal(validateMarkets([eth], "eth")[0]?.assetId, "eth");
 assert.throws(() => validateMarkets([eth], "btc"), /BTC five-minute market/);
 
