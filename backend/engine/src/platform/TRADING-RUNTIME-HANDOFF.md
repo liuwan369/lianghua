@@ -92,22 +92,17 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 
 - `npm run typecheck`
 - `npm run build`
-- `snapshot-gate.test.ts`
-- `runtime-snapshot.test.ts`
-- `runtime-lifecycle.test.ts`
-- `runtime-order-identity.test.ts`、`runtime-cli-limits.test.ts`、`runtime-feed-integration.test.mjs`
 - 真实 feed 函数带默认第五参数的启动接缝、无顶层 underlying asset 的 paired snapshot、断线后旧帧拒绝和可选 L2 深度过期门控。
 - 服务器只读行情探针已验证 paired snapshot、五档 YES/NO、sequence/sourceAt 无回退和断线恢复；交易运行时仍需在集成分支部署后再做服务器验证。
 - BTC 行情探针验证了 paired snapshots、五档 YES/NO、sequence/sourceAt 无回退和断线恢复。
 
-Node 24 的模块 mock 测试需要显式启用测试 mock：
+行情模块的 Node 24 模块 mock 探针需要显式启用测试 mock：
 
 ```text
 node --experimental-test-module-mocks --test src/live/feeds/polymarket.test.mjs
-node --experimental-test-module-mocks --test src/platform/runtime-feed-integration.test.mjs
 ```
 
-这些测试证明代码契约和门控逻辑，不能代替真实账户下的 CLOB 订单、User WebSocket 成交和链上结算验收。
+类型检查、构建和行情探针不能代替真实账户下的 CLOB 订单、User WebSocket 成交和链上结算验收。
 
 ## 尚未完成的真实验收
 
