@@ -6,7 +6,7 @@ import { createPublicClient, createWalletClient, decodeEventLog, encodeFunctionD
 import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { loadAccountConfig } from "../live/account.js";
-import { checkSettlementCredentials, inspectWalletAddress } from "../live/clob/wallet.js";
+import { checkSettlementCredentials, envWalletOverrides, inspectWalletAddress, resolveWallet } from "../live/clob/wallet.js";
 import { CTF, PUSD } from "../live/contracts.js";
 import type { PlatformAdapters, SettlementRequest, SettlementResult } from "./contracts.js";
 import { COLLATERAL_ADAPTER, redemptionPlan, type RedemptionTransaction } from "./settlement.js";
@@ -326,8 +326,16 @@ async function createBackend(): Promise<LiveSettlementBackend> {
   const config = loadAccountConfig();
   if (!config.ownerPrivateKey || config.errors.length) throw new UnsupportedSettlement("settlement_owner_credentials_missing_or_invalid");
   const account = privateKeyToAccount(config.ownerPrivateKey);
-  const wallet = config.depositWallet ?? account.address;
   const rpc = process.env.POLYGON_RPC?.trim() || "https://polygon-bor-rpc.publicnode.com";
+  const walletOverrides = envWalletOverrides();
+  // Keep settlement bound to the same funder as CLOB orders. With no explicit
+  // POLYMARKET_WALLET_ADDRESS/POLY_FUNDER, resolveWallet uses the Gamma
+  // profile proxy wallet and falls back to the signer EOA exactly as CLOB does.
+  const wallet = (await resolveWallet(account.address, {
+    funderOverride: walletOverrides.funder ?? config.depositWallet,
+    sigTypeOverride: walletOverrides.sigType,
+    rpcUrl: rpc,
+  })).funder;
   const inspection = await inspectWalletAddress(wallet, rpc);
   const deposit = inspection.walletKind === "DEPOSIT_WALLET";
   if (inspection.walletKind === "CONTRACT_UNKNOWN") throw new UnsupportedSettlement("settlement_wallet_type_requires_safe_or_proxy_sender");
