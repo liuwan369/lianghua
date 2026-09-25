@@ -128,7 +128,12 @@ function applyMessage(
   for (const [eventOrder, raw] of events.entries()) {
     if (!raw || typeof raw !== "object") continue;
     const e = raw as Record<string, unknown>;
-    const eventType = String(e.event_type ?? "").toLowerCase();
+    // The market websocket sends its initial token snapshot as
+    // `{market, asset_id, timestamp, bids, asks}` without `event_type`.
+    // Treat a complete level-2 frame as a book so later price_change
+    // messages can pass the initialized-book gate.
+    const hasBookLevels = Array.isArray(e.bids ?? e.buys) && Array.isArray(e.asks ?? e.sells);
+    const eventType = String(e.event_type ?? (hasBookLevels ? "book" : "")).toLowerCase();
     if (eventType !== "book" && eventType !== "price_change") continue;
     const eventMs = exchangeTimeMs(e);
     if (eventMs == null) continue;

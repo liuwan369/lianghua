@@ -79,6 +79,22 @@ test("nested price_change uses the frame timestamp and last valid top", async t 
   assert.equal(h.books().at(-1).upExchangeTsUnix, (time + 1) / 1000);
 });
 
+test("eventless token snapshot initializes depth for later price changes", async t => {
+  const h = await harness(t), time = stamp();
+  const eventlessBook = (asset, bid, ask) => ({
+    market: "market", asset_id: asset, timestamp: String(time),
+    bids: [{ price: String(bid), size: "10" }],
+    asks: [{ price: String(ask), size: "12" }],
+  });
+  h.socket.frame([eventlessBook("yes", 0.4, 0.6), eventlessBook("no", 0.4, 0.6)]);
+  assert.deepEqual(h.books().at(-1).YES.bids, [[0.4, 10]]);
+  assert.deepEqual(h.books().at(-1).NO.asks, [[0.6, 12]]);
+  h.socket.frame({ event_type: "price_change", timestamp: String(time + 1), price_changes: [
+    { asset_id: "yes", price: "0.41", size: "10", side: "BUY" },
+  ] });
+  assert.deepEqual(h.books().at(-1).YES.bids, [[0.41, 10], [0.4, 10]]);
+});
+
 test("multiple feeds emit scoped health and snapshots without leaking other markets", async t => {
   const h = await harness(t), time = stamp();
   const otherEvents = [];
