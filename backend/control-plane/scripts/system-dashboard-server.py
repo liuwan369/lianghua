@@ -1986,7 +1986,41 @@ def make_handler(root: Path):
             if path == "/api/metrics/summary":
                 run_id = _api_run_id()
                 if not run_id:
-                    raise KeyError("run")
+                    # No run is a valid unavailable state. Keep the response
+                    # successful so clients can render the last-known/empty
+                    # state without treating this as a missing route.
+                    self._send_json(json.dumps({
+                        "schemaVersion": 1,
+                        "available": False,
+                        "runId": None,
+                        "range": query.get("range", ["today"])[0],
+                        "from": None,
+                        "to": None,
+                        "asOf": None,
+                        "fill_count": None,
+                        "fill_notional": None,
+                        "known_fill_notional": None,
+                        "fees": None,
+                        "known_fees": None,
+                        "estimated_fees": None,
+                        "missing_fee_count": None,
+                        "settled_markets": None,
+                        "settled_pnl": None,
+                        "pnl": None,
+                        "settled_wins": None,
+                        "settled_losses": None,
+                        "settled_draws": None,
+                        "settled_pnl_pending": None,
+                        "win_rate": None,
+                        "pending_settlements": None,
+                        "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
+                        "completeness": "unavailable",
+                        "lag_bytes": None,
+                        "source": "ledger",
+                        "stale": True,
+                        "error": "当前没有运行记录",
+                    }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    return
                 asset_id = (query.get("assetId") or [None])[0]
                 market_id = (query.get("marketId") or [None])[0]
                 round_id_filter = (query.get("roundId") or [None])[0]
