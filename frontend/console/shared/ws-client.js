@@ -36,9 +36,10 @@
         try {
           const frame = JSON.parse(event.data);
           const payload = frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame;
-          const marketId = payload?.marketId ?? payload?.market_id ?? frame?.marketId ?? frame?.market_id ?? "";
-          const roundId = payload?.roundId ?? payload?.round_id ?? frame?.roundId ?? frame?.round_id ?? "";
-          const sequenceValue = payload?.sequence ?? frame?.sequence;
+          const snapshot = payload?.snapshot && typeof payload.snapshot === "object" ? payload.snapshot : null;
+          const marketId = snapshot?.marketId ?? snapshot?.market_id ?? payload?.marketId ?? payload?.market_id ?? frame?.marketId ?? frame?.market_id ?? "";
+          const roundId = snapshot?.roundId ?? snapshot?.round_id ?? payload?.roundId ?? payload?.round_id ?? frame?.roundId ?? frame?.round_id ?? "";
+          const sequenceValue = snapshot?.sequence ?? payload?.sequence ?? frame?.sequence;
           const sequence = Number(sequenceValue);
           const sequenceValid = sequenceValue !== null && sequenceValue !== undefined && sequenceValue !== "" && typeof sequenceValue !== "boolean" && Number.isFinite(sequence) && sequence >= 0;
           const watermarkKey = `${String(marketId)}\u0000${String(roundId)}`;
