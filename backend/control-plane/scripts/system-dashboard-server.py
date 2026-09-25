@@ -1984,9 +1984,46 @@ def make_handler(root: Path):
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/metrics/summary":
+                requested_range = query.get("range", ["today"])[0]
+                if requested_range not in {"run", "today", "all"}:
+                    raise ValueError("invalid metrics range")
                 run_id = _api_run_id()
                 if not run_id:
-                    raise KeyError("run")
+                    # No run is a valid unavailable state. Keep the response
+                    # successful so clients can render the last-known/empty
+                    # state without treating this as a missing route.
+                    self._send_json(json.dumps({
+                        "schemaVersion": 1,
+                        "available": False,
+                        "runId": None,
+                        "range": requested_range,
+                        "from": None,
+                        "to": None,
+                        "asOf": None,
+                        "fill_count": None,
+                        "fill_notional": None,
+                        "known_fill_notional": None,
+                        "fees": None,
+                        "known_fees": None,
+                        "estimated_fees": None,
+                        "missing_fee_count": None,
+                        "settled_markets": None,
+                        "settled_pnl": None,
+                        "pnl": None,
+                        "settled_wins": None,
+                        "settled_losses": None,
+                        "settled_draws": None,
+                        "settled_pnl_pending": None,
+                        "win_rate": None,
+                        "pending_settlements": None,
+                        "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
+                        "completeness": "unavailable",
+                        "lag_bytes": None,
+                        "source": "ledger",
+                        "stale": True,
+                        "error": "当前没有运行记录",
+                    }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    return
                 asset_id = (query.get("assetId") or [None])[0]
                 market_id = (query.get("marketId") or [None])[0]
                 round_id_filter = (query.get("roundId") or [None])[0]
@@ -2158,15 +2195,24 @@ def make_handler(root: Path):
                              as_of=float(stamp) if stamp else None,
                              snapshot_event_id=int(cutoff) if cutoff else None)}
                 elif path in {"/api/v1/runs", "/api/v1/events", "/api/v1/summary"}:
-                    ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
                     query = parse_qs(urlsplit(self.path).query)
                     if path.endswith("/runs"):
-                        before_id = query.get("before_id", [None])[0]
-                        limit = int(query.get("limit", ["50"])[0])
-                        value = {"schemaVersion": 1, **ledger.list_runs_page(
-                            before_id=int(before_id) if before_id else None, limit=limit,
-                            account_id=_current_account_id())}
+                        account_id = _current_account_id()
+                        if not account_id:
+                            # A missing account identity must never turn into
+                            # an unscoped historical listing.
+                            value = {"schemaVersion": 1, "runs": [], "next_before_id": None,
+                                     "available": False, "stale": True,
+                                     "error": "account_not_configured"}
+                        else:
+                            ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+                            before_id = query.get("before_id", [None])[0]
+                            limit = int(query.get("limit", ["50"])[0])
+                            value = {"schemaVersion": 1, **ledger.list_runs_page(
+                                before_id=int(before_id) if before_id else None, limit=limit,
+                                account_id=account_id)}
                     else:
+                        ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
                         run_id = query.get("run_id", [None])[0]
                         if not run_id or len(run_id) > 200:
                             raise ValueError("请指定运行编号")

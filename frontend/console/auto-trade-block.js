@@ -599,9 +599,12 @@
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
       var strategy = store.getState().strategy;
+      var strategyAssetId = strategy?.data?.assetId ?? strategy?.data?.asset_id ?? strategy?.data?.config?.assetId ?? strategy?.data?.config?.asset_id ?? strategy?.config?.assetId ?? strategy?.config?.asset_id ?? null;
       var reason = commandPending ? "控制指令处理中" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "stop" && !running) reason = "没有服务器确认的可停止运行";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
+      if (!reason && action === "start" && !strategyAssetId) reason = "激活策略尚未确认目标币种";
+      if (!reason && action === "start" && String(strategyAssetId) !== String(context.assetId)) reason = "激活策略与所选市场不一致，请切换市场或重新激活策略";
       if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
       if (!reason && action === "start") {
         var account = accountStatus?.data || {};
@@ -610,7 +613,7 @@
             : account.execution_credentials_ready === true && account.account_check_ready === true;
         if (accountStatus.status !== "ready" || liveReady !== true) reason = "服务器尚未确认账户可启动交易";
       }
-      if (!reason && action === "start" && (!asset?.canEnable || asset?.strategyEligible !== true || asset?.stale === true || catalog.stale || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : asset?.strategyEligible !== true ? "服务器尚未确认该市场符合策略条件" : "请先在市场页启用所选币种并等待服务器确认";
+      if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && running) reason = "所选市场正在运行";
       if (!reason && action === "pause" && !running) reason = "所选市场运行状态尚未确认";
       if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";

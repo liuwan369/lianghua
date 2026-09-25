@@ -12,6 +12,22 @@
     if (raw.supported === true || raw.canEnable === true || raw.can_enable === true || eligibility === true || ["supported", "eligible", "available"].includes(String(eligibility || "").toLowerCase())) return true;
     return false;
   };
+  const orderBookFrom = (raw) => {
+    const existing = raw.orderBook || raw.orderbook || raw.book;
+    if (existing) return existing;
+    const levels = (side, kind) => first(
+      raw[`${side}${kind[0].toUpperCase()}${kind.slice(1)}Levels`],
+      raw[`${side}_${kind}_levels`],
+      raw[`${side}${kind[0].toUpperCase()}${kind.slice(1)}_levels`]
+    );
+    const yes = { bids: levels("yes", "bid"), asks: levels("yes", "ask") };
+    const no = { bids: levels("no", "bid"), asks: levels("no", "ask") };
+    const up = { bids: first(raw.upBidLevels, raw.up_bid_levels), asks: first(raw.upAskLevels, raw.up_ask_levels) };
+    const down = { bids: first(raw.downBidLevels, raw.down_bid_levels), asks: first(raw.downAskLevels, raw.down_ask_levels) };
+    const hasLevels = (side) => Array.isArray(side.bids) || Array.isArray(side.asks);
+    if (!hasLevels(yes) && !hasLevels(no) && !hasLevels(up) && !hasLevels(down)) return null;
+    return { yes: hasLevels(yes) ? yes : up, no: hasLevels(no) ? no : down };
+  };
   const market = (raw = {}, index = 0) => {
     const assetId = assetIdFrom(raw, index);
     const symbol = symbolFrom(raw, assetId);
@@ -43,7 +59,7 @@
       sequence: finite(raw.sequence),
       sourceAt: first(raw.sourceAt, raw.source_at, null),
       expiresAt: first(raw.expiresAt, raw.expires_at, null),
-      orderBook: raw.orderBook || raw.orderbook || raw.book || null,
+      orderBook: orderBookFrom(raw),
       depthAvailable: raw.depthAvailable === true,
       strategyEligible: raw.strategyEligible === true,
       depthUnavailable: raw.depthUnavailable === true || raw.depth_unavailable === true,
@@ -58,11 +74,14 @@
     payload = payloadOf(payload) || {};
     const list = Array.isArray(payload) ? payload : first(payload.items, payload.markets, payload.current_markets, []);
     const items = list.map((item, index) => market(item, index)).filter((item) => item.assetId.length > 0);
+    const partial = payload.partial === true || payload.partial_data === true
+      || payload.stale === true && items.some((item) => item.stale !== true) && items.some((item) => item.stale === true);
     return {
       items,
       source: String(first(payload.source, payload.node_label, "backend")),
       asOf: first(payload.asOf, payload.as_of, null),
       stale: payload.stale === true || payload.collector_online === false,
+      partial,
       error: payload.error || payload.error_code || null
     };
   };

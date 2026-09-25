@@ -435,6 +435,26 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["asOf"])
         self.assertTrue(body["stale"])
 
+    def test_metrics_summary_without_run_is_unavailable_not_not_found(self):
+        with patch.object(server_module, "_api_run_id", return_value=None):
+            code, body = self.request("/api/metrics/summary?range=today")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["available"])
+        self.assertTrue(body["stale"])
+        self.assertEqual(body["completeness"], "unavailable")
+        self.assertEqual(body["error"], "当前没有运行记录")
+        self.assertIsNone(body["asOf"])
+        self.assertIsNone(body["pnl"])
+        self.assertIsNone(body["win_rate"])
+        self.assertIsNone(body["fill_count"])
+
+    def test_metrics_summary_without_run_rejects_invalid_range(self):
+        with patch.object(server_module, "_api_run_id", return_value=None):
+            code, body = self.request("/api/metrics/summary?range=bogus")
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], "invalid_query")
+        self.assertTrue(body["stale"])
+
     def test_read_endpoints_do_not_probe_or_ingest(self):
         with patch.object(server_module, "_api_run_id", return_value="run"), \
                 patch.object(server_module, "_api_ledger") as ledger, \
@@ -454,6 +474,16 @@ class ApiTests(unittest.TestCase):
             code, body = self.request("/api/v1/summary?run_id=run")
         self.assertEqual(code, 200)
         self.assertEqual(body["summary"]["settled_pnl"], 2.)
+
+    def test_legacy_runs_without_account_identity_are_unavailable(self):
+        with patch.object(server_module, "_current_account_id", return_value=None), \
+                patch.object(server_module, "Ledger", side_effect=AssertionError("unscoped ledger read")):
+            code, body = self.request("/api/v1/runs")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["available"])
+        self.assertTrue(body["stale"])
+        self.assertEqual(body["runs"], [])
+        self.assertEqual(body["error"], "account_not_configured")
 
     def test_settlement_credentials_are_displayed_as_runtime_tristate(self):
         wallet = "0x" + "a" * 40

@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -222,6 +223,65 @@ class LedgerRegressionTests(unittest.TestCase):
         page = self.ledger.settlements_page("run-a")["settlements"]
         self.assertEqual(page[0]["market_id"], self.market_id)
         self.assertEqual(page[0]["round_id"], self.round_id)
+
+    def test_multi_asset_round_migration_uses_namespaced_alias_key(self):
+        path = self.root / "legacy.sqlite"
+        ledger = Ledger(path)
+        journal = self.root / "legacy.jsonl"
+        ledger.register_run("run-eth", "live", "account-a", journal)
+        market_id = "0x" + "c" * 64
+        slug = "eth-updown-5m-1800000000"
+        round_id = "1800000000"
+        runtime = {"markets": [{"id": market_id, "name": slug, "assetId": "eth", "roundId": round_id}]}
+        db = sqlite3.connect(path)
+        try:
+            db.execute("INSERT INTO platform_runtime(run_id,source_at,payload) VALUES(?,?,?)",
+                       ("run-eth", self.now, json.dumps(runtime)))
+            db.execute("INSERT INTO markets(run_id,market,asset_id) VALUES(?,?,?)",
+                       ("run-eth", slug, "btc"))
+            db.execute("INSERT INTO market_details(run_id,market,asset_id,last_time) VALUES(?,?,?,?)",
+                       ("run-eth", slug, "btc", self.now))
+            settlement_payload = {"event": "settlement", "market_slug": slug,
+                                  "market_id": market_id, "state": "confirmed",
+                                  "payout_verified": True, "transaction_id": "0x" + "d" * 64,
+                                  "credited_usd": 1, "expected_payout_usd": 1, "time": self.now}
+            db.execute("INSERT INTO events(run_id,byte_offset,kind,asset_id,payload) VALUES(?,?,?,?,?)",
+                       ("run-eth", 10, "settlement", "btc", json.dumps(settlement_payload)))
+            db.execute("INSERT INTO settlement_details(run_id,market,market_id,asset_id,source_at,verified,payload) "
+                       "VALUES(?,?,?,?,?,?,?)",
+                       ("run-eth", slug, market_id, "btc", self.now, 1, json.dumps(settlement_payload)))
+            # Simulate a database where v1 was recorded before the
+            # multi-asset repair was shipped. v1 must remain present while v2
+            # reruns the repair exactly once.
+            db.execute("DELETE FROM projection_migrations WHERE name='round_identity_v2'")
+            db.commit()
+        finally:
+            db.close()
+        Ledger(path)
+        db = sqlite3.connect(path)
+        try:
+            market = db.execute("SELECT market,asset_id,round_id FROM markets WHERE run_id=? AND asset_id=?",
+                                ("run-eth", "eth")).fetchone()
+            detail = db.execute("SELECT market,asset_id,round_id FROM market_details WHERE run_id=? AND asset_id=?",
+                                ("run-eth", "eth")).fetchone()
+        finally:
+            db.close()
+        self.assertEqual(market, ("eth::" + slug, "eth", round_id))
+        self.assertEqual(detail, ("eth::" + slug, "eth", round_id))
+        db = sqlite3.connect(path)
+        try:
+            markers = {row[0] for row in db.execute("SELECT name FROM projection_migrations")}
+        finally:
+            db.close()
+        self.assertIn("round_identity_v1", markers)
+        self.assertIn("round_identity_v2", markers)
+        db = sqlite3.connect(path)
+        try:
+            settlements = db.execute("SELECT market,asset_id,round_id FROM settlement_details WHERE run_id=?",
+                                     ("run-eth",)).fetchall()
+        finally:
+            db.close()
+        self.assertEqual(settlements, [("eth::" + slug, "eth", round_id)])
 
     def test_unknown_round_identity_is_not_guessed(self):
         fill = self.fill(market_slug="unknown-old-slug", trade_id="unknown-round")
