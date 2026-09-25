@@ -90,6 +90,15 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertEqual(summary["settled_markets"], 0)
         self.assertEqual(summary["settled_pnl_pending"], 0)
 
+    def test_legacy_resolved_event_never_counts_as_final_settlement(self):
+        self.write("run-a", [self.fill(), {"event": "resolved", "market_slug": self.slug,
+                                            "pnl": 99, "winner": "UP"}])
+        summary = self.ledger.summary("run-a")
+        self.assertEqual(summary["settled_markets"], 0)
+        self.assertIsNone(summary["settled_pnl"])
+        self.assertEqual(self.ledger.events("run-a", kinds={"resolved"})["events"][0]["pnl"], None)
+        self.assertEqual(self.ledger.runtime_stats("run-a")["market_summaries"][0]["status"], "待结算")
+
     def test_late_runtime_snapshot_completes_earlier_confirmed_settlement(self):
         self.write("run-a", [self.fill(), self.settlement()])
         self.assertIsNone(self.ledger.summary("run-a")["settled_pnl"])
@@ -406,6 +415,13 @@ class LedgerRegressionTests(unittest.TestCase):
         self.write("run-b", [self.fill(trade_id="same-trade", order_id="same-order")])
         summary = self.ledger.summary("run-a", range="all")
         self.assertEqual(summary["run_count"], 2)
+        self.assertEqual(summary["fill_count"], 1)
+        self.assertAlmostEqual(summary["fill_notional"], 4.0)
+
+    def test_late_market_identity_does_not_duplicate_cross_run_fill(self):
+        self.write("run-a", [self.fill(market_id=None, round_id=None)])
+        self.write("run-b", [self.fill(market_id=self.market_id, round_id=self.round_id)])
+        summary = self.ledger.summary("run-a", range="all")
         self.assertEqual(summary["fill_count"], 1)
         self.assertAlmostEqual(summary["fill_notional"], 4.0)
 

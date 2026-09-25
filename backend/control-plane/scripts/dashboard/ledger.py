@@ -432,8 +432,9 @@ def _projection(record):
         "local_http", "user_ws", "account_read") else None
     price, shares = result["price"], result["shares"]
     result["amount"] = _number(price * shares) if price is not None and shares is not None and price >= 0 and shares >= 0 else None
-    # Stopped/unresolved snapshots are never settlement PnL.
-    if record["event"] != "resolved":
+    # Only the platform settlement lifecycle can produce final PnL. Legacy
+    # resolved events remain useful history, but never become a cash result.
+    if record["event"] != "settlement":
         result["pnl"] = None
     return result
 
@@ -1130,16 +1131,14 @@ class Ledger:
                 db.execute("UPDATE markets SET fills=fills+1 WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
                 db.execute("UPDATE market_details SET turnover=turnover+? WHERE run_id=? AND asset_id=? AND market=?", (event["amount"] or 0, run_id, asset_id, market_key))
         elif kind == "resolved" and market:
-            # A resolved market with no observed fills is not a trading settlement.
+            # Legacy market resolution is not proof of a payout, receipt, or
+            # reconciled cost basis. Keep it as pending history until a
+            # platform_settlement event supplies the required evidence.
             row = db.execute("SELECT fills,settled FROM markets WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key)).fetchone()
-            if row["fills"] and not row["settled"]:
-                db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
-                db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND asset_id=? AND market=?", (event["pnl"], run_id, asset_id, market_key))
-                db.execute("""UPDATE runs SET settled_markets=settled_markets+1,
-                    known_settled_pnl=known_settled_pnl+?,missing_pnl=missing_pnl+? WHERE run_id=?""",
-                           (event["pnl"] or 0, int(event["pnl"] is None), run_id))
-            elif not row["fills"]:
+            if not row["fills"]:
                 db.execute("UPDATE market_details SET status='无成交' WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
+            elif not row["settled"]:
+                db.execute("UPDATE market_details SET status='待结算',pnl=NULL WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market_key))
         elif kind == "settlement" and market:
             Ledger._record_settlement(db, run_id, event)
         elif kind in {"stopped", "unresolved"} and market:
@@ -1612,7 +1611,7 @@ class Ledger:
             return {**self.summary(run_id), "range": range, "from": None, "to": now, "as_of": now}
         with self._connect() as db:
             selected = self._run(db, run_id)
-            runs = list(db.execute("SELECT * FROM runs WHERE mode='live' AND account_id=?", (selected["account_id"],))) \
+            runs = list(db.execute("SELECT * FROM runs WHERE mode='live' AND lower(account_id)=lower(?)", (selected["account_id"],))) \
                 if selected["account_id"] and range != "run" else [selected]
             run_ids = [row["run_id"] for row in runs]
             placeholders = ",".join("?" for _ in run_ids)
@@ -1636,13 +1635,22 @@ class Ledger:
                 if round_id is not None and fill.get("round_id") != round_id:
                     continue
                 fill_asset = _asset_from(fill)
-                identity = _business_identity(fill)
-                key = (*identity, fill.get("trade_id"), fill.get("order_id")) \
-                    if fill.get("trade_id") and fill.get("order_id") and fill_asset is not None \
-                       and (identity[1] is not None or identity[2] is not None) else \
-                    (fill_asset, fill.get("trade_id"), fill.get("order_id")) \
-                    if fill.get("trade_id") and fill.get("order_id") and fill_asset is not None \
-                    else (row["run_id"], row["id"])
+                # A restart may add market/round identity after the first
+                # journal. Merge an unknown identity with its later known
+                # form, while keeping genuinely reused ids in distinct
+                # markets separate.
+                base_key = (fill_asset, fill.get("trade_id"), fill.get("order_id")) \
+                    if fill.get("trade_id") and fill.get("order_id") and fill_asset is not None else None
+                key = base_key or (row["run_id"], row["id"])
+                if base_key is not None and base_key in latest_fills:
+                    prior_fill = latest_fills[base_key]
+                    prior_market = prior_fill.get("market_id") or prior_fill.get("marketId")
+                    prior_round = prior_fill.get("round_id") or prior_fill.get("roundId")
+                    current_market = fill.get("market_id") or fill.get("marketId")
+                    current_round = fill.get("round_id") or fill.get("roundId")
+                    if ((prior_market is not None and current_market is not None and prior_market != current_market)
+                            or (prior_round is not None and current_round is not None and prior_round != current_round)):
+                        key = (*base_key, current_market, current_round)
                 revised = _trade_revision(latest_fills.get(key), fill)
                 if revised is not None:
                     latest_fills[key] = revised
@@ -1732,7 +1740,7 @@ class Ledger:
                 args.append(int(before_id))
             if account_id is not None:
                 clause += " AND " if clause else " WHERE "
-                clause += "account_id=?"
+                clause += "lower(account_id)=lower(?)"
                 args.append(account_id)
             args.append(limit + 1)
             rows = list(db.execute("""SELECT rowid AS id,run_id,mode,account_id,config_revision,created_at
