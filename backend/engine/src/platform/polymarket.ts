@@ -236,6 +236,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   // and token pair, but a per-market instance prevents a malformed marketId
   // from poisoning a valid stream that happens to reuse token metadata.
   const feedQueues = new Map<string, FeedQueue>();
+  // Advance the starting queue after every consumed event. A busy current
+  // round must not starve a prewarmed next-round queue at the boundary.
+  let feedQueueCursor = 0;
   let feedWaiter: (() => void) | undefined;
   let feedWaitTimer: ReturnType<typeof setTimeout> | undefined;
   const wakeFeedConsumer = (): void => {
@@ -604,9 +607,18 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     feedConsumer = (async () => {
       while (feedConsumerAlive) {
         let event: RoutedFeedEvent | undefined;
-        for (const queue of feedQueues.values()) {
-          const candidate = queue.tryPop();
-          if (candidate) { event = candidate as RoutedFeedEvent; break; }
+        const queueKeys = [...feedQueues.keys()];
+        if (queueKeys.length) {
+          const start = feedQueueCursor % queueKeys.length;
+          for (let offset = 0; offset < queueKeys.length; offset += 1) {
+            const index = (start + offset) % queueKeys.length;
+            const queue = feedQueues.get(queueKeys[index]);
+            const candidate = queue?.tryPop();
+            if (!candidate) continue;
+            feedQueueCursor = (index + 1) % queueKeys.length;
+            event = candidate as RoutedFeedEvent;
+            break;
+          }
         }
         if (!event) {
           await waitForFeedEvent(100);
@@ -1009,6 +1021,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       const feed = bookFeeds.get(market.id);
       if (feed) { feed.stop(); controls.delete(feed); bookFeeds.delete(market.id); bookHealth.delete(market.id); booksHealthy.delete(market.id); }
       feedQueues.delete(market.id);
+      feedQueueCursor = feedQueues.size ? feedQueueCursor % feedQueues.size : 0;
       const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
       const needsUser = account.orders.some(order => tokens.has(order.tokenId)
         && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))
