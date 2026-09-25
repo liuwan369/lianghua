@@ -24,6 +24,9 @@ const base = {
 };
 
 assert.strictEqual(viewModel.hasFreshBbo(base, now), true, "fresh dual-sided BBO is valid without depth");
+assert.strictEqual(viewModel.hasFreshBbo({ ...base, sequence: null }, now), false, "missing sequence is invalid");
+assert.strictEqual(viewModel.hasFreshBbo({ ...base, sequence: "" }, now), false, "empty sequence is invalid");
+assert.strictEqual(viewModel.hasFreshBbo({ ...base, sequence: false }, now), false, "boolean sequence is invalid");
 assert.strictEqual(viewModel.hasFreshBbo({ ...base, sourceAt: now - 20_000 }, now), false, "old sourceAt is stale");
 assert.strictEqual(viewModel.hasFreshBbo({ ...base, expiresAt: now - 1 }, now), false, "expired snapshot is invalid");
 assert.strictEqual(viewModel.hasFreshBbo({ ...base, stale: true }, now), false, "server stale marker blocks BBO");

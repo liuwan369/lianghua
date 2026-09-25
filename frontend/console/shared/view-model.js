@@ -139,8 +139,10 @@
     ];
     const sourceAt = timestampMs(first(raw.sourceAt, raw.source_at));
     const expiresAt = timestampMs(first(raw.expiresAt, raw.expires_at));
+    const sequence = raw.sequence;
     return Boolean(first(raw.marketId, raw.market_id) && first(raw.roundId, raw.round_id))
-      && Number.isFinite(Number(raw.sequence)) && Number(raw.sequence) >= 0
+      && sequence !== null && sequence !== undefined && sequence !== "" && typeof sequence !== "boolean"
+      && Number.isFinite(Number(sequence)) && Number(sequence) >= 0
       && raw.stale !== true
       && sourceAt != null && expiresAt != null
       && sourceAt > 0 && sourceAt >= now - 5000 && sourceAt <= now + 5000 && expiresAt > now
