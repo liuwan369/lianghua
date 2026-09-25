@@ -240,7 +240,7 @@ window.__POLY_PREVIEW_CONFIG__ = {
 }
 ```
 
-响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。`processRunning` 是服务器独立进程控制事实，不受运行投影 `stale` 影响：明确为 `true` 时前端禁止 start、允许 pause/stop；明确为 `false` 时才允许通过 start 门禁；缺失、null 或无法解析时显示“进程状态未知”并禁用可能重复启动的 start。行情 stale/过期门禁仍然独立生效，不能因 `processRunning` 明确而把行情显示为 ready。控制命令之后仍必须等待 API/status/event 的最终确认。
+响应只代表命令是否接收；最终结果由 runtime stream 返回。状态建议：`stopped/starting/running/pausing/paused/stopping/error`。停止响应中的 `remoteOrdersState`/`remote_orders_state` 可能为 `unconfirmed`；前端必须明确显示远端挂单撤销尚未确认，不能把停止请求接收解释为撤单已完成。`processRunning` 是服务器独立进程控制事实，不受运行投影 `stale` 影响：明确为 `true` 时，只有与当前 `assetId + marketId + roundId` 匹配的运行上下文才允许 pause/stop；stale 投影仍可允许匹配上下文的 stop，但禁止 start、pause/resume。明确为 `false` 时，start 还必须通过新鲜行情、策略、账户和运行池门禁，且 stale 投影仍禁止 start；缺失、null 或无法解析时显示“进程状态未知”并禁用控制按钮。行情 stale/过期门禁仍然独立生效，不能因 `processRunning` 明确而把行情显示为 ready。场次身份变化时必须清空上一场的持仓、订单和活动事件，断线但身份未变时保留最近成功数据并标记 stale。控制命令之后仍必须等待 API/status/event 的最终确认。
 
 ## 前端调用方式
 
