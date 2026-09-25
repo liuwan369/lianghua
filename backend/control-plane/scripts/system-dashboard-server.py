@@ -1984,6 +1984,9 @@ def make_handler(root: Path):
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/metrics/summary":
+                requested_range = query.get("range", ["today"])[0]
+                if requested_range not in {"run", "today", "all"}:
+                    raise ValueError("invalid metrics range")
                 run_id = _api_run_id()
                 if not run_id:
                     # No run is a valid unavailable state. Keep the response
@@ -1993,7 +1996,7 @@ def make_handler(root: Path):
                         "schemaVersion": 1,
                         "available": False,
                         "runId": None,
-                        "range": query.get("range", ["today"])[0],
+                        "range": requested_range,
                         "from": None,
                         "to": None,
                         "asOf": None,
