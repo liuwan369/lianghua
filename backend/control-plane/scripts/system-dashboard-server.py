@@ -1117,7 +1117,7 @@ def trading_status(include_stats: bool = True) -> dict:
             automatic = status["stop_result"] if status["stop_result"].get("automatic") else {}
             runtime["status"] = ("failed" if automatic.get("reason") in {
                 "journal_failed", "market_end_event_failed", "process_failed",
-            } or (_trading_exit_code is not None and _trading_exit_code != 0) else "stopped")
+            } else "stopped")
             runtime["stale"] = True
             stats = {**stats, "runtime": runtime}
         status["stats"] = stats
