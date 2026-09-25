@@ -448,6 +448,13 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["win_rate"])
         self.assertIsNone(body["fill_count"])
 
+    def test_metrics_summary_without_run_rejects_invalid_range(self):
+        with patch.object(server_module, "_api_run_id", return_value=None):
+            code, body = self.request("/api/metrics/summary?range=bogus")
+        self.assertEqual(code, 400)
+        self.assertEqual(body["error"], "invalid_query")
+        self.assertTrue(body["stale"])
+
     def test_read_endpoints_do_not_probe_or_ingest(self):
         with patch.object(server_module, "_api_run_id", return_value="run"), \
                 patch.object(server_module, "_api_ledger") as ledger, \
