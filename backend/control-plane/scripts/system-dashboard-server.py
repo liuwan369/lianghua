@@ -1283,30 +1283,44 @@ def strategy_control(payload: dict) -> dict:
             if not isinstance(requested_asset, str) or requested_asset.strip().lower() != selected_asset:
                 raise ValueError("命令 assetId 与策略配置不一致")
         requested_markets = payload.get("market_ids")
+        expected_market_identity = None
+        if requested_markets is None:
+            raise ValueError("启动必须指定 marketIds，以绑定初始 marketId 和 roundId")
         if requested_markets is not None:
             if (not isinstance(requested_markets, list)
-                    or not requested_markets
-                    or any(not isinstance(item, (str, dict)) for item in requested_markets)):
-                raise ValueError("命令 marketIds 无效")
-            catalog = _modern_markets().get("items") or []
-            for item in requested_markets:
-                if isinstance(item, dict):
-                    item_asset = item.get("assetId") or item.get("asset_id")
-                    if item_asset is not None and (not isinstance(item_asset, str)
-                                                   or item_asset.strip().lower() != selected_asset):
-                        raise ValueError("命令 marketIds 与策略 assetId 不一致")
-                market_id = item.get("marketId") or item.get("market_id") if isinstance(item, dict) else item.strip()
-                if not isinstance(market_id, str) or not market_id:
-                    raise ValueError("命令 marketIds 缺少市场身份")
-                if market_id.lower() in SUPPORTED_ASSET_IDS:
-                    if market_id.lower() != selected_asset:
-                        raise ValueError("命令 marketIds 与策略 assetId 不一致")
-                    continue  # Retain the legacy asset-alias command form.
-                matches = [row for row in catalog if row.get("marketId") == market_id
-                           and (not isinstance(item, dict) or not item.get("roundId")
-                                or row.get("roundId") == item["roundId"])]
-                if not matches or {row.get("assetId") for row in matches} != {selected_asset}:
-                    raise ValueError("命令 marketIds 未能映射到所选资产，请刷新市场")
+                    or len(requested_markets) != 1
+                    or not isinstance(requested_markets[0], (str, dict))):
+                raise ValueError("单实例启动必须指定一个有效 marketId")
+            selected = requested_markets[0]
+            if isinstance(selected, dict):
+                item_asset = selected.get("assetId") or selected.get("asset_id")
+                if item_asset is not None and (not isinstance(item_asset, str)
+                                               or item_asset.strip().lower() != selected_asset):
+                    raise ValueError("命令 marketIds 与策略 assetId 不一致")
+                market_id = (selected.get("marketId") or selected.get("market_id")
+                             or selected.get("conditionId") or selected.get("condition_id"))
+                requested_round = selected.get("roundId") or selected.get("round_id")
+            else:
+                market_id, requested_round = selected.strip(), None
+            if not isinstance(market_id, str) or not market_id or market_id.lower() in SUPPORTED_ASSET_IDS:
+                raise ValueError("命令 marketIds 必须是明确的市场 ID")
+            if requested_round is not None and (not isinstance(requested_round, str)
+                                                or not requested_round.isdigit()
+                                                or int(requested_round) % 300 != 0):
+                raise ValueError("命令 marketIds 缺少有效的五分钟 roundId")
+            catalog = _modern_markets({"assetId": [selected_asset]}).get("items") or []
+            matches = [row for row in catalog if row.get("marketId") == market_id
+                       and row.get("assetId") == selected_asset
+                       and (requested_round is None or row.get("roundId") == requested_round)]
+            identities = {(row.get("marketId"), row.get("roundId")) for row in matches
+                          if isinstance(row.get("marketId"), str) and row.get("marketId")
+                          and isinstance(row.get("roundId"), str) and row.get("roundId").isdigit()}
+            if len(identities) != 1:
+                raise ValueError("命令 marketId/roundId 未能唯一映射到所选资产，请刷新市场")
+            identity_market_id, identity_round_id = next(iter(identities))
+            if int(identity_round_id) % 300 != 0:
+                raise ValueError("市场目录的 roundId 无效，请刷新市场")
+            expected_market_identity = {"marketId": identity_market_id, "roundId": identity_round_id}
         pool = market_pool()
         if pool.get("error") == "market_pool_invalid" or (pool.get("available") and pool.get("stale")):
             raise ValueError("运行池配置无效，请先选择一个资产")
@@ -1315,6 +1329,7 @@ def strategy_control(payload: dict) -> dict:
             raise ValueError("运行池资产与策略 assetId 不一致，请先统一配置")
         return start_trading({"mode": config["mode"], "confirm_live": True,
                               "_request_selection": selection,
+                              "_expected_market_identity": expected_market_identity,
                               "duration_min": config["durationMinutes"]},
                              config_revision=saved["savedRevision"], request_id=request_id,
                              strategy_config=saved)
@@ -1405,6 +1420,15 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
             args.extend(["--strategy", STRATEGY_ID, "--asset", configured_asset,
                          "--strategy-config", str(strategy_config_store().path),
                          "--control-file", str(candidate_log.with_suffix(".control.json"))])
+            expected_identity = payload.get("_expected_market_identity")
+            if expected_identity is not None:
+                market_id = expected_identity.get("marketId") if isinstance(expected_identity, dict) else None
+                round_id = expected_identity.get("roundId") if isinstance(expected_identity, dict) else None
+                if (not isinstance(market_id, str) or not market_id
+                        or not isinstance(round_id, str) or not round_id.isdigit()
+                        or int(round_id) % 300 != 0):
+                    raise ValueError("启动市场身份无效")
+                args.extend(["--expected-market-id", market_id, "--expected-round-id", round_id])
         env = _trading_environment()
         env["LIVE"] = "true"
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -1432,6 +1456,7 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         if strategy_config:
             _trading_params = {"strategy_id": STRATEGY_ID, "mode": mode,
                                "requestSelection": payload.get("_request_selection"),
+                               "initialMarketIdentity": payload.get("_expected_market_identity"),
                                "duration_min": duration_min, "assetId": strategy_config["config"].get("assetId", "btc"),
                                "config": strategy_config["config"]}
         _trading_exit_code = None

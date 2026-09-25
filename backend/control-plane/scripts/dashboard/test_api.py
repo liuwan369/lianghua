@@ -123,6 +123,91 @@ class ApiTests(unittest.TestCase):
             self.assertFalse(body.get("ok", True))
             self.assertIn("marketIds", body["error"])
 
+    def test_runtime_command_forwards_initial_market_identity_to_engine(self):
+        server_module.strategy_config_store().save(default_config(), 0)
+        market_id = "0xbtc-selected"
+        round_id = "1800000000"
+        catalog = {"items": [{"assetId": "btc", "marketId": market_id, "roundId": round_id,
+                              "stale": True, "strategyEligible": False}]}
+        with patch.object(server_module, "_modern_markets", return_value=catalog), \
+                patch.object(server_module, "start_trading", return_value={"command_status": "accepted"}) as start:
+            result = server_module.strategy_control({
+                "action": "start", "strategy_id": "btc-reversal", "asset_id": "btc",
+                "market_ids": [market_id], "revision": 1,
+                "request_id": "00000000-0000-4000-8000-000000000003",
+            })
+        self.assertEqual(result["command_status"], "accepted")
+        payload = start.call_args.args[0]
+        self.assertEqual(payload["_expected_market_identity"], {"marketId": market_id, "roundId": round_id})
+        self.assertEqual(payload["_request_selection"], {"assetId": "btc", "marketIds": [market_id]})
+
+    def test_runtime_command_requires_market_selection(self):
+        server_module.strategy_config_store().save(default_config(), 0)
+        with self.assertRaisesRegex(ValueError, "marketIds"):
+            server_module.strategy_control({
+                "action": "start", "strategy_id": "btc-reversal", "asset_id": "btc",
+                "revision": 1, "request_id": "00000000-0000-4000-8000-000000000006",
+            })
+
+    def test_engine_spawn_receives_initial_market_identity_flags(self):
+        server_module.strategy_config_store().save(default_config(), 0)
+        strategy_config = server_module.strategy_config_store().get()
+        (self.root / "dist" / "cli").mkdir(parents=True)
+        (self.root / "dist" / "cli" / "platform.js").write_text("", encoding="utf-8")
+
+        class FakeProcess:
+            pid = 9876
+
+            def poll(self):
+                return None
+
+        identity = {"marketId": "0xbtc-selected", "roundId": "1800000000"}
+        with patch.object(server_module, "account_config_status", return_value={
+                "wallet": "0x" + "1" * 40, "execution_credentials_ready": True,
+                "account_check_ready": True, "settlement_credentials_ready": True}), \
+                patch.dict(server_module.os.environ, {"PM_TRADING_LIVE_UNLOCK": "1"}), \
+                patch.object(server_module, "_trading_environment", return_value={}), \
+                patch.object(server_module, "_persist_trading_state"), \
+                patch.object(server_module, "trading_status", return_value={"running": True}), \
+                patch.object(server_module.subprocess, "Popen", return_value=FakeProcess()) as popen:
+            server_module._trading_process = None
+            server_module._trading_log = None
+            server_module._trading_pid = None
+            server_module._trading_request_id = None
+            try:
+                server_module._start_trading({
+                    "mode": "live", "confirm_live": True, "duration_min": 1,
+                    "_expected_market_identity": identity,
+                }, config_revision=1, request_id="00000000-0000-4000-8000-000000000007",
+                    strategy_config=strategy_config)
+                args = popen.call_args.args[0]
+                self.assertEqual(args[args.index("--expected-market-id") + 1], identity["marketId"])
+                self.assertEqual(args[args.index("--expected-round-id") + 1], identity["roundId"])
+            finally:
+                server_module._trading_process = None
+
+    def test_runtime_command_rejects_ambiguous_or_invalid_initial_round(self):
+        server_module.strategy_config_store().save(default_config(), 0)
+        with patch.object(server_module, "_modern_markets", return_value={"items": [
+                {"assetId": "btc", "marketId": "0xbtc-selected", "roundId": "1800000000"},
+                {"assetId": "btc", "marketId": "0xbtc-selected", "roundId": "1800000300"},
+        ]}):
+            with self.assertRaises(ValueError):
+                server_module.strategy_control({
+                    "action": "start", "strategy_id": "btc-reversal", "asset_id": "btc",
+                    "market_ids": ["0xbtc-selected"], "revision": 1,
+                    "request_id": "00000000-0000-4000-8000-000000000004",
+                })
+        with patch.object(server_module, "_modern_markets", return_value={"items": [
+                {"assetId": "btc", "marketId": "0xbtc-selected", "roundId": "1800000001"},
+        ]}):
+            with self.assertRaisesRegex(ValueError, "roundId"):
+                server_module.strategy_control({
+                    "action": "start", "strategy_id": "btc-reversal", "asset_id": "btc",
+                    "market_ids": [{"marketId": "0xbtc-selected", "roundId": "1800000001"}],
+                    "revision": 1, "request_id": "00000000-0000-4000-8000-000000000005",
+                })
+
     def test_unimplemented_commands_do_not_report_success(self):
         with patch.object(server_module, "_control_request_error", return_value=None):
             for path in ("/api/orders/id/cancel", "/api/runtime/flatten"):

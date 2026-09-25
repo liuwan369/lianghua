@@ -35,6 +35,7 @@ export interface PlatformCliOptions {
   stopFile?: string;
   controlFile?: string;
   marketsFile?: string;
+  expectedMarketIdentity?: { marketId: string; roundId: string };
   strategy?: "btc-reversal";
   strategyConfigFile?: string;
   referenceFeed: boolean;
@@ -64,6 +65,8 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     .option("--strategy-config <path>", "Persisted strategy configuration JSON")
     .option("--asset <symbol>", "Selected market asset: btc, eth or sol", "btc")
     .option("--markets <path>", "JSON MarketInfo[] file; defaults to current selected-asset binary market discovery")
+    .option("--expected-market-id <id>", "Require the initially discovered market id to match the start request")
+    .option("--expected-round-id <round>", "Require the initially discovered round id to match the start request")
     .option("--capital-usd <number>", "Optional capital ceiling; live always respects actual available funds")
     .option("--daily-loss-usd <number>", "Optional daily loss stop; omitted disables this stop")
     .option("--order-usd <number>", "Maximum order notional (defaults to capital ceiling)")
@@ -86,6 +89,19 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
   const assetId = parseAsset(raw.asset);
   if (raw.strategy && raw.strategy !== "btc-reversal") throw new CliInputError("unknown built-in strategy");
   if (!!raw.strategy !== !!raw.strategyConfig) throw new CliInputError("--strategy requires --strategy-config and vice versa");
+  if (!!raw.expectedMarketId !== !!raw.expectedRoundId) {
+    throw new CliInputError("--expected-market-id and --expected-round-id must be provided together");
+  }
+  const expectedMarketIdentity = raw.expectedMarketId ? {
+    marketId: String(raw.expectedMarketId).trim(),
+    roundId: String(raw.expectedRoundId).trim(),
+  } : undefined;
+  if (expectedMarketIdentity && (!expectedMarketIdentity.marketId
+    || !/^\d+$/.test(expectedMarketIdentity.roundId)
+    || !Number.isSafeInteger(Number(expectedMarketIdentity.roundId))
+    || Number(expectedMarketIdentity.roundId) % MARKET_WINDOW_SEC !== 0)) {
+    throw new CliInputError("expected market identity must contain a market id and aligned five-minute round id");
+  }
   const capitalUsd = positive(raw.capitalUsd ?? Number.MAX_SAFE_INTEGER, "--capital-usd");
   const dailyLossUsd = raw.dailyLossUsd == null ? null : positive(raw.dailyLossUsd, "--daily-loss-usd");
   const maxOrderUsd = positive(raw.orderUsd ?? capitalUsd, "--order-usd");
@@ -125,7 +141,19 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     statusSec, stateFile, journalFile, stopFile, controlFile, strategy: raw.strategy,
     strategyConfigFile,
     marketsFile: raw.markets ? resolve(raw.markets) : undefined,
+    expectedMarketIdentity,
     referenceFeed: raw.referenceFeed === true, assetId };
+}
+
+/** Compare the request selector against authoritative discovery before connecting the live platform. */
+export function assertInitialMarketIdentity(
+  market: Pick<MarketInfo, "id" | "roundId"> | undefined,
+  expected: { marketId: string; roundId: string } | undefined,
+): void {
+  if (!expected) return;
+  if (!market || market.id !== expected.marketId || market.roundId !== expected.roundId) {
+    throw new CliInputError("initial discovered market does not match requested marketId and roundId");
+  }
 }
 
 /** Validate file input before any market, wallet or gateway connection. */
@@ -502,6 +530,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     }
     phase = "market_discovery";
     const markets = explicitMarkets ?? validateMarkets(await discoverMarket(options.assetId, undefined, false, discoveryAbort.signal), options.assetId);
+    assertInitialMarketIdentity(markets[0], options.expectedMarketIdentity);
     if (continuousMarkets && restored?.markets) {
       const unsettledTokens = new Set([
         ...restored.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
