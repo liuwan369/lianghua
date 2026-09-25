@@ -93,7 +93,11 @@ assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig({ assetId: "e
 assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig({}), false, "drafts without an explicit asset identity cannot pass the strategy activation gate");
 assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig(null), false, "initial empty strategy data is safe during page subscription");
 assert.match(autoTradeSource, /strategyAssetStartReason\(strategy, context\.assetId\)/, "auto-trade start uses the shared strategy asset gate");
+assert.match(autoTradeSource, /store\.canInitializeMarketPool\(marketPool\)/, "auto-trade can use the explicit first-run empty pool state");
+assert.match(autoTradeSource, /initialPoolAsset/, "auto-trade first-run bypass still requires a complete market identity");
 assert.match(overviewSource, /strategyAssetStartReason\(strategy, assetId\)/, "overview start uses the shared strategy asset gate");
+assert.match(overviewSource, /store\.canInitializeMarketPool\(state\.marketPool\)/, "overview can use the explicit first-run empty pool state");
+assert.match(overviewSource, /state\.marketCatalog\.selectedId \|\| window\.PolyPreview\.config\.selectedAssetId/, "overview start falls back to the selected server catalog asset before pool initialization");
 assert.match(overviewSource, /const overviewEventContext = \(\) =>[\s\S]*marketId: item\?\.marketId, roundId: item\?\.roundId, runId/, "overview events carry market and round identity");
 assert.match(overviewSource, /adapter\.loadEvents\(eventContext\.runId \|\| null, eventContext\)/, "overview refresh scopes events to the active run context");
 assert.match(overviewSource, /return state\.marketPool\.desiredIds\[0\] \|\| state\.marketCatalog\.selectedId/, "overview title follows the desired control asset");

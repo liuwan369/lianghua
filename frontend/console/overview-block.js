@@ -80,7 +80,7 @@
   });
   const overviewStartReason = () => {
     const state = store.getState();
-    const assetId = state.marketPool.desiredIds[0];
+    const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId;
     const runtime = state.runtime || {};
     const runtimeState = runtime.runtimeState || runtime.status;
     if (["running", "starting", "paused", "stopping"].includes(runtimeState)) return "服务器仍有运行状态，请先停止或等待状态确认";
@@ -88,7 +88,8 @@
     if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";
     if (item.canEnable !== true) return "服务器尚未确认该市场可加入运行池";
     if (item.stale === true || state.marketCatalog.stale) return "行情目录或行情已过期，暂不允许启动";
-    if (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)) return "请先在市场页面确认运行池";
+    const initialPool = store.canInitializeMarketPool(state.marketPool);
+    if ((!initialPool && (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)))) return "请先在市场页面确认运行池";
     const snapshotFresh = window.PolyPreviewViewModel.hasFreshBbo(item);
     if (!snapshotFresh) return "当前盘口快照未新鲜确认，暂不允许启动";
     const strategy = state.strategy || {};
@@ -130,7 +131,7 @@
     if (action === "start" || action === "exit") {
       if (button.disabled) return;
       const state = store.getState();
-      const assetId = state.marketPool.desiredIds[0];
+      const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId;
       const item = state.marketCatalog.items.find((item) => item.assetId === assetId);
       if (action === "start" && overviewStartReason()) { text("[data-overview-runtime]", overviewStartReason()); return; }
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });

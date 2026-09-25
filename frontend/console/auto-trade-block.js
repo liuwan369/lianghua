@@ -625,7 +625,11 @@
             : account.execution_credentials_ready === true && account.account_check_ready === true;
         if (accountStatus.status !== "ready" || liveReady !== true) reason = "服务器尚未确认账户可启动交易";
       }
-      if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
+      var initialPool = store.canInitializeMarketPool(marketPool);
+      var poolSelected = marketPool.desiredIds.includes(context.assetId);
+      var initialPoolAsset = initialPool && asset?.canEnable === true && asset?.stale !== true && catalog.stale !== true
+        && asset?.cycle === "5m" && Boolean(asset?.marketId && asset?.roundId);
+      if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || (!poolSelected && !initialPoolAsset))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
       if (!reason && action === "pause" && !running) reason = "所选市场运行状态尚未确认";
       if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";
