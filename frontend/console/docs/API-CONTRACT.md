@@ -13,7 +13,7 @@
 
 对生产尚未提供或返回不可用的能力，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识；当前 `/api/markets` 已能返回有效 `marketId + roundId`，但生产盘口深度仍未提供。
 
-本轮生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`（保存/检查另有 `account_response_invalid` 状态）；`/api/metrics/summary` 返回 HTTP 404；生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。`strategyEligible` 不作为前端启动预检条件，避免把展示采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。
+本轮生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；这不会单独阻止新鲜双边 BBO 的报价展示，五档区域会明确显示深度待接入，启动仍由 BBO、账户、策略、运行池和服务器运行时资格共同决定。运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`（保存/检查另有 `account_response_invalid` 状态）；`/api/metrics/summary` 返回 HTTP 404；生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。`strategyEligible` 不作为前端启动预检条件，避免把展示采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。
 
 ## 现有服务可复用接口
 
@@ -189,7 +189,7 @@ legacy 模式实际使用的 DTO 边界如下：
 }
 ```
 
-`bids`/`asks` 也可使用 `{ price, size }` level 对象。`depthUnavailable: true`、`stale: true`、缺少身份或缺少 sequence/sourceAt/expiresAt 时，前端保留上一份盘口并显示待接入/过期，不显示实时已连接。stale 市场目录没有新条目时，Store 保留最后一次成功目录。
+`bids`/`asks` 也可使用 `{ price, size }` level 对象。新鲜的双边 BBO 只要包含 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 和四个 bid/ask，就可以更新报价，即使 `depthAvailable=false` 或 `depthUnavailable=true`；此时五档表显示“深度暂不可用”，不填充伪造档位。`stale: true`、过期、缺少身份或缺少 sequence/sourceAt/expiresAt 时，前端保留上一份盘口并显示待接入/过期，不显示实时已连接。stale 市场目录没有新条目时，Store 保留最后一次成功目录。
 
 运行池 GET/PUT 的语义如下：
 

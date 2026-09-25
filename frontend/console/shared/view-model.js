@@ -122,6 +122,30 @@
     return Boolean(context?.assetId && context?.marketId && context?.roundId && assetId != null && marketId != null && roundId != null
       && String(assetId) === String(context.assetId) && String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId));
   };
+  const timestampMs = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    if (Number.isFinite(number)) return Math.abs(number) < 1e12 ? number * 1000 : number;
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const hasFreshBbo = (value, now = Date.now()) => {
+    const raw = payloadOf(value) || {};
+    const quotes = [
+      first(raw.yesBid, raw.yes_bid, raw.up_bid),
+      first(raw.yesAsk, raw.yes_ask, raw.up_ask),
+      first(raw.noBid, raw.no_bid, raw.down_bid),
+      first(raw.noAsk, raw.no_ask, raw.down_ask)
+    ];
+    const sourceAt = timestampMs(first(raw.sourceAt, raw.source_at));
+    const expiresAt = timestampMs(first(raw.expiresAt, raw.expires_at));
+    return Boolean(first(raw.marketId, raw.market_id) && first(raw.roundId, raw.round_id))
+      && Number.isFinite(Number(raw.sequence)) && Number(raw.sequence) >= 0
+      && raw.stale !== true
+      && sourceAt != null && expiresAt != null
+      && sourceAt > 0 && sourceAt >= now - 5000 && sourceAt <= now + 5000 && expiresAt > now
+      && quotes.every((quote) => Number.isFinite(Number(quote)) && Number(quote) > 0 && Number(quote) < 1);
+  };
   const strategyAssetId = (strategy = {}) => first(strategy.assetId, strategy.asset_id, strategy.data?.assetId, strategy.data?.asset_id, strategy.data?.config?.assetId, strategy.data?.config?.asset_id, strategy.config?.assetId, strategy.config?.asset_id);
   const strategyAssetStartReason = (strategy, assetId) => {
     const target = strategyAssetId(strategy);
@@ -129,5 +153,5 @@
     if (!assetId || String(target) !== String(assetId)) return "激活策略与所选市场不一致，请切换市场或重新激活策略";
     return "";
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, matchesIdentity, strategyAssetId, strategyAssetStartReason });
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason });
 })();
