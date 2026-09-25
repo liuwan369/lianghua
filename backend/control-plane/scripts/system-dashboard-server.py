@@ -1870,10 +1870,12 @@ def _api_run_id() -> str | None:
         # identity loaded while its journal belongs to another data root.
         # Never let that stale identity make modern read endpoints probe an
         # unrelated or missing ledger projection.
+        if run_id and _trading_log is None:
+            return None
         if run_id and _trading_log is not None:
             try:
                 _trading_log.resolve().relative_to((TRADING_ROOT / "results").resolve())
-            except (OSError, ValueError):
+            except (OSError, RuntimeError, ValueError):
                 return None
         return run_id
 

@@ -523,6 +523,11 @@ class ApiTests(unittest.TestCase):
             self.assertIsNone(body["asOf"])
             self.assertTrue(body["stale"])
 
+    def test_api_run_id_requires_log_bound_to_active_root(self):
+        with patch.object(server_module, "_trading_run_id", "stale"), \
+                patch.object(server_module, "_trading_log", None):
+            self.assertIsNone(server_module._api_run_id())
+
     def test_settlements_are_latest_per_round_and_canonical(self):
         ledger = Mock()
         ledger.settlements_page.return_value = {"settlements": [{
