@@ -82,7 +82,7 @@
     const state = store.getState();
     const assetId = state.marketPool.desiredIds[0];
     const runtime = state.runtime || {};
-    const runtimeState = runtime.status || runtime.runtimeState;
+    const runtimeState = runtime.runtimeState || runtime.status;
     if (["running", "starting", "paused", "stopping"].includes(runtimeState)) return "服务器仍有运行状态，请先停止或等待状态确认";
     const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
     if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";

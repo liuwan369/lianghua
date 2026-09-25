@@ -208,6 +208,7 @@
   var commandPending = false;
   var commandCooldownUntil = 0;
   var commandCooldownAction = null;
+  var commandCooldownContextKey = null;
   var currentMarketContextKey = null;
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
@@ -611,7 +612,7 @@
       var strategy = store.getState().strategy;
       var cooldownActive = commandCooldownUntil > Date.now();
       var sameActionCooldown = cooldownActive && commandCooldownAction === action;
-      var stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop";
+      var stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop" && commandCooldownContextKey === identityKey(context);
       var reason = commandPending || sameActionCooldown ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "stop" && !running && !stopAfterAcceptedStart) reason = "没有服务器确认的可停止运行";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
@@ -765,6 +766,7 @@
         if (acceptedResult) {
           commandCooldownUntil = Date.now() + 5000;
           commandCooldownAction = action;
+          commandCooldownContextKey = identityKey(context);
         }
         updateControls();
         scheduleRuntimeRefresh(500);
@@ -772,6 +774,7 @@
           if (commandCooldownUntil <= Date.now()) {
             commandCooldownUntil = 0;
             commandCooldownAction = null;
+            commandCooldownContextKey = null;
           }
           updateControls();
         }, commandCooldownUntil - Date.now() + 10);
