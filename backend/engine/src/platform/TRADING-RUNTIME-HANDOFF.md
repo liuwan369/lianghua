@@ -97,8 +97,15 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 - `runtime-lifecycle.test.ts`
 - `runtime-order-identity.test.ts`、`runtime-cli-limits.test.ts`、`runtime-feed-integration.test.mjs`
 - 真实 feed 函数带默认第五参数的启动接缝、无顶层 underlying asset 的 paired snapshot、断线后旧帧拒绝和可选 L2 深度过期门控。
-- 服务器临时组合最新行情底座和交易运行代码后，行情测试与交易运行测试通过。
+- 服务器只读行情探针已验证 paired snapshot、五档 YES/NO、sequence/sourceAt 无回退和断线恢复；交易运行时仍需在集成分支部署后再做服务器验证。
 - BTC 行情探针验证了 paired snapshots、五档 YES/NO、sequence/sourceAt 无回退和断线恢复。
+
+Node 24 的模块 mock 测试需要显式启用测试 mock：
+
+```text
+node --experimental-test-module-mocks --test src/live/feeds/polymarket.test.mjs
+node --experimental-test-module-mocks --test src/platform/runtime-feed-integration.test.mjs
+```
 
 这些测试证明代码契约和门控逻辑，不能代替真实账户下的 CLOB 订单、User WebSocket 成交和链上结算验收。
 
@@ -123,6 +130,8 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 - [ ] 生成包含最新行情代码和本分支交易运行代码的部署提交或集成分支。
 - [ ] 在服务器部署该组合提交，并记录实际 `marketId/roundId`。
 - [ ] 提供一段包含断线恢复和场次边界的 paired snapshot 日志，确认恢复后没有使用旧快照。
+
+当前服务器只读探针所在分支为 `codex/market-data`；尚未启动交易运行时，也没有提交真实订单。
 
 行情底座完成以上事项后，交易运行会话继续做真实账户下单、撤单和成交验收。
 
