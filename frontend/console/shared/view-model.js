@@ -74,11 +74,14 @@
     payload = payloadOf(payload) || {};
     const list = Array.isArray(payload) ? payload : first(payload.items, payload.markets, payload.current_markets, []);
     const items = list.map((item, index) => market(item, index)).filter((item) => item.assetId.length > 0);
+    const partial = payload.partial === true || payload.partial_data === true
+      || payload.stale === true && items.some((item) => item.stale !== true) && items.some((item) => item.stale === true);
     return {
       items,
       source: String(first(payload.source, payload.node_label, "backend")),
       asOf: first(payload.asOf, payload.as_of, null),
       stale: payload.stale === true || payload.collector_online === false,
+      partial,
       error: payload.error || payload.error_code || null
     };
   };

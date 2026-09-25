@@ -3,7 +3,7 @@
   const core = window.PolyPreview;
   const vm = window.PolyPreviewViewModel;
   if (!core || !vm) throw new Error("preview shared modules must load before preview-store.js");
-  const initialCatalog = { status: "unavailable", items: [], selectedId: null, source: "backend", stale: true, error: "行情目录尚未接入", receivedAt: 0 };
+  const initialCatalog = { status: "unavailable", items: [], selectedId: null, source: "backend", stale: true, partial: false, error: "行情目录尚未接入", receivedAt: 0 };
   const state = {
     marketCatalog: initialCatalog,
     marketPool: { desiredIds: [], currentIds: [], nextRoundIds: [], effectiveRoundId: null, source: "backend", status: "unavailable", stale: true, error: "运行池尚未接入", receivedAt: 0, initialUnavailable: false },
@@ -40,11 +40,23 @@
   const setMarketCatalog = (value) => {
     const next = vm.catalog(value);
     const hasPrevious = state.marketCatalog.items.length > 0;
-    const keepPrevious = hasPrevious && (next.stale || next.error || next.items.length === 0);
-    const items = keepPrevious ? state.marketCatalog.items : next.items;
+    const previousItems = state.marketCatalog.items;
+    const keepPrevious = hasPrevious && !next.partial && (next.stale || next.error || next.items.length === 0);
+    const items = next.partial
+      ? (() => {
+        const incoming = new Map(next.items.map((item) => [item.assetId, item]));
+        const merged = previousItems.map((previous) => {
+          const current = incoming.get(previous.assetId);
+          if (!current) return previous;
+          return current.stale === true ? { ...previous, stale: true, staleReason: current.staleReason || next.error || "该资产行情已过期" } : current;
+        });
+        next.items.forEach((item) => { if (!previousItems.some((previous) => previous.assetId === item.assetId)) merged.push(item); });
+        return merged;
+      })()
+      : keepPrevious ? previousItems : next.items;
     const requested = state.marketCatalog.selectedId || core.config.selectedAssetId;
     const selected = items.some((item) => item.assetId === requested) ? requested : requested ? null : items[0]?.assetId || null;
-    const status = next.stale ? (hasPrevious ? "stale" : "unavailable") : next.error ? (hasPrevious ? "error" : "unavailable") : next.items.length === 0 ? (hasPrevious ? "stale" : "unavailable") : "ready";
+    const status = next.partial ? "partial" : next.stale ? (hasPrevious ? "stale" : "unavailable") : next.error ? (hasPrevious ? "error" : "unavailable") : next.items.length === 0 ? (hasPrevious ? "stale" : "unavailable") : "ready";
     const error = next.error || (next.items.length === 0 && !hasPrevious ? "市场目录暂无有效快照" : null);
     const result = {
       ...next,
@@ -52,6 +64,7 @@
       source: keepPrevious ? state.marketCatalog.source : next.source,
       asOf: keepPrevious ? state.marketCatalog.asOf : next.asOf,
       status,
+      stale: next.partial ? false : next.stale,
       error,
       selectedId: selected,
       receivedAt: keepPrevious ? state.marketCatalog.receivedAt : Date.now()
