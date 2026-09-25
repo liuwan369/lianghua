@@ -1,6 +1,7 @@
 """Local HTTP regressions; no account credentials or exchange calls."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -86,6 +87,17 @@ class ApiTests(unittest.TestCase):
                 self.assertFalse(body["accepted"])
                 self.assert_metadata(body)
             store.assert_not_called()
+
+    def test_https_proxy_identity_is_control_session(self):
+        headers = {
+            "Content-Type": "application/json",
+            "Origin": "https://console.example",
+            "Host": "console.example",
+            "X-Forwarded-Proto": "https",
+            "X-PM-Authenticated": "operator",
+        }
+        with patch.dict(server_module.os.environ, {"PM_TRUST_ACCOUNT_PROXY": "1"}, clear=False):
+            self.assertIsNone(server_module._control_request_error(headers, "live"))
 
     def test_draft_then_publish_and_unsupported_round(self):
         with patch.object(server_module, "_control_request_error", return_value=None):

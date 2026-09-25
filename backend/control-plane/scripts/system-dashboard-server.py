@@ -860,6 +860,21 @@ def _control_request_error(headers, mode: str | None, *, allow_session: bool = T
         if parsed.scheme not in {"http", "https"} or not host or parsed.netloc != host:
             return 403, "请求来源不允许"
 
+    # The public deployment already authenticates every request with nginx
+    # Basic Auth and forwards the authenticated operator identity.  Treat that
+    # HTTPS proxy identity as the control session so a fresh server does not
+    # require a second password that was never configured.  The backend is
+    # loopback-only; direct HTTP callers still need the signed control token.
+    proxy_authenticated = (
+        os.environ.get("PM_TRUST_ACCOUNT_PROXY") == "1"
+        and bool(headers.get("X-PM-Authenticated"))
+        and headers.get("X-Forwarded-Proto") == "https"
+        and bool(origin)
+        and parsed.scheme == "https"
+    )
+    if proxy_authenticated:
+        return None
+
     configured_token = _control_token()
     token_required = bool(configured_token) or os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1" or mode == "live"
     if not token_required:
@@ -2502,6 +2517,16 @@ def make_handler(root: Path):
                         return
                     supplied_token = _supplied_control_token(self.headers).strip()
                     if not supplied_token:
+                        # Basic Auth at the HTTPS proxy is already a valid
+                        # control identity.  Do not force the operator to
+                        # invent and persist a second token on first deploy.
+                        if (os.environ.get("PM_TRUST_ACCOUNT_PROXY") == "1"
+                                and self.headers.get("X-PM-Authenticated")
+                                and self.headers.get("X-Forwarded-Proto") == "https"):
+                            self._send_json(
+                                b'{"ok":true,"persistent":false,"proxy_authenticated":true}',
+                            )
+                            return
                         self._send_json(
                             json.dumps({"ok": False, "error": "请填写交易控制密码"}, ensure_ascii=False).encode("utf-8"),
                             400,
