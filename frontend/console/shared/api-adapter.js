@@ -66,6 +66,18 @@
     };
   };
   let runtimeRequest = null;
+  // Event reads are independent low-frequency snapshots. A page can have an
+  // older request in flight while the selected run/round changes, so keep a
+  // monotonically increasing generation at this boundary. The latest request
+  // owns the events slice; an older response must not replace it.
+  let eventsRequestGeneration = 0;
+  const eventScope = (context = {}) => Object.fromEntries(
+    ["assetId", "marketId", "roundId"]
+      .filter((key) => context[key] != null && context[key] !== "")
+      .map((key) => [key, String(context[key])])
+  );
+  const eventScopeKey = (scope = {}) => JSON.stringify([scope.assetId || null, scope.marketId || null, scope.roundId || null]);
+  const eventRunId = (raw, context = {}) => raw?.runId ?? raw?.run_id ?? context.runId ?? null;
   const adapter = {
     async loadMarkets() {
       return readSlice("marketCatalog", async () => {
@@ -244,18 +256,51 @@
       });
     },
     async loadEvents(runId, context = {}) {
+      const generation = ++eventsRequestGeneration;
       return readSlice("events", async () => {
         const eventContext = { ...context, ...(runId && !context.runId ? { runId } : {}) };
-        const raw = await modernOrLegacy(() => core.api.events("", eventContext), async () => {
-          const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
-          if (!activeRunId) throw new Error("当前运行标识尚未提供");
-          return core.api.legacyEvents(activeRunId);
-        });
+        let raw;
+        try {
+          raw = await modernOrLegacy(() => core.api.events("", eventContext), async () => {
+            const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
+            if (!activeRunId) throw new Error("当前运行标识尚未提供");
+            return core.api.legacyEvents(activeRunId);
+          });
+        } catch (error) {
+          // A superseded failure is no longer a failure for the visible view.
+          // Let the newer request decide whether the slice is stale.
+          if (generation !== eventsRequestGeneration) return store.getState().events;
+          throw error;
+        }
+        if (generation !== eventsRequestGeneration) return store.getState().events;
         const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.events) ? raw.events : [];
         const status = resourceStatus(raw);
         const current = store.getState().events;
         if (status !== "ready" && (current.data || current.items?.length)) return store.setSlice("events", { ...current, status, stale: true, error: raw?.error || "事件已过期，保留最近成功数据" });
-        return store.setSlice("events", { status, stale: status !== "ready", items, cursor: raw?.cursor ?? raw?.next_before_id ?? null, data: raw, error: raw?.error || null });
+        const incomingRunId = eventRunId(raw, eventContext);
+        const incomingScope = eventScope(eventContext);
+        const currentRunId = current.runId ?? current.data?.runId ?? current.data?.run_id ?? null;
+        const currentScope = current.scope || {};
+        // Ledger events are append-only. If the same run and same query scope
+        // briefly returns a successful empty page, keep the last non-empty
+        // page visible while exposing `empty` for consumers that need the
+        // distinction. A new run or round intentionally clears the list.
+        const retainOnEmpty = status === "ready" && items.length === 0
+          && current.items?.length > 0
+          && incomingRunId != null && currentRunId != null
+          && String(incomingRunId) === String(currentRunId)
+          && eventScopeKey(incomingScope) === eventScopeKey(currentScope);
+        return store.setSlice("events", {
+          status,
+          stale: status !== "ready",
+          items: retainOnEmpty ? current.items : items,
+          empty: items.length === 0,
+          scope: incomingScope,
+          runId: incomingRunId,
+          cursor: raw?.cursor ?? raw?.next_before_id ?? null,
+          data: raw,
+          error: raw?.error || null
+        });
       });
     },
     async saveMarketPool(payload) {

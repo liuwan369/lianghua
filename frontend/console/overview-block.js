@@ -105,10 +105,11 @@
   };
   const overviewEventContext = () => {
     const state = store.getState();
-    const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId;
-    const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
     const runId = state.runtime?.runId || state.runtime?.run_id || null;
-    const context = { assetId, marketId: item?.marketId, roundId: item?.roundId, runId };
+    // Overview is a run-level activity feed. Scoping it to the currently
+    // selected round made a valid round transition look like an empty log and
+    // discarded the previous run events on the next poll.
+    const context = { runId };
     return Object.fromEntries(Object.entries(context).filter(([, value]) => value != null && value !== ""));
   };
   const updateOverviewControls = () => {
