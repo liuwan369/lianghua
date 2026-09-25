@@ -391,14 +391,45 @@ class ApiTests(unittest.TestCase):
 
     def test_event_mapping_and_query_errors(self):
         mapped = server_module._event_dto({"id": 2, "event": "fill", "market": "btc-updown-5m-1",
-                                           "market_id": "0xcondition", "round_id": "1800000000", "time": 12.})
+                                           "market_id": "0xcondition", "round_id": "1800000000", "time": 12.,
+                                           "trade_id": "trade-1", "order_id": "order-1",
+                                           "trade_status": "CONFIRMED", "fee": .1})
         self.assertTrue({"id", "time", "kind", "marketId", "roundId", "severity", "message"} <= set(mapped))
         self.assertEqual(mapped["marketId"], "0xcondition")
         self.assertEqual(mapped["roundId"], "1800000000")
+        self.assertEqual(mapped["tradeId"], "trade-1")
+        self.assertEqual(mapped["orderId"], "order-1")
+        self.assertEqual(mapped["tradeStatus"], "CONFIRMED")
+        self.assertEqual(mapped["status"], "CONFIRMED")
+        self.assertEqual(mapped["feeUsd"], .1)
         with patch.object(server_module, "_api_run_id", return_value="run"):
             code, error = self.request("/api/events?cursor=invalid")
         self.assertEqual(code, 400)
         self.assert_metadata(error)
+
+    def test_fill_revisions_keep_identity_aliases_without_being_counted_as_new_fills(self):
+        ledger = Mock()
+        ledger.events.return_value = {"events": [
+            {"id": 3, "event": "fill", "market_id": "0xcondition", "round_id": "1800000000",
+             "trade_id": "trade-1", "order_id": "order-1", "trade_status": "CONFIRMED", "fee": .1, "time": 3.},
+            {"id": 2, "event": "fill", "market_id": "0xcondition", "round_id": "1800000000",
+             "trade_id": "trade-1", "order_id": "order-1", "trade_status": "MINED", "fee": None, "time": 2.},
+            {"id": 1, "event": "fill", "market_id": "0xcondition", "round_id": "1800000000",
+             "trade_id": "trade-1", "order_id": "order-1", "trade_status": "MATCHED", "fee": None, "time": 1.}],
+            "next_before_id": None}
+        with patch.object(server_module, "_api_run_id", return_value="run"), \
+                patch.object(server_module, "_api_ledger", return_value=ledger), \
+                patch.object(server_module, "_ledger_metadata", return_value={
+                    "source": "ledger", "asOf": 3., "stale": False, "error": None}):
+            code, body = self.request("/api/fills")
+        self.assertEqual(code, 200)
+        self.assertTrue(body["available"])
+        self.assertEqual(len(body["items"]), 3)
+        self.assertEqual({item["tradeId"] for item in body["items"]}, {"trade-1"})
+        self.assertEqual({item["orderId"] for item in body["items"]}, {"order-1"})
+        self.assertEqual([item["tradeStatus"] for item in body["items"]], ["CONFIRMED", "MINED", "MATCHED"])
+        self.assertEqual(body["items"][0]["feeUsd"], .1)
+        ledger.events.assert_called_once()
 
     def test_unavailable_modern_reads_have_no_source_clock(self):
         for path in ("/api/events", "/api/settlements", "/api/rounds/unknown/orders", "/api/rounds/unknown/position"):

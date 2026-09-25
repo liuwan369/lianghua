@@ -161,6 +161,23 @@ class LedgerRegressionTests(unittest.TestCase):
         self.assertEqual(summary["order_count"], 1)
         self.assertEqual(summary["fill_count"], 0)
 
+    def test_account_order_count_merges_late_market_identity_across_restart(self):
+        order = {"event": "order", "client_order_id": "client-late-order", "order_id": "order-late",
+                 "status": "OPEN", "market_slug": self.slug, "updated_at": self.now}
+        self.write("run-a", [order])
+        self.write("run-b", [{**order, "market_id": self.market_id, "round_id": self.round_id}])
+        summary = self.ledger.metrics_summary("run-a", range="all")
+        self.assertEqual(summary["order_count"], 1)
+
+    def test_account_order_count_splits_reused_order_id_when_identity_conflicts(self):
+        order = {"event": "order", "client_order_id": "client-reused", "order_id": "order-reused",
+                 "status": "OPEN", "market_id": self.market_id, "market_slug": self.slug,
+                 "updated_at": self.now}
+        self.write("run-a", [{**order, "round_id": self.round_id}])
+        self.write("run-b", [{**order, "round_id": "1800000300"}])
+        summary = self.ledger.metrics_summary("run-a", range="all")
+        self.assertEqual(summary["order_count"], 2)
+
     def test_composite_identity_filters_do_not_cross_assets(self):
         btc_order = {"event": "order", "assetId": "btc", "client_order_id": "btc-client",
                      "order_id": "shared-order", "status": "OPEN", "market_id": self.market_id,

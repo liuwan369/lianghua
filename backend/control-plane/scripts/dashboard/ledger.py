@@ -1628,7 +1628,10 @@ class Ledger:
                     order_sql += " AND asset_id=?"
                     order_args.append(asset_id)
                 order_rows = db.execute(order_sql, order_args)
-                order_identities = set()
+                # Keep order identities stable across restarts. Older journal
+                # rows may lack market/round mapping while a later run has
+                # the same venue order id with that mapping.
+                order_entities = []
                 for row in order_rows:
                     order = json.loads(row["payload"])
                     order_asset = _asset_from(order) or row["asset_id"]
@@ -1640,12 +1643,34 @@ class Ledger:
                         continue
                     order_id = order.get("order_id") or order.get("orderId")
                     if order_id:
-                        identity = (order_asset, order_market, order_round, order_id)
+                        candidates = [entity for entity in order_entities
+                                      if entity["asset"] == order_asset and entity["order_id"] == order_id]
+                        match = None
+                        for entity in candidates:
+                            if ((entity["market"] is not None and order_market is not None
+                                 and entity["market"] != order_market)
+                                    or (entity["round"] is not None and order_round is not None
+                                        and entity["round"] != order_round)):
+                                continue
+                            match = entity
+                            break
+                        if match is None:
+                            match = {"asset": order_asset, "order_id": order_id,
+                                     "market": order_market, "round": order_round}
+                            order_entities.append(match)
+                        else:
+                            if match["market"] is None and order_market is not None:
+                                match["market"] = order_market
+                            if match["round"] is None and order_round is not None:
+                                match["round"] = order_round
                     else:
-                        identity = (row["run_id"], order_asset, order_market, order_round,
-                                    row["client_order_id"])
-                    order_identities.add(identity)
-                order_count = len(order_identities)
+                        # Without an exchange order id, a client id is only
+                        # safe within its originating run.
+                        order_entities.append({"asset": order_asset, "order_id": None,
+                                               "market": order_market, "round": order_round,
+                                               "run_id": row["run_id"],
+                                               "client_order_id": row["client_order_id"]})
+                order_count = len(order_entities)
             period = " AND COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))>=?" \
                 " AND COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))<=?" if start is not None else ""
             parameters = (*run_ids, start, now) if start is not None else tuple(run_ids)
