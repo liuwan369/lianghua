@@ -1,7 +1,7 @@
 [Unit]
 Description=Polymarket BTC 5m simple trading dashboard (Dublin, local only)
 After=network-online.target pm-clob-market-snapshot.service
-Wants=network-online.target
+Wants=network-online.target pm-clob-market-snapshot.service
 
 [Service]
 Type=simple
