@@ -435,6 +435,19 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["asOf"])
         self.assertTrue(body["stale"])
 
+    def test_metrics_summary_without_run_is_unavailable_not_not_found(self):
+        with patch.object(server_module, "_api_run_id", return_value=None):
+            code, body = self.request("/api/metrics/summary?range=today")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["available"])
+        self.assertTrue(body["stale"])
+        self.assertEqual(body["completeness"], "unavailable")
+        self.assertEqual(body["error"], "当前没有运行记录")
+        self.assertIsNone(body["asOf"])
+        self.assertIsNone(body["pnl"])
+        self.assertIsNone(body["win_rate"])
+        self.assertIsNone(body["fill_count"])
+
     def test_read_endpoints_do_not_probe_or_ingest(self):
         with patch.object(server_module, "_api_run_id", return_value="run"), \
                 patch.object(server_module, "_api_ledger") as ledger, \
