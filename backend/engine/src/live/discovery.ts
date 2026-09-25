@@ -80,16 +80,19 @@ function jsonOrStrArray(v: unknown): string[] | undefined {
 }
 
 function marketList(v: unknown): Record<string, JsonValue>[] {
-  if (Array.isArray(v)) return v as Record<string, JsonValue>[];
+  const records = (items: unknown[]): Record<string, JsonValue>[] => items.filter((item): item is Record<string, JsonValue> =>
+    item != null && typeof item === "object" && !Array.isArray(item));
+  if (Array.isArray(v)) return records(v);
   if (v && typeof v === "object" && "data" in v) {
     const data = (v as { data?: unknown }).data;
-    if (Array.isArray(data)) return data as Record<string, JsonValue>[];
+    if (Array.isArray(data)) return records(data);
   }
   return [];
 }
 
 /** Parse one Gamma market JSON into a Candidate. */
-export function parseMarket(m: Record<string, JsonValue>, asset = DEFAULT_MARKET_ASSET): Candidate | undefined {
+export function parseMarket(m: Record<string, JsonValue> | null | undefined, asset = DEFAULT_MARKET_ASSET): Candidate | undefined {
+  if (m == null || typeof m !== "object" || Array.isArray(m)) return undefined;
   const normalizedAsset = normalizeMarketAsset(asset);
   const slugRaw = m.slug;
   if (typeof slugRaw !== "string") return undefined;
@@ -102,7 +105,8 @@ export function parseMarket(m: Record<string, JsonValue>, asset = DEFAULT_MARKET
 
   const toks =
     jsonOrStrArray(m.clobTokenIds) ?? jsonOrStrArray(m.clob_token_ids);
-  if (!toks || toks.length !== 2 || !toks[0]?.trim() || !toks[1]?.trim() || toks[0] === toks[1]) return undefined;
+  const tokenValues = toks?.map(value => value.trim());
+  if (!tokenValues || tokenValues.length !== 2 || !tokenValues[0] || !tokenValues[1] || tokenValues[0] === tokenValues[1]) return undefined;
 
   const outs = jsonOrStrArray(m.outcomes) ?? [];
   const labels = outs.map(value => value.trim().toLowerCase());
@@ -113,15 +117,15 @@ export function parseMarket(m: Record<string, JsonValue>, asset = DEFAULT_MARKET
   if (!Number.isSafeInteger(slugStart) || slugStart < 0 || slugStart % FIVE_MINUTES_SEC !== 0) return undefined;
 
   const conditionId = [m.conditionId, m.condition_id]
-    .find((value): value is string => typeof value === "string" && value.trim().length > 0) ?? "";
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "";
   if (!conditionId) return undefined;
 
   return {
     asset: normalizedAsset,
     slug,
     slugStart,
-    upToken: toks[upI]!,
-    downToken: toks[1 - upI]!,
+    upToken: tokenValues[upI]!,
+    downToken: tokenValues[1 - upI]!,
     conditionId,
   };
 }
