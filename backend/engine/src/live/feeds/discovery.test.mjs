@@ -75,3 +75,10 @@ test("discovery requires an unambiguous binary outcome mapping without shifting 
   assert.equal(parseMarket({ ...market(slug), clobTokenIds: [null, "yes-token", "no-token"] }, "sol"), undefined);
   assert.equal(parseMarket({ ...market(slug), clobTokenIds: ["one", "two", "three"] }, "sol"), undefined);
 });
+
+test("discovery ignores malformed batch entries and normalizes token identities", () => {
+  const slug = "eth-updown-5m-1800000000";
+  assert.equal(parseMarket(null, "eth"), undefined);
+  assert.equal(parseMarket({ slug, conditionId: "condition", clobTokenIds: ["  yes-token ", " no-token "], outcomes: ["Yes", "No"] }, "eth")?.upToken, "yes-token");
+  assert.equal(parseMarket({ slug, conditionId: "condition", clobTokenIds: ["yes-token", " yes-token "], outcomes: ["Yes", "No"] }, "eth"), undefined);
+});
