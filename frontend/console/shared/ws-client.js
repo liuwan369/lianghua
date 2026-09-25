@@ -40,11 +40,13 @@
           const roundId = payload?.roundId ?? payload?.round_id ?? frame?.roundId ?? frame?.round_id ?? "";
           const sequenceValue = payload?.sequence ?? frame?.sequence;
           const sequence = Number(sequenceValue);
+          const sequenceValid = sequenceValue !== null && sequenceValue !== undefined && sequenceValue !== "" && typeof sequenceValue !== "boolean" && Number.isFinite(sequence) && sequence >= 0;
           const watermarkKey = `${String(marketId)}\u0000${String(roundId)}`;
           const previous = sequenceWatermarks.get(watermarkKey);
+          if (options.requireSequence === true && !sequenceValid) return;
           if (Number.isFinite(sequence) && previous != null && sequence <= previous) return;
           if (typeof options.acceptFrame === "function" && !options.acceptFrame(frame)) return;
-          if (Number.isFinite(sequence)) sequenceWatermarks.set(watermarkKey, sequence);
+          if (sequenceValid) sequenceWatermarks.set(watermarkKey, sequence);
           options.onMessage?.(frame);
         } catch (error) { options.onError?.(error); }
       });

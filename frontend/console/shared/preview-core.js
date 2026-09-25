@@ -98,6 +98,7 @@
     if (context.assetId) params.set("assetId", context.assetId);
     if (context.marketId) params.set("marketId", context.marketId);
     if (context.roundId) params.set("roundId", context.roundId);
+    if (context.cursor) params.set("cursor", context.cursor);
     const query = params.toString();
     return query ? `?${query}` : "";
   };
@@ -149,7 +150,7 @@
     accountSave: (payload = {}) => accountPost("/api/account/save", payload),
     diagnostics: () => request("/api/diagnostics/health"),
     metrics: (range = "today") => request(`/api/metrics/summary?range=${encodeURIComponent(range)}`),
-    events: (cursor = "") => request(`/api/events${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`),
+    events: (cursor = "", context = {}) => request(`/api/events${scopedQuery({ ...context, ...(cursor ? { cursor } : {}) })}`),
     legacyStatus: () => request("/api/v1/status"),
     legacyMarkets: () => request("/api/v1/markets"),
     legacyAccount: () => request("/api/account/status"),

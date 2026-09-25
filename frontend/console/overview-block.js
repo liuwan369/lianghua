@@ -268,12 +268,19 @@
   text(".sidebar-status small", "各模块独立更新");
   text(".log-state small", "当前运行");
   document.querySelector("[data-account-total]").previousElementSibling.textContent = "账户资产 / 抵押余额";
-  const currentMarket = store.getState().marketCatalog.items.find((item) => item.assetId === store.getState().marketCatalog.selectedId);
+  const controlAssetId = () => {
+    const state = store.getState();
+    return state.marketPool.currentIds[0] || state.marketPool.desiredIds[0] || state.marketCatalog.selectedId;
+  };
+  const currentMarket = store.getState().marketCatalog.items.find((item) => item.assetId === controlAssetId());
   text(".header-status strong", currentMarket ? `${currentMarket.symbol} · 5 分钟 YES / NO` : "等待市场目录");
-  store.subscribe("marketCatalog", (catalog) => {
-    const market = catalog.items.find((item) => item.assetId === catalog.selectedId);
+  const renderControlMarket = () => {
+    const market = store.getState().marketCatalog.items.find((item) => item.assetId === controlAssetId());
     text(".header-status strong", market ? `${market.symbol} · 5 分钟 YES / NO` : "等待市场目录");
-  });
+  };
+  renderControlMarket();
+  store.subscribe("marketCatalog", renderControlMarket);
+  store.subscribe("marketPool", renderControlMarket);
   let fastRequest = null;
   let slowRequest = null;
   let accountRequest = null;

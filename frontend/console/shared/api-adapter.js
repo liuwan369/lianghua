@@ -57,6 +57,9 @@
     const accepted = raw.accepted ?? raw.ok ?? nested.accepted;
     return {
       ...nested,
+      commandStatus: raw.commandStatus ?? raw.command_status ?? nested.commandStatus ?? nested.command_status,
+      serviceState: raw.serviceState ?? raw.service_state ?? nested.serviceState ?? nested.service_state,
+      remoteOrdersState: raw.remoteOrdersState ?? raw.remote_orders_state ?? nested.remoteOrdersState ?? nested.remote_orders_state,
       accepted: accepted === true,
       status: typeof nested.status === "string" ? nested.status : accepted === true ? "accepted" : "rejected",
       message: raw.message || nested.message || (accepted === true ? "指令已接收，等待运行状态确认" : "运行控制接口未接受指令")
@@ -240,9 +243,9 @@
         return store.setSlice("metrics", { status: stale ? "stale" : "ready", stale, data, error: stale ? "部分统计未更新，保留最近结果" : null });
       });
     },
-    async loadEvents(runId) {
+    async loadEvents(runId, context = {}) {
       return readSlice("events", async () => {
-        const raw = await modernOrLegacy(() => core.api.events(), async () => {
+        const raw = await modernOrLegacy(() => core.api.events("", context), async () => {
           const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
           if (!activeRunId) throw new Error("当前运行标识尚未提供");
           return core.api.legacyEvents(activeRunId);
