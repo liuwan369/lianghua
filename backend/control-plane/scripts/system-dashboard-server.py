@@ -1865,7 +1865,17 @@ def _modern_runtime(status: dict) -> dict:
 def _api_run_id() -> str | None:
     _restore_trading_state()
     with _trading_lock:
-        return _run_identity()
+        run_id = _run_identity()
+        # A test or an in-process root switch can leave the previous runtime
+        # identity loaded while its journal belongs to another data root.
+        # Never let that stale identity make modern read endpoints probe an
+        # unrelated or missing ledger projection.
+        if run_id and _trading_log is not None:
+            try:
+                _trading_log.resolve().relative_to((TRADING_ROOT / "results").resolve())
+            except (OSError, ValueError):
+                return None
+        return run_id
 
 
 def _api_ledger() -> Ledger:
@@ -2264,8 +2274,9 @@ def make_handler(root: Path):
                         self._send_json(b'{"error":"invalid_position_query","stale":true}', 400)
                         return
                     except (KeyError, OSError, sqlite3.Error, RuntimeError):
-                        self._send_json(b'{"error":"position_unavailable","stale":true}', 503)
-                        return
+                        value = {"schemaVersion": 1, "available": False, "stale": True,
+                                 "source": "ledger", "asOf": None, "error": "ledger_projection_unavailable",
+                                 "roundId": round_id}
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/strategy-config":
