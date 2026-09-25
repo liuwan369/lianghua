@@ -28,9 +28,17 @@
 
 以上清单描述真实联调前提；后端尚未提供的能力必须在页面保持 `unavailable/stale`，不能用演示数据填充。
 
+## 代码接入状态
+
+- 前端代码已实现五个入口、Store/Adapter 分片更新、`marketId + roundId` 隔离、Unix 秒/毫秒/ISO 时间归一化、盘口 fresh gate、账户启动门禁、stale 快照保留和无 WebSocket 时的独立 REST 轮询。
+- 代码已包含目标接口和 legacy adapter 的兼容路径；接口是否能驱动真实交易仍以服务器响应和最终状态事件为准。
+- 本清单不把真实订单、成交或结算标记为已验证；本轮只读复核没有执行启动、停止、下单、账户保存或控制会话写入。
+
 ## 最近一次真实只读联调
 
-- 通过公网 Basic Auth 会话逐页访问 `overview.html`、`market.html`、`auto-trade.html`、`strategy.html`、`settings.html`，五个入口均返回 HTTP 200，页面脚本没有运行时异常。
-- 市场目录的 `asOf`、`sourceAt` 和 `sequence` 在连续请求中持续前进，行情采样没有冻结；运行池、交易运行状态、账户快照和统计接口的过期/不可用状态仍按服务器原样显示。
+- 通过公网 Basic Auth 会话访问 `overview.html`、`market.html`、`auto-trade.html`、`strategy.html`、`settings.html`，五个入口均返回 HTTP 200。未认证访问返回 HTTP 401，符合部署保护；未在未认证页面上推断 DOM 或交易结果。
+- `/api/markets?asset=crypto&duration=5m` 返回 HTTP 200；当前 `collector_online=true`、`stale=false`，BTC/ETH/SOL 均有有效 `marketId`、`roundId`，连续请求中的 `sequence`、`sourceAt`、`expiresAt` 持续更新。生产当前 `depthAvailable=false`、`strategyEligible=false`，因此启动按钮保持禁用。
+- `/api/runtime/market-pool` 返回 HTTP 200，但 `available=false`、`stale=true`、`error=market_pool_unavailable`；`/api/runtime/status` 返回 `status=stopped`、`stale=true`、`error=runtime_snapshot_stale`。
+- `/api/account/status` 可读取服务器配置状态，但当前 `live_start_ready=false`、`account_check_ready=false`；账户保存/检查另有已观测的 `account_response_invalid` 状态。前端不会把账户配置完成解释为可启动交易。
+- `/api/diagnostics/health` 当前为 `degraded`、`trading_runtime_unavailable`；`/api/metrics/summary?range=today` 生产返回 HTTP 404。生产 `streams=false`，因此页面使用 REST 轮询并保留最近成功快照，不创建 WebSocket。
 - 浏览器会话必须使用正常的 Basic Auth challenge、代理会话或请求头注入；不能把 `user:password@host` 写进页面 URL，否则浏览器会拒绝相对 `fetch` 请求。账户密码、Token 和私钥不得写入前端或文档。
-- 本轮服务器仍返回 `market_pool_unavailable`、`runtime_snapshot_stale`、`account_response_invalid`，并且没有可用的 `/api/metrics/summary` 路由；这些属于运行时、账本 API 或部署接线项，前端保留最近成功数据并显示 `stale/unavailable`。

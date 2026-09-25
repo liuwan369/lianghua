@@ -2,16 +2,18 @@
 
 下面是前端需要的最小接口集合。路径可以按现有服务命名调整，但语义和字段边界应保持一致。当前前端默认策略 ID 是 `btc-reversal`，只服务 BTC 五分钟反转策略。
 
-## 当前联调前提
+## 代码接入边界与生产状态
 
-以下条件是前端进入真实交易联调的硬性接口前提，当前独立前端尚未连接真实账户和交易环境：
+以下条件是前端进入真实交易联调的接口边界。前端代码已经接入目标接口、legacy 回退和状态门禁；“代码已实现”不等于“生产已经提供可交易数据”。本轮生产只读结果另列在本节末尾。
 
 1. 市场目录必须返回真实的 `marketId` 和 `roundId`，运行池必须返回 `desiredIds`、`currentIds`、`nextRoundIds` 以及 `effectiveRoundId`。前端以 `marketId + roundId` 隔离盘口、持仓、订单和策略阶段。
 2. `/api/v1/markets` 是旧的兼容接口，可能没有 `roundId`。如果只提供该接口，前端可以显示市场和报价，但不会使用空轮次查询持仓或订单，页面会显示等待后端提供当前轮次标识。
 3. 实时行情、运行状态和订单事件分别通过独立流接入。只有配置了 `streams.markets`、`streams.runtime`、`streams.orders` 的地址后，前端才会建立对应 WebSocket；地址未配置时显示待接入并保留最近一次成功的 REST 快照。
 4. 账户快照、账户检查和交易控制必须由真实后端提供。前端不接收或保存私钥、Token、签名材料或其他账户秘密；账户页面只显示服务器返回的配置状态、检查结果和只读摘要。
 
-后端尚未提供上述能力时，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。后端必须提供符合当前约定的市场目录、运行池、快照和 `marketId + roundId` 字段；旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识。
+对生产尚未提供或返回不可用的能力，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识；当前 `/api/markets` 已能返回有效 `marketId + roundId`，但生产盘口深度仍未提供。
+
+本轮生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`（保存/检查另有 `account_response_invalid` 状态）；`/api/metrics/summary` 返回 HTTP 404；生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。
 
 ## 现有服务可复用接口
 
@@ -42,8 +44,13 @@
 | `GET /api/v1/runs`、`GET /api/v1/events`、`GET /api/v1/summary`、`GET /api/v1/orders` | 可用 | 运行历史、事件、汇总、订单只读查询 | 以 `run_id` 查询，仍不是按 `marketId + roundId` 的实时读模型 |
 | `GET /api/strategy-config`、`PUT /api/strategy-config` | 可用 | 读取/保存策略配置 | 使用 `expectedRevision` + `config`；没有独立 drafts/activate 路由 |
 | `POST /api/trading/control` | 可用 | 启动、暂停、恢复、停止 | 使用 snake_case；`start` 的 `request_id` 必须是 UUID |
-| `/api/bootstrap`、`/api/markets`、`/api/runtime/*`、`/api/rounds/*`、`/api/account/snapshot`、`/api/diagnostics/health`、`/api/metrics/summary` | 当前未发现 | 目标契约接口 | 前端不能把目标路径当成已部署能力；由 Adapter 明确选择回退或显示 `unavailable` |
-| `/api/stream/markets`、`/api/stream/runtime`、`/api/stream/orders` | 当前未发现浏览器侧服务 | 三条独立实时流 | 引擎内部 WebSocket 不等于控制台可订阅流；未配置 URL 时不建立连接 |
+| `/api/bootstrap` | 代码已实现 | 本轮未单独验证生产响应 | 由 Adapter 读取能力与版本；不可用时保留 `unavailable` |
+| `/api/markets` | 代码已实现 | 生产 HTTP 200；目录新鲜且有 `marketId + roundId`，但 `depthAvailable=false`、`strategyEligible=false` | 不因目录有报价就开放启动 |
+| `/api/runtime/*` | 代码已实现 | `market-pool` HTTP 200 但 `market_pool_unavailable`；status HTTP 200 但 `stopped/runtime_snapshot_stale`；控制命令本轮未调用 | 运行池和最终状态以服务器为准 |
+| `/api/rounds/*` | 代码已实现 | 本轮未验证真实持仓/订单响应 | 不声称真实订单、成交或结算已验证 |
+| `/api/account/snapshot`、`/api/diagnostics/health` | 代码已实现 | diagnostics 生产 HTTP 200、`degraded/trading_runtime_unavailable`；账户快照本轮未单独验证 | `/api/account/status` 当前 `live_start_ready=false` |
+| `/api/metrics/summary` | 代码已实现 | 生产 HTTP 404 | 总览保留 unavailable/stale，legacy 汇总仍走兼容路径 |
+| `/api/stream/markets`、`/api/stream/runtime`、`/api/stream/orders` | 代码已实现配置入口；生产 `streams=false` | 本轮生产未建立 WebSocket，使用独立 REST 轮询 | 引擎内部 WebSocket 不等于控制台可订阅流；未配置 URL 时不建立连接 |
 
 ### `/api/v1/markets` 的 legacy DTO
 
