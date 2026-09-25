@@ -534,6 +534,31 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(status["live_start_ready"])
         self.assertFalse(status["liveStartReady"])
 
+    def test_account_save_persists_when_check_is_temporarily_unavailable(self):
+        wallet = "0x" + "a" * 40
+        values = {"POLYMARKET_WALLET_ADDRESS": wallet,
+                  "POLYMARKET_OWNER_PRIVATE_KEY": "0x" + "b" * 64}
+        for code in ("account_rpc_failed", "account_response_invalid"):
+            with self.subTest(code=code), \
+                    patch.object(server_module, "_account_values", return_value=values), \
+                    patch.object(server_module, "trading_status", return_value={"running": False}), \
+                    patch.object(server_module.account_store, "load_profile", return_value=values), \
+                    patch.object(server_module.account_store, "check_account",
+                                 side_effect=server_module.account_store.AccountCheckError(code)), \
+                    patch.object(server_module.account_store, "save_profile") as save, \
+                    patch.object(server_module, "_persist_trading_state"), \
+                    patch.object(server_module, "_account_data", None), \
+                    patch.object(server_module, "_account_report", {"account_ready": True}), \
+                    patch.object(server_module, "_account_report_identity", "old"), \
+                    patch.object(server_module, "_account_check_error", None):
+                result = server_module._checked_account_action({"wallet": wallet}, save=True)
+            self.assertTrue(result["saved"])
+            self.assertFalse(result["account_check_ready"])
+            self.assertFalse(result["live_start_ready"])
+            self.assertIsNone(result["settlement_credentials_ready"])
+            self.assertEqual(result["check_error"], code)
+            save.assert_called_once()
+
 
 class SnapshotTests(unittest.TestCase):
     def test_engine_frame_is_rechecked_at_read_time(self):
