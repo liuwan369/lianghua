@@ -144,7 +144,17 @@
           const scoped = markets.map((item) => ({ ...item, assetId: item.assetId ?? item.asset_id ?? data.assetId })).find((item) => vm.matchesIdentity(item, context));
           if (scoped) return { ...vm.runtime({ ...data, ...scoped, status: data.status || data.state }), connectionStatus: resourceStatus(data), stale: resourceStatus(data) !== "ready" };
           if (vm.matchesIdentity(data, context)) return vm.runtime(data);
-          throw new Error("运行状态身份与所选资产不匹配");
+          const processOnly = vm.runtime(data);
+          return {
+            status: "unavailable",
+            state: "unavailable",
+            source: processOnly.source,
+            processRunning: processOnly.processRunning,
+            stale: true,
+            connectionStatus: resourceStatus(data),
+            identityMismatch: true,
+            error: "运行状态身份与所选资产不匹配"
+          };
         } catch (error) {
           return { status: "unavailable", stale: true, error: errorText(error), assetId: context.assetId, marketId: context.marketId, roundId: context.roundId };
         }

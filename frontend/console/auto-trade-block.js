@@ -613,6 +613,7 @@
     var runtimeIdentityMatches = Boolean(selectedRuntime && vm.matchesIdentity(selectedRuntime, context));
     var runtimeActive = processRunning === true;
     var running = processRunning === true;
+    var freshPaused = runtimeIdentityMatches && !selectedRuntime.stale && processRunning === true && (runtimeState === "paused");
     var catalog = store.getState().marketCatalog;
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
@@ -638,7 +639,7 @@
       }
       if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || marketPool.stale || !marketPool.desiredIds.includes(context.assetId))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
-      if (action === "pause") button.textContent = selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused" ? "恢复新增" : "暂停新增";
+      if (action === "pause") button.textContent = freshPaused ? "恢复新增" : "暂停新增";
       button.disabled = Boolean(reason);
       button.title = reason;
     });
@@ -745,7 +746,14 @@
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const action = button.dataset.action === "pause" && (selectedRuntime?.state === "paused" || selectedRuntime?.status === "paused") ? "resume" : button.dataset.action;
+      const contextForAction = currentContext();
+      const runtimeStateForAction = selectedRuntime?.state || selectedRuntime?.status;
+      const canResume = button.dataset.action === "pause"
+        && !selectedRuntime?.stale
+        && selectedRuntime?.processRunning === true
+        && vm.matchesIdentity(selectedRuntime, contextForAction)
+        && runtimeStateForAction === "paused";
+      const action = canResume ? "resume" : button.dataset.action;
       if (commandPending || button.disabled) return;
       var context = currentContext();
       var version = contextVersion;
