@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -222,6 +223,39 @@ class LedgerRegressionTests(unittest.TestCase):
         page = self.ledger.settlements_page("run-a")["settlements"]
         self.assertEqual(page[0]["market_id"], self.market_id)
         self.assertEqual(page[0]["round_id"], self.round_id)
+
+    def test_multi_asset_round_migration_uses_namespaced_alias_key(self):
+        path = self.root / "legacy.sqlite"
+        ledger = Ledger(path)
+        journal = self.root / "legacy.jsonl"
+        ledger.register_run("run-eth", "live", "account-a", journal)
+        market_id = "0x" + "c" * 64
+        slug = "eth-updown-5m-1800000000"
+        round_id = "1800000000"
+        runtime = {"markets": [{"id": market_id, "name": slug, "assetId": "eth", "roundId": round_id}]}
+        db = sqlite3.connect(path)
+        try:
+            db.execute("INSERT INTO platform_runtime(run_id,source_at,payload) VALUES(?,?,?)",
+                       ("run-eth", self.now, json.dumps(runtime)))
+            db.execute("INSERT INTO markets(run_id,market,asset_id) VALUES(?,?,?)",
+                       ("run-eth", slug, "btc"))
+            db.execute("INSERT INTO market_details(run_id,market,asset_id,last_time) VALUES(?,?,?,?)",
+                       ("run-eth", slug, "btc", self.now))
+            db.execute("DELETE FROM projection_migrations WHERE name='round_identity_v1'")
+            db.commit()
+        finally:
+            db.close()
+        Ledger(path)
+        db = sqlite3.connect(path)
+        try:
+            market = db.execute("SELECT market,asset_id,round_id FROM markets WHERE run_id=? AND asset_id=?",
+                                ("run-eth", "eth")).fetchone()
+            detail = db.execute("SELECT market,asset_id,round_id FROM market_details WHERE run_id=? AND asset_id=?",
+                                ("run-eth", "eth")).fetchone()
+        finally:
+            db.close()
+        self.assertEqual(market, ("eth::" + slug, "eth", round_id))
+        self.assertEqual(detail, ("eth::" + slug, "eth", round_id))
 
     def test_unknown_round_identity_is_not_guessed(self):
         fill = self.fill(market_slug="unknown-old-slug", trade_id="unknown-round")

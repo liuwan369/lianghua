@@ -475,6 +475,16 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(body["summary"]["settled_pnl"], 2.)
 
+    def test_legacy_runs_without_account_identity_are_unavailable(self):
+        with patch.object(server_module, "_current_account_id", return_value=None), \
+                patch.object(server_module, "Ledger", side_effect=AssertionError("unscoped ledger read")):
+            code, body = self.request("/api/v1/runs")
+        self.assertEqual(code, 200)
+        self.assertFalse(body["available"])
+        self.assertTrue(body["stale"])
+        self.assertEqual(body["runs"], [])
+        self.assertEqual(body["error"], "account_not_configured")
+
     def test_settlement_credentials_are_displayed_as_runtime_tristate(self):
         wallet = "0x" + "a" * 40
         values = {"POLYMARKET_WALLET_ADDRESS": wallet,
