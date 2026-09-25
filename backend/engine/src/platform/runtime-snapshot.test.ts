@@ -28,6 +28,13 @@ function paired(sequence: number, at: number, yesAsk: number, noAsk: number): Ma
       depthSourceAt: at, depthExpiresAt: 1298, bids: [[noAsk - 0.05, 10]], asks: [[noAsk, 10]], sequence } };
 }
 
+function pairedWithConflictingDepth(sequence: number, at: number, yesAsk: number, noAsk: number): MarketBookSnapshot {
+  const value = paired(sequence, at, yesAsk, noAsk);
+  return { ...value,
+    YES: { ...value.YES!, bid: yesAsk - 0.04, bids: [[yesAsk - 0.01, 9]], asks: [[yesAsk - 0.01, 11]] },
+    NO: { ...value.NO!, bid: noAsk - 0.04, bids: [[noAsk + 0.01, 9]], asks: [[noAsk + 0.01, 11]] } };
+}
+
 {
   let now = 1000;
   const platform = createPlatform(() => now);
@@ -60,6 +67,56 @@ function paired(sequence: number, at: number, yesAsk: number, noAsk: number): Ma
     YES: { ...first.YES!, assetId: "wrong" }, }), false, "wrong token identity is rejected");
   assert.throws(() => platform.ingest({ kind: "market", market: { ...market, roundId: "1100" } }),
     /market round identity is required/, "market round identity must match the five-minute start");
+}
+
+{
+  let now = 1000;
+  const platform = createPlatform(() => now);
+  platform.ingest({ kind: "market", market });
+  const strategy = createBtcReversalStrategy({ triggerPrice: 0.6, confirmationPrice: 0.65,
+    maxBuyPrice: 0.7, stageShares: [1], maxStages: 1, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 },
+    { persist: () => undefined });
+  platform.attach(strategy);
+
+  let listenerSnapshot: MarketBookSnapshot | undefined;
+  let strategySnapshot: MarketBookSnapshot | undefined;
+  let strategyContextBook: { tokenId: string; bids?: unknown[]; asks?: unknown[] } | undefined;
+  platform.subscribe(event => { if (event.kind === "book" && event.snapshot) listenerSnapshot = event.snapshot; });
+  const strategyOnEvent = strategy.onEvent.bind(strategy);
+  strategy.onEvent = (event, context) => {
+    if (event.kind === "book" && event.snapshot) {
+      strategySnapshot = event.snapshot;
+      strategyContextBook = context.books.find(book => book.tokenId === "yes-1");
+    }
+    return strategyOnEvent(event, context);
+  };
+  const baseline = pairedWithConflictingDepth(1, 1000, 0.41, 0.59);
+  assert.equal(platform.ingestSnapshot(baseline), true,
+    "a fresh BBO remains executable while L2 top levels are temporarily different");
+  const accepted = { ...baseline, assetId: "btc" };
+  assert.deepEqual(listenerSnapshot, accepted, "the platform listener receives the accepted paired snapshot");
+  assert.deepEqual(strategySnapshot, accepted, "the strategy listener receives the same paired snapshot");
+  assert.ok(Math.abs(platform.market.snapshots()[0]?.YES?.bids?.[0]?.[0]! - 0.4) < 1e-9,
+    "the accepted snapshot keeps the venue L2 for API display");
+  assert.equal(platform.market.book("yes-1")?.ask, 0.41, "the market book exposes the fast BBO ask");
+  assert.equal(platform.market.book("no-1")?.ask, 0.59, "the market book exposes the fast BBO ask");
+  assert.ok(Math.abs(platform.market.depth("yes-1")?.asks?.[0]?.[0]! - 0.4) < 1e-9,
+    "display depth keeps the original L2 instead of rewriting it to BBO");
+  assert.equal(strategyContextBook?.bids, undefined,
+    "strategy context does not expose conflicting L2 to execution logic");
+  assert.equal(strategyContextBook?.asks, undefined,
+    "strategy context does not expose conflicting L2 asks to execution logic");
+  const coreBooks = (platform.core as unknown as { books: Map<string, { bids?: unknown[]; asks?: unknown[] }> }).books;
+  assert.equal(coreBooks.get("yes-1")?.bids, undefined,
+    "conflicting L2 is removed from the core execution book");
+  assert.equal(coreBooks.get("yes-1")?.asks, undefined,
+    "conflicting L2 asks are removed from the core execution book");
+
+  now = 1001;
+  assert.equal(platform.ingestSnapshot(pairedWithConflictingDepth(2, 1001, 0.7, 0.5)), true,
+    "a later BBO crossing is accepted despite the same temporary L2 skew");
+  assert.equal(strategy.exportState().rounds[0]?.stages[0]?.direction, "UP",
+    "the strategy consumes the fresh BBO and can trigger normally");
 }
 
 {

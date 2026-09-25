@@ -16,6 +16,7 @@ export class TradingPlatform {
   readonly core: TradingCore;
   private markets = new Map<string, MarketInfo>();
   private books = new Map<string, Book>();
+  private executionBooks = new Map<string, Book>();
   private snapshots = new Map<string, MarketBookSnapshot>();
   private listeners = new Set<(event: TradingEvent) => void>();
   private plugins = new Map<string, StrategyPlugin>();
@@ -183,6 +184,7 @@ export class TradingPlatform {
     for (const book of books) {
       const snapshot = clone(book);
       this.books.set(book.tokenId, snapshot);
+      this.executionBooks.set(book.tokenId, clone(snapshot));
       try { this.options.adapters.record?.({ kind: "book", book: snapshot }); }
       catch { /* Background logging is not an order gate. */ }
     }
@@ -235,13 +237,30 @@ export class TradingPlatform {
       depthSourceAt: asset.depthSourceAt,
       depthExpiresAt: asset.depthExpiresAt,
     });
-    const books = [toBook(yes), toBook(no)];
+    // Fast BBO and the venue's slower L2 stream can briefly describe different
+    // top levels. Keep the complete venue book for status/API consumers, but
+    // do not let a conflicting L2 price or size reject the live BBO or enter
+    // the core's execution book. The core remains strict for legacy books and
+    // for L2 that agrees with its BBO.
+    const displayBooks = [toBook(yes), toBook(no)];
+    const executionBooks = displayBooks.map(book => {
+      const bid = book.bids?.[0];
+      const ask = book.asks?.[0];
+      const depthMatchesBbo = (!bid || book.bid == null || Math.abs(book.bid - bid[0]) <= 1e-9)
+        && (!ask || book.ask == null || Math.abs(book.ask - ask[0]) <= 1e-9)
+        && (!bid || book.bidSize == null || Math.abs(book.bidSize - bid[1]) <= 1e-9)
+        && (!ask || book.askSize == null || Math.abs(book.askSize - ask[1]) <= 1e-9);
+      if (depthMatchesBbo) return book;
+      return { ...book, bidSize: undefined, askSize: undefined, bids: undefined, asks: undefined,
+        depthSourceAt: undefined, depthExpiresAt: undefined };
+    });
     const appliedAt = performance.now();
-    if (!this.core.markBatch(books)) return false;
+    if (!this.core.markBatch(executionBooks)) return false;
     // Preserve venue identity and timestamps; enrich only the runtime symbol
     // from the registered market whose outcome tokens were checked above.
     snapshot = { ...snapshot, assetId: market.assetId };
-    for (const book of books) this.books.set(book.tokenId, clone(book));
+    for (const book of displayBooks) this.books.set(book.tokenId, clone(book));
+    for (const book of executionBooks) this.executionBooks.set(book.tokenId, clone(book));
     const key = JSON.stringify([marketId, roundId]);
     this.snapshots.set(key, clone(snapshot));
     const recordEvent: TradingEvent = { kind: "book", snapshot: clone(snapshot), marketId, roundId,
@@ -262,7 +281,9 @@ export class TradingPlatform {
   }
   private context(): StrategyContext {
     return freeze({ mode: this.options.adapters.gateway.mode, now: this.options.now?.() ?? Date.now() / 1000,
-      markets: this.market.list(), books: this.market.books(), account: this.core.contextSnapshot(),
+      // Strategy contexts expose the execution-safe view. The public market
+      // accessors and paired snapshots retain the venue's raw L2 for display.
+      markets: this.market.list(), books: clone([...this.executionBooks.values()]), account: this.core.contextSnapshot(),
       estimateFee: (order: Omit<OrderRequest, "strategyId">) =>
         this.options.adapters.estimateFee?.({ ...order, strategyId: "estimate" }) ?? 0 });
   }
