@@ -340,6 +340,7 @@
     text("[data-status-age]", "--");
     text("[data-position-state]", "读取中");
     text("[data-orders-state]", "读取中");
+    text("[data-activity-state]", "正在读取新场次事件");
     text("[data-live-status]", "所选市场状态待接入");
     text("[data-invested]", "--");
     text('[data-holding="up"]', "--");
@@ -355,6 +356,8 @@
     if (body) body.innerHTML = '<tr><td colspan="6">正在读取新场次持仓和订单</td></tr>';
     var timeline = document.querySelector("[data-stage-timeline]");
     if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>新场次数据读取中</strong><small>等待后端返回当前 roundId 的持仓和策略阶段</small></div><time>--</time></li>';
+    var activityList = document.querySelector("[data-activity-list]");
+    if (activityList) activityList.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>新场次事件读取中</strong><small>等待后端返回当前 marketId + roundId 事件</small></div><b class="activity-tag info-tag">读取中</b></li>';
   };
   var itemMatchesContext = function(item, asset) {
     return vm.matchesIdentity(item, { assetId: asset?.id, marketId: asset?.marketId, roundId: asset?.roundId });
@@ -607,6 +610,7 @@
     var asset = assetById(context.assetId);
     var runtimeState = selectedRuntime?.state || selectedRuntime?.status;
     var processRunning = selectedRuntime?.processRunning;
+    var runtimeIdentityMatches = Boolean(selectedRuntime && vm.matchesIdentity(selectedRuntime, context));
     var runtimeActive = processRunning === true;
     var running = processRunning === true;
     var catalog = store.getState().marketCatalog;
@@ -617,10 +621,11 @@
       var sameActionCooldown = cooldownActive && commandCooldownAction === action;
       var stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop" && commandCooldownContextKey === identityKey(context);
       var reason = commandPending || sameActionCooldown ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
-      if (!reason && action === "stop" && !running && !stopAfterAcceptedStart) reason = "没有服务器确认的可停止运行";
-      if (!reason && action === "pause" && processRunning !== true) reason = "服务器未确认进程正在运行";
+      if (!reason && action === "stop" && (!runtimeIdentityMatches || !running) && !stopAfterAcceptedStart) reason = !runtimeIdentityMatches ? "当前市场没有匹配的服务器运行身份" : "没有服务器确认的可停止运行";
+      if (!reason && action === "pause" && (processRunning !== true || selectedRuntime?.stale || !runtimeIdentityMatches)) reason = selectedRuntime?.stale ? "运行状态已过期，暂不允许暂停或恢复" : !runtimeIdentityMatches ? "当前市场没有匹配的服务器运行身份" : "服务器未确认进程正在运行";
       if (!reason && action === "start" && processRunning === true) reason = "服务器已确认进程正在运行";
       if (!reason && action === "start" && processRunning !== false) reason = "服务器进程状态未知，暂不允许启动";
+      if (!reason && action === "start" && selectedRuntime?.stale) reason = "运行状态已过期，暂不允许启动";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
       if (!reason && action === "start") reason = vm.strategyAssetStartReason(strategy, context.assetId);
       if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";

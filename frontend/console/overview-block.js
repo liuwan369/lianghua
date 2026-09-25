@@ -84,6 +84,7 @@
     const runtime = state.runtime || {};
     if (runtime.processRunning === true) return "服务器已确认进程正在运行，请先停止或等待状态确认";
     if (runtime.processRunning !== false) return "服务器进程状态未知，暂不允许启动";
+    if (runtime.stale) return "运行状态已过期，暂不允许启动";
     const runtimeState = runtime.runtimeState || runtime.status;
     if (!runtime.stale && ["running", "starting", "paused", "stopping"].includes(runtimeState)) return "服务器仍有运行状态，请先停止或等待状态确认";
     const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
