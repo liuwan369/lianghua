@@ -6,7 +6,7 @@
   const initialCatalog = { status: "unavailable", items: [], selectedId: null, source: "backend", stale: true, error: "行情目录尚未接入", receivedAt: 0 };
   const state = {
     marketCatalog: initialCatalog,
-    marketPool: { desiredIds: [], currentIds: [], nextRoundIds: [], effectiveRoundId: null, source: "backend", status: "unavailable", stale: true, error: "运行池尚未接入" },
+    marketPool: { desiredIds: [], currentIds: [], nextRoundIds: [], effectiveRoundId: null, source: "backend", status: "unavailable", stale: true, error: "运行池尚未接入", receivedAt: 0, initialUnavailable: false },
     runtime: { status: "unavailable", source: "backend", stale: true, asOf: null, markets: [], error: "后端尚未接入" },
     strategy: { status: "unavailable", revision: null, data: null, error: "策略配置尚未接入" },
     account: { status: "unavailable", data: null, error: "后端尚未接入" },
@@ -25,9 +25,15 @@
     listener(state[slice], state);
     return () => subscribers.set(slice, list.filter((item) => item !== listener));
   };
+  const canInitializeMarketPool = (value) => Boolean(value?.initialUnavailable === true
+    && !(value.receivedAt > 0)
+    && value.error === "market_pool_unavailable"
+    && Array.isArray(value.desiredIds) && value.desiredIds.length === 0
+    && Array.isArray(value.currentIds) && value.currentIds.length === 0
+    && Array.isArray(value.nextRoundIds) && value.nextRoundIds.length === 0);
   const setMarketPool = (value) => {
     const next = vm.pool(value, state.marketCatalog.items);
-    const result = { ...next, status: "ready", stale: false, error: null, pendingDesiredIds: null, receivedAt: Date.now() };
+    const result = { ...next, status: "ready", stale: false, error: null, pendingDesiredIds: null, receivedAt: Date.now(), initialUnavailable: false };
     update("marketPool", result);
     return result;
   };
@@ -59,5 +65,5 @@
     return update("marketCatalog", { selectedId });
   };
   const setSlice = (slice, value) => update(slice, value);
-  window.PolyPreviewStore = Object.freeze({ getState: () => state, subscribe, update, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket });
+  window.PolyPreviewStore = Object.freeze({ getState: () => state, subscribe, update, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket, canInitializeMarketPool });
 })();

@@ -13,7 +13,7 @@
 
 对生产尚未提供或返回不可用的能力，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识；当前 `/api/markets` 已能返回有效 `marketId + roundId`，但生产盘口深度仍未提供。
 
-本轮生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`（保存/检查另有 `account_response_invalid` 状态）；`/api/metrics/summary` 返回 HTTP 404；生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。
+本轮生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`（保存/检查另有 `account_response_invalid` 状态）；`/api/metrics/summary` 返回 HTTP 404；生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。`strategyEligible` 不作为前端启动预检条件，避免把展示采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。
 
 ## 现有服务可复用接口
 
@@ -199,6 +199,8 @@ legacy 模式实际使用的 DTO 边界如下：
 - `effectiveRoundId` 是这次变更计划生效的轮次。
 
 前端 PUT 只提交 `desiredIds` 和可选的 `effectiveRoundId`，不能用客户端状态覆盖服务器的 `currentIds` 或 `nextRoundIds`。当前单实例运行池要求始终保留一个 desired asset；市场页因此会禁用最后一个已启用币种的停用操作，停止交易使用 runtime stop 命令。
+
+若首次 GET 明确返回空的 `market_pool_unavailable` 且浏览器从未收到成功池快照，前端只允许选择一个完整、服务端支持的 `marketId + roundId` 资产发起首次 PUT；网络错误、已有配置 stale 或其他 unavailable 不开放写入。首次 PUT 仍使用同源认证凭据并要求已建立的 live control session，认证失败原样显示，不在浏览器保存或注入密码/Token。
 
 ## WebSocket 实时流
 
