@@ -78,20 +78,6 @@
       if (target) window.PolyPreview.navigate(target);
     });
   });
-  const hasTradableDepth = (item) => {
-    if (item?.depthAvailable !== true || item?.depthUnavailable === true) return false;
-    const book = item.orderBook || {};
-    const sideBook = (side) => book[side] || book[side.toUpperCase()] || {};
-    const hasFiveLevels = (levels) => Array.isArray(levels) && levels.length >= 5 && levels.slice(0, 5).every((level) => {
-      const price = Array.isArray(level) ? Number(level[0]) : Number(level?.price);
-      const size = Array.isArray(level) ? Number(level[1]) : Number(level?.size ?? level?.quantity ?? level?.shares);
-      return Number.isFinite(price) && price > 0 && price < 1 && Number.isFinite(size) && size > 0;
-    });
-    return ["yes", "no"].every((side) => {
-      const levels = sideBook(side);
-      return hasFiveLevels(levels.bids || levels.bid) && hasFiveLevels(levels.asks || levels.ask);
-    });
-  };
   const overviewStartReason = () => {
     const state = store.getState();
     const assetId = state.marketPool.desiredIds[0];
@@ -100,13 +86,7 @@
     if (item.canEnable !== true) return "服务器尚未确认该市场可加入运行池";
     if (item.stale === true || state.marketCatalog.stale) return "行情目录或行情已过期，暂不允许启动";
     if (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)) return "请先在市场页面确认运行池";
-    const now = Date.now();
-    const sourceAt = window.PolyPreview.format.timestampMs(item.sourceAt);
-    const expiresAt = window.PolyPreview.format.timestampMs(item.expiresAt);
-    const snapshotFresh = hasTradableDepth(item) && item.stale !== true
-      && Number.isFinite(Number(item.sequence)) && sourceAt != null && expiresAt != null
-      && [item.yesBid, item.yesAsk, item.noBid, item.noAsk].every((value) => Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) < 1)
-      && sourceAt > 0 && sourceAt <= now + 5000 && expiresAt > now;
+    const snapshotFresh = window.PolyPreviewViewModel.hasFreshBbo(item);
     if (!snapshotFresh) return "当前盘口快照未新鲜确认，暂不允许启动";
     const strategy = state.strategy || {};
     if (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";

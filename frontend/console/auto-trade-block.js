@@ -104,7 +104,7 @@
             <div class="quote-box up-quote"><span><i></i>YES \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="yes-bid">--</b><em>/</em><b data-quote="yes-ask">--</b></strong></div>
             <div class="quote-box down-quote"><span><i></i>NO \u4E70\u4E00 / \u5356\u4E00</span><strong><b data-quote="no-bid">--</b><em>/</em><b data-quote="no-ask">--</b></strong></div>
           </div>
-          <div class="depth-toolbar"><div><strong>\u4E94\u6863\u6DF1\u5EA6</strong><span>\u4E70\u5356\u4E24\u4FA7\u5B9E\u65F6\u663E\u793A</span></div><span class="depth-source" data-book-source>\u7B49\u5F85\u5B9E\u65F6\u5FEB\u7167</span></div>
+          <div class="depth-toolbar"><div><strong>\u4E94\u6863\u6DF1\u5EA6</strong><span data-depth-availability>\u7B49\u5F85\u6DF1\u5EA6\u6570\u636E</span></div><span class="depth-source" data-book-source>\u7B49\u5F85\u5B9E\u65F6\u5FEB\u7167</span></div>
           <div class="depth-columns">
             <section class="depth-book up-depth" aria-label="YES \u4E94\u6863\u6DF1\u5EA6">
               <div class="depth-book-title"><span class="direction-dot up-dot"></span><strong>YES</strong><small>\u4E70\u5165\u65B9\u5411</small></div>
@@ -239,19 +239,19 @@
         return Number.isFinite(price) && price > 0 && price < 1 && Number.isFinite(size) && size > 0;
       });
     };
-    var hasDepth = source.depthAvailable !== false && ["yes", "no"].every(function(side) {
+    var hasDepth = ["yes", "no"].every(function(side) {
       var sideBook = bookSide(side);
       var bids = sideBook.bids || sideBook.bid;
       var asks = sideBook.asks || sideBook.ask;
       return hasFiveLevels(bids) && hasFiveLevels(asks);
     });
+    var depthPresent = !model.depthUnavailable && hasDepth;
     var watermarkKey = identityKey(context);
     var previousSequence = snapshotWatermarks.get(watermarkKey);
-    var valid = Boolean(marketId && roundId) && hasDepth && !model.depthUnavailable && Number.isFinite(sequence) && sequence >= 0 && sourceAt != null && expiresAt != null
-      && sourceAt <= now + 5000 && expiresAt > now && source.stale !== true && raw.stale !== true
+    var valid = Boolean(marketId && roundId) && vm.hasFreshBbo(source, now) && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence >= previousSequence);
     if (!valid) {
-      markSnapshotStale(model.depthUnavailable || source.depthAvailable === false || !hasDepth ? "盘口深度待接入 · 保留最近快照" : raw.stale === true ? "行情源标记 stale · 保留最近快照" : "行情已过期、缺少深度或序列落后 · 保留最近快照");
+      markSnapshotStale(raw.stale === true || source.stale === true ? "行情源标记 stale · 保留最近快照" : !vm.hasFreshBbo(source, now) ? "双边 BBO 已过期或待接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");
       return false;
     }
     if (sequence === previousSequence && lastSnapshotValid) return true;
@@ -272,6 +272,10 @@
       var bids = levels(side, "bid"); var asks = levels(side, "ask");
       var render = function(node, list, tone) {
         if (!node) return;
+        if (!depthPresent || list.length < 5) {
+          node.innerHTML = '<tr><td colspan="4" class="depth-unavailable">深度暂不可用</td></tr>';
+          return;
+        }
         if (node.rows.length !== 5) node.innerHTML = Array.from({ length: 5 }, function(_, index) { return `<tr><td>${index + 1}</td><td class="depth-price ${tone}">--</td><td>--</td><td><span class="depth-bar ${tone}" style="--depth:0%"></span></td></tr>`; }).join("");
         var maximum = Math.max(1, ...list.slice(0, 5).map(function(level) { return level.size; }));
         Array.from(node.rows).forEach(function(row, index) {
@@ -292,6 +296,7 @@
     });
     text("[data-book-source]", `${fromStream ? "实时流" : "REST 快照"} · ${window.PolyPreview.format.time(sourceAt)}`);
     text("[data-book-live-state]", fromStream ? "实时流 · 已连接" : "REST 快照 · 已更新");
+    text("[data-depth-availability]", depthPresent ? "五档深度 · 已接入" : "BBO 已更新 · 深度暂不可用");
     text("[data-book-age]", window.PolyPreview.format.time(sourceAt));
     return true;
   };
@@ -309,7 +314,7 @@
     var assetId = payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id;
     if (!requireRound && !marketId && !roundId && !assetId) return true;
     if (!context.assetId || !context.marketId || !context.roundId || !marketId || !roundId || !assetId) return false;
-    return String(assetId) === String(context.assetId) && marketId === context.marketId && roundId === context.roundId;
+    return String(assetId) === String(context.assetId) && String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId);
   };
   var streamUrl = function(name) {
     var configured = window.PolyPreview.config.streams?.[name];
