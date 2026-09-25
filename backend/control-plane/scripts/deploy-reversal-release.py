@@ -293,13 +293,17 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
         if restarted:
             subprocess.run(['systemctl','restart',dashboard_unit],check=True)
         import time
-        for attempt in range(20):
+        for attempt in range(45):
             try:
                 after=status()
-                break
+                if (after.get('running') is False
+                        and after.get('live_unlocked') is before['live_unlocked']):
+                    break
             except Exception:
-                if attempt==19: raise
-                time.sleep(1)
+                after = None
+            if attempt == 44:
+                raise RuntimeError('Dashboard did not return the expected stopped/live-lock state after restart')
+            time.sleep(1)
         if after.get('running') is not False or after.get('live_unlocked') is not before['live_unlocked']:
             raise RuntimeError('Unexpected trading state')
     except Exception:
