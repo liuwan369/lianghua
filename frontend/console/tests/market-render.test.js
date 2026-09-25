@@ -82,9 +82,16 @@ const rootPath = require("path").resolve(__dirname, "..");
 const autoTradeSource = fs.readFileSync(`${rootPath}/auto-trade-block.js`, "utf8");
 const overviewSource = fs.readFileSync(`${rootPath}/overview-block.js`, "utf8");
 const marketSource = fs.readFileSync(`${rootPath}/market-block.js`, "utf8");
+const strategySource = fs.readFileSync(`${rootPath}/strategy-block.js`, "utf8");
 (async () => {
 load(`${rootPath}/shared/preview-core.js`);
 load(`${rootPath}/shared/view-model.js`);
+assert.match(strategySource, /const selectedAsset = \(\) => "btc";/, "strategy drafts always target the BTC-only reversal strategy regardless of selected market");
+assert.match(strategySource, /language-chip">BTC \\xB7 5m/, "strategy page identifies its fixed BTC five-minute target");
+assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig({ asset_id: "BTC" }), true, "BTC target accepts the server's canonical asset identity case-insensitively");
+assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig({ assetId: "eth" }), false, "non-BTC drafts cannot pass the strategy activation gate");
+assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig({}), false, "drafts without an explicit asset identity cannot pass the strategy activation gate");
+assert.strictEqual(window.PolyPreviewViewModel.isBtcStrategyConfig(null), false, "initial empty strategy data is safe during page subscription");
 assert.match(autoTradeSource, /strategyAssetStartReason\(strategy, context\.assetId\)/, "auto-trade start uses the shared strategy asset gate");
 assert.match(overviewSource, /strategyAssetStartReason\(strategy, assetId\)/, "overview start uses the shared strategy asset gate");
 assert.match(overviewSource, /const overviewEventContext = \(\) =>[\s\S]*marketId: item\?\.marketId, roundId: item\?\.roundId, runId/, "overview events carry market and round identity");

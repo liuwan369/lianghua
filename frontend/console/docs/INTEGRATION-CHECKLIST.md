@@ -41,5 +41,5 @@
 - `/api/markets?asset=crypto&duration=5m` 返回 HTTP 200；当前 `collector_online=true`、`stale=false`，BTC/ETH/SOL 均有有效 `marketId`、`roundId`，连续请求中的 `sequence`、`sourceAt`、`expiresAt` 持续更新。生产当前 `depthAvailable=false`、`strategyEligible=false`；新鲜双边 BBO 可独立更新报价，缺少五档不单独禁用启动，五档区域显示“深度暂不可用”，启动仍需通过策略、账户、运行池和服务器运行时门禁。
 - `/api/runtime/market-pool` 返回 HTTP 200，但 `available=false`、`stale=true`、`error=market_pool_unavailable`；`/api/runtime/status` 返回 `status=stopped`、`stale=true`、`error=runtime_snapshot_stale`。
 - `/api/account/status` 可读取服务器配置状态，但当前 `live_start_ready=false`、`account_check_ready=false`；账户保存/检查另有已观测的 `account_response_invalid` 状态。前端不会把账户配置完成解释为可启动交易。
-- `/api/diagnostics/health` 当前为 `degraded`、`trading_runtime_unavailable`；`/api/metrics/summary?range=today` 生产返回 HTTP 404。生产 `streams=false`，因此页面使用 REST 轮询并保留最近成功快照，不创建 WebSocket。
+- 截至 2026-09-25，`/api/diagnostics/health` 返回 `degraded`、`trading_runtime_unavailable`；`/api/account/snapshot` 返回 HTTP 200 但 `available=false`、`stale=true`、`account_response_invalid`。`/api/metrics/summary?range=today` 与 `?range=run` 均返回 HTTP 200，但 `available=false`、`stale=true`、错误为“当前没有运行记录”；路由已部署，当前没有可汇总的运行记录，且无 `runId` 可供 legacy 回退。生产 `streams=false`，因此页面使用 REST 轮询并保留最近成功快照，不创建 WebSocket。
 - 浏览器会话必须使用正常的 Basic Auth challenge、代理会话或请求头注入；不能把 `user:password@host` 写进页面 URL，否则浏览器会拒绝相对 `fetch` 请求。账户密码、Token 和私钥不得写入前端或文档。

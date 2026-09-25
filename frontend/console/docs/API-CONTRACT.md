@@ -13,7 +13,7 @@
 
 对生产尚未提供或返回不可用的能力，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识；当前 `/api/markets` 已能返回有效 `marketId + roundId`，但生产盘口深度仍未提供。
 
-本轮生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；这不会单独阻止新鲜双边 BBO 的报价展示，五档区域会明确显示深度待接入，启动仍由 BBO、账户、策略、运行池和服务器运行时资格共同决定。运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`（保存/检查另有 `account_response_invalid` 状态）；`/api/metrics/summary` 返回 HTTP 404；生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。`strategyEligible` 不作为前端启动预检条件，避免把展示采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。
+截至 2026-09-25 的生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；这不会单独阻止新鲜双边 BBO 的报价展示，五档区域会明确显示深度待接入，启动仍由 BBO、账户、策略、运行池和服务器运行时资格共同决定。运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`、`account_check_ready=false`，账户快照返回 HTTP 200 但 `available=false`、`stale=true`、`account_response_invalid`。`/api/metrics/summary?range=today` 与 `?range=run` 返回 HTTP 200，但 `available=false`、`stale=true`、错误为“当前没有运行记录”；路由已部署，但目前没有可汇总的运行记录，也没有 `runId` 可回退查询 legacy 汇总。生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。`strategyEligible` 不作为前端启动预检条件，避免把展示采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。
 
 ## 现有服务可复用接口
 
@@ -48,8 +48,8 @@
 | `/api/markets` | 代码已实现 | 生产 HTTP 200；目录新鲜且有 `marketId + roundId`，但 `depthAvailable=false`、`strategyEligible=false` | 不因目录有报价就开放启动 |
 | `/api/runtime/*` | 代码已实现 | `market-pool` HTTP 200 但 `market_pool_unavailable`；status HTTP 200 但 `stopped/runtime_snapshot_stale`；控制命令本轮未调用 | 运行池和最终状态以服务器为准 |
 | `/api/rounds/*` | 代码已实现 | 本轮未验证真实持仓/订单响应 | 不声称真实订单、成交或结算已验证 |
-| `/api/account/snapshot`、`/api/diagnostics/health` | 代码已实现 | diagnostics 生产 HTTP 200、`degraded/trading_runtime_unavailable`；账户快照本轮未单独验证 | `/api/account/status` 当前 `live_start_ready=false` |
-| `/api/metrics/summary` | 代码已实现 | 生产 HTTP 404 | 总览保留 unavailable/stale，legacy 汇总仍走兼容路径 |
+| `/api/account/snapshot`、`/api/diagnostics/health` | 代码已实现 | 两者生产 HTTP 200；诊断 `degraded/trading_runtime_unavailable`，账户快照 `available=false/stale=true/account_response_invalid` | `/api/account/status` 当前 `live_start_ready=false`、`account_check_ready=false` |
+| `/api/metrics/summary` | 代码已实现 | `range=today` 和 `range=run` 均生产 HTTP 200、`available=false`、`stale=true`、无运行记录 | 路由已部署；没有 `runId`，因此 legacy 按运行 ID 汇总无法调用 |
 | `/api/stream/markets`、`/api/stream/runtime`、`/api/stream/orders` | 代码已实现配置入口；生产 `streams=false` | 本轮生产未建立 WebSocket，使用独立 REST 轮询 | 引擎内部 WebSocket 不等于控制台可订阅流；未配置 URL 时不建立连接 |
 
 ### `/api/v1/markets` 的 legacy DTO

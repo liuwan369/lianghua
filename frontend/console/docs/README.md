@@ -6,7 +6,7 @@
 
 代码接入边界已经包含目标市场目录、运行池、运行状态、账户状态、诊断、统计、事件和按 `marketId + roundId` 隔离的读模型。生产只读联调结果需要单独看待：当前 `/api/markets` 已返回有效 `marketId`、`roundId`，`collector_online=true`、`stale=false`，并且 `sequence/sourceAt/expiresAt` 持续更新；`depthAvailable=false`、`strategyEligible=false` 时，前端仍可显示新鲜双边 BBO，五档表显示深度待接入，启动由完整运行时门禁决定。旧 `/api/v1/markets` 仍是兼容回退，若该旧响应缺少 `roundId`，前端只展示目录/报价，不查询持仓和订单，并明确等待后端提供轮次标识。
 
-生产当前运行池返回 `market_pool_unavailable`，runtime 返回 `stopped`、`runtime_snapshot_stale`，账户状态返回 `live_start_ready=false`；账户保存/检查仍可能返回 `account_response_invalid`。`/api/metrics/summary` 在生产返回 HTTP 404。WebSocket 只有在运行配置中的 `streams.markets`、`streams.runtime`、`streams.orders` 提供地址后才建立实时连接；当前生产 `streams=false`，页面使用独立 REST 轮询并保留最近快照。当前只完成市场目录和状态类只读联调，没有验证真实订单、成交或结算；账户页只显示服务器状态，账户保存回执必须是 `ok: true` 且包含 `report`，否则不会清空输入或显示成功。
+截至 2026-09-25 的服务器只读复核：运行池返回 `market_pool_unavailable`，runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态为 `live_start_ready=false`、`account_check_ready=false`，账户快照返回 HTTP 200 但 `available=false`、`stale=true`、`account_response_invalid`。`/api/metrics/summary?range=today` 和 `?range=run` 均返回 HTTP 200，但 `available=false`、`stale=true`、错误为“当前没有运行记录”；这是已部署路由的无运行数据响应，不是路由缺失，因没有 `runId` 也无法回退到按运行 ID 查询的 legacy 汇总。WebSocket 只有在运行配置中的 `streams.markets`、`streams.runtime`、`streams.orders` 提供地址后才建立实时连接；当前生产 `streams=false`，页面使用独立 REST 轮询并保留最近快照。当前只完成市场目录和状态类只读联调，没有验证真实订单、成交或结算；账户页只显示服务器状态，账户保存回执必须是 `ok: true` 且包含 `report`，否则不会清空输入或显示成功。
 
 策略配置保存草稿和发布激活是两个动作：草稿必须包含完整配置（包括 `maxStages`）、`draftId` 和 `expectedRevision`；只有激活接口返回确认的正版本后，启动按钮才允许提交该版本。检查已保存账户使用 `POST /api/account/check` 空 JSON `{}`，不提交当前表单。控制会话使用同源 HTTPS、`X-PM-Control-Token` 和服务器 HttpOnly cookie，前端不保存控制密码，也不自行创建实盘解锁开关。撤单、清余量和参考参数在服务器能力为 false/501 时保持禁用。
 

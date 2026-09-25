@@ -5,6 +5,7 @@
   if (!root) throw new Error("strategy block root missing");
   var store = window.PolyPreviewStore;
   var adapter = window.PolyPreviewAdapter;
+  var vm = window.PolyPreviewViewModel;
   var navItems = [
     ["\u25C8", "\u603B\u89C8", "overview.html"],
     ["\u25C7", "\u5E02\u573A", "market.html"],
@@ -18,19 +19,19 @@
     <aside class="preview-sidebar">
       <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
-      <p class="sidebar-copy">\u9762\u5411 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
+      <p class="sidebar-copy">\u9762\u5411 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
       <nav aria-label="\u7B56\u7565\u5BFC\u822A">${navMarkup}</nav>
       <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待后端连接</small></div>
     </aside>
 
     <main class="preview-main strategy-main">
       <header class="preview-header strategy-header">
-        <div class="hero-copy"><p class="eyebrow">STRATEGY CONFIGURATION</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip">CRYPTO \xB7 5m</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
+        <div class="hero-copy"><p class="eyebrow">STRATEGY CONFIGURATION</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip">BTC \xB7 5m</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
         <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>后端未连接</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>btc-reversal</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>未来未创建场次</strong></article></div></div>
       </header>
 
       <section class="strategy-identity-panel">
-        <div class="strategy-identity-icon">\u21AF</div><div class="strategy-identity-copy"><p class="eyebrow">ACTIVE STRATEGY</p><h2>平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C</h2><p>\u8DDF\u968F\u65B9\u5411\u53CD\u8F6C\uFF0C\u6309\u786E\u8BA4\u6B21\u6570\u5206\u9636\u6BB5\u4E70\u5165\uFF1B\u540C\u4E00\u65B9\u5411\u4E0D\u4F1A\u91CD\u590D\u52A0\u4ED3\u3002</p></div><div class="identity-tags"><span class="identity-tag active-tag"><i></i>\u552F\u4E00\u8FD0\u884C\u7B56\u7565</span><span class="identity-tag">已发布版本待读取</span></div>
+        <div class="strategy-identity-icon">\u21AF</div><div class="strategy-identity-copy"><p class="eyebrow">ACTIVE STRATEGY</p><h2>BTC \u4E94\u5206\u949F\u53CD\u8F6C</h2><p>\u8DDF\u968F\u65B9\u5411\u53CD\u8F6C\uFF0C\u6309\u786E\u8BA4\u6B21\u6570\u5206\u9636\u6BB5\u4E70\u5165\uFF1B\u540C\u4E00\u65B9\u5411\u4E0D\u4F1A\u91CD\u590D\u52A0\u4ED3\u3002</p></div><div class="identity-tags"><span class="identity-tag active-tag"><i></i>\u552F\u4E00\u8FD0\u884C\u7B56\u7565</span><span class="identity-tag">已发布版本待读取</span></div>
       </section>
 
       <section class="strategy-layout">
@@ -68,7 +69,7 @@
         <aside class="strategy-aside">
           <section class="preview-card"><div class="panel-heading"><div><p class="eyebrow">LIVE PREVIEW</p><h2>\u53C2\u6570\u9884\u89C8</h2></div><span class="preview-dot"><i></i>\u5F85\u4FDD\u5B58</span></div><div class="preview-price"><span>\u89E6\u53D1\u4EF7</span><strong data-preview-trigger>--</strong><span class="preview-arrow">\u2192</span><div><span>\u6700\u9AD8\u4E70\u5165</span><strong data-preview-max>--</strong></div></div><div class="preview-steps"><div class="preview-step-heading"><span>\u5206\u9636\u6BB5\u4E70\u5165\u8BA1\u5212</span><b data-preview-total>--</b></div><ol></ol></div></section>
           <section class="activation-card"><div class="activation-heading"><span class="activation-icon">\u25F7</span><div><h3>\u751F\u6548\u89C4\u5219</h3><p>\u4E0D\u4F1A\u7ACB\u5373\u6539\u53D8\u5F53\u524D\u8FD0\u884C</p></div></div><div class="activation-line"><i class="done"></i><div><strong>保存策略草稿</strong><small>仅保存，不发布、不启动</small></div></div><div class="activation-line"><i></i><div><strong>另行激活草稿</strong><small>当前和已预热场次配置保持不变</small></div></div><div class="activation-line"><i></i><div><strong>\u81EA\u52A8\u4EA4\u6613\u8BFB\u53D6</strong><small>激活后仅影响未来未创建场次</small></div></div></section>
-          <section class="guardrail-card"><div class="guardrail-heading"><span>\u7B56\u7565\u7EA6\u675F</span><b>4 \u9879</b></div><ul><li><i>\u2713</i>\u5355\u4E00 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565</li><li><i>\u2713</i>\u4EF7\u683C\u4F7F\u7528\u9650\u4EF7\uFF0C\u4E0D\u8FFD\u9AD8</li><li><i>\u2713</i>\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3</li><li><i>\u2713</i>\u4FDD\u5B58\u4E0D\u4F1A\u81EA\u52A8\u542F\u52A8\u4EA4\u6613</li></ul></section>
+          <section class="guardrail-card"><div class="guardrail-heading"><span>\u7B56\u7565\u7EA6\u675F</span><b>4 \u9879</b></div><ul><li><i>\u2713</i>\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565</li><li><i>\u2713</i>\u4EF7\u683C\u4F7F\u7528\u9650\u4EF7\uFF0C\u4E0D\u8FFD\u9AD8</li><li><i>\u2713</i>\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3</li><li><i>\u2713</i>\u4FDD\u5B58\u4E0D\u4F1A\u81EA\u52A8\u542F\u52A8\u4EA4\u6613</li></ul></section>
         </aside>
       </section>
     </main>
@@ -109,22 +110,22 @@
   let formKey = null;
   const legacyMode = core.config.apiFlavor === "legacy";
   const published = () => resource?.data?.config || null;
+  const hasBtcPublished = () => vm.isBtcStrategyConfig(published());
   const draft = () => resource?.draft || null;
   const validDraft = () => {
     const value = draft();
     return value && typeof value.draftId === "string" && value.config
+      && vm.isBtcStrategyConfig(value.config)
       && Number.isInteger(value.expectedRevision) && value.expectedRevision === resource.revision;
   };
-  const selectedAsset = () => store.getState().marketCatalog?.selectedId
-    || core.config.selectedAssetId || new URLSearchParams(window.location.search).get("assetId")
-    || formConfig?.assetId || published()?.assetId;
+  const selectedAsset = () => "btc";
   const setMessage = (message) => text("[data-save-state]", message);
   const controls = () => {
-    const available = Boolean(published());
+    const available = hasBtcPublished();
     root.querySelectorAll("[data-field], [data-stage], [data-stage-count], [data-max-stages], [data-runtime-field]")
       .forEach((input) => { input.disabled = busy || !available; });
     root.querySelector("[data-save]").disabled = busy || !available;
-    root.querySelector("[data-reset]").disabled = busy || !published();
+    root.querySelector("[data-reset]").disabled = busy || !available;
     root.querySelector("[data-reload]").disabled = busy;
     root.querySelector("[data-activate]").disabled = legacyMode || busy || dirty || !validDraft() || resource.status !== "ready";
   };
@@ -176,12 +177,13 @@
     resource = next;
     text("[data-strategy-revision]", resource.revision == null ? "--" : `REV-${resource.revision}`);
     text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布 REV-${resource.revision}`);
-    text(".strategy-state-chip", resource.status === "ready" ? "服务器配置已读取" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
+    text(".strategy-state-chip", resource.status === "ready" ? hasBtcPublished() ? "BTC 服务器配置已读取" : "配置目标未确认为 BTC" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
     const savedDraft = draft();
     text("[data-draft-state]", validDraft()
       ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于 REV-${savedDraft.expectedRevision} · 未激活`
+      : savedDraft && !vm.isBtcStrategyConfig(savedDraft.config) ? "服务器草稿目标不是 BTC，已禁止激活；请先在服务器更正草稿。"
       : savedDraft ? "原草稿基线已过期或已发布，请重新保存后激活。" : "尚无可激活草稿；保存不会自动发布或启动。");
-    if (!dirty && !busy && resource.status === "ready") {
+    if (!dirty && !busy && resource.status === "ready" && hasBtcPublished()) {
       const config = validDraft() ? savedDraft.config : published();
       const key = validDraft() ? `draft:${savedDraft.draftId}` : `revision:${resource.revision}`;
       if (config && Array.isArray(config.stageShares) && key !== formKey) {
@@ -191,7 +193,9 @@
     }
     if (!busy && resource.status === "stale") setMessage("策略接口断开，保留上次配置和未保存输入。");
     if (!busy && resource.status === "unavailable") setMessage("策略配置不可用，等待接口恢复。");
-    if (!dirty && !busy && !published() && !validDraft()) {
+    if (!busy && resource.status === "ready" && !hasBtcPublished()) setMessage("服务器策略没有明确的 BTC 目标，编辑、保存和激活已停用。");
+    else if (!busy && savedDraft && !vm.isBtcStrategyConfig(savedDraft.config)) setMessage("服务器草稿目标不是 BTC，激活已停用；请先在服务器更正草稿。");
+    if (!dirty && !busy && !hasBtcPublished() && !validDraft()) {
       field("trigger").value = "";
       field("confirm").value = "";
       field("maxPrice").value = "";
@@ -266,6 +270,7 @@
     busy = true; controls(); setMessage("正在保存草稿，尚未发布…");
     try {
       const result = await adapter.saveStrategy(payload);
+      if (!vm.isBtcStrategyConfig(result?.config)) throw new Error("服务器保存回执没有确认 BTC 目标；输入已保留，不能激活。");
       if (result?.published === true) {
         resource = store.getState().strategy;
         dirty = false;
