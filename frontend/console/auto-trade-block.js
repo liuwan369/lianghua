@@ -206,6 +206,7 @@
   var contextVersion = 0;
   var selectedRuntime = null;
   var commandPending = false;
+  var commandCooldownUntil = 0;
   var currentMarketContextKey = null;
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
@@ -469,7 +470,7 @@
   var refreshEvents = function() {
     if (eventsRefreshInFlight) return eventsRefreshInFlight;
     var version = contextVersion;
-    eventsRefreshInFlight = Promise.resolve().then(function() { return adapter.loadEvents(); }).then(function(value) {
+    eventsRefreshInFlight = Promise.resolve().then(function() { return adapter.loadEvents(null, currentContext()); }).then(function(value) {
       if (version === contextVersion) renderEvents(value);
     }).finally(function() { eventsRefreshInFlight = null; scheduleEventsRefresh(version === contextVersion ? 5000 : 0); });
     return eventsRefreshInFlight;
@@ -496,7 +497,7 @@
     if (!hasMarketStream) markStreamPending();
     var make = function(name, requireRound, onMessage, onState) {
       var url = streamUrl(name); if (!url) return;
-      var stream = window.PolyPreviewStreams.createStream(name, { url, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { if (currentLifecycle()) markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
+      var stream = window.PolyPreviewStreams.createStream(name, { url, requireSequence: requireRound, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { if (currentLifecycle()) markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
       stream.connect();
       stream.subscribe({ assetId: context.assetId, marketIds: [context.marketId], marketId: context.marketId, roundId: context.roundId });
       streams.push(stream);
@@ -604,7 +605,7 @@
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
       var strategy = store.getState().strategy;
-      var reason = commandPending ? "控制指令处理中" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
+      var reason = commandPending || commandCooldownUntil > Date.now() ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
       if (!reason && action === "stop" && !running) reason = "没有服务器确认的可停止运行";
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
       if (!reason && action === "start") reason = vm.strategyAssetStartReason(strategy, context.assetId);
@@ -728,6 +729,7 @@
       if (commandPending || button.disabled) return;
       var context = currentContext();
       var version = contextVersion;
+      var acceptedResult = false;
       commandPending = true;
       updateControls();
       try {
@@ -735,6 +737,7 @@
         const result = await adapter.commandRuntime(command);
         if (version !== contextVersion) return;
         const accepted = result?.accepted === true && result.commandStatus !== "failed";
+        acceptedResult = accepted;
         const remoteOrdersState = result?.remoteOrdersState ?? result?.remote_orders_state;
         if (action === "stop") {
           const remoteText = remoteOrdersState === "confirmed" || remoteOrdersState === "cancelled" ? "远端挂单撤销已确认" : remoteOrdersState === "unconfirmed" ? "远端挂单撤销尚未确认" : "远端挂单状态待确认";
@@ -750,7 +753,13 @@
           text("[data-strategy-status]", "控制失败，未改变运行状态");
         }
       }
-      finally { commandPending = false; updateControls(); scheduleRuntimeRefresh(500); }
+      finally {
+        commandPending = false;
+        if (acceptedResult) commandCooldownUntil = Date.now() + 5000;
+        updateControls();
+        scheduleRuntimeRefresh(500);
+        if (commandCooldownUntil > Date.now()) window.setTimeout(updateControls, commandCooldownUntil - Date.now() + 10);
+      }
     });
   });
   document.querySelectorAll("[data-preview-nav]").forEach((button) => {
@@ -768,7 +777,7 @@
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
   });
-  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadEvents()]).then(function(results) {
+  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadEvents(null, currentContext())]).then(function(results) {
     var eventsResult = results[4];
     if (eventsResult.status === "fulfilled") renderEvents(eventsResult.value);
     streamLifecycleReady = true;

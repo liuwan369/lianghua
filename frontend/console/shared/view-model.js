@@ -15,6 +15,17 @@
   const orderBookFrom = (raw) => {
     const existing = raw.orderBook || raw.orderbook || raw.book;
     if (existing) return existing;
+    const canonicalYes = raw.YES || raw.yes || raw.up;
+    const canonicalNo = raw.NO || raw.no || raw.down;
+    if (canonicalYes || canonicalNo) {
+      const side = (value) => value && {
+        bids: first(value.bids, value.bidLevels, value.bid_levels),
+        asks: first(value.asks, value.askLevels, value.ask_levels)
+      };
+      const yes = side(canonicalYes);
+      const no = side(canonicalNo);
+      if (Array.isArray(yes?.bids) || Array.isArray(yes?.asks) || Array.isArray(no?.bids) || Array.isArray(no?.asks)) return { yes, no };
+    }
     const levels = (side, kind) => first(
       raw[`${side}${kind[0].toUpperCase()}${kind.slice(1)}Levels`],
       raw[`${side}_${kind}_levels`],
@@ -31,6 +42,8 @@
   const market = (raw = {}, index = 0) => {
     const assetId = assetIdFrom(raw, index);
     const symbol = symbolFrom(raw, assetId);
+    const yes = raw.YES || raw.yes || raw.up || {};
+    const no = raw.NO || raw.no || raw.down || {};
     return {
       assetId,
       supported: raw.supported !== false,
@@ -44,12 +57,14 @@
       cycle: String(first(raw.cycle, raw.duration, "5m")),
       marketId: first(raw.marketId, raw.market_id) == null ? null : String(first(raw.marketId, raw.market_id)),
       roundId: first(raw.roundId, raw.round_id) == null ? null : String(first(raw.roundId, raw.round_id)),
+      yesToken: first(raw.yesToken, raw.yes_token, raw.YES?.assetId, raw.yes?.assetId, null),
+      noToken: first(raw.noToken, raw.no_token, raw.NO?.assetId, raw.no?.assetId, null),
       startAt: first(raw.startAt, raw.start, null),
       endAt: first(raw.endAt, raw.end, null),
-      yesBid: finite(first(raw.yesBid, raw.yes_bid, raw.up_bid)),
-      yesAsk: finite(first(raw.yesAsk, raw.yes_ask, raw.up_ask)),
-      noBid: finite(first(raw.noBid, raw.no_bid, raw.down_bid)),
-      noAsk: finite(first(raw.noAsk, raw.no_ask, raw.down_ask)),
+      yesBid: finite(first(raw.yesBid, raw.yes_bid, raw.up_bid, yes.bid, yes.yesBid)),
+      yesAsk: finite(first(raw.yesAsk, raw.yes_ask, raw.up_ask, yes.ask, yes.yesAsk)),
+      noBid: finite(first(raw.noBid, raw.no_bid, raw.down_bid, no.bid, no.noBid)),
+      noAsk: finite(first(raw.noAsk, raw.no_ask, raw.down_ask, no.ask, no.noAsk)),
       volume: finite(first(raw.volume, raw.volumeUsd, raw.volume_usd)),
       liquidity: finite(first(raw.liquidity, raw.liquidityUsd, raw.liquidity_usd)),
       spread: finite(raw.spread),
@@ -132,10 +147,10 @@
   const hasFreshBbo = (value, now = Date.now()) => {
     const raw = payloadOf(value) || {};
     const quotes = [
-      first(raw.yesBid, raw.yes_bid, raw.up_bid),
-      first(raw.yesAsk, raw.yes_ask, raw.up_ask),
-      first(raw.noBid, raw.no_bid, raw.down_bid),
-      first(raw.noAsk, raw.no_ask, raw.down_ask)
+      first(raw.yesBid, raw.yes_bid, raw.up_bid, raw.YES?.bid, raw.YES?.yesBid, raw.yes?.bid),
+      first(raw.yesAsk, raw.yes_ask, raw.up_ask, raw.YES?.ask, raw.YES?.yesAsk, raw.yes?.ask),
+      first(raw.noBid, raw.no_bid, raw.down_bid, raw.NO?.bid, raw.NO?.noBid, raw.no?.bid),
+      first(raw.noAsk, raw.no_ask, raw.down_ask, raw.NO?.ask, raw.NO?.noAsk, raw.no?.ask)
     ];
     const sourceAt = timestampMs(first(raw.sourceAt, raw.source_at));
     const expiresAt = timestampMs(first(raw.expiresAt, raw.expires_at));
