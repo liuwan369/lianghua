@@ -74,10 +74,11 @@ global.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
 const load = (file) => vm.runInThisContext(fs.readFileSync(file, "utf8"), { filename: file });
 const rootPath = require("path").resolve(__dirname, "..");
 const autoTradeSource = fs.readFileSync(`${rootPath}/auto-trade-block.js`, "utf8");
-assert.ok(autoTradeSource.includes("strategyAssetId"), "auto-trade start reads the active strategy asset");
-assert.ok(autoTradeSource.includes("激活策略与所选市场不一致"), "auto-trade blocks strategy/market asset mismatch");
 load(`${rootPath}/shared/preview-core.js`);
 load(`${rootPath}/shared/view-model.js`);
+assert.match(autoTradeSource, /strategyAssetStartReason\(strategy, context\.assetId\)/, "auto-trade start uses the shared strategy asset gate");
+assert.match(window.PolyPreviewViewModel.strategyAssetStartReason({ data: { config: { assetId: "btc" } } }, "eth"), /策略与所选市场不一致/, "strategy mismatch disables start");
+assert.strictEqual(window.PolyPreviewViewModel.strategyAssetStartReason({ data: { config: { assetId: "btc" } } }, "btc"), "", "matching strategy asset permits this gate");
 load(`${rootPath}/shared/preview-store.js`);
 const store = window.PolyPreviewStore;
 window.PolyPreviewAdapter = {
