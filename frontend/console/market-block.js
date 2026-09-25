@@ -332,7 +332,8 @@
       renderCounts();
       renderList();
       renderDetail();
-      text("[data-market-refresh-note]", resource?.status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : resource?.status === "stale" || resource?.status === "unavailable"
+      text("[data-market-refresh-note]", resource?.status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : resource?.status === "partial"
+        ? "部分行情更新 · 过期资产保留上次数据" : resource?.status === "stale" || resource?.status === "unavailable"
         ? `${resource.status === "unavailable" ? "行情待接入" : "连接中断"} · ${resource.error || "保留上次数据"}`
         : `最后刷新 · ${window.PolyPreview.format.clock()}`);
     } catch (error) { text("[data-market-refresh-note]", error.message || "市场目录读取失败"); }

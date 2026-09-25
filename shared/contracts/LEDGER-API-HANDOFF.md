@@ -6,13 +6,13 @@
 
 ## 当前提交
 
-- 账本、控制面和共享契约：`ae1820c`
+- 账本、控制面和共享契约：`818b4a9`（本次交付）
 - 结算凭据三态回归测试：`2c3d9fd`
-- 当前交接审查修复：`b56ef6c`（accepted snapshot、market-pool 持久化、bootstrap 来源时间和旧行情回退语义）
+- 当前交接审查修复已并入上述提交历史（accepted snapshot、market-pool 持久化、bootstrap 来源时间和旧行情回退语义）
 - 当前分支：`codex/ledger-api`
 - 当前工作区已验证无未提交修改。
 
-交易运行时和行情分支不在本工作区。当前运行时状态快照已提供 `roundId` 和结算身份；但运行时 CLI 的 order/fill/settlement journal 仍需要直接写 `market_id/round_id`，账本保留晚到映射作为兼容路径。组合部署提交号需要集成会话在合并各分支后产生。
+交易运行时和行情分支不在本工作区。当前运行时状态快照和 CLI journal 已提供 `marketId/roundId` 及结算身份；账本仍保留晚到映射作为兼容路径。组合部署提交号需要集成会话在合并各分支后产生。
 
 ## 数据流
 
@@ -77,7 +77,7 @@ schemaVersion, source, asOf, stale, error
 |---|---|
 | `GET /api/markets` | 运行时 accepted `snapshots[]` 优先；采集器 `current_markets[*].snapshot`（兼容 `paired_snapshot`）也可无损展示 `marketId/roundId/YES/NO/assetId/bids/asks/sequence/sourceAt/expiresAt`，但固定 `strategyEligible=false`；仅 legacy row 时 `depthAvailable=false`、`strategyEligible=false`、`stale=true` |
 | `GET /api/markets/{marketId}/snapshot` | 市场 DTO 加同一份 `orderBook`；accepted snapshot 可提供五档和 freshness 字段，旧采集器回退不伪造深度 |
-| `GET /api/runtime/status` | `status/state/serviceState/commandStatus/remoteOrdersState/runId/strategyId/execution/markets/projection/asOf/stale/error` |
+| `GET /api/runtime/status` | `status/state/serviceState/commandStatus/remoteOrdersState/runId/strategyId/execution/markets/projection/risk/funds/asOf/stale/error`; `funds` keeps `availableUsd`, `reservedUsd`, `positionCostUsd`, `occupiedUsd`, estimated fees, and confirmed fees separate; unknown values remain `null` |
 | `GET/PUT /api/runtime/market-pool` | 服务器持久化 BTC 五分钟运行池；读取 `market_pool.json` 的 `desired/current/next/effective/updatedAt`，写入只接受 `btc`，当前/下一场仍由运行时确认 |
 | `GET /api/rounds/{roundId}/position` | `available/runId/marketId/roundId/yesShares/noShares/averagePrice/occupiedUsd/outcomePnl/updatedAt/expiresAt/stale/error` |
 | `GET /api/rounds/{roundId}/orders` | 分页订单、`clientOrderId/orderId/marketId/roundId/status/filledShares/updatedAt/fills`，支持快照游标避免分页漂移 |
@@ -123,8 +123,8 @@ schemaVersion, source, asOf, stale, error
 1. 旧 `/api/v1/markets` 保留旧 `round_id` slug 字段；现代 `roundId` 不使用该兼容字段，也不会据此给历史订单归属。
 2. 前端必须使用现代 `marketId`/`roundId`、YES/NO 字段和 `stale/error` 状态，不能把旧 `up_bid/down_bid` 或 slug 当成现代身份。
 3. 运行时必须持续输出显式 `roundId`；若旧运行时仍缺字段，账本会安全返回 `null`，相关按场次查询会 unavailable。
-4. `account-check` 的 `settlement_credentials_ready` 需要由交易运行时 CLI 输出；账本只透传三态，控制面实盘启动要求明确为 `true`。交易运行时仍负责根据钱包类型验证 Builder/Relayer，并在 redeem 前结合真实回执确认。
-5. 运行时 CLI 仍需直接在 order/fill/settlement journal 写入 `market_id/round_id` 和订单 `created_at`；在此之前账本依赖状态映射回填，前端可能看不到完整的首条事件身份。
+4. `account-check` 的 `settlement_credentials_ready` 由交易运行时 CLI 输出；账本只透传三态，控制面实盘启动要求明确为 `true`。交易运行时按钱包类型验证 Builder/Relayer，并在 redeem 前结合真实回执确认。
+5. 运行时 CLI 已在 order/fill/settlement journal 写入 `market_id/round_id` 和订单 `created_at`；账本继续支持旧事件的状态映射回填。
 6. 尚未完成服务器实测：真实下单、撤单、成交回报、资金释放、重启恢复、连续场次切换和链上 redeem。
 7. `/api/stream/markets` 本轮仍未接通，bootstrap 保持 `capabilityDetails.streams=false`；集成会话不能把 404 当成已提供流。
 8. 行情会话仍需在 collector serializer 写入 `current_markets[*].snapshot` canonical 对象；控制面已兼容 `snapshot`、`paired_snapshot` 和直接 canonical row，未提供该对象时只能使用 legacy 展示回退。
