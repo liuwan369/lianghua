@@ -1563,6 +1563,10 @@ def _epoch(value):
     return None
 
 
+def _money(value):
+    return value if type(value) in (int, float) and math.isfinite(value) else None
+
+
 def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
     """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
@@ -1802,7 +1806,10 @@ def _modern_runtime(status: dict) -> dict:
         state = "failed" if status.get("exit_code") not in (None, 0) else "stopped"
     source_at = _epoch(runtime.get("source_at"))
     expires_at = _epoch(runtime.get("expires_at"))
-    stale = bool(not runtime or source_at is None or expires_at is None or expires_at <= time.time())
+    projection_stale = (runtime.get("stale") is True or projection.get("stale") is True
+                        or (projection.get("state") is not None and projection.get("state") != "ready"))
+    stale = bool(not runtime or source_at is None or expires_at is None or expires_at <= time.time()
+                 or projection_stale)
     stop_result = status.get("stop_result") if isinstance(status.get("stop_result"), dict) else {}
     params = status.get("params") if isinstance(status.get("params"), dict) else {}
     config = params.get("config") if isinstance(params.get("config"), dict) else {}
@@ -1824,7 +1831,8 @@ def _modern_runtime(status: dict) -> dict:
                 {**item, "marketId": item.get("marketId") or item.get("market_id") or item.get("id"),
                  "roundId": item.get("roundId") or item.get("round_id")}
                 for item in runtime.get("markets", [])],
-            "error": runtime.get("error") or ("runtime_snapshot_stale" if stale else None)
+            "error": runtime.get("error") or projection.get("error")
+                or ("ledger_projection_incomplete" if projection_stale else "runtime_snapshot_stale" if stale else None)
                 or ((status.get("stop_result") or {}).get("message") if state == "failed" else None),
             "projection": projection}
 
@@ -1893,7 +1901,7 @@ def _event_dto(event: dict) -> dict:
         result.update({"payoutVerified": event.get("payout_verified") is True,
                        "accountingState": event.get("accounting_state"),
                        "pnlError": event.get("pnl_error"),
-                       "pnl": _epoch(event.get("pnl"))})
+                       "pnl": _money(event.get("pnl"))})
     return result
 
 
@@ -1916,42 +1924,76 @@ def _order_dto(order: dict) -> dict:
 
 def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
     if not run_id:
-        return {"schemaVersion": 1, "available": False, "items": None, "cursor": None, "runId": None,
+        return {"schemaVersion": 1, "status": "unavailable", "available": False,
+                "items": None, "cursor": None, "runId": None,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
     requested_asset = (query.get("assetId") or [None])[0]
-    result = _api_ledger().events(run_id, before_id=int(cursor) if cursor else None,
-                                  limit=int(query.get("limit", ["50"])[0]), kinds=kinds,
-                                  asset_id=requested_asset,
-                                  market_id=(query.get("marketId") or [None])[0],
-                                  round_id=(query.get("roundId") or [None])[0])
+    try:
+        result = _api_ledger().events(run_id, before_id=int(cursor) if cursor else None,
+                                      limit=int(query.get("limit", ["50"])[0]), kinds=kinds,
+                                      asset_id=requested_asset,
+                                      market_id=(query.get("marketId") or [None])[0],
+                                      round_id=(query.get("roundId") or [None])[0])
+    except KeyError:
+        return {"schemaVersion": 1, "status": "unavailable", "available": False,
+                "items": None, "events": None, "cursor": None, "runId": run_id,
+                "source": "ledger", "asOf": None, "stale": True,
+                "error": "ledger_projection_unavailable"}
     items = [_event_dto(event) for event in result["events"]]
-    return {"schemaVersion": 1, "items": items, "events": items,
+    metadata = _ledger_metadata(run_id)
+    return {"schemaVersion": 1, "status": "stale" if metadata["stale"] else "ready",
+            "available": True, "items": items, "events": items,
             "cursor": result.get("next_before_id"), "runId": run_id,
-            **_ledger_metadata(run_id)}
+            **metadata}
 
 
 def _modern_settlements(run_id: str | None, query: dict) -> dict:
     if not run_id:
-        return {"schemaVersion": 1, "available": False, "items": None, "settlements": None, "cursor": None, "runId": None,
+        return {"schemaVersion": 1, "status": "unavailable", "available": False,
+                "items": None, "settlements": None, "cursor": None, "runId": None,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
     requested_asset = (query.get("assetId") or [None])[0]
-    result = _api_ledger().settlements_page(run_id, before_id=int(cursor) if cursor else None,
-                                            limit=int(query.get("limit", ["50"])[0]),
-                                            asset_id=requested_asset,
-                                            market_id=(query.get("marketId") or [None])[0],
-                                            round_id=(query.get("roundId") or [None])[0])
+    try:
+        result = _api_ledger().settlements_page(run_id, before_id=int(cursor) if cursor else None,
+                                                limit=int(query.get("limit", ["50"])[0]),
+                                                asset_id=requested_asset,
+                                                market_id=(query.get("marketId") or [None])[0],
+                                                round_id=(query.get("roundId") or [None])[0])
+    except KeyError:
+        return {"schemaVersion": 1, "status": "unavailable", "available": False,
+                "items": None, "settlements": None, "cursor": None, "runId": run_id,
+                "source": "ledger", "asOf": None, "stale": True,
+                "error": "ledger_projection_unavailable"}
     available = result.get("available", True)
     items = [_event_dto(item) for item in result.get("settlements", [])] if available else None
     metadata = _ledger_metadata(run_id)
-    return {"schemaVersion": 1, "items": items, "settlements": items,
+    stale = bool(result.get("available") is False) or metadata["stale"]
+    return {"schemaVersion": 1, "status": "unavailable" if not available else "stale" if stale else "ready",
+            "items": items, "settlements": items,
             "cursor": result.get("next_before_id"), "runId": run_id, "available": available,
             **metadata,
             "error": result.get("error") or metadata["error"],
-            "stale": bool(result.get("available") is False) or metadata["stale"]}
+            "stale": stale}
+
+
+def _unavailable_metrics_summary(run_id: str | None, range_name: str, error: str,
+                                 *, completeness: str = "unavailable") -> dict:
+    return {"schemaVersion": 1, "status": "unavailable", "available": False,
+            "runId": run_id, "range": range_name, "from": None, "to": None, "asOf": None,
+            "fill_count": None, "fills": None, "order_count": None, "orders": None,
+            "fill_notional": None, "known_fill_notional": None, "fees": None,
+            "known_fees": None, "estimated_fees": None, "missing_fee_count": None,
+            "settled_markets": None, "settled_pnl": None, "pnl": None,
+            "settled_wins": None, "wins": None, "settled_losses": None, "losses": None,
+            "settled_draws": None, "settled_pnl_pending": None, "win_rate": None,
+            "pending_settlements": None,
+            "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
+            "completeness": completeness, "lag_bytes": None, "source": "ledger",
+            "stale": True, "error": error}
 
 
 def make_handler(root: Path):
@@ -1985,7 +2027,15 @@ def make_handler(root: Path):
                     "capabilities": ["markets", "runtime", "orders", "positions", "metrics", "events"],
                     "capabilityDetails": {"fills": True, "settlements": True, "strategyDrafts": True,
                         "strategyActivate": True, "activateAtRound": False, "cancelOrder": False,
-                        "flatten": False, "editMarketPool": True, "presets": False, "streams": False},
+                        "flatten": False, "editMarketPool": True, "presets": False, "streams": False,
+                        "restRefresh": True},
+                    "streams": {"available": False, "transport": None,
+                        "endpoints": {"markets": None, "runtime": None, "orders": None},
+                        "fallbackTransport": "rest",
+                        "restEndpoints": {"markets": "/api/markets", "runtime": "/api/runtime/status",
+                            "orders": "/api/rounds/{roundId}/orders", "fills": "/api/fills",
+                            "settlements": "/api/settlements", "metrics": "/api/metrics/summary",
+                            "events": "/api/events"}},
                     "runtime": runtime,
                 }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
@@ -2070,51 +2120,33 @@ def make_handler(root: Path):
                     # No run is a valid unavailable state. Keep the response
                     # successful so clients can render the last-known/empty
                     # state without treating this as a missing route.
-                    self._send_json(json.dumps({
-                        "schemaVersion": 1,
-                        "available": False,
-                        "runId": None,
-                        "range": requested_range,
-                        "from": None,
-                        "to": None,
-                        "asOf": None,
-                        "fill_count": None,
-                        "fill_notional": None,
-                        "known_fill_notional": None,
-                        "fees": None,
-                        "known_fees": None,
-                        "estimated_fees": None,
-                        "missing_fee_count": None,
-                        "settled_markets": None,
-                        "settled_pnl": None,
-                        "pnl": None,
-                        "settled_wins": None,
-                        "settled_losses": None,
-                        "settled_draws": None,
-                        "settled_pnl_pending": None,
-                        "win_rate": None,
-                        "pending_settlements": None,
-                        "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
-                        "completeness": "unavailable",
-                        "lag_bytes": None,
-                        "source": "ledger",
-                        "stale": True,
-                        "error": "当前没有运行记录",
-                    }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    self._send_json(json.dumps(_unavailable_metrics_summary(
+                        None, requested_range, "当前没有运行记录"),
+                        ensure_ascii=False, allow_nan=False).encode("utf-8"))
                     return
                 asset_id = (query.get("assetId") or [None])[0]
                 market_id = (query.get("marketId") or [None])[0]
                 round_id_filter = (query.get("roundId") or [None])[0]
-                if asset_id is None and market_id is None and round_id_filter is None:
-                    stats = _api_ledger().summary(run_id, range=query.get("range", ["today"])[0])
-                else:
-                    stats = _api_ledger().metrics_summary(run_id, range=query.get("range", ["today"])[0],
-                                                          asset_id=asset_id, market_id=market_id,
-                                                          round_id=round_id_filter)
+                try:
+                    if asset_id is None and market_id is None and round_id_filter is None:
+                        stats = _api_ledger().summary(run_id, range=requested_range)
+                    else:
+                        stats = _api_ledger().metrics_summary(run_id, range=requested_range,
+                                                              asset_id=asset_id, market_id=market_id,
+                                                              round_id=round_id_filter)
+                except KeyError:
+                    self._send_json(json.dumps(_unavailable_metrics_summary(
+                        run_id, requested_range, "ledger_projection_unavailable", completeness="waiting"),
+                        ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    return
                 metadata = _ledger_metadata(run_id)
-                value = {"schemaVersion": 1, **stats, **metadata,
+                stale = metadata["stale"] or stats.get("completeness") != "caught_up"
+                value = {"schemaVersion": 1, "status": "stale" if stale else "ready",
+                         "available": True, **stats, **metadata,
+                         "fills": stats.get("fill_count"), "orders": stats.get("order_count"),
+                         "wins": stats.get("settled_wins"), "losses": stats.get("settled_losses"),
                          "pnl": stats.get("settled_pnl"),
-                         "stale": metadata["stale"] or stats.get("completeness") != "caught_up",
+                         "stale": stale,
                          "error": metadata["error"] or stats.get("error")}
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
@@ -2136,7 +2168,8 @@ def make_handler(root: Path):
                 round_id = path[len("/api/rounds/"):-len("/orders")].strip("/")
                 run_id = _api_run_id()
                 if not run_id:
-                    self._send_json(json.dumps({"schemaVersion": 1, "available": False, "orders": None, "total": None,
+                    self._send_json(json.dumps({"schemaVersion": 1, "status": "unavailable", "available": False,
+                        "orders": None, "total": None,
                         "roundId": round_id, "source": "ledger", "asOf": None, "stale": True,
                         "error": "当前没有运行记录"}, ensure_ascii=False).encode("utf-8"))
                     return
@@ -2155,9 +2188,17 @@ def make_handler(root: Path):
                                                        market_id=legacy_market_id,
                                                        round_id=legacy_round_id)
                     result["orders"] = [_order_dto(order) for order in result.get("orders", [])]
-                    self._send_json(json.dumps({"schemaVersion": 1, "roundId": round_id,
-                        **result, **_ledger_metadata(run_id)},
+                    metadata = _ledger_metadata(run_id)
+                    self._send_json(json.dumps({"schemaVersion": 1,
+                        "status": "stale" if metadata["stale"] else "ready", "available": True,
+                        "roundId": round_id,
+                        **result, **metadata},
                         ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                except KeyError:
+                    self._send_json(json.dumps({"schemaVersion": 1, "status": "unavailable", "available": False,
+                        "orders": None, "total": None, "roundId": round_id, "runId": run_id,
+                        "source": "ledger", "asOf": None, "stale": True,
+                        "error": "ledger_projection_unavailable"}, ensure_ascii=False).encode("utf-8"))
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_order_query","stale":true}', 400)
                 return
