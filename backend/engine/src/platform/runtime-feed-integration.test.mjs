@@ -95,19 +95,22 @@ test("actual feed shape reaches runtime and status; disconnect and round identit
   // current queue synchronously from its own consumer callback and verify the
   // next market is still delivered while that stream remains busy.
   let currentFlood = 0;
-  let nextDuringFlood = false;
+  let nextFloodAt;
   const unsubscribeFairness = connection.platform.subscribe(event => {
     if (event.kind !== "book" || !event.snapshot) return;
-    if (event.snapshot.marketId === "next" && currentFlood > 0) nextDuringFlood = true;
+    if (event.snapshot.marketId === "next" && currentFlood > 0 && nextFloodAt === undefined) {
+      nextFloodAt = currentFlood;
+    }
     if (event.snapshot.marketId !== "current" || currentFlood >= 1000) return;
     currentFlood += 1;
     currentSocket.frame(pair("current", nowMs - 90 + currentFlood, 0.51));
   });
   currentSocket.frame(pair("current", nowMs - 90, 0.51));
   nextSocket.frame(pair("next", nowMs - 90, 0.51));
-  for (let i = 0; i < 20 && !nextDuringFlood; i++) await delay(5);
+  for (let i = 0; i < 20 && nextFloodAt === undefined; i++) await delay(5);
   unsubscribeFairness();
-  assert.equal(nextDuringFlood, true, "a busy current queue cannot starve the next round");
+  assert.ok(nextFloodAt !== undefined, "a busy current queue cannot starve the next round");
+  assert.ok(nextFloodAt < 100, `next round was consumed too late at currentFlood=${nextFloodAt}`);
   assert.ok(currentFlood > 0, "the current queue stayed busy during the fairness check");
 
   currentSocket.terminate();
