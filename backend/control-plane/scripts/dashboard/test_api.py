@@ -435,6 +435,21 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(body["asOf"])
         self.assertTrue(body["stale"])
 
+    def test_runtime_status_separates_explicit_funds_and_unknown_fees(self):
+        now = time.time()
+        status = {"running": True, "run_id": "run", "strategy_id": "btc-reversal",
+                  "stats": {"runtime": {"source_at": now, "expires_at": now + 5,
+                      "risk": {"availableUsd": 12, "occupiedUsd": 3.5},
+                      "strategy_runtime": {"currentRound": {"costUsd": 2.5, "reservedUsd": 1.0}},
+                      "markets": []}}}
+        view = server_module._modern_runtime(status)
+        self.assertEqual(view["funds"]["availableUsd"], 12)
+        self.assertEqual(view["funds"]["occupiedUsd"], 3.5)
+        self.assertEqual(view["funds"]["reservedUsd"], 1.0)
+        self.assertEqual(view["funds"]["positionCostUsd"], 2.5)
+        self.assertIsNone(view["funds"]["estimatedFeesUsd"])
+        self.assertIsNone(view["funds"]["confirmedFeesUsd"])
+
     def test_metrics_summary_without_run_is_unavailable_not_not_found(self):
         with patch.object(server_module, "_api_run_id", return_value=None):
             code, body = self.request("/api/metrics/summary?range=today")

@@ -643,6 +643,9 @@ def account_action(payload: dict, save: bool = False) -> dict:
 
 def _checked_account_action(payload: dict, save: bool = False) -> dict:
     global _account_report, _account_report_identity, _account_check_error
+    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
+    global _trading_log, _trading_console_log, _trading_started_at, _trading_exit_code
+    global _trading_stop_result, _trading_engine
     # The account-check lock prevents a concurrent start; slow RPC work must
     # not hold the runtime status/control lock.
     with _trading_lock:
@@ -679,6 +682,26 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
             account_store.save_profile(values)
             if _account_data is not None:
                 _account_data.invalidate()
+            if candidate_identity != saved_identity:
+                # A stopped run is still useful as history, but it belongs to
+                # the previous credential set. Do not let default modern API
+                # queries select that run after an account switch or signer
+                # replacement; the SQLite projection remains untouched.
+                _trading_run_id = None
+                _trading_config_revision = None
+                _trading_account_id = None
+                _trading_request_id = None
+                _trading_log = None
+                _trading_console_log = None
+                _trading_started_at = None
+                _trading_exit_code = None
+                _trading_stop_result = None
+                _trading_engine = None
+                _projection_pending.clear()
+                _modern_market_cache.clear()
+                _modern_response_cache.clear()
+                _trade_cache.clear()
+                _persist_trading_state()
         # Readiness belongs to the exact credential set, never wallet alone.
         if save or candidate_identity == saved_identity:
             _account_report = report
@@ -1007,7 +1030,12 @@ def trading_status(include_stats: bool = True) -> dict:
             # exists and is non-empty after dotenv loading by the child process.
             "account_configured": account["live_start_ready"],
             "service_state": "running" if running else ("failed" if _trading_exit_code not in (None, 0) else "stopped"),
-            "command_status": "executing" if running else ("failed" if _trading_exit_code not in (None, 0) else "confirmed"),
+            # Process exit only confirms the local process. A live stop is
+            # confirmed after the runtime/account projection confirms remote
+            # order reconciliation; until then keep the command executing.
+            "command_status": "executing" if running else ("failed" if _trading_exit_code not in (None, 0)
+                              else "confirmed" if (_trading_stop_result or {}).get("confirmed") is True
+                              else "executing"),
             "account": account,
             "log": str(_trading_log).replace("\\", "/") if _trading_log else None,
             "run_id": _trading_run_id,
@@ -1716,6 +1744,21 @@ def _modern_runtime(status: dict) -> dict:
     runtime = stats.get("runtime") if isinstance(stats, dict) else None
     projection = projection if isinstance(projection, dict) else {}
     runtime = runtime if isinstance(runtime, dict) else {}
+    risk = runtime.get("risk") if isinstance(runtime.get("risk"), dict) else {}
+    strategy_runtime = runtime.get("strategy_runtime") if isinstance(runtime.get("strategy_runtime"), dict) else {}
+    current_round = strategy_runtime.get("currentRound") if isinstance(strategy_runtime.get("currentRound"), dict) else {}
+    amount = lambda value: value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
+    # These values are only copied when the runtime explicitly reported them.
+    # Unknown cash, reservations, costs, or fees stay null instead of looking
+    # like released funds after a stop or an incomplete account refresh.
+    funds = {
+        "availableUsd": amount(risk.get("availableUsd")),
+        "occupiedUsd": amount(risk.get("occupiedUsd")),
+        "reservedUsd": amount(current_round.get("reservedUsd")),
+        "positionCostUsd": amount(current_round.get("costUsd")),
+        "estimatedFeesUsd": amount(runtime.get("estimated_fees_usd")),
+        "confirmedFeesUsd": amount(runtime.get("confirmed_fees_usd")),
+    }
     if status.get("running"):
         state = "paused" if (runtime.get("strategy_runtime") or {}).get("paused") else runtime.get("status") or "starting"
     else:
@@ -1740,7 +1783,7 @@ def _modern_runtime(status: dict) -> dict:
             "asOf": source_at,
             "stale": stale, "runId": status.get("run_id"),
             "strategyId": status.get("strategy_id") or "btc-reversal", "assetId": asset_id,
-            "execution": status.get("execution"), "markets": [
+            "execution": status.get("execution"), "risk": risk or None, "funds": funds, "markets": [
                 {**item, "marketId": item.get("marketId") or item.get("market_id") or item.get("id"),
                  "roundId": item.get("roundId") or item.get("round_id")}
                 for item in runtime.get("markets", [])],
@@ -2127,7 +2170,12 @@ def make_handler(root: Path):
                 self.end_headers()
                 return
             if path == "/api/account/status":
-                self._send_json(json.dumps({**account_config_status(), "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
+                account = account_config_status()
+                self._send_json(json.dumps({**account, "schemaVersion": 1,
+                    "source": "control-plane", "asOf": account.get("last_check_at"),
+                    "stale": account.get("account_check_state") != "ready",
+                    "error": account.get("last_check_error"),
+                    "control_source": control_source()}, ensure_ascii=False).encode("utf-8"))
                 return
             if path == "/api/live":
                 self._send_json(json.dumps(cached_live_status(), ensure_ascii=False).encode("utf-8"))
