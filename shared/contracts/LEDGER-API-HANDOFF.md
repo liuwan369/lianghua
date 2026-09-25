@@ -77,7 +77,7 @@ schemaVersion, source, asOf, stale, error
 |---|---|
 | `GET /api/markets` | 运行时 accepted `snapshots[]` 优先；采集器 `current_markets[*].snapshot`（兼容 `paired_snapshot`）也可无损展示 `marketId/roundId/YES/NO/assetId/bids/asks/sequence/sourceAt/expiresAt`，但固定 `strategyEligible=false`；仅 legacy row 时 `depthAvailable=false`、`strategyEligible=false`、`stale=true` |
 | `GET /api/markets/{marketId}/snapshot` | 市场 DTO 加同一份 `orderBook`；accepted snapshot 可提供五档和 freshness 字段，旧采集器回退不伪造深度 |
-| `GET /api/runtime/status` | `status/state/serviceState/commandStatus/remoteOrdersState/runId/strategyId/execution/markets/projection/risk/funds/asOf/stale/error`; `funds` keeps `availableUsd`, `reservedUsd`, `positionCostUsd`, `occupiedUsd`, estimated fees, and confirmed fees separate; unknown values remain `null` |
+| `GET /api/runtime/status` | `status/state/serviceState/commandStatus/processRunning/remoteOrdersState/runId/strategyId/execution/markets/projection/risk/funds/asOf/stale/error`; `processRunning` is the direct local process fact from `trading_status()` and is independent of asynchronous ledger projection freshness; `funds` keeps `availableUsd`, `reservedUsd`, `positionCostUsd`, occupied USD, estimated fees, and confirmed fees separate; unknown values remain `null` |
 | `GET/PUT /api/runtime/market-pool` | 服务器持久化 BTC 五分钟运行池；读取 `market_pool.json` 的 `desired/current/next/effective/updatedAt`，写入只接受 `btc`，当前/下一场仍由运行时确认 |
 | `GET /api/rounds/{roundId}/position` | `available/runId/marketId/roundId/yesShares/noShares/averagePrice/occupiedUsd/outcomePnl/updatedAt/expiresAt/stale/error` |
 | `GET /api/rounds/{roundId}/orders` | 分页订单、`clientOrderId/orderId/marketId/roundId/status/filledShares/updatedAt/fills`，支持快照游标避免分页漂移 |

@@ -1798,7 +1798,8 @@ def _modern_runtime(status: dict) -> dict:
         "estimatedFeesUsd": amount(runtime.get("estimated_fees_usd")),
         "confirmedFeesUsd": amount(runtime.get("confirmed_fees_usd")),
     }
-    if status.get("running"):
+    process_running = status.get("running") if type(status.get("running")) is bool else None
+    if process_running is True:
         state = "paused" if (runtime.get("strategy_runtime") or {}).get("paused") else runtime.get("status") or "starting"
     else:
         state = "failed" if status.get("exit_code") not in (None, 0) else "stopped"
@@ -1820,6 +1821,9 @@ def _modern_runtime(status: dict) -> dict:
     return {"schemaVersion": 1, "status": state, "state": state,
             "serviceState": status.get("service_state") or state,
             "commandStatus": status.get("command_status") or ("executing" if status.get("running") else "confirmed"),
+            # This is the direct local process fact from trading_status(); it
+            # is independent from asynchronous ledger projection freshness.
+            "processRunning": process_running,
             "remoteOrdersState": stop_result.get("remote_orders_state"),
             "source": "platform-runtime" if runtime else "control-plane",
             "asOf": source_at,
