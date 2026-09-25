@@ -122,5 +122,12 @@
     return Boolean(context?.assetId && context?.marketId && context?.roundId && assetId != null && marketId != null && roundId != null
       && String(assetId) === String(context.assetId) && String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId));
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, matchesIdentity });
+  const strategyAssetId = (strategy = {}) => first(strategy.assetId, strategy.asset_id, strategy.data?.assetId, strategy.data?.asset_id, strategy.data?.config?.assetId, strategy.data?.config?.asset_id, strategy.config?.assetId, strategy.config?.asset_id);
+  const strategyAssetStartReason = (strategy, assetId) => {
+    const target = strategyAssetId(strategy);
+    if (!target) return "激活策略尚未确认目标币种";
+    if (!assetId || String(target) !== String(assetId)) return "激活策略与所选市场不一致，请切换市场或重新激活策略";
+    return "";
+  };
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, matchesIdentity, strategyAssetId, strategyAssetStartReason });
 })();
