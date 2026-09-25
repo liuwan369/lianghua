@@ -507,7 +507,13 @@ class Ledger:
                                                "round_id=COALESCE(excluded.round_id,market_aliases.round_id)",
                                                (row["run_id"], stored_id, stored_name, market_asset,
                                                 market.get("roundId") or market.get("round_id")))
-                                    self._backfill_identity(db, row["run_id"], market_id, market_asset)
+                                    # market_aliases stores non-BTC identities
+                                    # in the namespaced key used by the
+                                    # projection tables (for example
+                                    # ``eth::condition``). Use that key for
+                                    # backfill; the runtime-facing id is only
+                                    # the unnamespaced lookup value.
+                                    self._backfill_identity(db, row["run_id"], stored_id, market_asset)
                     # Existing journals were already consumed; backfill only settlement projections once.
                     for row in db.execute("SELECT run_id,payload FROM events WHERE kind='settlement' ORDER BY id").fetchall():
                         event = json.loads(row["payload"])
@@ -666,6 +672,47 @@ class Ledger:
 
         canonical, old_key, round_id = aliases["market"], aliases["market_id"], aliases["round_id"]
         if canonical and old_key and canonical != old_key:
+            # Databases created before asset columns existed contain legacy
+            # rows with the column default ``btc``. Re-home one unambiguous
+            # legacy key to the runtime-owned asset before normal merging;
+            # an existing BTC alias makes the row intentionally ambiguous.
+            # A legacy slug carries the asset in its runtime market name and
+            # can be moved safely. A bare condition id has no asset evidence,
+            # so leave that row untouched rather than guessing its owner.
+            legacy_keys = [value for value in (_identity_value(asset_id, canonical),)
+                           if isinstance(value, str) and value]
+            for table in ("markets", "market_details"):
+                candidates = db.execute(
+                    f"SELECT * FROM {table} WHERE run_id=? AND asset_id='btc' "
+                    f"AND market IN ({','.join('?' for _ in legacy_keys)})",
+                    (run_id, *legacy_keys)).fetchall()
+                if len(candidates) != 1:
+                    continue
+                legacy = candidates[0]
+                if db.execute("SELECT 1 FROM market_aliases WHERE run_id=? AND asset_id='btc' AND market=? LIMIT 1",
+                              (run_id, legacy["market"])).fetchone():
+                    continue
+                target = db.execute(f"SELECT * FROM {table} WHERE run_id=? AND asset_id=? AND market=?",
+                                    (run_id, asset_id, canonical)).fetchone()
+                if target is None:
+                    db.execute(f"UPDATE {table} SET market=?,asset_id=?,round_id=COALESCE(round_id,?) "
+                               "WHERE run_id=? AND asset_id='btc' AND market=?",
+                               (canonical, asset_id, round_id, run_id, legacy["market"]))
+                elif table == "markets":
+                    db.execute("UPDATE markets SET fills=fills+?,settled=MAX(settled,?),round_id=COALESCE(round_id,?) "
+                               "WHERE run_id=? AND asset_id=? AND market=?",
+                               (legacy["fills"], legacy["settled"], round_id, run_id, asset_id, canonical))
+                    db.execute("DELETE FROM markets WHERE run_id=? AND asset_id='btc' AND market=?",
+                               (run_id, legacy["market"]))
+                else:
+                    db.execute("UPDATE market_details SET turnover=turnover+?,pnl=COALESCE(pnl,?),"
+                               "status=CASE WHEN ?='已结算' THEN ? ELSE status END,"
+                               "round_id=COALESCE(round_id,?),last_time=MAX(last_time,?) "
+                               "WHERE run_id=? AND asset_id=? AND market=?",
+                               (legacy["turnover"], legacy["pnl"], legacy["status"], legacy["status"],
+                                round_id, legacy["last_time"], run_id, asset_id, canonical))
+                    db.execute("DELETE FROM market_details WHERE run_id=? AND asset_id='btc' AND market=?",
+                               (run_id, legacy["market"]))
             # Events without market_slug may have created a temporary
             # condition-id bucket before the runtime map arrived. Merge that
             # bucket into the canonical slug instead of splitting fills or
