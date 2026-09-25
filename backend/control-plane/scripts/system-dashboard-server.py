@@ -480,7 +480,11 @@ def _automatic_stop_result(exit_code: int | None, console_path: Path | None) -> 
         candidate = event.get("reason")
         terminal_reason = candidate if candidate in _AUTOMATIC_STOP_MESSAGES else None
         break
-    failed = terminal_status == "failed" or (exit_code is not None and exit_code != 0)
+    # The platform can finish its own drain after receiving SIGTERM/SIGINT and
+    # still leave a non-zero process code.  A terminal platform_status event is
+    # the authoritative outcome; only an explicit failed event or an exit
+    # without a known terminal status is an execution failure.
+    failed = terminal_status == "failed" or (terminal_status is None and exit_code is not None and exit_code != 0)
     reason = terminal_reason or ("process_failed" if failed else "process_exited")
     message = _AUTOMATIC_STOP_MESSAGES.get(
         reason,
@@ -1064,6 +1068,8 @@ def trading_status(include_stats: bool = True) -> dict:
                 _persist_trading_state()
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
         account = account_config_status()
+        stop_reason = (_trading_stop_result or {}).get("reason")
+        stop_failed = stop_reason in {"journal_failed", "market_end_event_failed", "process_failed"}
         status = {
             "available": (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file(),
             "execution_target": "platform",
@@ -1081,11 +1087,11 @@ def trading_status(include_stats: bool = True) -> dict:
             # A present .env is not enough: report configured only when the key
             # exists and is non-empty after dotenv loading by the child process.
             "account_configured": account["live_start_ready"],
-            "service_state": "running" if running else ("failed" if _trading_exit_code not in (None, 0) else "stopped"),
+            "service_state": "running" if running else ("failed" if stop_failed else "stopped"),
             # Process exit only confirms the local process. A live stop is
             # confirmed after the runtime/account projection confirms remote
             # order reconciliation; until then keep the command executing.
-            "command_status": "executing" if running else ("failed" if _trading_exit_code not in (None, 0)
+            "command_status": "executing" if running else ("failed" if stop_failed
                               else "confirmed" if (_trading_stop_result or {}).get("confirmed") is True
                               else "executing"),
             "account": account,
@@ -1843,7 +1849,8 @@ def _modern_runtime(status: dict) -> dict:
     if status.get("running"):
         state = "paused" if (runtime.get("strategy_runtime") or {}).get("paused") else runtime.get("status") or "starting"
     else:
-        state = "failed" if status.get("exit_code") not in (None, 0) else "stopped"
+        stop_reason = (status.get("stop_result") or {}).get("reason")
+        state = "failed" if stop_reason in {"journal_failed", "market_end_event_failed", "process_failed"} else "stopped"
     source_at = _epoch(runtime.get("source_at"))
     expires_at = _epoch(runtime.get("expires_at"))
     projection_stale = (runtime.get("stale") is True or projection.get("stale") is True
