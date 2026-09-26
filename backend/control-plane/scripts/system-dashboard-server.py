@@ -1128,6 +1128,21 @@ def trading_status(include_stats: bool = True) -> dict:
                 _trading_pid = None
                 _persist_trading_state()
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
+        # The account reader is intentionally asynchronous.  A stop request
+        # can finish before its next cache refresh, so reconcile the persisted
+        # stop result on later status reads as soon as a fresh, complete empty
+        # open-order snapshot becomes available.  This is cache-only and never
+        # waits for the reader or performs network I/O on the status path.
+        if (not running and isinstance(_trading_stop_result, dict)
+                and _trading_stop_result.get("confirmed") is not True
+                and _remote_orders_empty_from_fresh_snapshot()):
+            _trading_stop_result = {
+                **_trading_stop_result,
+                "confirmed": True,
+                "remote_orders_state": "confirmed",
+                "message": "进程已停止，账户快照已确认无远端挂单。",
+            }
+            _persist_trading_state()
         account = account_config_status()
         stop_reason = (_trading_stop_result or {}).get("reason")
         stop_failed = stop_reason in {"journal_failed", "market_end_event_failed", "process_failed"}
