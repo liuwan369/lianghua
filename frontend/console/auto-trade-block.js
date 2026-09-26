@@ -373,6 +373,12 @@
     var asset = assetById(selectedAssetId);
     return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { assetId: null, marketId: null, roundId: null };
   };
+  var eventContext = function() {
+    var context = currentContext();
+    var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
+    var runId = runtime.runId ?? runtime.run_id;
+    return runId ? { assetId: context.assetId, runId: String(runId) } : context;
+  };
   var payloadOf = function(frame) { return frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame || {}; };
   var frameMatches = function(frame, requireRound) {
     var context = currentContext();
@@ -521,11 +527,13 @@
     var resource = raw || {};
     var payload = resource?.data && typeof resource.data === "object" ? resource.data : resource;
     var context = currentContext();
+    var runId = payload?.runId ?? payload?.run_id ?? resource?.runId ?? resource?.run_id;
     var events = Array.isArray(resource?.items) ? resource.items : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.events) ? payload.events : [];
     var scoped = events.filter(function(event) {
       var marketId = event.marketId ?? event.market_id;
       var roundId = event.roundId ?? event.round_id;
       var assetId = event.assetId ?? event.asset_id;
+      if (runId != null) return assetId == null || String(assetId) === String(context.assetId);
       return context.marketId != null && context.roundId != null
         && marketId != null && roundId != null
         && String(marketId) === String(context.marketId)
@@ -571,7 +579,7 @@
   var refreshEvents = function() {
     if (eventsRefreshInFlight) return eventsRefreshInFlight;
     var version = contextVersion;
-    eventsRefreshInFlight = Promise.resolve().then(function() { return adapter.loadEvents(null, currentContext()); }).then(function(value) {
+    eventsRefreshInFlight = Promise.resolve().then(function() { return adapter.loadEvents(null, eventContext()); }).then(function(value) {
       if (version === contextVersion) renderEvents(value);
     }).finally(function() { eventsRefreshInFlight = null; scheduleEventsRefresh(version === contextVersion ? 5000 : 0); });
     return eventsRefreshInFlight;
@@ -950,7 +958,7 @@
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
   });
-  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadEvents(null, currentContext())]).then(function(results) {
+  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadEvents(null, eventContext())]).then(function(results) {
     var eventsResult = results[4];
     if (eventsResult.status === "fulfilled") renderEvents(eventsResult.value);
     streamLifecycleReady = true;
