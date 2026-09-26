@@ -193,6 +193,25 @@ def _number(value):
     return result if math.isfinite(result) else None
 
 
+def _explicit_zero_coverage(value):
+    """Return true only when the runtime supplied a non-empty zero position."""
+    return (isinstance(value, dict) and bool(value)
+            and all(_number(amount) == 0 for amount in value.values()))
+
+
+def _explicit_no_redemption(payload):
+    """Recognize the live adapter's terminal no-holdings response."""
+    if not isinstance(payload, dict):
+        return False
+    reason = str(payload.get("reason") or payload.get("message") or "").lower()
+    return ("无需赎回" in reason or "无该场持仓" in reason
+            or "no holdings" in reason or "no redemption" in reason
+            or (payload.get("state") == "confirmed"
+                and payload.get("payout_verified") is not True
+                and not payload.get("transaction_id")
+                and payload.get("credited_usd") is None))
+
+
 def _text(value, maximum=200):
     return value[:maximum] if isinstance(value, str) else None
 
@@ -422,6 +441,10 @@ def _projection(record):
         result["payout_verified"] = verified
         result.update({field: amount if verified and amount is not None and amount >= 0 else None
                        for field, amount in amounts.items()})
+        result["settlement_required"] = record.get("settlement_required") if isinstance(record.get("settlement_required"), bool) else None
+        result["redemption_required"] = record.get("redemption_required") if isinstance(record.get("redemption_required"), bool) else None
+        result["settlementRequired"] = result["settlement_required"]
+        result["redemptionRequired"] = result["redemption_required"]
     for field in ("created_at", "average_price", "filled_shares", "reserved_usd", "reserved_shares", "sign_latency_ms", "risk_metadata_latency_ms", "ack_latency_ms", "total_ack_latency_ms",
                   "cancel_requested_at", "cancel_ack_at", "cancel_ack_latency_ms", "venue_status_at",
                   "venue_status_latency_ms", "venue_status_after_ack_latency_ms", "updated_at"):
@@ -553,6 +576,14 @@ class Ledger:
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('platform_settlements_v1')")
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('round_identity_v1')")
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('round_identity_v2')")
+                # Recompute settlement semantics for rows projected before
+                # no-trade/no-redemption was distinguished from pending work.
+                # This is idempotent and lets an existing live run converge
+                # without replaying its journal or changing payout evidence.
+                if not db.execute("SELECT 1 FROM projection_migrations WHERE name='settlement_semantics_v1'").fetchone():
+                    for row in db.execute("SELECT run_id,market,asset_id FROM settlement_details").fetchall():
+                        self._refresh_settlement(db, row["run_id"], row["market"], row["asset_id"])
+                    db.execute("INSERT INTO projection_migrations VALUES('settlement_semantics_v1')")
 
     @contextmanager
     def _connect(self):
@@ -1252,9 +1283,21 @@ class Ledger:
         if row is None:
             return
         payload = json.loads(row["payload"])
+        market_row = db.execute("SELECT fills FROM markets WHERE run_id=? AND asset_id=? AND market=?",
+                                (run_id, asset_id, market)).fetchone()
+        no_trade = (not row["verified"] and market_row is not None and market_row["fills"] == 0
+                    and (_explicit_zero_coverage(payload.get("coverage"))
+                         or _explicit_no_redemption(payload)))
         pnl = None
         reason = "payout_unverified"
-        if row["verified"]:
+        accounting_state = "pending"
+        if no_trade:
+            # A confirmed no-holdings response is a terminal no-op. It is not
+            # a payout failure and must not keep the run in pending settlement.
+            reason = "no_trade"
+            accounting_state = "no_trade"
+        elif row["verified"]:
+            accounting_state = "confirmed"
             round_id = row["round_id"]
             trades = [json.loads(item[0]) for item in db.execute(
                 "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=? "
@@ -1278,7 +1321,8 @@ class Ledger:
                 if all(abs(net_shares[token] - shares) < 1e-6 for token, shares in coverage.items()):
                     pnl = _number(payload["credited_usd"] - net_cost)
                     reason = None if pnl is not None else "invalid_pnl"
-        payload.update(pnl=pnl, accounting_state="confirmed" if row["verified"] else "pending", pnl_error=reason)
+        payload.update(pnl=pnl, accounting_state=accounting_state, pnl_error=reason,
+                      settlement_required=not no_trade, redemption_required=not no_trade)
         db.execute("UPDATE settlement_details SET pnl=?,payload=? WHERE run_id=? AND asset_id=? AND market=?",
                    (pnl, json.dumps(payload, allow_nan=False), run_id, asset_id, market))
         prior = db.execute("SELECT m.settled,m.fills,d.pnl FROM markets m JOIN market_details d "
@@ -1570,8 +1614,10 @@ class Ledger:
             losses = int(settled["losses"] or 0)
             result.update(settled_wins=wins, settled_losses=losses,
                           settled_draws=int(settled["draws"] or 0), settled_pnl_pending=run["missing_pnl"],
-                          pending_settlements=db.execute("SELECT COUNT(*) FROM settlement_details WHERE run_id=? AND verified=0",
-                                                        (run_id,)).fetchone()[0] if self._has_table(db, "settlement_details") else 0,
+                          pending_settlements=db.execute(
+                              "SELECT COUNT(*) FROM settlement_details WHERE run_id=? AND verified=0 "
+                              "AND COALESCE(json_extract(payload,'$.redemption_required'),1) != 0",
+                              (run_id,)).fetchone()[0] if self._has_table(db, "settlement_details") else 0,
                           win_rate=(wins / (wins + losses) if wins + losses else None))
             try:
                 source_bytes = Path(run["path"]).stat().st_size
@@ -1778,7 +1824,9 @@ class Ledger:
             def settlement_identity(item):
                 return (item["asset_id"], item.get("market_id") or item["market"], item["round_id"])
             pending_markets = {settlement_identity(item) for item in settlements.values()
-                               if not item["verified"] and (start is None or start <= item["source_at"] <= now)}
+                               if not item["verified"]
+                               and json.loads(item["payload"]).get("redemption_required", True)
+                               and (start is None or start <= item["source_at"] <= now)}
             pending_markets.difference_update(settlement_identity(item)
                                              for item in settlements.values() if item["verified"])
             wins = sum(value is not None and value > 1e-9 for value in pnl_values)

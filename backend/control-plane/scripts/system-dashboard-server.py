@@ -2370,7 +2370,14 @@ def make_handler(root: Path):
                 requested_range = query.get("range", ["today"])[0]
                 if requested_range not in {"run", "today", "all"}:
                     raise ValueError("invalid metrics range")
-                run_id = _api_run_id()
+                requested_run_id = query.get("runId", [None])[0]
+                if requested_run_id is not None:
+                    run_id = _scoped_run_id(requested_run_id)
+                    if run_id is None:
+                        self._send_json(b'{"error":"run_not_found","stale":true}', 404)
+                        return
+                else:
+                    run_id = _api_run_id()
                 if not run_id:
                     # No run is a valid unavailable state. Keep the response
                     # successful so clients can render the last-known/empty

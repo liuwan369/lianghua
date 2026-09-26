@@ -56,7 +56,7 @@
 
 现代成功和错误响应必须带 `schemaVersion`、`source`、`asOf`、`stale`、`error`。账本投影进程负责从运行日志生成订单、成交、结算、持仓和统计；HTTP 请求只读 SQLite/原子快照和已有缓存，不解析日志、不触碰实时下单链路。`stale` 或 `error` 时保留上一次有效字段及原始来源时间，不用请求时间刷新快照；从未成功取得数据时 `asOf=null`，未知金额和盈亏使用 `null`。
 
-`/api/fills` 分页返回成交 journal 状态记录，同一经济成交可能有后续修订，前端不能直接按记录求和。`/api/settlements` 分页返回每场最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`。只有 `platform_settlement.state="confirmed"` 且 `payout_verified=true` 的结算计入确认统计；完整的已确认成交、实际手续费、核实到账及可核对成交成本的平台持仓快照缺一时，结算净盈亏为 `null`，并说明尚未核实的原因。
+`/api/fills` 分页返回成交 journal 状态记录，同一经济成交可能有后续修订，前端不能直接按记录求和。`/api/settlements` 分页返回每场最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`。只有 `platform_settlement.state="confirmed"` 且 `payout_verified=true` 的结算计入确认统计；明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算。完整的已确认成交、实际手续费、核实到账及可核对成交成本的平台持仓快照缺一时，结算净盈亏为 `null`，并说明尚未核实的原因。
 
 资金投影要区分可用余额、预留资金、持仓成本、估算手续费和已确认手续费。撤单请求或进程停止不是资金已释放的证明；结算必须同时有 `payout_verified`、交易回执和到账金额才能进入确认盈亏。未决订单、未确认结算或费用缺失不能进入最终胜率。
 

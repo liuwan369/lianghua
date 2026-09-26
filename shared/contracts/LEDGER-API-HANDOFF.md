@@ -89,7 +89,7 @@ schemaVersion, source, asOf, stale, error
 | `GET /api/account/snapshot` | 独立只读账户余额/抵押品快照，不返回密钥 |
 | `POST /api/account/check` | 服务器执行只读账户检查；不会保存账户，响应不含私钥或 Token |
 
-`fees` 只表示已确认费用；`estimated_fees` 单独表示估算费用。未决订单、未确认结算、费用或成本缺失不进入最终盈亏和胜率。结算必须同时满足确认状态、`payout_verified`、有效交易回执、到账金额和可核对成交成本。
+`fees` 只表示已确认费用；`estimated_fees` 单独表示估算费用。无成交且无持仓、无需赎回的场次返回 `accounting_state=no_trade`、`redemption_required=false`，不计入 `pending_settlements`。未决订单、未确认结算、费用或成本缺失不进入最终盈亏和胜率。结算必须同时满足确认状态、`payout_verified`、有效交易回执、到账金额和可核对成交成本。
 
 ## 运行命令接口
 
