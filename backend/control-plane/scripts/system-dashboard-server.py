@@ -2156,7 +2156,11 @@ def _event_dto(event: dict) -> dict:
         result.update({"payoutVerified": event.get("payout_verified") is True,
                        "accountingState": event.get("accounting_state"),
                        "pnlError": event.get("pnl_error"),
-                       "pnl": _money(event.get("pnl"))})
+                       "pnl": _money(event.get("pnl")),
+                       "settlementRequired": event.get("settlement_required"),
+                       "redemptionRequired": event.get("redemption_required"),
+                       "settlement_required": event.get("settlement_required"),
+                       "redemption_required": event.get("redemption_required")})
     return result
 
 

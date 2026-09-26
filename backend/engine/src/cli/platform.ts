@@ -763,17 +763,30 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     for (const marketEndTimer of marketEndTimers.values()) clearTimeout(marketEndTimer);
     marketEndTimers.clear();
     // Finish any settlement pass that was already in flight before closing the
-    // gateway. The bounded drain below can then safely handle the last round.
+    // gateway. Pause new strategy decisions and cancel active orders first so
+    // the bounded drain can submit the last round's redeem while the adapter
+    // is still connected.
     await settlementJob?.catch(() => undefined);
-    try { await connection?.stop(signalReason ?? (primaryFailure ? "run_failed" : "run_complete")); }
-    catch (error) {
-      primaryFailure ??= error;
-      reportError("shutdown", "platform_shutdown_failed");
+    if (reversal) {
+      reversal.setPaused(true);
+      try {
+        await connection?.platform.orders.cancelAll("btc-reversal");
+        await connection?.platform.idle();
+        await connection?.recoverAccount();
+      } catch (error) {
+        primaryFailure ??= error;
+        reportError("shutdown", "settlement_preparation_failed");
+      }
     }
     try { await drainSettlements?.(); }
     catch (error) {
       primaryFailure ??= error;
       reportError("settlement", "settlement_drain_failed");
+    }
+    try { await connection?.stop(signalReason ?? (primaryFailure ? "run_failed" : "run_complete")); }
+    catch (error) {
+      primaryFailure ??= error;
+      reportError("shutdown", "platform_shutdown_failed");
     }
     await discoveryJob;
     await settlementJob;
