@@ -1867,6 +1867,97 @@ def _modern_runtime(status: dict) -> dict:
         asset_id = None
     else:
         asset_id = asset_id.strip().lower()
+
+    def identity_value(item, *keys):
+        if not isinstance(item, dict):
+            return None
+        for key in keys:
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def identity_view(item):
+        return {
+            "marketId": identity_value(item, "marketId", "market_id", "id"),
+            "roundId": identity_value(item, "roundId", "round_id"),
+            "assetId": identity_value(item, "assetId", "asset_id"),
+            "name": identity_value(item, "name", "marketSlug", "market_slug"),
+        }
+
+    # Runtime market rows are the primary source. Older runtime snapshots can
+    # omit one of the identity fields while strategy_runtime has the same
+    # explicit market/round identity. Merge only an unambiguous match from
+    # that payload; never infer a round from time, slug text, or row order.
+    runtime_markets = runtime.get("markets") if isinstance(runtime.get("markets"), list) else []
+    strategy_candidates = []
+    for candidate in ([strategy_runtime.get("currentRound")] if current_round else []):
+        if isinstance(candidate, dict):
+            strategy_candidates.append(candidate)
+    rounds = strategy_runtime.get("rounds") if isinstance(strategy_runtime.get("rounds"), list) else []
+    strategy_candidates.extend(candidate for candidate in rounds if isinstance(candidate, dict))
+
+    candidate_views = [(candidate, identity_view(candidate)) for candidate in strategy_candidates]
+    market_rows = []
+    seen_rows = set()
+    for source in runtime_markets:
+        if not isinstance(source, dict):
+            continue
+        row = dict(source)
+        view = identity_view(source)
+        matches = []
+        for candidate, candidate_view in candidate_views:
+            if view["assetId"] and candidate_view["assetId"] and view["assetId"].lower() != candidate_view["assetId"].lower():
+                continue
+            if view["marketId"]:
+                if candidate_view["marketId"] != view["marketId"]:
+                    continue
+            elif view["name"]:
+                if candidate_view["name"] != view["name"]:
+                    continue
+            else:
+                continue
+            if view["roundId"] and candidate_view["roundId"] and candidate_view["roundId"] != view["roundId"]:
+                continue
+            matches.append(candidate_view)
+        # A field can be backfilled only when all matching runtime candidates
+        # agree. This allows a market id to be known even if its round is
+        # ambiguous, while refusing to assign the wrong historical round.
+        for field in ("marketId", "roundId"):
+            if view[field] is None:
+                values = {match[field] for match in matches if match[field] is not None}
+                if len(values) == 1:
+                    view[field] = values.pop()
+        if view["marketId"] and not identity_value(source, "marketId", "market_id"):
+            row["marketId"] = view["marketId"]
+        if view["roundId"] and not identity_value(source, "roundId", "round_id"):
+            row["roundId"] = view["roundId"]
+        if view["assetId"] and not identity_value(source, "assetId", "asset_id"):
+            row["assetId"] = view["assetId"]
+        row_key = (view["assetId"], view["marketId"], view["roundId"], view["name"])
+        if row_key not in seen_rows:
+            seen_rows.add(row_key)
+            market_rows.append(row)
+
+    # If the runtime market list is absent, the explicit strategy round
+    # records are still valid read-only runtime identity sources. Do not add a
+    # strategy row when it has no market or round identity at all.
+    for candidate, view in candidate_views:
+        if not view["marketId"] and not view["roundId"]:
+            continue
+        row_key = (view["assetId"], view["marketId"], view["roundId"], view["name"])
+        if row_key in seen_rows:
+            continue
+        row = dict(candidate)
+        if view["marketId"]:
+            row["marketId"] = view["marketId"]
+        if view["roundId"]:
+            row["roundId"] = view["roundId"]
+        if view["assetId"]:
+            row["assetId"] = view["assetId"]
+        seen_rows.add(row_key)
+        market_rows.append(row)
+
     return {"schemaVersion": 1, "status": state, "state": state,
             "serviceState": status.get("service_state") or state,
             "commandStatus": status.get("command_status") or ("executing" if status.get("running") else "confirmed"),
@@ -1881,7 +1972,7 @@ def _modern_runtime(status: dict) -> dict:
             "execution": status.get("execution"), "risk": risk or None, "funds": funds, "markets": [
                 {**item, "marketId": item.get("marketId") or item.get("market_id") or item.get("id"),
                  "roundId": item.get("roundId") or item.get("round_id")}
-                for item in runtime.get("markets", [])],
+                for item in market_rows],
             "error": runtime.get("error") or projection.get("error")
                 or ("ledger_projection_incomplete" if projection_stale else "runtime_snapshot_stale" if stale else None)
                 or ((status.get("stop_result") or {}).get("message") if state == "failed" else None),
