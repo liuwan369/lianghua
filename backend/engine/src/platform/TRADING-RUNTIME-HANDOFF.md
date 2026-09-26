@@ -92,22 +92,25 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 
 - `npm run typecheck`
 - `npm run build`
+- `npm exec -- tsx src/platform/runtime-discovery-routing.test.ts`
+- `npm exec -- tsx src/live/clob/settlement-credentials.test.ts`
 - 真实 feed 函数带默认第五参数的启动接缝、无顶层 underlying asset 的 paired snapshot、断线后旧帧拒绝和可选 L2 深度过期门控。
-- 服务器只读行情探针已验证 paired snapshot、五档 YES/NO、sequence/sourceAt 无回退和断线恢复；交易运行时仍需在集成分支部署后再做服务器验证。
-- BTC 行情探针验证了 paired snapshots、五档 YES/NO、sequence/sourceAt 无回退和断线恢复。
+- 服务器 `account-check` 已在受保护账户环境下只读验证：钱包/Owner 匹配、CLOB V2 授权和 `settlement_credentials_ready=true`；没有输出任何秘密。
+- 服务器受控交易运行探针已实际接入当前轮和下一轮 BTC 市场：两个 `marketId + roundId` 各自收到独立 paired snapshot，sequence 在各自轮次内递增；停止后订单数为 0。
+- 服务器 BTC 行情探针验证了五档 YES/NO、sequence/sourceAt 无回退和断线恢复；collector 不可用时 direct discovery 仍返回带身份的市场。
 
-类型检查、构建和行情探针不能代替真实账户下的 CLOB 订单、User WebSocket 成交和链上结算验收。
+以上验证没有启动策略下单，也没有提交真实订单；它们不能代替真实账户下的 CLOB 订单、User WebSocket 成交和链上结算验收。
 
 ## 尚未完成的真实验收
 
-以下事项必须在服务器注入交易账户配置后完成：
+以下事项仍必须由集成/账本模块配合，在服务器受控额度下完成：
 
 - 真实 CLOB 下单 ACK，以及超时重试仍保持单一 `clientOrderId`。
 - 真实撤单 ACK、停止撤单和资金释放。
 - User WebSocket 成交、部分成交、重复成交和重连补偿。
 - 真实账户资金预留、释放和账户对账。
-- 使用同一状态文件重启并恢复真实订单、成交和策略阶段。
-- 旧 round 到新 round 的连续运行隔离。
+- 使用同一状态文件重启并恢复真实订单、成交和策略阶段；无真实订单的进程重启探针已由本会话完成。
+- 旧 round 到新 round 的连续运行隔离；无下单的双轮 feed 隔离已由本会话完成。
 - 有真实获胜持仓时的 redeem 和链上回执。
 
 账户密钥由 `backend/control-plane` 注入 live 子进程；不要把私钥、Token 或 Builder/Relayer Secret 写入本仓库或日志。交易运行消费 `POLYMARKET_WALLET_ADDRESS`/`POLY_FUNDER` 和 `POLYMARKET_OWNER_PRIVATE_KEY`，结算还需要受支持的 Builder 或 Relayer 凭据。
@@ -120,21 +123,21 @@ CLI journal 的 `order`、`fill` 和 `platform_settlement` 事件直接写入
 - [ ] 在服务器部署该组合提交，并记录实际 `marketId/roundId`。
 - [ ] 提供一段包含断线恢复和场次边界的 paired snapshot 日志，确认恢复后没有使用旧快照。
 
-当前服务器只读探针所在分支为 `codex/market-data`；尚未启动交易运行时，也没有提交真实订单。
+服务器正式 checkout 仍为 `codex/market-data`；本分支构建产物在独立临时目录完成了受控 runtime 探针，没有提交真实订单。
 
-行情底座完成以上事项后，交易运行会话继续做真实账户下单、撤单和成交验收。
+行情底座的 paired snapshot 和身份交接已完成；集成分支只需部署组合提交后继续做真实账户下单、撤单和成交验收。
 
 ### 控制面 / 部署模块
 
 - [ ] 通过受保护的账户配置入口注入 Owner signer、funder/wallet 和必要的 RPC。
-- [ ] 开启实盘解锁并启动 `dist/cli/platform.js --live`，不得把秘密写入命令行、日志或 Git。
+- [ ] 开启实盘解锁并启动 `dist/cli/platform.js --live`，不得把秘密写入命令行、日志或 Git；账户只读预检已通过。
 - [ ] 提供只包含字段存在性、钱包地址和 signer 地址匹配结果的非敏感启动证据。
 
-控制面完成后，交易运行会话负责检查真实订单生命周期和重启恢复。
+控制面完成后，集成模块负责安排最小额度真实订单；交易运行会话负责核对订单生命周期和重启恢复证据。
 
 ### 账本 / 结算模块
 
-- [ ] 提供成交、费用、资金变动和链上回执的真实查询结果。
+- [ ] 提供成交、费用、资金变动和链上回执的真实查询结果；当前只验证了结算凭据预检，未执行 redeem。
 - [ ] 确认结算查询和 redeem 使用同一个 `marketId + roundId`，不跨轮次读取。
 
 账本和结算完成后，交易运行会话负责把结果与本地订单、成交和持仓状态对账。
