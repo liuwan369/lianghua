@@ -574,6 +574,15 @@ button {
   font-size: 10px;
   line-height: 1.6;
 }
+.metrics-footnote > span:last-child {
+  min-width: 0;
+}
+.metrics-footnote small {
+  display: block;
+  margin-top: 3px;
+  color: #93aabd;
+  font-size: 10px;
+}
 .info-dot {
   display: grid;
   place-items: center;

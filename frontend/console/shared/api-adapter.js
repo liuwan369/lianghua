@@ -66,6 +66,17 @@
     };
   };
   let runtimeRequest = null;
+  let rememberedRunId = null;
+  const rememberedRun = () => {
+    if (rememberedRunId) return rememberedRunId;
+    try { rememberedRunId = sessionStorage.getItem("polymarket.lastRunId") || null; } catch { rememberedRunId = null; }
+    return rememberedRunId;
+  };
+  const rememberRun = (runId) => {
+    if (!runId) return;
+    rememberedRunId = String(runId);
+    try { sessionStorage.setItem("polymarket.lastRunId", rememberedRunId); } catch { /* storage is optional */ }
+  };
   // Event reads are independent low-frequency snapshots. A page can have an
   // older request in flight while the selected run/round changes, so keep a
   // monotonically increasing generation at this boundary. The latest request
@@ -154,8 +165,16 @@
           const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
           const markets = Array.isArray(data?.markets) ? data.markets : [];
           const scoped = markets.map((item) => ({ ...item, assetId: item.assetId ?? item.asset_id ?? data.assetId })).find((item) => vm.matchesIdentity(item, context));
-          if (scoped) return { ...vm.runtime({ ...data, ...scoped, status: data.status || data.state }), connectionStatus: resourceStatus(data), stale: resourceStatus(data) !== "ready" };
-          if (vm.matchesIdentity(data, context)) return vm.runtime(data);
+          if (scoped) {
+            const model = vm.runtime({ ...data, ...scoped, status: data.status || data.state });
+            rememberRun(model.runId);
+            return { ...model, connectionStatus: resourceStatus(data), stale: resourceStatus(data) !== "ready" };
+          }
+          if (vm.matchesIdentity(data, context)) {
+            const model = vm.runtime(data);
+            rememberRun(model.runId);
+            return model;
+          }
           const processOnly = vm.runtime(data);
           return {
             status: "unavailable",
@@ -175,6 +194,7 @@
       runtimeRequest = readSlice("runtime", async () => {
         const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
         const model = vm.runtime(raw);
+        rememberRun(model.runId);
         const connectionStatus = resourceStatus(raw);
         const current = store.getState().runtime;
         if (connectionStatus !== "ready" && hasSnapshot("runtime", current)) {
@@ -245,14 +265,16 @@
     },
     async loadMetrics(runId) {
       return readSlice("metrics", async () => {
+        const effectiveRunId = runId || store.getState().runtime.runId || rememberedRun();
+        const metricContext = effectiveRunId ? { runId: effectiveRunId } : {};
         const legacySummary = async () => {
-          const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
+          const activeRunId = effectiveRunId || (await adapter.loadRuntime()).runId;
           if (!activeRunId) throw new Error("当前运行标识尚未提供");
           return core.api.legacySummary(activeRunId);
         };
         const results = await Promise.allSettled([
-          modernOrLegacy(() => core.api.metrics("today"), legacySummary),
-          modernOrLegacy(() => core.api.metrics("run"), legacySummary)
+          modernOrLegacy(() => core.api.metrics("today", metricContext), legacySummary),
+          modernOrLegacy(() => core.api.metrics("run", metricContext), legacySummary)
         ]);
         const data = { ...(store.getState().metrics.data || {}), periodStatus: {} };
         ["today", "current"].forEach((period, index) => {
@@ -262,7 +284,35 @@
         });
         if (results.every((result) => result.status === "rejected")) throw results[0].reason;
         const stale = Object.values(data.periodStatus).some((status) => status !== "ready");
+        const currentMetrics = store.getState().metrics;
+        if (stale && currentMetrics.data && results.every((result) => result.status === "fulfilled" && resourceStatus(result.value) === "unavailable")) {
+          return store.setSlice("metrics", { ...currentMetrics, status: "stale", stale: true, error: "统计接口暂时不可用，保留最近成功数据" });
+        }
         return store.setSlice("metrics", { status: stale ? "stale" : "ready", stale, data, error: stale ? "部分统计未更新，保留最近结果" : null });
+      });
+    },
+    async loadFills(runId, context = {}) {
+      return readSlice("fills", async () => {
+        const effectiveRunId = runId || context.runId || store.getState().runtime.runId || rememberedRun();
+        const scope = { ...context, ...(effectiveRunId ? { runId: effectiveRunId } : {}) };
+        const raw = await core.api.fills(scope);
+        const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.fills) ? raw.fills : [];
+        const status = resourceStatus(raw);
+        const current = store.getState().fills;
+        if (status !== "ready" && current.items?.length) return store.setSlice("fills", { ...current, status, stale: true, error: raw?.error || "成交记录已过期，保留最近成功数据" });
+        return store.setSlice("fills", { status, stale: status !== "ready", items, data: raw, runId: raw?.runId ?? raw?.run_id ?? effectiveRunId ?? null, error: raw?.error || null });
+      });
+    },
+    async loadSettlements(runId, context = {}) {
+      return readSlice("settlements", async () => {
+        const effectiveRunId = runId || context.runId || store.getState().runtime.runId || rememberedRun();
+        const scope = { ...context, ...(effectiveRunId ? { runId: effectiveRunId } : {}) };
+        const raw = await core.api.settlements(scope);
+        const items = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.settlements) ? raw.settlements : [];
+        const status = resourceStatus(raw);
+        const current = store.getState().settlements;
+        if (status !== "ready" && current.items?.length) return store.setSlice("settlements", { ...current, status, stale: true, error: raw?.error || "结算记录已过期，保留最近成功数据" });
+        return store.setSlice("settlements", { status, stale: status !== "ready", items, data: raw, runId: raw?.runId ?? raw?.run_id ?? effectiveRunId ?? null, error: raw?.error || null });
       });
     },
     async loadEvents(runId, context = {}) {

@@ -1981,6 +1981,22 @@ button {
   color: #8ec6e4;
   font-size: 9px;
 }
+.settlement-note {
+  color: #a6bdd0;
+}
+.settlement-note > span:last-child {
+  min-width: 0;
+}
+.settlement-note b {
+  color: #e6f1f7;
+  font-weight: 650;
+}
+.settlement-note small {
+  display: block;
+  margin-top: 3px;
+  color: #7894aa;
+  font-size: 9px;
+}
 .orders-panel,
 .activity-panel {
   margin-top: 13px;

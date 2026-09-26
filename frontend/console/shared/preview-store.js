@@ -13,6 +13,8 @@
     accountStatus: { status: "unavailable", data: null, error: "账户配置状态尚未接入" },
     diagnostics: { status: "unavailable", data: null, error: "后端尚未接入" },
     metrics: { status: "unavailable", data: null, error: "后端尚未接入" },
+    fills: { status: "unavailable", items: [], data: null, runId: null, error: null },
+    settlements: { status: "unavailable", items: [], data: null, runId: null, error: null },
     events: { status: "unavailable", items: [], cursor: null, error: null }
   };
   const subscribers = new Map();

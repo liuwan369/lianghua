@@ -15,6 +15,11 @@ const MARKET_WINDOW_SEC = 300;
 const DISCOVERY_PREWARM_MS = 10_000;
 const DISCOVERY_PREWARM_RETRY_MS = 250;
 const DISCOVERY_POST_BOUNDARY_MS = 20_000;
+// A duration/operator stop must still give already-traded rounds a chance to
+// reach their terminal boundary and submit settlement. Keep this bounded so a
+// broken market or RPC cannot hold the process forever.
+const SETTLEMENT_DRAIN_MAX_MS = 5 * 60_000;
+const SETTLEMENT_DRAIN_POLL_MS = 15_000;
 const BEST_EFFORT_LATENCY_METRICS = new Set([
   "book_batch_apply", "book_processing", "market_age", "strategy_decision", "ws_receive_to_decision",
 ]);
@@ -273,6 +278,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   let controlTimer: ReturnType<typeof setInterval> | undefined;
   let settlementTimer: ReturnType<typeof setInterval> | undefined;
   let settlementJob: Promise<void> | undefined;
+  let drainSettlements: (() => Promise<void>) | undefined;
   const confirmedSettlements = new Set<string>();
   let discoveryJob: Promise<void> | undefined;
   const discoveryAbort = new AbortController();
@@ -678,29 +684,55 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
           } catch { reportError("strategy_control", "strategy_configuration_unavailable"); }
         }, 1000);
         if (options.mode === "live") {
-          const settleEndedMarkets = () => {
-            if (settlementJob || signalReason) return;
-            settlementJob = (async () => {
-              const state = connection!.platform.account.current(), now = Date.now() / 1000;
-              for (const market of connection!.platform.market.list()) {
-                if (market.endsAt > now || confirmedSettlements.has(market.id)) continue;
-                const tokenIds = market.instruments.map(instrument => instrument.tokenId);
-                const hasStrategyRound = reversal!.getStatus().rounds.some(round => round.marketId === market.id && round.stages.length > 0);
-                if (!hasStrategyRound && !state.positions.some(position => tokenIds.includes(position.tokenId) && position.shares > 0)) continue;
-                if (state.orders.some(order => tokenIds.includes(order.tokenId)
-                  && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))) continue;
-                if (state.fills.some(fill => tokenIds.includes(fill.tokenId) && fill.status
-                  && !["CONFIRMED", "FAILED"].includes(fill.status))) continue;
-                const result = await connection!.platform.settlement.redeem({ marketId: market.id, assetId: market.assetId, tokenIds });
-                if (result.state === "confirmed") {
-                  await connection!.recoverAccount();
-                  confirmedSettlements.add(market.id);
-                }
+          const runSettlementPass = async () => {
+            const state = connection!.platform.account.current(), now = Date.now() / 1000;
+            for (const market of connection!.platform.market.list()) {
+              if (market.endsAt > now || confirmedSettlements.has(market.id)) continue;
+              const tokenIds = market.instruments.map(instrument => instrument.tokenId);
+              const hasStrategyRound = reversal!.getStatus().rounds.some(round => round.marketId === market.id && round.stages.length > 0);
+              if (!hasStrategyRound && !state.positions.some(position => tokenIds.includes(position.tokenId) && position.shares > 0)) continue;
+              if (state.orders.some(order => tokenIds.includes(order.tokenId)
+                && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))) continue;
+              if (state.fills.some(fill => tokenIds.includes(fill.tokenId) && fill.status
+                && !["CONFIRMED", "FAILED"].includes(fill.status))) continue;
+              const result = await connection!.platform.settlement.redeem({ marketId: market.id, assetId: market.assetId, tokenIds });
+              if (result.state === "confirmed") {
+                await connection!.recoverAccount();
+                confirmedSettlements.add(market.id);
               }
-            })().catch(() => reportError("settlement", "settlement_reconciliation_pending"))
-              .finally(() => { settlementJob = undefined; });
+            }
           };
-          settleEndedMarkets(); settlementTimer = setInterval(settleEndedMarkets, 15_000);
+          const settleEndedMarkets = (draining = false): Promise<void> | undefined => {
+            if (settlementJob || (!draining && signalReason)) return settlementJob;
+            settlementJob = runSettlementPass().catch(() => reportError("settlement", "settlement_reconciliation_pending"))
+              .finally(() => { settlementJob = undefined; });
+            return settlementJob;
+          };
+          drainSettlements = async () => {
+            const deadline = Date.now() + SETTLEMENT_DRAIN_MAX_MS;
+            let needsMore = true;
+            while (needsMore && Date.now() < deadline) {
+              await settleEndedMarkets(true);
+              const state = connection!.platform.account.current();
+              needsMore = connection!.platform.market.list().some(market => {
+                const tokenIds = new Set(market.instruments.map(instrument => instrument.tokenId));
+                const hasActivity = state.positions.some(position => tokenIds.has(position.tokenId) && position.shares > 0)
+                  || state.fills.some(fill => tokenIds.has(fill.tokenId) && fill.status !== "FAILED" && fill.shares > 0)
+                  || state.orders.some(order => tokenIds.has(order.tokenId)
+                    && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending));
+                if (!hasActivity || confirmedSettlements.has(market.id)) return false;
+                // Keep polling an ended round while a redemption is pending;
+                // a single submitted transaction is not yet a cash receipt.
+                return true;
+              });
+              if (needsMore) {
+                const waitMs = Math.min(SETTLEMENT_DRAIN_POLL_MS, Math.max(1, deadline - Date.now()));
+                await new Promise<void>(resolveWait => setTimeout(resolveWait, waitMs));
+              }
+            }
+            if (needsMore) reportError("settlement", "settlement_drain_timeout");
+          };
+          settleEndedMarkets(); settlementTimer = setInterval(() => { settleEndedMarkets(); }, 15_000);
         }
       }
       timer = setInterval(() => {
@@ -730,10 +762,18 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     clearTimeout(durationTimer); clearTimeout(marketTimer);
     for (const marketEndTimer of marketEndTimers.values()) clearTimeout(marketEndTimer);
     marketEndTimers.clear();
+    // Finish any settlement pass that was already in flight before closing the
+    // gateway. The bounded drain below can then safely handle the last round.
+    await settlementJob?.catch(() => undefined);
     try { await connection?.stop(signalReason ?? (primaryFailure ? "run_failed" : "run_complete")); }
     catch (error) {
       primaryFailure ??= error;
       reportError("shutdown", "platform_shutdown_failed");
+    }
+    try { await drainSettlements?.(); }
+    catch (error) {
+      primaryFailure ??= error;
+      reportError("settlement", "settlement_drain_failed");
     }
     await discoveryJob;
     await settlementJob;

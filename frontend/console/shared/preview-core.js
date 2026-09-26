@@ -151,6 +151,7 @@
   };
   const scopedQuery = (context = {}) => {
     const params = new URLSearchParams();
+    if (context.range) params.set("range", context.range);
     if (context.assetId) params.set("assetId", context.assetId);
     if (context.marketId) params.set("marketId", context.marketId);
     if (context.roundId) params.set("roundId", context.roundId);
@@ -206,8 +207,10 @@
     accountCheck: (payload = {}) => accountPost("/api/account/check", payload),
     accountSave: (payload = {}) => accountPost("/api/account/save", payload),
     diagnostics: () => request("/api/diagnostics/health"),
-    metrics: (range = "today") => request(`/api/metrics/summary?range=${encodeURIComponent(range)}`),
+    metrics: (range = "today", context = {}) => request(`/api/metrics/summary${scopedQuery({ ...context, range })}`),
     events: (cursor = "", context = {}) => request(`/api/events${scopedQuery({ ...context, ...(cursor ? { cursor } : {}) })}`),
+    fills: (context = {}) => request(`/api/fills${scopedQuery(context)}`),
+    settlements: (context = {}) => request(`/api/settlements${scopedQuery(context)}`),
     legacyStatus: () => request("/api/v1/status"),
     legacyMarkets: () => request("/api/v1/markets"),
     legacyAccount: () => request("/api/account/status"),

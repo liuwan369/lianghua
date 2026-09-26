@@ -54,7 +54,7 @@
           <article class="metric-group"><div class="metric-heading"><span class="metric-mark green-mark">\u7387</span><div><h3>\u80DC\u7387</h3><p>\u5DF2\u5B8C\u6210\u573A\u6B21\u7684\u6BD4\u4F8B</p></div></div><strong class="metric-primary"><span data-metric="rate-current">--</span><em>%</em></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="rate-today">--</span>%</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="rate-month">--</span>%</dd></div></dl></article>
           <article class="metric-group"><div class="metric-heading"><span class="metric-mark violet-mark">\u51C0</span><div><h3>\u7D2F\u8BA1\u76C8\u5229</h3><p>\u5DF2\u7ED3\u7B97\u51C0\u7ED3\u679C</p></div></div><strong class="metric-primary"><span data-metric="pnl-current">--</span> <em>USDC</em></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="pnl-today">--</span> USDC</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="pnl-month">--</span> USDC</dd></div></dl></article>
         </div>
-        <div class="metrics-footnote"><span class="info-dot">i</span><span data-metrics-state>\u4EC5\u7EDF\u8BA1\u5DF2\u53D6\u5F97\u7684\u771F\u5B9E\u8BB0\u5F55\uFF1B\u540E\u7AEF\u63A5\u5165\u540E\u518D\u663E\u793A\u771F\u5B9E\u8D26\u6237\u6570\u636E\u3002</span></div>
+        <div class="metrics-footnote"><span class="info-dot">i</span><span><span data-metrics-state>\u4EC5\u7EDF\u8BA1\u5DF2\u53D6\u5F97\u7684\u771F\u5B9E\u8BB0\u5F55\uFF1B\u540E\u7AEF\u63A5\u5165\u540E\u518D\u663E\u793A\u771F\u5B9E\u8D26\u6237\u6570\u636E\u3002</span><small data-metrics-detail>待结算 -- · PnL 待核对 -- · 费用 --</small></span></div>
       </section>
 
       <section class="server-panel" aria-labelledby="server-title">
@@ -291,13 +291,19 @@
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);
     ["current", "today", "month"].forEach((period) => {
       const suffix = period === "current" ? "current" : period;
-      setMetric(`orders-${suffix}`, formatMetric(periodValue(data, period, ["orders", "orderCount", "order_count", "ordersCount", "fill_count", "fillCount", "count"], ["orders", "orderCount", "order_count", "fill_count", "fillCount", "count"])));
+      setMetric(`orders-${suffix}`, formatMetric(periodValue(data, period, ["orders", "orderCount", "order_count", "ordersCount", "count"], ["orders", "orderCount", "order_count", "ordersCount", "count"])));
       setMetric(`wins-${suffix}`, formatMetric(periodValue(data, period, ["settled_wins", "wins", "winCount", "win_count"])));
       setMetric(`losses-${suffix}`, formatMetric(periodValue(data, period, ["settled_losses", "losses", "lossCount", "loss_count"])));
       const rate = finite(periodValue(data, period, ["winRate", "win_rate", "rate"], ["winRate", "win_rate", "rate"]));
       setMetric(`rate-${suffix}`, rate == null ? "--" : (rate <= 1 ? rate * 100 : rate).toFixed(2));
       setMetric(`pnl-${suffix}`, formatMetric(periodValue(data, period, ["pnlUsd", "pnl_usd", "profit", "settledPnl", "settled_pnl"], ["pnlUsd", "pnl_usd", "profit", "settledPnl", "settled_pnl"]), 2));
     });
+    const pending = periodValue(data, "current", ["pending_settlements"], ["pending_settlements"]);
+    const pendingPnl = periodValue(data, "current", ["settled_pnl_pending"], ["settled_pnl_pending"]);
+    const fees = periodValue(data, "current", ["fees"], ["fees"]);
+    const estimatedFees = periodValue(data, "current", ["estimated_fees"], ["estimated_fees"]);
+    const display = (value, digits = 0) => value == null ? "--" : formatMetric(value, digits);
+    text("[data-metrics-detail]", `待结算 ${display(pending)} · PnL 待核对 ${display(pendingPnl)} · 已确认费用 ${display(fees, 4)} · 估算费用 ${display(estimatedFees, 4)}`);
   };
   const renderDiagnostics = (resource) => {
     const health = resource?.data;
@@ -323,8 +329,12 @@
   const renderAccount = (resource) => {
     const data = resource?.data;
     if (!data) return;
-    const total = read(data, ["totalUsd", "total_usd", "equity"], data.collateral?.available === true ? data.collateral.value : null);
-    const available = read(data, ["availableUsd", "available_usd", "balance_occupancy.spendable_balance"]);
+    const collateralValue = data.collateral?.value;
+    const collateralAvailable = data.collateral?.available === true
+      ? (collateralValue && typeof collateralValue === "object" ? read(collateralValue, ["availableUsd", "available_usd", "value", "amount"]) : collateralValue)
+      : null;
+    const total = read(data, ["totalUsd", "total_usd", "equity"], collateralAvailable);
+    const available = read(data, ["availableUsd", "available_usd", "balance_occupancy.spendable_balance"], collateralAvailable);
     const formatUsd = (value) => { const amount = finite(value); return amount == null ? "--" : `${amount.toFixed(2)} USDC`; };
     text("[data-account-total]", formatUsd(total));
     text("[data-account-available]", formatUsd(available));

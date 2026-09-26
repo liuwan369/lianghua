@@ -59,7 +59,7 @@
             <article class="header-status"><span>\u5F53\u524D\u5E02\u573A</span><strong data-active-market>当前选中市场 / 五分钟 YES-NO</strong></article>
              <article class="header-status"><span>\u6570\u636E\u8FDE\u63A5</span><strong class="status-warning" data-connection-status>后端未连接 · 等待快照</strong></article>
             <article class="header-status"><span>\u4EA4\u6613\u6A21\u5F0F</span><strong>\u5B9E\u76D8 \xB7 \u5355\u7B56\u7565</strong></article>
-            <article class="header-status"><span>\u8D26\u6237\u4F59\u989D</span><strong>-- USDC</strong></article>
+             <article class="header-status"><span>\u8D26\u6237\u4F59\u989D</span><strong data-auto-account-available>-- USDC</strong></article>
           </div>
         </div>
       </header>
@@ -142,13 +142,14 @@
             <ol class="stage-timeline" data-stage-timeline><li class="current"><span>·</span><div><strong>\u573A\u6B21\u548C\u7B56\u7565\u9636\u6BB5\u5F85\u63A5\u5165</strong><small>\u540E\u7AEF\u8FD4\u56DE\u5E02\u573A\u548C\u8F6E\u6B21\u8EAB\u4EFD\u540E\u663E\u793A\u5B9E\u65F6\u8FDB\u5EA6</small></div><time>--</time></li></ol>
           </div>
           <p class="result-note"><span class="info-dot">i</span>\u9884\u8BA1\u7ED3\u679C\u6309\u5DF2\u6210\u4EA4\u4EFD\u989D\u548C\u5B9E\u9645\u6210\u672C\u8BA1\u7B97\uFF0C\u6700\u7EC8\u4EE5\u5B98\u65B9\u7ED3\u679C\u548C\u5230\u8D26\u4E3A\u51C6\u3002</p>
+          <p class="result-note settlement-note"><span class="info-dot">!</span><span>结算状态：<b data-settlement-state>等待本场结算记录</b><small data-settlement-detail>成交、结算和到账状态由服务器账本确认。</small></span></p>
         </article>
       </section>
 
       <section class="orders-panel trade-panel" aria-labelledby="orders-title">
         <div class="panel-heading">
           <div><p class="eyebrow">\u8BA2\u5355\u72B6\u6001</p><h2 id="orders-title">\u5F53\u524D\u8FD0\u884C\u8BA2\u5355</h2></div>
-          <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div>
+          <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div>
         </div>
         <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
       </section>
@@ -379,6 +380,12 @@
     var runId = runtime.runId ?? runtime.run_id;
     return runId ? { assetId: context.assetId, runId: String(runId) } : context;
   };
+  var ledgerContext = function() {
+    var context = currentContext();
+    var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
+    var runId = runtime.runId ?? runtime.run_id;
+    return runId ? { ...context, runId: String(runId) } : context;
+  };
   var payloadOf = function(frame) { return frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame || {}; };
   var frameMatches = function(frame, requireRound) {
     var context = currentContext();
@@ -410,7 +417,10 @@
     text("[data-strategy-status]", "所选市场状态待接入");
     text("[data-status-age]", "--");
     text("[data-position-state]", "读取中");
+    text("[data-settlement-state]", "等待本场结算记录");
+    text("[data-settlement-detail]", "成交、结算和到账状态由服务器账本确认。");
     text("[data-orders-state]", "读取中");
+    text("[data-fill-summary]", "成交回报 --");
     text("[data-activity-state]", "正在读取新场次事件");
     text("[data-live-status]", "所选市场状态待接入");
     text("[data-invested]", "--");
@@ -500,7 +510,11 @@
   var renderOrders = function(raw, asset) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : null;
-    if (!orders || !asset || raw?.stale || raw?.error || raw?.available === false || orders.some(function(order) { return !itemMatchesContext(order, asset); })) {
+    var mismatched = orders && asset && orders.some(function(order) {
+      var hasIdentity = ["assetId", "asset_id", "marketId", "market_id", "roundId", "round_id"].some(function(key) { return order[key] != null && String(order[key]) !== ""; });
+      return hasIdentity && !itemMatchesContext(order, asset);
+    });
+    if (!orders || !asset || raw?.stale || raw?.error || raw?.available === false || mismatched) {
       var orderReason = window.PolyPreview.format.readableError(raw?.error, "订单数据尚未确认");
       text("[data-orders-state]", `${orderReason} · 保留本场最近成功数据`);
       return false;
@@ -521,6 +535,57 @@
       return `<tr><td>${window.PolyPreview.format.time(order.updatedAt || order.createdAt || order.time)}</td><td>${window.PolyPreview.format.escape(sideText)}</td><td>${Number.isFinite(price) ? price.toFixed(3) : "--"}</td><td>${Number.isFinite(size) ? size.toFixed(2) : "--"}</td><td>${Number.isFinite(filled) ? filled.toFixed(2) : "--"}</td><td>${window.PolyPreview.format.escape(status)}</td></tr>`;
     }).join("") : '<tr><td colspan="6">当前场次暂无订单</td></tr>');
     text("[data-orders-state]", `已更新 · ${window.PolyPreview.format.time(raw.asOf)}`);
+    return true;
+  };
+  var renderFills = function(raw, asset) {
+    var resource = raw || {};
+    var payload = resource?.data && typeof resource.data === "object" ? resource.data : resource;
+    var fills = Array.isArray(resource?.items) ? resource.items : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.fills) ? payload.fills : Array.isArray(payload) ? payload : null;
+    if (!fills || resource?.stale || resource?.status !== "ready" || payload?.stale || payload?.error || payload?.available === false) {
+      text("[data-fill-summary]", "成交回报待确认");
+      return false;
+    }
+    var scoped = fills.filter(function(fill) {
+      return !asset || !["assetId", "asset_id", "marketId", "market_id", "roundId", "round_id"].some(function(key) { return fill[key] != null && String(fill[key]) !== ""; }) || itemMatchesContext(fill, asset);
+    });
+    var confirmed = scoped.filter(function(fill) { return String(fill.tradeStatus || fill.trade_status || fill.status || "").toUpperCase() !== "FAILED"; });
+    text("[data-fill-summary]", `成交回报 ${confirmed.length} 条`);
+    return true;
+  };
+  var renderSettlements = function(raw) {
+    var resource = raw || {};
+    var payload = resource?.data && typeof resource.data === "object" ? resource.data : resource;
+    var items = Array.isArray(resource?.items) ? resource.items : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.settlements) ? payload.settlements : Array.isArray(payload) ? payload : null;
+    var context = currentContext();
+    var stateNode = document.querySelector("[data-settlement-state]");
+    var detailNode = document.querySelector("[data-settlement-detail]");
+    var set = function(state, detail) { if (stateNode) stateNode.textContent = state; if (detailNode) detailNode.textContent = detail; };
+    if (!items || resource?.stale || resource?.status !== "ready" || payload?.stale || payload?.error || payload?.available === false) {
+      set("结算记录待确认", window.PolyPreview.format.readableError(resource?.error || payload?.error, "账本连接中断，保留最近结算状态"));
+      return false;
+    }
+    var scoped = items.filter(function(item) { return vm.matchesIdentity(item, context); });
+    if (!scoped.length) { set("本场暂无结算记录", "场次尚未结束，或账本尚未收到本场结算回执。"); return true; }
+    var item = scoped[0];
+    var state = String(item.state || item.status || "unknown").toLowerCase();
+    var payoutVerified = item.payoutVerified ?? item.payout_verified;
+    var noTrade = item.noTrade ?? item.no_trade;
+    var accounting = String(item.accountingState || item.accounting_state || "").toLowerCase();
+    var settlementRequired = item.settlementRequired ?? item.settlement_required;
+    var redemptionRequired = item.redemptionRequired ?? item.redemption_required;
+    noTrade = noTrade === true || settlementRequired === false || redemptionRequired === false || accounting === "no_trade";
+    var pnlError = item.pnlError || item.pnl_error;
+    var label = noTrade === true
+      ? (state === "confirmed" ? "无成交 · 无需赎回" : "无成交 · 等待结算确认")
+      : state === "confirmed" && payoutVerified === true ? "结算已确认 · 到账已核实"
+        : state === "confirmed" ? "结算已确认 · 到账待核实" : state === "failed" ? "结算失败" : "结算处理中";
+    var details = [];
+    var accountingLabels = { no_trade: "无成交，无需赎回", cost_basis_unverified: "成交成本尚未核实", payout_unverified: "到账尚未核实", verified: "账本已核实", pending: "账本待处理" };
+    if (accounting && !noTrade) details.push(accountingLabels[accounting] || `账本：${accounting}`);
+    if (pnlError) details.push(window.PolyPreview.format.readableError(pnlError, "盈亏暂不可核对"));
+    var pnl = numeric(item.pnl);
+    if (pnl != null) details.push(`净盈亏 ${pnl.toFixed(2)} USDC`);
+    set(label, details.join(" · ") || "服务器已返回本场结算状态。");
     return true;
   };
   var renderEvents = function(raw) {
@@ -701,7 +766,13 @@
       }, function() { if (version === contextVersion) text("[data-position-state]", "读取失败 · 保留本场最近成功数据"); }),
       Promise.resolve().then(function() { return adapter.loadOrders(context.roundId, context); }).then(function(value) {
         if (version === contextVersion) renderOrders(value, asset);
-      }, function() { if (version === contextVersion) text("[data-orders-state]", "读取失败 · 保留本场最近成功数据"); })
+      }, function() { if (version === contextVersion) text("[data-orders-state]", "读取失败 · 保留本场最近成功数据"); }),
+      Promise.resolve().then(function() { return adapter.loadFills(null, ledgerContext()); }).then(function(value) {
+        if (version === contextVersion) renderFills(value, asset);
+      }, function() { if (version === contextVersion) text("[data-fill-summary]", "成交回报读取失败"); }),
+      Promise.resolve().then(function() { return adapter.loadSettlements(null, ledgerContext()); }).then(function(value) {
+        if (version === contextVersion) renderSettlements(value);
+      }, function() { if (version === contextVersion) { text("[data-settlement-state]", "结算读取失败"); text("[data-settlement-detail]", "未确认结算状态，不显示成功结果。"); } })
     ]).finally(function() {
       roundRefreshInFlight = null;
       scheduleRoundRefresh(version === contextVersion ? 3000 : 0);
@@ -772,6 +843,15 @@
   var renderStrategyRevision = function(resource) {
     var revision = Number(resource?.revision);
     text("[data-strategy-revision]", Number.isInteger(revision) && revision > 0 ? `参数版本 ${revision}` : "参数版本待接入");
+  };
+  var renderAccount = function(resource) {
+    var data = resource?.data || {};
+    var collateral = data.collateral?.value;
+    var fallback = data.collateral?.available === true
+      ? (collateral && typeof collateral === "object" ? numeric(collateral.availableUsd ?? collateral.available_usd ?? collateral.value ?? collateral.amount) : numeric(collateral))
+      : null;
+    var value = numeric(data.availableUsd ?? data.available_usd ?? data.balance_occupancy?.spendable_balance) ?? fallback;
+    text("[data-auto-account-available]", value == null ? "-- USDC" : `${value.toFixed(2)} USDC`);
   };
   var renderRuntime = function(runtime, globalProcess = false) {
     if (globalProcess) {
@@ -864,6 +944,7 @@
   renderStrategyRevision(store.getState().strategy);
   store.subscribe("strategy", renderStrategyRevision);
   store.subscribe("accountStatus", function(value) { accountStatus = value; updateControls(); });
+  store.subscribe("account", renderAccount);
   store.subscribe("marketPool", function(value) {
     marketPool = value;
     renderMarketPool();
@@ -958,8 +1039,8 @@
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
   });
-  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadEvents(null, eventContext())]).then(function(results) {
-    var eventsResult = results[4];
+  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadAccount(), adapter.loadEvents(null, eventContext())]).then(function(results) {
+    var eventsResult = results[5];
     if (eventsResult.status === "fulfilled") renderEvents(eventsResult.value);
     streamLifecycleReady = true;
     scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleEventsRefresh(5000); startStreams();
