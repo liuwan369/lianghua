@@ -1,6 +1,7 @@
 /** Machine-readable, read-only bridge. Never log an exception or credential. */
 import { preflightReport } from "../live/onchain.js";
 import { loadAccountConfig } from "../live/account.js";
+import { accountSignatureTypeValue, accountWalletKindValue } from "../live/clob/account-status.js";
 
 let errorCode: "invalid_account_config" | "account_rpc_failed" = "invalid_account_config";
 try {
@@ -29,6 +30,7 @@ try {
         : "结算凭据未就绪，实盘启动将被阻止" },
   ];
   console.log(JSON.stringify({ wallet: report.collateralWallet, owner: report.walletOwner ?? config.ownerSigner ?? null,
+    wallet_kind: accountWalletKindValue(report.walletKind), signature_type: accountSignatureTypeValue(report.signatureType),
     signer_matches: report.ownerMatchesSigner === true, compromised,
     balance: report.pusdOnChain, approvals_ready: report.approvalsFullyReady,
     settlement_credentials_ready: report.settlementCredentialsReady,
@@ -37,6 +39,8 @@ try {
 } catch {
   console.log(JSON.stringify({
     error_code: errorCode,
+    wallet_kind: null,
+    signature_type: null,
     settlement_credentials_ready: null,
     error: errorCode === "invalid_account_config"
       ? "账户配置无效，请核对资金钱包地址与签名私钥格式。"

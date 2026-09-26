@@ -102,6 +102,8 @@ export interface PreflightOptions {
 export interface PreflightReport {
   ready: boolean;
   collateralWallet: Address;
+  /** Non-secret on-chain wallet classification for account status consumers. */
+  walletKind: "EOA" | "DEPOSIT_WALLET" | "CONTRACT_UNKNOWN";
   signatureType: number | null;
   walletSource: string;
   gasWallet: Address;
@@ -250,6 +252,7 @@ export async function preflightReport(
   return {
     ready,
     collateralWallet: collat,
+    walletKind: publicCheck.walletKind,
     signatureType: sigType,
     walletSource,
     gasWallet: gasAddr,
