@@ -324,7 +324,7 @@
       for (const id of next.desiredIds) {
         const item = catalog.get(id);
         if (!item) throw new Error("资产 " + id + " 不在服务器市场目录中");
-        if (!current.desiredIds.includes(id) && (!item.canEnable || !item.marketId || !item.roundId || item.cycle !== "5m" || initialUnavailable && (marketCatalog.status !== "ready" || marketCatalog.stale || item.stale))) throw new Error(item.symbol + " 缺少新鲜目录中的服务器运行资格或 marketId + roundId，未提交运行池");
+        if (!current.desiredIds.includes(id) && (!item.canEnable || !item.marketId || !item.roundId || item.cycle !== "5m" || initialUnavailable && (marketCatalog.status !== "ready" || marketCatalog.stale || item.stale))) throw new Error(item.symbol + " 缺少新鲜目录中的服务器运行资格或完整市场轮次身份，未提交运行池");
       }
       if (initialUnavailable) store.setSlice("marketPool", { ...current, status: "unavailable", stale: true, initialUnavailable: false, error: null });
       const raw = await core.api.marketPool({ method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ desiredIds: next.desiredIds, effectiveRoundId: next.effectiveRoundId }) });

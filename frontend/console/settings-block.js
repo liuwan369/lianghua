@@ -17,7 +17,7 @@
   root.innerHTML = `
   <div class="settings-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
-      <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div></div>
+      <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>交易控制台</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">面向平台支持加密货币的五分钟反转策略控制平台。</p>
       <nav aria-label="设置导航">${navMarkup}</nav>
@@ -26,7 +26,7 @@
 
     <main class="settings-main">
       <header class="preview-header">
-        <div class="hero-copy"><p class="eyebrow">SYSTEM SETTINGS</p><div class="hero-title-row"><h1>设置</h1><span class="language-chip">CRYPTO · 5m</span></div><p class="subtitle">连接、版本和服务器账户状态集中查看。</p></div>
+        <div class="hero-copy"><p class="eyebrow">系统设置</p><div class="hero-title-row"><h1>设置</h1><span class="language-chip">BTC · 5 分钟</span></div><p class="subtitle">连接、版本和服务器账户状态集中查看。</p></div>
         <div class="header-tools"><div class="header-status-grid">
           <article class="header-status"><span>账户状态</span><strong data-header-account>未接入</strong></article>
           <article class="header-status"><span>当前版本</span><strong data-header-version>未提供</strong></article>
@@ -41,10 +41,10 @@
       </div>
 
       <section class="settings-pane active" data-settings-pane="diagnostics" role="tabpanel">
-        <div class="pane-heading"><div><p class="eyebrow">HEALTH OVERVIEW</p><h2>系统诊断</h2><p>显示当前服务健康和交易链路状态，全部为只读信息。</p></div><div class="pane-actions"><span class="live-chip"><i></i><b data-diagnostic-state>后端未连接</b></span><button type="button" class="action-button" data-refresh-diagnostics><span>↻</span>刷新诊断</button></div></div>
+        <div class="pane-heading"><div><p class="eyebrow">健康概览</p><h2>系统诊断</h2><p>显示当前服务健康和交易链路状态，全部为只读信息。</p></div><div class="pane-actions"><span class="live-chip"><i></i><b data-diagnostic-state>后端未连接</b></span><button type="button" class="action-button" data-refresh-diagnostics><span>↻</span>刷新诊断</button></div></div>
 
         <section class="diagnostic-panel connection-panel">
-          <div class="panel-heading"><div><p class="eyebrow">CONNECTIONS</p><h3>连接状态</h3></div><span class="panel-meta" data-diagnostic-time>最后检查 --:--:--</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">连接状态</p><h3>连接状态</h3></div><span class="panel-meta" data-diagnostic-time>最后检查 --:--:--</span></div>
           <div class="connection-grid">
             <article class="connection-card"><div class="connection-icon blue">⌁</div><div><span>行情节点</span><strong class="status-warning" data-connection-value="market">等待接入</strong><small data-connection-detail="market">行情更新时间 --</small></div><i class="status-dot warning"></i></article>
             <article class="connection-card"><div class="connection-icon green">↗</div><div><span>交易连接</span><strong class="status-warning" data-connection-value="trade">未检查</strong><small data-connection-detail="trade">不会自动下单</small></div><i class="status-dot warning"></i></article>
@@ -57,9 +57,9 @@
       </section>
 
       <section class="settings-pane" data-settings-pane="account" role="tabpanel" hidden>
-        <div class="pane-heading"><div><p class="eyebrow">ACCOUNT STATUS</p><h2>账户状态</h2><p>账户配置只通过当前 HTTPS 同源接口提交；页面不保存或回显密钥。</p></div><span class="live-chip warning-chip"><i></i><b>未接入</b></span></div>
+        <div class="pane-heading"><div><p class="eyebrow">账户状态</p><h2>账户状态</h2><p>账户配置只通过当前 HTTPS 同源接口提交；页面不保存或回显密钥。</p></div><span class="live-chip warning-chip"><i></i><b>未接入</b></span></div>
         <div class="account-layout"><div class="account-form-panel">
-          <div class="panel-heading"><div><p class="eyebrow">SERVER CONFIGURATION</p><h3>账户配置</h3></div><span class="panel-meta">后端受控配置</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">服务器配置</p><h3>账户配置</h3></div><span class="panel-meta">后端受控配置</span></div>
           <div class="account-readonly-note"><span class="security-icon">◈</span><div><strong>只提交到服务器</strong><p>输入只在检查或保存时发送到同源后端；成功后立即清空密码字段，不写入浏览器存储或日志。</p></div></div>
           <div class="account-status-grid"><div><span>钱包</span><b data-account-flag="wallet">未知</b></div><div><span>Owner</span><b data-account-flag="owner">未知</b></div><div><span>Relayer</span><b data-account-flag="relayer">未知</b></div><div><span>Builder</span><b data-account-flag="builder">未知</b></div><div><span>交易凭据</span><b data-account-flag="execution">未知</b></div></div>
           <label class="field"><span>资金钱包地址</span><input type="text" data-account-field="wallet" autocomplete="off" spellcheck="false" placeholder="0x..." required></label>
@@ -68,7 +68,7 @@
           <div class="account-field-row"><label class="field"><span>Builder API Key</span><input type="password" data-account-field="builder_api_key" autocomplete="new-password" spellcheck="false"></label><label class="field"><span>Builder Secret</span><input type="password" data-account-field="builder_secret" autocomplete="new-password" spellcheck="false"></label></div>
           <label class="field"><span>Builder Passphrase</span><input type="password" data-account-field="builder_passphrase" autocomplete="new-password" spellcheck="false"></label>
           <div class="form-actions"><button type="button" class="action-button" data-account-check-saved>检查已保存账户</button><button type="button" class="action-button" data-account-check>检查输入账户</button><button type="button" class="action-button primary-action" data-account-save>检查并保存</button></div><p class="form-message" data-account-message role="status" aria-live="polite">检查已保存账户不会提交输入框草稿。检查不会保存，保存不会启动交易。钱包不变时空白密钥保留服务器配置；更换钱包不会继承旧密钥。</p>
-        </div><aside class="account-side"><section class="side-card"><div class="panel-heading"><div><p class="eyebrow">READ ONLY</p><h3>账户管理边界</h3></div><span class="panel-meta">后端管理</span></div><p class="side-copy">保存位置：服务器受控账户配置（由服务器 PM_ACCOUNT_PROFILE 指定）。未保存账户时，服务器可读取部署环境配置。此处只显示配置状态。</p><p class="side-copy" data-account-last-check>最近账户检查：未提供</p><p class="side-copy" data-account-report>账户检查结果尚未提供。</p></section><section class="side-card control-session-card"><div class="panel-heading"><div><p class="eyebrow">CONTROL SESSION</p><h3>连接控制会话</h3></div><span class="panel-meta">受保护访问</span></div><label class="field"><span>交易控制密码</span><input type="password" data-control-token autocomplete="new-password" spellcheck="false" maxlength="1024"><small>由服务器验证并保存控制密码，浏览器只使用服务器设置的 HttpOnly 会话 Cookie。</small></label><button type="button" class="action-button" data-control-connect>连接控制会话</button><p class="form-message" data-control-message role="status" aria-live="polite">连接成功后清空密码输入；不会启动交易或改变服务器实盘解锁配置。</p></section><section class="security-card"><span class="security-icon">◈</span><div><strong>账户安全</strong><p>密码只留在当前输入框，检查或保存成功后清除；失败保留草稿供重试。离开页面时清空密码字段。</p></div></section></aside></div>
+        </div><aside class="account-side"><section class="side-card"><div class="panel-heading"><div><p class="eyebrow">只读信息</p><h3>账户管理边界</h3></div><span class="panel-meta">后端管理</span></div><p class="side-copy">保存位置：服务器受控账户配置（由服务器 PM_ACCOUNT_PROFILE 指定）。未保存账户时，服务器可读取部署环境配置。此处只显示配置状态。</p><p class="side-copy" data-account-last-check>最近账户检查：未提供</p><p class="side-copy" data-account-report>账户检查结果尚未提供。</p></section><section class="side-card control-session-card"><div class="panel-heading"><div><p class="eyebrow">控制会话</p><h3>连接控制会话</h3></div><span class="panel-meta">受保护访问</span></div><label class="field"><span>交易控制密码</span><input type="password" data-control-token autocomplete="new-password" spellcheck="false" maxlength="1024"><small>由服务器验证并保存控制密码，浏览器只使用服务器设置的 HttpOnly 会话 Cookie。</small></label><button type="button" class="action-button" data-control-connect>连接控制会话</button><p class="form-message" data-control-message role="status" aria-live="polite">连接成功后清空密码输入；不会启动交易或改变服务器实盘解锁配置。</p></section><section class="security-card"><span class="security-icon">◈</span><div><strong>账户安全</strong><p>密码只留在当前输入框，检查或保存成功后清除；失败保留草稿供重试。离开页面时清空密码字段。</p></div></section></aside></div>
       </section>
 
     </main>
@@ -113,11 +113,30 @@
   let diagnosticsBusy = false;
   let closed = false;
   let savedWallet = "";
+  const accountErrorLabels = {
+    account_rpc_failed: "区块链节点查询失败，请检查网络连接",
+    account_check_failed: "账户检查未通过，请查看账户配置和授权",
+    account_checker_unavailable: "服务器账户检查程序暂不可用",
+    account_check_busy: "已有账户检查正在进行，请稍候",
+    invalid_account_config: "账户配置格式不正确",
+    account_changed_during_check: "检查期间账户配置发生变化，请重新检查",
+    wallet_address_mismatch: "钱包地址与签名私钥不匹配",
+    approvals_missing: "交易授权未完成",
+    settlement_credentials_unavailable: "结算凭据不可用",
+    settlement_credentials_not_ready: "结算凭据尚未准备好",
+    account_response_invalid: "服务器返回的账户数据无效",
+    account_reader_unavailable: "账户读取程序暂不可用"
+  };
+  const readableError = (value) => {
+    const raw = typeof value === "string" ? value : "";
+    const code = raw.toLowerCase().replace(/^error[:_ -]*/, "").split(/[:：]/, 1)[0];
+    return accountErrorLabels[code] || raw;
+  };
   const safeMessage = (value, payload = {}) => {
     let message = typeof value === "string" ? value : "接口暂时不可用";
     const secrets = [...Object.values(payload), controlInput.value.trim(), ...accountFields.filter((field) => field.type === "password").map((field) => field.value.trim())];
     for (const secret of secrets) if (typeof secret === "string" && secret) message = message.split(secret).join("[已隐藏]");
-    return message.replace(/(?:0x)?[a-fA-F0-9]{64}/g, "[已隐藏]").slice(0, 240);
+    return readableError(message.replace(/(?:0x)?[a-fA-F0-9]{64}/g, "[已隐藏]")).slice(0, 240);
   };
   const connection = (name, label, detail, tone = "warning") => {
     const node = document.querySelector(`[data-connection-value="${name}"]`);

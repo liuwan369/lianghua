@@ -47,7 +47,7 @@
         signal: controller.signal
       });
       const body = await response.json().catch(() => null);
-      if (!response.ok) { const error = new Error((body && body.error) || `请求失败（HTTP ${response.status}）`); error.status = response.status; throw error; }
+      if (!response.ok) { const error = new Error((body && body.error) || `请求失败（状态码 ${response.status}）`); error.status = response.status; throw error; }
       if (!body || typeof body !== "object") throw new Error("接口未返回有效 JSON 数据，保留上次成功数据");
       return body;
     } catch (error) {
@@ -74,6 +74,30 @@
     time(value, fallback = "--:--:--") {
       const date = this.timestamp(value);
       return date ? date.toLocaleTimeString("zh-CN", { hour12: false }) : fallback;
+    },
+    readableError(value, fallback = "接口暂时不可用") {
+      const raw = String(value ?? "").trim();
+      if (!raw) return fallback;
+      const labels = {
+        market_pool_unavailable: "运行池暂时不可用",
+        account_rpc_failed: "区块链节点查询失败，请检查网络连接",
+        account_check_failed: "账户检查未通过，请查看账户配置和授权",
+        account_checker_unavailable: "服务器账户检查程序暂不可用",
+        invalid_account_config: "账户配置格式不正确",
+        wallet_address_mismatch: "钱包地址与签名私钥不匹配",
+        approvals_missing: "交易授权未完成",
+        settlement_credentials_unavailable: "结算凭据不可用",
+        account_response_invalid: "服务器返回的账户数据无效",
+        ledger_projection_unavailable: "账本数据暂不可用",
+        runtime_snapshot_stale: "运行状态已过期",
+        strategy_config_unavailable: "策略配置暂不可用",
+        order_recovery_pending: "订单状态仍在核对",
+        market_feed_unhealthy: "行情数据异常，等待恢复",
+        transport_disconnected: "行情连接中断，等待恢复",
+        stale_book: "行情盘口已过期，暂不用于交易"
+      };
+      const code = raw.toLowerCase().replace(/^error[:_ -]*/, "").split(/[:：]/, 1)[0];
+      return labels[code] || raw;
     },
     money(value) { return Number.isFinite(value) ? `$${value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toFixed(0)}` : "--"; },
     escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); }

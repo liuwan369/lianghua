@@ -29,7 +29,7 @@
     <aside class="preview-sidebar">
       <div class="preview-brand">
         <span class="brand-mark">P</span>
-        <div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div>
+        <div><strong>POLYMARKET</strong><small>交易控制台</small></div>
       </div>
       <div class="brand-card">
         <span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span>
@@ -43,7 +43,7 @@
     <main class="preview-main auto-trade-main">
       <header class="preview-header trade-header">
         <div class="hero-copy">
-          <p class="eyebrow">LIVE CONTROL \xB7 通用 REVERSAL</p>
+          <p class="eyebrow">BTC 五分钟反转 · 实盘控制</p>
           <div class="hero-title-row"><h1>\u81EA\u52A8\u4EA4\u6613</h1><span class="language-chip">5 \u5206\u949F</span></div>
           <p class="subtitle">\u76D8\u53E3\u3001\u7B56\u7565\u5224\u65AD\u3001\u5F53\u524D\u6301\u4ED3\u548C\u8BA2\u5355\u72B6\u6001\u96C6\u4E2D\u67E5\u770B\uFF0C\u5B9E\u65F6\u6570\u636E\u5404\u81EA\u72EC\u7ACB\u66F4\u65B0\u3002</p>
           <div class="hero-actions">
@@ -51,11 +51,12 @@
             <button class="hero-button" type="button" data-action="pause">\u6682\u505C\u65B0\u589E</button>
             <button class="hero-button exit-action" type="button" data-action="stop" title="提交停止请求；远端挂单撤销状态以服务器确认为准">\u8BF7\u6C42\u505C\u6B62</button>
           </div>
+          <p class="control-feedback" data-control-feedback role="status" aria-live="polite">正在检查启动条件…</p>
         </div>
         <div class="trade-header-side">
            <span class="live-chip"><i></i><b data-live-status>后端未连接</b><small data-live-clock>--:--:--</small></span>
           <div class="header-status-grid">
-            <article class="header-status"><span>\u5F53\u524D\u5E02\u573A</span><strong data-active-market>当前选中市场 / 5m YES-NO</strong></article>
+            <article class="header-status"><span>\u5F53\u524D\u5E02\u573A</span><strong data-active-market>当前选中市场 / 五分钟 YES-NO</strong></article>
              <article class="header-status"><span>\u6570\u636E\u8FDE\u63A5</span><strong class="status-warning" data-connection-status>后端未连接 · 等待快照</strong></article>
             <article class="header-status"><span>\u4EA4\u6613\u6A21\u5F0F</span><strong>\u5B9E\u76D8 \xB7 \u5355\u7B56\u7565</strong></article>
             <article class="header-status"><span>\u8D26\u6237\u4F59\u989D</span><strong>-- USDC</strong></article>
@@ -65,13 +66,13 @@
 
       <section class="latency-panel" aria-labelledby="latency-title">
         <div class="panel-heading compact-heading">
-          <div><p class="eyebrow">EXECUTION TELEMETRY</p><h2 id="latency-title">\u4EA4\u6613\u901F\u5EA6</h2></div>
+          <div><p class="eyebrow">\u6267\u884C\u5EF6\u8FDF</p><h2 id="latency-title">\u4EA4\u6613\u901F\u5EA6</h2></div>
           <div class="latency-heading-meta"><span class="sample-dot"></span><span>\u5F53\u524D\u8FD0\u884C p95</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8\u5EF6\u8FDF</button></div>
         </div>
         <div class="latency-grid">
-          <article class="latency-card"><span>\u884C\u60C5\u5230\u51B3\u7B56</span><strong><b data-latency="decision">--</b><em>ms</em></strong><small>WebSocket \u6536\u5230\u884C\u60C5\u5230\u7B56\u7565\u5B8C\u6210</small></article>
-          <article class="latency-card"><span>\u4E0B\u5355\u786E\u8BA4</span><strong><b data-latency="order">--</b><em>ms</em></strong><small>HTTP \u53D1\u51FA\u8BA2\u5355\u5230\u5E73\u53F0\u786E\u8BA4</small></article>
-          <article class="latency-card"><span>\u64A4\u5355\u786E\u8BA4</span><strong><b data-latency="cancel">--</b><em>ms</em></strong><small>\u53D1\u51FA\u64A4\u5355\u5230\u5E73\u53F0\u660E\u786E\u53D6\u6D88</small></article>
+          <article class="latency-card"><span>\u884C\u60C5\u5230\u51B3\u7B56</span><strong><b data-latency="decision">--</b><em>ms</em></strong><small>\u5B9E\u65F6\u884C\u60C5\u5230\u7B56\u7565\u5224\u65AD\u5B8C\u6210</small></article>
+          <article class="latency-card"><span>\u4E0B\u5355\u786E\u8BA4</span><strong><b data-latency="order">--</b><em>ms</em></strong><small>\u53D1\u51FA\u8BA2\u5355\u5230\u5E73\u53F0\u786E\u8BA4</small></article>
+          <article class="latency-card"><span>\u64A4\u5355\u786E\u8BA4</span><strong><b data-latency="cancel">--</b><em>ms</em></strong><small>\u53D1\u51FA\u64A4\u5355\u5230\u5E73\u53F0\u786E\u8BA4\u64A4\u9500</small></article>
           <article class="latency-card latency-accent"><span>\u6574\u8F6E\u53CD\u5E94</span><strong><b data-latency="round">--</b><em>ms</em></strong><small>\u89E6\u53D1\u884C\u60C5\u6536\u5230\u5230\u8BA2\u5355\u786E\u8BA4</small></article>
         </div>
         <p class="latency-caption">\u5EF6\u8FDF\u53EA\u53CD\u6620\u4EE3\u7801\u94FE\u8DEF\uFF0C\u4E0D\u5305\u542B\u7B49\u5F85\u5BF9\u624B\u6210\u4EA4\u548C\u94FE\u4E0A\u786E\u8BA4\u3002\u65E0\u6837\u672C\u65F6\u663E\u793A --\u3002</p>
@@ -79,10 +80,12 @@
 
       <section class="trade-panel market-pool-panel" aria-labelledby="market-pool-title">
         <div class="panel-heading">
-          <div><p class="eyebrow">ENABLED MARKET POOL</p><h2 id="market-pool-title">\u5F53\u524D\u8FD0\u884C\u6C60</h2></div>
-          <a class="pool-link" href="market.html" data-manage-markets>\u7BA1\u7406\u5E02\u573A <span>↗</span></a>
+          <div><p class="eyebrow">\u8FD0\u884C\u5E02\u573A</p><h2 id="market-pool-title">\u5F53\u524D\u8FD0\u884C\u6C60</h2></div>
+          <div class="pool-actions">
+            <label class="market-selector" data-market-selector-wrap><span>查看市场</span><select data-market-selector><option value="">等待市场目录</option></select></label>
+            <a class="pool-link" href="market.html" data-manage-markets>\u7BA1\u7406\u5E02\u573A <span>↗</span></a>
+          </div>
         </div>
-        <label class="market-selector"><span>详情市场</span><select data-market-selector><option value="">等待市场目录</option></select></label>
         <div class="market-pool-row" data-market-pool-row></div>
         <p class="market-pool-note" data-market-pool-note>\u5F53\u524D\u573A\u6B21\u7EE7\u7EED\u8FD0\u884C\uFF0C\u5E02\u573A\u9875\u65B0\u542F\u7528\u7684\u5E01\u79CD\u4ECE\u4E0B\u4E00\u573A\u52A0\u5165\u3002</p>
       </section>
@@ -97,7 +100,7 @@
       <section class="trade-main-grid">
         <article class="trade-panel orderbook-panel" aria-labelledby="orderbook-title">
           <div class="panel-heading">
-            <div><p class="eyebrow">LIVE ORDER BOOK</p><h2 id="orderbook-title">\u5F53\u524D\u76D8\u53E3</h2></div>
+            <div><p class="eyebrow">\u5B9E\u65F6\u76D8\u53E3</p><h2 id="orderbook-title">\u5F53\u524D\u76D8\u53E3</h2></div>
             <div class="book-live"><i></i><span data-book-live-state>\u5F85\u63A5\u5165</span><small data-book-age>--</small></div>
           </div>
           <div class="quote-strip">
@@ -124,7 +127,7 @@
 
         <article class="trade-panel position-panel" aria-labelledby="position-title">
           <div class="panel-heading">
-            <div><p class="eyebrow">ROUND POSITION</p><h2 id="position-title">\u672C\u573A\u6301\u4ED3\u4E0E\u7ED3\u679C</h2></div>
+            <div><p class="eyebrow">\u672C\u573A\u7ED3\u679C</p><h2 id="position-title">\u672C\u573A\u6301\u4ED3\u4E0E\u7ED3\u679C</h2></div>
             <span class="panel-meta" data-round-identity>\u5F53\u524D\u573A\u6B21 \xB7 \u7B49\u5F85\u8F6E\u6B21\u6807\u8BC6</span>
           </div>
           <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong></div><span class="position-badge" data-position-state>\u5F85\u63A5\u5165</span></div>
@@ -132,11 +135,11 @@
             <div class="holding-item up-holding"><span>YES \u4EFD\u989D</span><strong data-holding="up">--</strong><small>\u5747\u4EF7 <b data-average="up">--</b></small></div>
             <div class="holding-item down-holding"><span>NO \u4EFD\u989D</span><strong data-holding="down">--</strong><small>\u5747\u4EF7 <b data-average="down">--</b></small></div>
           </div>
-          <div class="result-grid"><div><span>\u5DF2\u4E70\u5165 / \u8BA2\u5355\u5360\u7528</span><strong><b data-bought>--</b> / <b data-occupied>--</b> USDC</strong></div><div><span>YES \u80DC / NO \u80DC\u9884\u8BA1\u7ED3\u679C</span><strong class="result-values"><b data-outcome="up">--</b><em>/</em><b data-outcome="down">--</b> USDC</strong></div></div>
+          <div class="result-grid"><div><span>\u5DF2\u4E70\u5165 / \u8BA2\u5355\u5360\u7528</span><strong><b data-bought>--</b> / <b data-occupied>--</b> USDC</strong></div><div><span>YES \u80DC / NO \u80DC\u9884\u8BA1\u7ED3\u679C</span><strong class="result-values"><b data-outcome="up">--</b><em>/</em><b data-outcome="down">--</b> USDC</strong></div><div><span>\u5168\u90E8\u6301\u4ED3\u5747\u4EF7</span><strong><b data-average-total>--</b></strong></div></div>
           <div class="stage-section">
             <div class="stage-heading"><div><span>\u9636\u6BB5\u8FDB\u5EA6</span><small>\u9636\u6BB5\u72B6\u6001\u5F52\u5165\u672C\u573A\u7ED3\u679C</small></div><b data-stage-progress>--</b></div>
             <div class="stage-track"><i data-progress-fill></i></div>
-            <ol class="stage-timeline" data-stage-timeline><li class="current"><span>·</span><div><strong>\u573A\u6B21\u548C\u7B56\u7565\u9636\u6BB5\u5F85\u63A5\u5165</strong><small>\u540E\u7AEF\u8FD4\u56DE marketId + roundId \u540E\u663E\u793A\u5B9E\u65F6\u8FDB\u5EA6</small></div><time>--</time></li></ol>
+            <ol class="stage-timeline" data-stage-timeline><li class="current"><span>·</span><div><strong>\u573A\u6B21\u548C\u7B56\u7565\u9636\u6BB5\u5F85\u63A5\u5165</strong><small>\u540E\u7AEF\u8FD4\u56DE\u5E02\u573A\u548C\u8F6E\u6B21\u8EAB\u4EFD\u540E\u663E\u793A\u5B9E\u65F6\u8FDB\u5EA6</small></div><time>--</time></li></ol>
           </div>
           <p class="result-note"><span class="info-dot">i</span>\u9884\u8BA1\u7ED3\u679C\u6309\u5DF2\u6210\u4EA4\u4EFD\u989D\u548C\u5B9E\u9645\u6210\u672C\u8BA1\u7B97\uFF0C\u6700\u7EC8\u4EE5\u5B98\u65B9\u7ED3\u679C\u548C\u5230\u8D26\u4E3A\u51C6\u3002</p>
         </article>
@@ -144,15 +147,15 @@
 
       <section class="orders-panel trade-panel" aria-labelledby="orders-title">
         <div class="panel-heading">
-          <div><p class="eyebrow">ORDER LIFECYCLE</p><h2 id="orders-title">\u5F53\u524D\u8FD0\u884C\u8BA2\u5355</h2></div>
+          <div><p class="eyebrow">\u8BA2\u5355\u72B6\u6001</p><h2 id="orders-title">\u5F53\u524D\u8FD0\u884C\u8BA2\u5355</h2></div>
           <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div>
         </div>
         <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
       </section>
 
       <section class="activity-panel trade-panel" aria-labelledby="activity-title">
-        <div class="panel-heading"><div><p class="eyebrow">RUN ACTIVITY</p><h2 id="activity-title">\u6700\u8FD1\u52A8\u4F5C</h2></div><span class="panel-meta" data-activity-state>\u5F53\u524D\u8FD0\u884C\u4E8B\u4EF6</span></div>
-        <ol class="activity-list" data-activity-list aria-live="polite"><li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE\u8FD0\u884C\u4E8B\u4EF6</strong><small>\u5B9E\u65F6\u4E8B\u4EF6\u5C06\u6309 marketId + roundId \u8FFD\u52A0</small></div><b class="activity-tag info-tag">\u5F85\u63A5\u5165</b></li></ol>
+        <div class="panel-heading"><div><p class="eyebrow">\u6700\u8FD1\u4E8B\u4EF6</p><h2 id="activity-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><span class="panel-meta" data-activity-state>\u5F53\u524D\u8FD0\u884C\u4E8B\u4EF6</span></div>
+        <ol class="activity-list" data-activity-list aria-live="polite"><li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE\u8FD0\u884C\u4E8B\u4EF6</strong><small>\u5B9E\u65F6\u4E8B\u4EF6\u5C06\u6309\u5F53\u524D\u5E02\u573A\u548C\u8F6E\u6B21\u8FFD\u52A0</small></div><b class="activity-tag info-tag">\u5F85\u63A5\u5165</b></li></ol>
       </section>
     </main>
   </div>
@@ -164,10 +167,65 @@
   var html = function(node, value) { if (node && node.innerHTML !== value) node.innerHTML = value; };
   var identityKey = function(context) { return JSON.stringify([context.assetId, context.marketId, context.roundId]); };
   var numeric = function(value) { return value == null || value === "" ? null : Number.isFinite(Number(value)) ? Number(value) : null; };
+  var shortIdentity = function(value) {
+    var raw = String(value ?? "");
+    return /^0x[\da-f]{32,}$/i.test(raw) ? `${raw.slice(0, 10)}…${raw.slice(-4)}` : raw.length > 22 ? `${raw.slice(0, 10)}…${raw.slice(-5)}` : raw;
+  };
+  var displayRound = function(value) {
+    var raw = String(value ?? "");
+    var stamp = /^\d{10,13}$/.test(raw) ? Number(raw) * (raw.length === 10 ? 1000 : 1) : NaN;
+    if (!Number.isFinite(stamp)) return shortIdentity(raw);
+    var date = new Date(stamp);
+    if (!Number.isFinite(date.getTime())) return shortIdentity(raw);
+    return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date).replaceAll("/", "-");
+  };
+  var fullIdentity = function(context) {
+    return `${context.assetId || "未知币种"} · marketId ${context.marketId || "待提供"} · roundId ${context.roundId || "待提供"}`;
+  };
+  var eventLabels = {
+    stopped: "交易进程已停止", platform_stopped: "交易进程已停止", started: "交易进程已启动", platform_started: "交易进程已启动",
+    market_feed_unhealthy: "行情数据异常", transport_disconnected: "行情连接中断，正在等待恢复", stale_book: "行情盘口已过期",
+    incomplete_book: "行情深度不完整", connected_waiting_book: "行情已连接，等待盘口数据", complete_book: "盘口数据完整",
+    fill: "订单成交", order: "订单状态更新", settlement: "本场结算状态更新", platform_error: "交易运行异常",
+    error: "运行异常", unresolved: "结果待确认", order_acknowledged: "订单已确认", order_rejected: "订单未被接受",
+    settlement_reconciliation_pending: "结算对账待处理", settlement_failed: "结算未完成", settlement_confirmed: "结算已确认",
+    running: "运行中", paused: "已暂停", stopping: "正在停止", ready: "已就绪", degraded: "服务异常",
+    unavailable: "暂不可用", stale: "数据已过期", unknown: "状态未知"
+  };
+  var orderLabels = {
+    open: "等待成交", live: "等待成交", pending: "处理中", acknowledged: "平台已确认", partially_filled: "部分成交",
+    filled: "已成交", matched: "已成交", cancelled: "已撤销", canceled: "已撤销", rejected: "未接受", failed: "失败",
+    expired: "已过期", unknown: "状态未知", buy: "买入", sell: "卖出", yes: "YES", no: "NO", up: "YES", down: "NO"
+  };
+  var eventWords = {
+    market: "市场", feed: "行情源", unhealthy: "异常", transport: "连接", disconnected: "中断", stale: "过期", book: "盘口",
+    incomplete: "不完整", complete: "完整", connected: "已连接", waiting: "等待", order: "订单", fill: "成交", settlement: "结算",
+    reconciliation: "对账", pending: "待处理", failed: "失败", error: "异常", stopped: "已停止", started: "已启动", running: "运行中",
+    paused: "已暂停", stopping: "正在停止", rejected: "未接受", acknowledged: "已确认", confirmed: "已确认", unresolved: "待确认",
+    retrying: "重试中", submit: "提交", result: "结果", platform: "交易进程", credentials: "账户凭据", missing: "缺失", mismatch: "不匹配",
+    timeout: "超时", rpc: "区块链节点", unavailable: "暂不可用", unknown: "未知", strategy: "策略", decision: "判断", skipped: "已跳过", accepted: "已接受"
+  };
+  var eventText = function(value, fallback) {
+    var raw = String(value ?? "").trim();
+    if (!raw) return fallback;
+    if (/market_feed_unhealthy/i.test(raw) && /transport_disconnected/i.test(raw)) return "行情连接中断，正在等待恢复";
+    if (/market_feed_unhealthy/i.test(raw) && /stale_book/i.test(raw)) return "行情盘口已过期，暂不用于交易";
+    if (/market_feed_unhealthy/i.test(raw) && /incomplete_book/i.test(raw)) return "行情深度不完整，暂不可交易";
+    raw = raw.replace(/(?:0x[\da-f]{32,}|\b\d{30,}\b)/ig, "关联当前市场");
+    var normalized = raw.toLowerCase();
+    if (eventLabels[normalized]) return eventLabels[normalized];
+    if (/^[a-z][a-z0-9_:\s-]*$/i.test(raw)) {
+      var words = normalized.split(/[_:\s-]+/).filter(Boolean).map(function(word) { return eventWords[word]; });
+      return words.length && words.every(Boolean) ? words.join(" · ") : fallback;
+    }
+    return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
+  };
   var renderMarketSelector = function() {
     var selector = document.querySelector("[data-market-selector]");
     if (!selector) return;
-    html(selector, '<option value="">请选择市场</option>' + marketAssets.map(function(asset) { return `<option value="${window.PolyPreview.format.escape(asset.id)}">${window.PolyPreview.format.escape(asset.symbol)} · ${window.PolyPreview.format.escape(asset.name)}</option>`; }).join(""));
+    var selectorWrap = document.querySelector("[data-market-selector-wrap]");
+    if (selectorWrap) selectorWrap.hidden = marketAssets.length < 2;
+    html(selector, '<option value="">请选择市场</option>' + marketAssets.map(function(asset) { return `<option value="${window.PolyPreview.format.escape(asset.id)}" title="${window.PolyPreview.format.escape(asset.name)}">${window.PolyPreview.format.escape(asset.symbol)} · ${window.PolyPreview.format.escape(asset.cycle || "5分钟")}</option>`; }).join(""));
     selector.value = assetById(selectedAssetId) ? selectedAssetId : "";
     selector.disabled = marketAssets.length === 0;
   };
@@ -185,7 +243,7 @@
       }).join("") : '<div class="market-pool-empty"><span>＋</span><strong>暂无启用币种</strong><small>前往市场启用五分钟加密货币。</small></div>');
     }
     var selected = assetById(selectedAssetId);
-    var activeMarket = selected ? `${selected.symbol} / ${selected.cycle || "5m"} YES-NO` : "请选择详情市场";
+    var activeMarket = selected ? `${selected.symbol} / ${selected.cycle || "5分钟"} YES-NO` : "请选择市场";
     text("[data-active-market]", activeMarket);
     text("[data-market-pool-note]", marketPool.stale ? "运行池连接中断 · 保留服务器最近确认配置" : marketPool.pendingDesiredIds ? "变更已提交 · 等待服务器确认运行池" : visibleAssets.length ? "单实例运行一个资产；详情选择只切换查看内容，运行状态以服务器确认结果为准。" : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
@@ -255,7 +313,7 @@
     var valid = Boolean(marketId && roundId) && vm.hasFreshBbo(source, now) && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence >= previousSequence);
     if (!valid) {
-      markSnapshotStale(raw.stale === true || source.stale === true ? "行情源标记 stale · 保留最近快照" : !vm.hasFreshBbo(source, now) ? "双边 BBO 已过期或待接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");
+      markSnapshotStale(raw.stale === true || source.stale === true ? "行情源报告数据过期 · 保留最近快照" : !vm.hasFreshBbo(source, now) ? "买卖报价已过期或未接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");
       return false;
     }
     if (sequence === previousSequence && lastSnapshotValid) return true;
@@ -298,8 +356,8 @@
       render(bidNode, bids, "bid");
       render(askNode, asks, "ask");
     });
-    text("[data-book-source]", `${fromStream ? "实时流" : "REST 快照"} · ${window.PolyPreview.format.time(sourceAt)}`);
-    text("[data-book-live-state]", fromStream ? "实时流 · 已连接" : "REST 快照 · 已更新");
+    text("[data-book-source]", `${fromStream ? "实时行情" : "后端快照"} · ${window.PolyPreview.format.time(sourceAt)}`);
+    text("[data-book-live-state]", fromStream ? "实时行情 · 已连接" : "后端快照 · 已更新");
     text("[data-depth-availability]", depthPresent ? "五档深度 · 已接入" : "BBO 已更新 · 深度暂不可用");
     text("[data-book-age]", window.PolyPreview.format.time(sourceAt));
     return true;
@@ -327,7 +385,7 @@
   };
   var streamConfigKey = function() { return ["markets", "runtime", "orders"].map(function(name) { return `${name}:${streamUrl(name) || ""}`; }).join("|"); };
   var markStreamPending = function() {
-    if (!lastSnapshotValid) text("[data-book-live-state]", "等待 REST 快照");
+    if (!lastSnapshotValid) text("[data-book-live-state]", "等待后端行情快照");
   };
   var resetRoundPanels = function() {
     if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
@@ -348,6 +406,7 @@
     text('[data-holding="down"]', "--");
     text('[data-average="up"]', "--");
     text('[data-average="down"]', "--");
+    text("[data-average-total]", "--");
     text("[data-stage]", "待接入");
     text("[data-confirmations]", "--");
     text("[data-stage-progress]", "--");
@@ -356,9 +415,9 @@
     var body = document.querySelector(".orders-table tbody");
     if (body) body.innerHTML = '<tr><td colspan="6">正在读取新场次持仓和订单</td></tr>';
     var timeline = document.querySelector("[data-stage-timeline]");
-    if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>新场次数据读取中</strong><small>等待后端返回当前 roundId 的持仓和策略阶段</small></div><time>--</time></li>';
+    if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>新场次数据读取中</strong><small>等待后端返回本场持仓和策略阶段</small></div><time>--</time></li>';
     var activityList = document.querySelector("[data-activity-list]");
-    if (activityList) activityList.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>新场次事件读取中</strong><small>等待后端返回当前 marketId + roundId 事件</small></div><b class="activity-tag info-tag">读取中</b></li>';
+    if (activityList) activityList.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>新场次事件读取中</strong><small>等待后端返回本场运行事件</small></div><b class="activity-tag info-tag">读取中</b></li>';
   };
   var itemMatchesContext = function(item, asset) {
     return vm.matchesIdentity(item, { assetId: asset?.id, marketId: asset?.marketId, roundId: asset?.roundId });
@@ -371,15 +430,19 @@
     contextVersion += 1;
     selectedRuntime = null;
     resetRoundPanels();
-    text("[data-round-identity]", context.assetId && context.marketId && context.roundId ? `${context.assetId} · marketId ${context.marketId} · roundId ${context.roundId}` : "所选资产的 marketId + roundId 待后端提供");
-    text("[data-round]", context.roundId || "场次身份待接入");
+    var identityNode = document.querySelector("[data-round-identity]");
+    if (identityNode) {
+      identityNode.textContent = context.assetId && context.roundId ? `${context.assetId} · ${displayRound(context.roundId)}` : "等待场次信息";
+      identityNode.title = fullIdentity(context);
+    }
+    text("[data-round]", context.roundId ? displayRound(context.roundId) : "等待场次信息");
     return contextKey;
   };
   var renderPosition = function(raw) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var position = raw?.position || raw;
     if (!position || !vm.matchesIdentity(position, currentContext()) || raw.stale || raw.error || raw.available === false || position.stale || position.available === false || position.error) {
-      text("[data-position-state]", "持仓 unavailable/stale · 保留本场最近成功数据");
+      text("[data-position-state]", "持仓暂不可用或已过期 · 保留本场最近成功数据");
       return false;
     }
     var number = function(...keys) { for (var key of keys) { var value = numeric(position[key]); if (value != null) return value; } return null; };
@@ -398,9 +461,22 @@
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
     text('[data-holding="up"]', yesShares == null ? "--" : yesShares.toFixed(2));
     text('[data-holding="down"]', noShares == null ? "--" : noShares.toFixed(2));
-    var average = position.averagePrice && typeof position.averagePrice === "object" ? position.averagePrice : {};
+    var averageValue = position.averagePrice;
+    var average = averageValue && typeof averageValue === "object" ? averageValue : {};
+    var totalAverage = numeric(averageValue);
     var yesAverage = numeric(average.yes ?? average.up ?? position.yesAveragePrice ?? position.yes_average_price);
     var noAverage = numeric(average.no ?? average.down ?? position.noAveragePrice ?? position.no_average_price);
+    // The ledger currently returns a weighted total average as a scalar. Only
+    // assign it to one side when the other side is explicitly empty.
+    if (totalAverage != null) {
+      if (yesAverage == null && noAverage == null && yesShares != null && noShares != null) {
+        if (yesShares > 0 && noShares === 0) yesAverage = totalAverage;
+        if (noShares > 0 && yesShares === 0) noAverage = totalAverage;
+      }
+      text("[data-average-total]", totalAverage.toFixed(3));
+    } else {
+      text("[data-average-total]", "--");
+    }
     text('[data-average="up"]', yesAverage == null ? "--" : yesAverage.toFixed(3));
     text('[data-average="down"]', noAverage == null ? "--" : noAverage.toFixed(3));
     var progress = numeric(position.stageProgress ?? position.stage_progress);
@@ -412,7 +488,7 @@
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : null;
     if (!orders || !asset || raw.stale || raw.error || raw.available === false || orders.some(function(order) { return !itemMatchesContext(order, asset); })) {
-      text("[data-orders-state]", "订单 unavailable/stale · 保留本场最近成功数据");
+      text("[data-orders-state]", "订单数据暂不可用或已过期 · 保留本场最近成功数据");
       return false;
     }
     // Empty pages are valid for this scoped REST request; non-empty rows must all identify this asset and round.
@@ -425,8 +501,10 @@
     text("[data-order-count]", String(numeric(raw.total) ?? orders.length));
     html(body, orders.length ? orders.slice(0, 20).map(function(order) {
       var side = order.side || order.outcome || order.token || "--";
+      var sideText = orderLabels[String(side).toLowerCase()] || (/^0x[\da-f]{24,}$/i.test(String(side)) ? "YES / NO" : "--");
+      var status = orderLabels[String(order.status || "unknown").toLowerCase()] || "状态待确认";
       var price = numeric(order.price); var size = numeric(order.size ?? order.quantity ?? order.shares); var filled = numeric(order.filledShares ?? order.filled_shares ?? order.filled ?? order.filledSize ?? order.filled_size);
-      return `<tr><td>${window.PolyPreview.format.time(order.updatedAt || order.createdAt || order.time)}</td><td>${window.PolyPreview.format.escape(String(side).toUpperCase())}</td><td>${Number.isFinite(price) ? price.toFixed(3) : "--"}</td><td>${Number.isFinite(size) ? size.toFixed(2) : "--"}</td><td>${Number.isFinite(filled) ? filled.toFixed(2) : "--"}</td><td>${window.PolyPreview.format.escape(order.status || "--")}</td></tr>`;
+      return `<tr><td>${window.PolyPreview.format.time(order.updatedAt || order.createdAt || order.time)}</td><td>${window.PolyPreview.format.escape(sideText)}</td><td>${Number.isFinite(price) ? price.toFixed(3) : "--"}</td><td>${Number.isFinite(size) ? size.toFixed(2) : "--"}</td><td>${Number.isFinite(filled) ? filled.toFixed(2) : "--"}</td><td>${window.PolyPreview.format.escape(status)}</td></tr>`;
     }).join("") : '<tr><td colspan="6">当前场次暂无订单</td></tr>');
     text("[data-orders-state]", `已更新 · ${window.PolyPreview.format.time(raw.asOf)}`);
     return true;
@@ -450,21 +528,25 @@
     var stale = resource.stale === true || ["stale", "unavailable", "error", "degraded"].includes(resource.status) || payload?.stale === true || payload?.available === false;
     if (!list) return;
     if (stale || resource.error || payload?.error) {
-      text("[data-activity-state]", resource.status === "unavailable" ? "事件待接入" : "事件连接中断 · 保留最近事件");
+      text("[data-activity-state]", resource.status === "unavailable" ? "暂无可用运行事件" : "事件连接中断 · 保留最近事件");
       return;
     }
     text("[data-activity-state]", "事件已更新");
     if (!scoped.length) {
-      list.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>当前场次暂无运行事件</strong><small>事件接口已连接，等待服务器返回当前 marketId + roundId 事件</small></div><b class="activity-tag info-tag">暂无</b></li>';
+      list.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>当前场次暂无运行事件</strong><small>运行事件接口已连接，等待本场数据</small></div><b class="activity-tag info-tag">暂无</b></li>';
       return;
     }
     list.innerHTML = scoped.slice(0, 20).map(function(event) {
       var severity = String(event.severity || event.level || "info").toLowerCase();
       var tag = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : "信息";
       var icon = severity === "error" || severity === "critical" ? "!" : severity === "warning" || severity === "warn" ? "!" : "i";
-      var message = event.message || event.detail || event.kind || "运行事件";
-      var detail = event.detail && event.message ? event.detail : event.kind || "服务器事件";
-      return `<li><time>${window.PolyPreview.format.time(event.time || event.createdAt || event.created_at)}</time><span class="activity-icon ${severity === "error" || severity === "critical" ? "error-icon" : severity === "warning" || severity === "warn" ? "warn-icon" : "info-icon"}">${icon}</span><div><strong>${window.PolyPreview.format.escape(message)}</strong><small>${window.PolyPreview.format.escape(detail)}</small></div><b class="activity-tag info-tag">${tag}</b></li>`;
+      var kind = String(event.kind || event.event || "unknown").toLowerCase();
+      var kindLabel = eventLabels[kind] || eventText(kind, "服务器事件：未分类状态");
+      var message = eventText(event.message || event.reason || event.detail || kind, kindLabel);
+      var rawDetail = event.detail && event.detail !== event.message ? event.detail : event.reason && event.reason !== event.message ? event.reason : null;
+      var detail = eventText(rawDetail, kindLabel);
+      var tagClass = severity === "error" || severity === "critical" ? "error-tag" : severity === "warning" || severity === "warn" ? "warning-tag" : "info-tag";
+      return `<li><time>${window.PolyPreview.format.time(event.time || event.createdAt || event.created_at)}</time><span class="activity-icon ${severity === "error" || severity === "critical" ? "error-icon" : severity === "warning" || severity === "warn" ? "warn-icon" : "info-icon"}">${icon}</span><div><strong title="${window.PolyPreview.format.escape(message)}">${window.PolyPreview.format.escape(message)}</strong><small title="${window.PolyPreview.format.escape(detail)}">${window.PolyPreview.format.escape(detail)}</small></div><b class="activity-tag ${tagClass}">${tag}</b></li>`;
     }).join("");
   };
   var eventsRefreshTimer = null;
@@ -527,7 +609,7 @@
     }, function(state) {
       if (!currentLifecycle()) return;
       if (state !== "connected") {
-        text("[data-book-source]", `实时流${state === "error" ? "错误" : "断开"} · 保留最近快照`);
+       text("[data-book-source]", `实时行情${state === "error" ? "异常" : "中断"} · 保留最近快照`);
         text("[data-book-live-state]", "连接中断 · 保留快照");
       }
     });
@@ -539,12 +621,12 @@
        var runtimeFrame = vm.runtime(payload);
        if (hasIdentity) renderRuntime(runtimeFrame);
        else if (runtimeFrame.processRunning !== null) renderRuntime(runtimeFrame, true);
-       else text("[data-connection-status]", "运行流已连接 · 等待所选市场状态");
+       else text("[data-connection-status]", "实时状态流已连接 · 等待所选市场状态");
        scheduleRuntimeRefresh(0);
      }, function(state) {
       if (!currentLifecycle()) return;
       if (state === "connected") return;
-      text("[data-connection-status]", "运行流中断 · REST 独立刷新");
+      text("[data-connection-status]", "实时状态流中断 · 后端接口独立刷新");
     });
   };
   var loadCurrentMarket = async function() {
@@ -586,8 +668,8 @@
     if (roundRefreshInFlight) return roundRefreshInFlight;
     var context = currentContext();
     if (!context.assetId || !context.marketId || !context.roundId) {
-      text("[data-position-state]", "unavailable · 等待完整市场身份");
-      text("[data-orders-state]", "unavailable · 等待完整市场身份");
+      text("[data-position-state]", "等待完整市场身份");
+      text("[data-orders-state]", "等待完整市场身份");
       scheduleRoundRefresh();
       return Promise.resolve();
     }
@@ -614,6 +696,7 @@
     var runtimeIdentityMatches = Boolean(selectedRuntime && vm.matchesIdentity(selectedRuntime, context));
     var runtimeActive = processRunning === true;
     var running = processRunning === true;
+    var startReason = "";
     var freshPaused = runtimeIdentityMatches && !selectedRuntime.stale && processRunning === true && (runtimeState === "paused");
     var catalog = store.getState().marketCatalog;
     document.querySelectorAll("[data-action]").forEach(function(button) {
@@ -636,7 +719,13 @@
         var liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
           : typeof account.liveStartReady === "boolean" ? account.liveStartReady
             : account.execution_credentials_ready === true && account.account_check_ready === true;
-        if (accountStatus.status !== "ready" || liveReady !== true) reason = "服务器尚未确认账户可启动交易";
+        var accountErrors = { account_rpc_failed: "区块链节点查询失败，请检查网络连接", account_check_failed: "账户检查未通过，请查看账户配置和授权", account_checker_unavailable: "服务器账户检查程序暂不可用", invalid_account_config: "账户配置格式不正确", wallet_address_mismatch: "钱包地址与签名私钥不匹配", approvals_missing: "交易授权未完成", settlement_credentials_unavailable: "结算凭据不可用" };
+        var accountError = String(account.last_check_error || "").toLowerCase().split(/[:：]/, 1)[0];
+        if (accountStatus.status !== "ready" || accountStatus.stale === true || accountStatus.error) reason = "账户状态暂不可用，请刷新服务器账户状态";
+        if (!reason && account.account_check_ready !== true) reason = accountErrors[accountError] || "账户尚未检查通过，请到设置页检查已保存账户";
+        if (!reason && account.settlement_credentials_ready !== true) reason = "结算凭据尚未确认，请到设置页重新检查账户";
+        if (!reason && account.server_live_enabled === false) reason = "服务器尚未开启实盘交易配置";
+        if (!reason && liveReady !== true) reason = "服务器尚未确认账户可启动交易";
       }
       var initialPool = store.canInitializeMarketPool(marketPool);
       var poolSelected = marketPool.desiredIds.includes(context.assetId);
@@ -644,14 +733,20 @@
         && asset?.cycle === "5m" && Boolean(asset?.marketId && asset?.roundId);
       if (!reason && action === "start" && (!asset?.canEnable || asset?.stale === true || catalog.stale || (!poolSelected && !initialPoolAsset))) reason = catalog.stale || asset?.stale === true ? "行情目录或行情已过期，暂不允许启动" : !asset?.canEnable ? "服务器尚未确认该市场可加入运行池" : "请先在市场页启用所选币种并等待服务器确认";
       if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
+      if (action === "start") startReason = reason;
       if (action === "pause") button.textContent = freshPaused ? "恢复新增" : "暂停新增";
       button.disabled = Boolean(reason);
       button.title = reason;
     });
+    var feedback = document.querySelector("[data-control-feedback]");
+    if (feedback) {
+      feedback.classList.toggle("is-blocked", Boolean(startReason));
+      feedback.textContent = commandPending ? "正在提交控制请求，等待服务器确认…" : startReason ? `暂不能启动：${startReason}` : "启动条件已满足，可以启动交易。";
+    }
   };
   var renderStrategyRevision = function(resource) {
     var revision = Number(resource?.revision);
-    text("[data-strategy-revision]", Number.isInteger(revision) && revision > 0 ? `参数版本 REV-${revision}` : "参数版本待接入");
+    text("[data-strategy-revision]", Number.isInteger(revision) && revision > 0 ? `参数版本 ${revision}` : "参数版本待接入");
   };
   var renderRuntime = function(runtime, globalProcess = false) {
     if (globalProcess) {
@@ -670,12 +765,14 @@
     if (available) selectedRuntime = runtime;
     else if (matching && (runtime.processRunning === true || runtime.processRunning === false)) selectedRuntime = { ...runtime, stale: true };
     else if (selectedRuntime) selectedRuntime = { ...selectedRuntime, stale: true, processRunning: runtime?.processRunning ?? null };
-    var state = available ? runtime.state || runtime.status : selectedRuntime ? `${selectedRuntime.state || selectedRuntime.status} · stale` : "所选市场状态 unavailable";
+    var stateValue = available ? runtime.state || runtime.status : selectedRuntime ? selectedRuntime.state || selectedRuntime.status : "unavailable";
+    var state = eventText(stateValue, "所选市场状态暂不可用");
+    if (!available && selectedRuntime) state += " · 数据已过期";
     var processState = (available ? runtime : selectedRuntime)?.processRunning === true ? "进程运行中" : (available ? runtime : selectedRuntime)?.processRunning === false ? "进程已停止" : "进程状态未知";
     text("[data-strategy-status]", state);
     text("[data-live-status]", state);
     text("[data-status-age]", window.PolyPreview.format.time((available ? runtime : selectedRuntime)?.asOf));
-    text("[data-connection-status]", available ? `REST 独立刷新 · ${processState}` : `运行投影过期 · ${processState} · 行情独立刷新`);
+    text("[data-connection-status]", available ? `接口独立刷新 · ${processState}` : `运行状态已过期 · ${processState} · 行情独立刷新`);
     text("[data-sidebar-state]", available ? `所选市场已连接 · ${processState}` : `所选市场状态待接入 · ${processState}`);
     text("[data-sidebar-detail]", available ? "五分钟反转策略" : "保留本场最近成功数据");
     updateControls();
@@ -775,6 +872,8 @@
       var version = contextVersion;
       var acceptedResult = false;
       commandPending = true;
+      var feedback = document.querySelector("[data-control-feedback]");
+      if (feedback) { feedback.classList.remove("is-blocked"); feedback.textContent = action === "start" ? "正在提交启动请求，等待服务器确认…" : "正在提交控制请求，等待服务器确认…"; }
       updateControls();
       try {
         const command = { action, ...(context.assetId ? { assetId: context.assetId } : {}), ...(context.marketId ? { marketIds: [context.marketId] } : {}), strategyId: window.PolyPreview.config.strategyId, requestId: `console-${Date.now()}` };
@@ -791,10 +890,12 @@
           text("[data-live-status]", result.message || (accepted ? "指令已接收，等待运行状态确认" : "指令未接受，运行状态未改变"));
           text("[data-strategy-status]", accepted ? "等待状态确认" : "指令未接受，未改变运行状态");
         }
+        if (feedback) { feedback.classList.toggle("is-blocked", !accepted); feedback.textContent = accepted ? "服务器已接收请求，等待运行状态确认。" : "服务器未接收请求，运行状态没有改变。"; }
       } catch (error) {
         if (version === contextVersion) {
           text("[data-live-status]", error.message || "控制请求失败，运行状态未改变");
           text("[data-strategy-status]", "控制失败，未改变运行状态");
+          if (feedback) { feedback.classList.add("is-blocked"); feedback.textContent = `${error.message || "控制请求失败"}，运行状态没有改变。`; }
         }
       }
       finally {

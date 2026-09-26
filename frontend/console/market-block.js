@@ -33,7 +33,7 @@
   root.innerHTML = `
   <div class="overview-preview market-preview crypto-market-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
-      <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div></div>
+      <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>交易控制台</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">选择平台支持的加密货币五分钟市场，并决定哪些币种加入自动交易。</p>
       <nav aria-label="加密货币市场导航">${navMarkup}</nav>
@@ -42,28 +42,28 @@
 
     <main class="preview-main market-main crypto-market-main">
       <header class="preview-header market-header crypto-market-header">
-        <div class="hero-copy"><p class="eyebrow">CRYPTO MARKET POOL</p><div class="hero-title-row"><h1>加密货币市场</h1><span class="language-chip">5 分钟 · YES / NO</span></div><p class="subtitle">只展示平台支持的加密货币五分钟市场。启用币种后，自动交易可在运行中加入下一个可用场次。</p><div class="market-header-actions"><span class="market-note" data-market-source><i></i>行情连接中 · 等待后端</span><button class="hero-button" type="button" data-refresh-markets>刷新币种</button></div></div>
+        <div class="hero-copy"><p class="eyebrow">加密货币市场池</p><div class="hero-title-row"><h1>加密货币市场</h1><span class="language-chip">5 分钟 · YES / NO</span></div><p class="subtitle">只展示平台支持的加密货币五分钟市场。启用币种后，自动交易可在运行中加入下一个可用场次。</p><div class="market-header-actions"><span class="market-note" data-market-source><i></i>行情连接中 · 等待后端</span><button class="hero-button" type="button" data-refresh-markets>刷新币种</button></div></div>
         <div class="market-header-side"><div class="header-status-grid"><article class="header-status"><span>支持币种</span><strong data-market-count>--</strong></article><article class="header-status"><span>已启用</span><strong data-enabled-count>--</strong></article><article class="header-status"><span>当前运行</span><strong data-running-count>--</strong></article><article class="header-status"><span>市场周期</span><strong>固定 5 分钟</strong></article></div></div>
       </header>
 
-      <section class="pool-toolbar"><div><p class="eyebrow">SUPPORTED ASSETS</p><h2>平台支持的币种</h2><p>选择币种查看当前场次；单实例启用一个币种，切换将替换待运行配置。</p></div><div class="pool-toolbar-actions"><label class="search-box"><span>⌕</span><input type="search" placeholder="搜索币种名称或代码…" data-coin-search></label><span class="pool-sort"><i></i>按目录顺序</span></div></section>
+      <section class="pool-toolbar"><div><p class="eyebrow">支持的币种</p><h2>平台支持的币种</h2><p>选择币种查看当前场次；单实例启用一个币种，切换将替换待运行配置。</p></div><div class="pool-toolbar-actions"><label class="search-box"><span>⌕</span><input type="search" placeholder="搜索币种名称或代码…" data-coin-search></label><span class="pool-sort"><i></i>按目录顺序</span></div></section>
 
       <section class="market-layout crypto-market-layout">
         <div class="coin-pool-panel">
-          <div class="list-heading"><div><p class="eyebrow">5M CRYPTO POOL</p><h2>可用币种</h2></div><span class="list-caption" data-pool-caption>等待市场目录</span></div>
+          <div class="list-heading"><div><p class="eyebrow">5 分钟币种池</p><h2>可用币种</h2></div><span class="list-caption" data-pool-caption>等待市场目录</span></div>
           <div class="coin-list" data-coin-list aria-live="polite"></div>
           <div class="pool-footnote"><span class="info-dot">i</span><span>启用只改变自动交易运行池，不会立刻下单；当前场次继续使用已启动的币种，新增币种从下一个可用场次开始。</span></div>
         </div>
 
         <aside class="coin-detail-panel" aria-labelledby="coin-detail-title">
-          <div class="detail-heading"><div><p class="eyebrow">SELECTED ASSET</p><h2 id="coin-detail-title" data-detail-title>等待选择市场</h2></div><span class="detail-state disabled" data-detail-state>待选择</span></div>
-          <div class="coin-detail-identity"><span class="detail-coin-icon" data-detail-icon>?</span><div><strong data-detail-name>等待后端目录</strong><small data-detail-english>assetId · marketId · roundId</small></div><span class="detail-cycle">5M</span></div>
+          <div class="detail-heading"><div><p class="eyebrow">当前选择</p><h2 id="coin-detail-title" data-detail-title>等待选择市场</h2></div><span class="detail-state disabled" data-detail-state>待选择</span></div>
+          <div class="coin-detail-identity"><span class="detail-coin-icon" data-detail-icon>?</span><div><strong data-detail-name>等待后端目录</strong><small data-detail-english>资产标识 · 市场标识 · 轮次标识</small></div><span class="detail-cycle">5 分钟</span></div>
           <div class="detail-quote-grid"><div class="detail-quote yes-quote"><div><span class="outcome-dot"></span><span>YES</span></div><strong data-detail-yes>--</strong><small data-detail-yes-caption>买一 · --</small></div><div class="detail-quote no-quote"><div><span class="outcome-dot"></span><span>NO</span></div><strong data-detail-no>--</strong><small data-detail-no-caption>买一 · --</small></div></div>
           <div class="detail-stats"><div><span>本场结束</span><strong data-detail-close>--</strong></div><div><span>剩余时间</span><strong data-detail-remaining>--</strong></div><div><span>交易量</span><strong data-detail-volume>--</strong></div><div><span>流动性</span><strong data-detail-liquidity>--</strong></div></div>
 
           <section class="market-readiness"><div class="readiness-heading"><span>运行条件</span><small>以服务端确认为准</small></div><ul><li data-readiness="support"><i>·</i><span>运行时支持</span><b>待确认</b></li><li data-readiness="identity"><i>·</i><span>五分钟 YES / NO 场次</span><b>待确认</b></li><li data-readiness="quote"><i>·</i><span>当前报价</span><b>待确认</b></li></ul></section>
 
-          <section class="trade-link-card"><div class="trade-link-heading"><span class="link-icon">↗</span><div><p class="eyebrow">AUTO TRADE LINK</p><h3>自动交易关联</h3></div><span class="link-state" data-link-state>运行中</span></div><p data-link-copy>该币种已在自动交易运行池中，当前场次正在执行。</p><button class="enable-coin-button" type="button" data-detail-enable>停用并移出运行池</button><small data-link-note>停用只影响后续场次，不撤销当前场次订单。</small></section>
+          <section class="trade-link-card"><div class="trade-link-heading"><span class="link-icon">↗</span><div><p class="eyebrow">自动交易关联</p><h3>自动交易关联</h3></div><span class="link-state" data-link-state>运行中</span></div><p data-link-copy>该币种已在自动交易运行池中，当前场次正在执行。</p><button class="enable-coin-button" type="button" data-detail-enable>停用并移出运行池</button><small data-link-note>停用只影响后续场次，不撤销当前场次订单。</small></section>
         </aside>
       </section>
       <div class="market-selection-note"><span class="note-icon">i</span><span data-selection-note>等待服务器返回市场目录后，才能选择资产或修改运行池。</span><span class="note-time" data-market-refresh-note>最后刷新 · --</span></div>
@@ -145,7 +145,7 @@
       const waiting = poolSaving || Boolean(pool.pendingDesiredIds) || !poolWritable(pool) || marketStale;
       const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
       button.disabled = waiting || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      button.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
+      button.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "完整市场和轮次身份待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
       button.classList.toggle("enabled", coin.enabled);
       button.setAttribute("aria-pressed", String(Boolean(coin.enabled)));
       set("[data-enable-coin] span", canInitialize && !coin.enabled ? "首次启用" : waiting ? "等待确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
@@ -211,7 +211,7 @@
       const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
       const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
       action.disabled = poolSaving || !poolWritable(pool) || Boolean(pool.pendingDesiredIds) || marketStale || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      action.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "marketId + roundId 待后端提供" : "";
+      action.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "完整市场和轮次身份待后端提供" : "";
       action.textContent = poolSaving ? "提交中…" : canInitialize ? "首次启用此币种" : marketStale ? "等待行情确认" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "停用（下一场生效）" : coin.canEnable && completeIdentity ? "启用此币种（替换待运行配置）" : "等待市场身份";
       if (pool.stale === true && !canInitializePool(pool)) action.textContent = "等待运行池确认";
       action.classList.toggle("selected", coin.enabled);
@@ -225,7 +225,7 @@
     text("[data-market-source]", textValue);
     text("[data-sidebar-state]", status === "ready" ? (incompleteIdentity ? "轮次标识待接入" : "行情已连接") : status === "error" ? "行情读取失败" : status === "partial" ? "部分行情过期" : "数据连接");
     text("[data-sidebar-detail]", status === "error" ? "保留最近成功数据" : status === "stale" ? "保留最近成功数据" : status === "partial" ? "健康资产已更新，过期资产保留快照" : status === "unavailable" ? "等待后端" : incompleteIdentity ? "目录/报价可用，持仓订单等待 roundId" : "五分钟市场");
-    if (["error", "stale", "partial", "unavailable"].includes(status)) text("[data-market-refresh-note]", status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : status === "partial" ? "部分行情更新 · 过期资产保留上次数据" : status === "unavailable" ? "行情待接入 · 保留上次数据" : `连接中断 · ${resource.error || "保留上次数据"}`);
+    if (["error", "stale", "partial", "unavailable"].includes(status)) text("[data-market-refresh-note]", status === "error" ? `读取失败 · ${window.PolyPreview.format.readableError(resource.error, "保留上次数据")}` : status === "partial" ? "部分行情更新 · 过期资产保留上次数据" : status === "unavailable" ? "行情待接入 · 保留上次数据" : `连接中断 · ${window.PolyPreview.format.readableError(resource.error, "保留上次数据")}`);
     else if (status === "ready") text("[data-market-refresh-note]", `最后刷新 · ${window.PolyPreview.format.time(resource.asOf) || window.PolyPreview.format.clock()}`);
   };
 
@@ -246,7 +246,7 @@
       return;
     }
     if (!coin.enabled && (!coin.canEnable || !completeIdentity)) {
-      text("[data-selection-note]", `${coin.symbol} 缺少服务器确认的运行资格或 marketId + roundId，未修改运行池。`);
+      text("[data-selection-note]", `${coin.symbol} 缺少服务器确认的运行资格或完整市场轮次身份，未修改运行池。`);
       return;
     }
     if (coin.enabled && state.marketPool.desiredIds.length <= 1) {
@@ -332,11 +332,11 @@
       renderCounts();
       renderList();
       renderDetail();
-      text("[data-market-refresh-note]", resource?.status === "error" ? `读取失败 · ${resource.error || "保留上次数据"}` : resource?.status === "partial"
+      text("[data-market-refresh-note]", resource?.status === "error" ? `读取失败 · ${window.PolyPreview.format.readableError(resource.error, "保留上次数据")}` : resource?.status === "partial"
         ? "部分行情更新 · 过期资产保留上次数据" : resource?.status === "stale" || resource?.status === "unavailable"
-        ? `${resource.status === "unavailable" ? "行情待接入" : "连接中断"} · ${resource.error || "保留上次数据"}`
+        ? `${resource.status === "unavailable" ? "行情待接入" : "连接中断"} · ${window.PolyPreview.format.readableError(resource.error, "保留上次数据")}`
         : `最后刷新 · ${window.PolyPreview.format.clock()}`);
-    } catch (error) { text("[data-market-refresh-note]", error.message || "市场目录读取失败"); }
+    } catch (error) { text("[data-market-refresh-note]", window.PolyPreview.format.readableError(error.message, "市场目录读取失败")); }
     finally { button.disabled = false; }
   });
   store.subscribe("marketCatalog", (value) => { selectedId = value.selectedId || null; syncCoins(); renderCounts(); renderList(); renderDetail(); renderCatalogStatus(value); });

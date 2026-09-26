@@ -17,7 +17,7 @@
   root.innerHTML = `
   <div class="overview-preview strategy-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
-      <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>TRADING CONSOLE</small></div></div>
+      <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>交易控制台</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
       <p class="sidebar-copy">\u9762\u5411 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
       <nav aria-label="\u7B56\u7565\u5BFC\u822A">${navMarkup}</nav>
@@ -26,17 +26,17 @@
 
     <main class="preview-main strategy-main">
       <header class="preview-header strategy-header">
-        <div class="hero-copy"><p class="eyebrow">STRATEGY CONFIGURATION</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip">BTC \xB7 5m</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
+        <div class="hero-copy"><p class="eyebrow">策略配置</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip">BTC \xB7 5 分钟</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
         <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>后端未连接</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>btc-reversal</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>未来未创建场次</strong></article></div></div>
       </header>
 
       <section class="strategy-identity-panel">
-        <div class="strategy-identity-icon">\u21AF</div><div class="strategy-identity-copy"><p class="eyebrow">ACTIVE STRATEGY</p><h2>BTC \u4E94\u5206\u949F\u53CD\u8F6C</h2><p>\u8DDF\u968F\u65B9\u5411\u53CD\u8F6C\uFF0C\u6309\u786E\u8BA4\u6B21\u6570\u5206\u9636\u6BB5\u4E70\u5165\uFF1B\u540C\u4E00\u65B9\u5411\u4E0D\u4F1A\u91CD\u590D\u52A0\u4ED3\u3002</p></div><div class="identity-tags"><span class="identity-tag active-tag"><i></i>\u552F\u4E00\u8FD0\u884C\u7B56\u7565</span><span class="identity-tag">已发布版本待读取</span></div>
+        <div class="strategy-identity-icon">\u21AF</div><div class="strategy-identity-copy"><p class="eyebrow">当前策略</p><h2>BTC \u4E94\u5206\u949F\u53CD\u8F6C</h2><p>\u8DDF\u968F\u65B9\u5411\u53CD\u8F6C\uFF0C\u6309\u786E\u8BA4\u6B21\u6570\u5206\u9636\u6BB5\u4E70\u5165\uFF1B\u540C\u4E00\u65B9\u5411\u4E0D\u4F1A\u91CD\u590D\u52A0\u4ED3\u3002</p></div><div class="identity-tags"><span class="identity-tag active-tag"><i></i>\u552F\u4E00\u8FD0\u884C\u7B56\u7565</span><span class="identity-tag">已发布版本待读取</span></div>
       </section>
 
       <section class="strategy-layout">
         <div class="strategy-form-panel">
-          <div class="panel-heading"><div><p class="eyebrow">CONFIGURATION</p><h2>\u7B56\u7565\u53C2\u6570</h2></div><span class="panel-meta">保存草稿后需另行激活</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">配置内容</p><h2>\u7B56\u7565\u53C2\u6570</h2></div><span class="panel-meta">保存草稿后需另行激活</span></div>
           <div class="strategy-tabs" role="tablist"><button type="button" class="strategy-tab active" data-strategy-tab="parameters" role="tab" aria-selected="true">\u7B56\u7565\u53C2\u6570</button><button type="button" class="strategy-tab" data-strategy-tab="runtime" role="tab" aria-selected="false">\u8FD0\u884C\u8BBE\u7F6E</button></div>
 
           <div class="strategy-pane" data-strategy-pane="parameters">
@@ -55,9 +55,9 @@
 
           <div class="strategy-pane" data-strategy-pane="runtime" hidden>
             <div class="config-section"><div class="config-section-heading"><div><span class="section-number">03</span><div><h3>\u8D44\u91D1\u4E0E\u8FD0\u884C\u65F6\u95F4</h3><p>\u9650\u5236\u5355\u573A\u6295\u5165\u3001\u7B56\u7565\u603B\u5360\u7528\u548C\u81EA\u52A8\u505C\u6B62\u6761\u4EF6\u3002</p></div></div><span class="section-state">\u53EF\u9009\u8FB9\u754C</span></div><div class="field-grid runtime-fields">
-              <label class="strategy-field"><span>\u5355\u573A\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="roundBudget"><b>USD</b></div><small>\u5305\u62EC\u672C\u573A\u6301\u4ED3\u3001\u672A\u5B8C\u6210\u4E70\u5355\u548C\u8D39\u7528\u9884\u7559\u3002</small></label>
-              <label class="strategy-field"><span>\u7B56\u7565\u603B\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="totalBudget"><b>USD</b></div><small>\u9650\u5236\u672C\u7B56\u7565\u540C\u65F6\u5360\u7528\u7684\u8D44\u91D1\u3002</small></label>
-              <label class="strategy-field"><span>\u6BCF\u65E5\u4E8F\u635F\u505C\u6B62\u7EBF</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="lossLimit"><b>USD</b></div><small>\u8FBE\u5230\u540E\u6682\u505C\u65B0\u589E\u8BA2\u5355\uFF0C\u4FDD\u7559\u5DF2\u6709\u8BA2\u5355\u3002</small></label>
+              <label class="strategy-field"><span>\u5355\u573A\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="roundBudget"><b>USDC</b></div><small>\u5305\u62EC\u672C\u573A\u6301\u4ED3\u3001\u672A\u5B8C\u6210\u4E70\u5355\u548C\u8D39\u7528\u9884\u7559\u3002</small></label>
+              <label class="strategy-field"><span>\u7B56\u7565\u603B\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="totalBudget"><b>USDC</b></div><small>\u9650\u5236\u672C\u7B56\u7565\u540C\u65F6\u5360\u7528\u7684\u8D44\u91D1\u3002</small></label>
+              <label class="strategy-field"><span>\u6BCF\u65E5\u4E8F\u635F\u505C\u6B62\u7EBF</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="lossLimit"><b>USDC</b></div><small>\u8FBE\u5230\u540E\u6682\u505C\u65B0\u589E\u8BA2\u5355\uFF0C\u4FDD\u7559\u5DF2\u6709\u8BA2\u5355\u3002</small></label>
               <label class="strategy-field"><span>\u8FD0\u884C\u65F6\u957F</span><div><input type="number" value="0" data-runtime-field="duration"><b>\u5206\u949F</b></div><small>0 \u8868\u793A\u6301\u7EED\u8FD0\u884C\uFF0C\u76F4\u5230\u624B\u52A8\u505C\u6B62\u3002</small></label>
             </div></div><div class="runtime-note"><span class="info-dot">i</span><span>\u6682\u505C\u65B0\u589E\u4F1A\u4FDD\u7559\u73B0\u6709\u8BA2\u5355\uFF1B\u505C\u6B62\u4F1A\u64A4\u9500\u4F59\u91CF\uFF0C\u5DF2\u6210\u4EA4\u6301\u4ED3\u4FDD\u7559\u3002\u8FD0\u884C\u65F6\u957F\u5728\u4E0B\u6B21\u542F\u52A8\u65F6\u751F\u6548\u3002</span></div>
           </div>
@@ -67,7 +67,7 @@
         </div>
 
         <aside class="strategy-aside">
-          <section class="preview-card"><div class="panel-heading"><div><p class="eyebrow">LIVE PREVIEW</p><h2>\u53C2\u6570\u9884\u89C8</h2></div><span class="preview-dot"><i></i>\u5F85\u4FDD\u5B58</span></div><div class="preview-price"><span>\u89E6\u53D1\u4EF7</span><strong data-preview-trigger>--</strong><span class="preview-arrow">\u2192</span><div><span>\u6700\u9AD8\u4E70\u5165</span><strong data-preview-max>--</strong></div></div><div class="preview-steps"><div class="preview-step-heading"><span>\u5206\u9636\u6BB5\u4E70\u5165\u8BA1\u5212</span><b data-preview-total>--</b></div><ol></ol></div></section>
+          <section class="preview-card"><div class="panel-heading"><div><p class="eyebrow">实时预览</p><h2>\u53C2\u6570\u9884\u89C8</h2></div><span class="preview-dot"><i></i>\u5F85\u4FDD\u5B58</span></div><div class="preview-price"><span>\u89E6\u53D1\u4EF7</span><strong data-preview-trigger>--</strong><span class="preview-arrow">\u2192</span><div><span>\u6700\u9AD8\u4E70\u5165</span><strong data-preview-max>--</strong></div></div><div class="preview-steps"><div class="preview-step-heading"><span>\u5206\u9636\u6BB5\u4E70\u5165\u8BA1\u5212</span><b data-preview-total>--</b></div><ol></ol></div></section>
           <section class="activation-card"><div class="activation-heading"><span class="activation-icon">\u25F7</span><div><h3>\u751F\u6548\u89C4\u5219</h3><p>\u4E0D\u4F1A\u7ACB\u5373\u6539\u53D8\u5F53\u524D\u8FD0\u884C</p></div></div><div class="activation-line"><i class="done"></i><div><strong>保存策略草稿</strong><small>仅保存，不发布、不启动</small></div></div><div class="activation-line"><i></i><div><strong>另行激活草稿</strong><small>当前和已预热场次配置保持不变</small></div></div><div class="activation-line"><i></i><div><strong>\u81EA\u52A8\u4EA4\u6613\u8BFB\u53D6</strong><small>激活后仅影响未来未创建场次</small></div></div></section>
           <section class="guardrail-card"><div class="guardrail-heading"><span>\u7B56\u7565\u7EA6\u675F</span><b>4 \u9879</b></div><ul><li><i>\u2713</i>\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565</li><li><i>\u2713</i>\u4EF7\u683C\u4F7F\u7528\u9650\u4EF7\uFF0C\u4E0D\u8FFD\u9AD8</li><li><i>\u2713</i>\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3</li><li><i>\u2713</i>\u4FDD\u5B58\u4E0D\u4F1A\u81EA\u52A8\u542F\u52A8\u4EA4\u6613</li></ul></section>
         </aside>
@@ -135,8 +135,8 @@
     const stages = stageInputs().map((input) => input.value.trim() === "" ? null : Number(input.value));
     const limit = Number(root.querySelector("[data-max-stages]").value);
     const total = stages.length && Number.isInteger(limit) && limit > 0 ? stages.slice(0, limit).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0) : null;
-    text("[data-preview-trigger]", Number.isFinite(trigger) ? `${trigger / 100} USD` : "--");
-    text("[data-preview-max]", Number.isFinite(max) ? `${max / 100} USD` : "--");
+    text("[data-preview-trigger]", Number.isFinite(trigger) ? `${trigger / 100} USDC` : "--");
+    text("[data-preview-max]", Number.isFinite(max) ? `${max / 100} USDC` : "--");
     text("[data-preview-total]", `${Number.isFinite(total) ? total : "--"} 份`);
     const list = root.querySelector(".preview-steps ol");
     list.innerHTML = stages.map((value, index) => `<li><i>${index + 1}</i><span>${index >= limit ? "不执行 · 超出上限" : index ? `第 ${index} 次反转` : "进入触发区"}</span><strong>${Number.isFinite(value) ? value : "--"} 份</strong></li>`).join("");
@@ -175,12 +175,12 @@
   };
   const receive = (next) => {
     resource = next;
-    text("[data-strategy-revision]", resource.revision == null ? "--" : `REV-${resource.revision}`);
-    text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布 REV-${resource.revision}`);
+    text("[data-strategy-revision]", resource.revision == null ? "--" : `版本 ${resource.revision}`);
+    text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布版本 ${resource.revision}`);
     text(".strategy-state-chip", resource.status === "ready" ? hasBtcPublished() ? "BTC 服务器配置已读取" : "配置目标未确认为 BTC" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
     const savedDraft = draft();
     text("[data-draft-state]", validDraft()
-      ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于 REV-${savedDraft.expectedRevision} · 未激活`
+      ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于版本 ${savedDraft.expectedRevision} · 未激活`
       : savedDraft && !vm.isBtcStrategyConfig(savedDraft.config) ? "服务器草稿目标不是 BTC，已禁止激活；请先在服务器更正草稿。"
       : savedDraft ? "原草稿基线已过期或已发布，请重新保存后激活。" : "尚无可激活草稿；保存不会自动发布或启动。");
     if (!dirty && !busy && resource.status === "ready" && hasBtcPublished()) {
@@ -237,7 +237,7 @@
     if (busy) return;
     busy = true; controls();
     try { await adapter.loadStrategy(); }
-    catch (error) { setMessage(error.message || "策略读取失败，输入已保留。"); }
+    catch (error) { setMessage(core.format.readableError(error.message, "策略读取失败，输入已保留。")); }
     finally { busy = false; receive(store.getState().strategy); }
     if (dirty) setMessage("服务器状态已读取；未保存输入保持不变。撤销修改可恢复服务器值。");
   });
@@ -287,7 +287,7 @@
       baselineRevision = result.expectedRevision;
       formKey = `draft:${result.draftId}`;
       setMessage("策略草稿已保存，尚未激活；请确认后点击激活已保存草稿。");
-    } catch (error) { setMessage(error.message || "草稿保存失败，输入已保留。"); }
+    } catch (error) { setMessage(core.format.readableError(error.message, "草稿保存失败，输入已保留。")); }
     finally { busy = false; controls(); }
   });
   root.querySelector("[data-activate]").addEventListener("click", async () => {
@@ -300,7 +300,7 @@
       busy = false;
       receive(store.getState().strategy);
       setMessage(resource.status === "ready" ? "策略已发布；仅影响未来未创建场次，当前及已预热场次保持原配置。" : "服务器已确认发布，但配置重读失败；保留草稿和最后配置，恢复连接后核对版本。");
-    } catch (error) { setMessage(error.message || "激活失败，草稿已保留。"); }
+    } catch (error) { setMessage(core.format.readableError(error.message, "激活失败，草稿已保留。")); }
     finally { busy = false; controls(); }
   });
   if (legacyMode) root.querySelector("[data-activate]").hidden = true;
