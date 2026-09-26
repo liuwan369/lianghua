@@ -447,8 +447,9 @@
   var renderPosition = function(raw) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var position = raw?.position || raw;
-    if (!position || !vm.matchesIdentity(position, currentContext()) || raw.stale || raw.error || raw.available === false || position.stale || position.available === false || position.error) {
-      text("[data-position-state]", "持仓暂不可用或已过期 · 保留本场最近成功数据");
+    if (!position || !vm.matchesIdentity(position, currentContext()) || raw?.stale || raw?.error || raw?.available === false || position.stale || position.available === false || position.error) {
+      var positionReason = window.PolyPreview.format.readableError(raw?.error || position?.error, "持仓数据尚未确认");
+      text("[data-position-state]", `${positionReason} · 保留本场最近成功数据`);
       return false;
     }
     var number = function(...keys) { for (var key of keys) { var value = numeric(position[key]); if (value != null) return value; } return null; };
@@ -493,8 +494,9 @@
   var renderOrders = function(raw, asset) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : null;
-    if (!orders || !asset || raw.stale || raw.error || raw.available === false || orders.some(function(order) { return !itemMatchesContext(order, asset); })) {
-      text("[data-orders-state]", "订单数据暂不可用或已过期 · 保留本场最近成功数据");
+    if (!orders || !asset || raw?.stale || raw?.error || raw?.available === false || orders.some(function(order) { return !itemMatchesContext(order, asset); })) {
+      var orderReason = window.PolyPreview.format.readableError(raw?.error, "订单数据尚未确认");
+      text("[data-orders-state]", `${orderReason} · 保留本场最近成功数据`);
       return false;
     }
     // Empty pages are valid for this scoped REST request; non-empty rows must all identify this asset and round.
