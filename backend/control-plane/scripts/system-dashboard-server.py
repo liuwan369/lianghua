@@ -278,6 +278,27 @@ def account_data() -> AccountData:
         return _account_data
 
 
+def _remote_orders_empty_from_fresh_snapshot() -> bool:
+    """Return true only when a fresh account read proves there are no orders.
+
+    This is a cache-only check.  Stop handling must not perform network I/O or
+    wait for the slow account reader; an unavailable or incomplete snapshot
+    remains unconfirmed until a later account refresh provides the evidence.
+    """
+    try:
+        snapshot = account_data().snapshot()
+    except Exception:
+        return False
+    if not isinstance(snapshot, dict) or snapshot.get("available") is not True or snapshot.get("stale") is not False:
+        return False
+    orders = snapshot.get("open_orders")
+    return (isinstance(orders, dict)
+            and orders.get("available") is True
+            and orders.get("complete") is True
+            and isinstance(orders.get("items"), list)
+            and not orders["items"])
+
+
 def _metric_services() -> dict:
     """Return process identities from memory; the sampler performs OS reads."""
     with _trading_lock:
@@ -491,7 +512,9 @@ def _automatic_stop_result(exit_code: int | None, console_path: Path | None) -> 
         reason,
         "交易进程异常退出，请核对运行记录。" if failed else "交易进程已停止，请核对订单与持仓状态。",
     )
-    return {"confirmed": False, "process_stopped": True, "automatic": True,
+    remote_confirmed = _remote_orders_empty_from_fresh_snapshot()
+    return {"confirmed": remote_confirmed, "process_stopped": True, "automatic": True,
+            "remote_orders_state": "confirmed" if remote_confirmed else "unconfirmed",
             "exit_code": exit_code, "reason": reason, "message": message}
 
 
@@ -1566,11 +1589,13 @@ def stop_trading() -> dict:
             return trading_status(include_stats=False)
         stop_requested = False
         if process is None and not _process_matches(candidate_pid, _trading_log):
+            remote_confirmed = _remote_orders_empty_from_fresh_snapshot()
             _trading_stop_result = {
-                "confirmed": False,
+                "confirmed": remote_confirmed,
                 "process_stopped": True,
-                "remote_orders_state": "unconfirmed",
-                "message": "当前没有正在运行的交易任务。",
+                "remote_orders_state": "confirmed" if remote_confirmed else "unconfirmed",
+                "message": ("当前没有正在运行的交易任务，账户快照已确认无远端挂单。"
+                            if remote_confirmed else "当前没有正在运行的交易任务，远端挂单状态尚未通过账户查询确认。"),
             }
             _persist_trading_state()
             return trading_status(include_stats=False)
@@ -1619,13 +1644,18 @@ def stop_trading() -> dict:
         _trading_exit_code = process.poll() if process else None
         stopped = not _process_matches(restored_pid or (process.pid if process else None), _trading_log)
         # A stopped process does not prove remote live orders were cancelled.
-        confirmed = False
+        # Only a fresh, complete account snapshot with an empty open-order
+        # section can confirm the remote side of the stop.
+        confirmed = bool(stopped and _remote_orders_empty_from_fresh_snapshot())
         if not stopped:
             message = "已请求停止，正在等待撤单及成交对账完成；后台进程保留，请稍后核对。"
+        elif confirmed:
+            message = "进程已停止，账户快照已确认无远端挂单。"
         else:
             message = "进程已停止；实盘挂单尚未通过账户查询确认。"
         _trading_stop_result = {"confirmed": confirmed, "process_stopped": stopped,
-                                "remote_orders_state": "unconfirmed", "message": message}
+                                "remote_orders_state": "confirmed" if confirmed else "unconfirmed",
+                                "message": message}
         if stop_requested:
             _trading_stop_result["requested_pid"] = candidate_pid
         if stopped:
