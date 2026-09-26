@@ -67,6 +67,7 @@ _live_cache_at = 0.0
 _account_report: dict | None = None
 _account_report_identity: str | None = None
 _account_check_error: str | None = None
+_account_startup_check_error: str | None = None
 _account_data: AccountData | None = None
 _account_data_lock = threading.Lock()
 _read_model: ReadModel | None = None
@@ -581,7 +582,8 @@ def account_config_status() -> dict:
                           and _account_report_identity == _account_identity(values))
     checked_at = _epoch(report.get("checked_at")) if report else None
     check_fresh = bool(checked_at is not None and 0 <= time.time() - checked_at <= 15 * 60)
-    account_check_ready = bool(not _account_check_error and report_matches and check_fresh
+    check_error = _account_check_error or _account_startup_check_error
+    account_check_ready = bool(not check_error and report_matches and check_fresh
                                and report.get("account_ready") is True
                                and report.get("signer_matches") is True
                                and report.get("approvals_ready") is True
@@ -599,7 +601,8 @@ def account_config_status() -> dict:
         "config_error": config_error,
         "server_live_enabled": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
         "last_check": report,
-        "last_check_error": _account_check_error,
+        "last_check_error": check_error,
+        "startup_check_error": _account_startup_check_error,
         "last_check_at": checked_at,
         "account_check_state": check_state,
         "account_check_ready": account_check_ready,
@@ -649,7 +652,7 @@ def account_action(payload: dict, save: bool = False) -> dict:
 
 def warm_account_check() -> None:
     """Refresh the saved account check after startup without blocking serving."""
-    global _account_report, _account_report_identity, _account_check_error
+    global _account_report, _account_report_identity, _account_check_error, _account_startup_check_error
     if not _account_check_lock.acquire(blocking=False):
         return
     try:
@@ -666,10 +669,12 @@ def warm_account_check() -> None:
             _account_report = report
             _account_report_identity = identity
             _account_check_error = None
-    except Exception:
+            _account_startup_check_error = None
+    except Exception as exc:
         # Startup probing is best effort. A failed probe leaves the durable
         # config intact and deliberately keeps readiness at unknown.
         with _trading_lock:
+            _account_startup_check_error = getattr(exc, "code", None) or "account_check_failed"
             if _account_report is None:
                 _account_report_identity = None
                 _account_check_error = None
@@ -700,7 +705,7 @@ def _clear_account_run_selection() -> None:
 
 
 def _checked_account_action(payload: dict, save: bool = False) -> dict:
-    global _account_report, _account_report_identity, _account_check_error
+    global _account_report, _account_report_identity, _account_check_error, _account_startup_check_error
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
     global _trading_log, _trading_console_log, _trading_started_at, _trading_exit_code
     global _trading_stop_result, _trading_engine
@@ -732,6 +737,7 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
         if (not save) or exc.code in {"invalid_account_config", "account_changed_during_check"}:
             if candidate_identity == saved_identity:
                 _account_check_error = exc.code
+                _account_startup_check_error = None
             raise
         with _trading_lock:
             if _account_identity(_account_values()) != saved_identity:
@@ -745,6 +751,7 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
             _account_report = None
             _account_report_identity = candidate_identity
             _account_check_error = exc.code
+            _account_startup_check_error = None
             return {
                 "saved": True,
                 "wallet": values.get("POLYMARKET_WALLET_ADDRESS") or values.get("POLY_FUNDER", ""),
@@ -778,6 +785,7 @@ def _checked_account_action(payload: dict, save: bool = False) -> dict:
             _account_report = report
             _account_report_identity = _account_identity(_account_values()) if save else saved_identity
             _account_check_error = None
+            _account_startup_check_error = None
         return report
 
 
@@ -1982,6 +1990,7 @@ def _modern_runtime(status: dict) -> dict:
             row = dict(candidate)
             if view["marketId"]:
                 row["marketId"] = view["marketId"]
+                row.setdefault("id", view["marketId"])
             if view["roundId"]:
                 row["roundId"] = view["roundId"]
             if view["assetId"]:
