@@ -1437,7 +1437,7 @@ class Ledger:
                 "win_rate": summary.get("win_rate"),
                 "last_event": events[0]["event"] if events else None,
                 "error": ("交易日志待核对" if summary["error"] or summary["invalid_records"]
-                          else "引擎报告异常，请检查运行状态" if counts.get("error", 0) else None),
+                          else "运行日志包含需核对事件" if counts.get("error", 0) else None),
                 "events": list(reversed(events)), "market_summaries": markets,
                 "latency": summary.get("latency"), "runtime": runtime,
                 "orders": orders, "order_count": order_count, "orders_truncated": order_count > len(orders)}
