@@ -182,6 +182,12 @@
   var fullIdentity = function(context) {
     return `${context.assetId || "未知币种"} · marketId ${context.marketId || "待提供"} · roundId ${context.roundId || "待提供"}`;
   };
+  var displayIdentity = function(context) {
+    var asset = String(context.assetId || "未知币种").toUpperCase();
+    var market = context.marketId ? shortIdentity(context.marketId) : "待确认";
+    var round = context.roundId ? displayRound(context.roundId) : "待确认";
+    return `${asset} · 市场 ${market} · 场次 ${round}`;
+  };
   var eventLabels = {
     stopped: "交易进程已停止", platform_stopped: "交易进程已停止", started: "交易进程已启动", platform_started: "交易进程已启动",
     market_feed_unhealthy: "行情数据异常", transport_disconnected: "行情连接中断，正在等待恢复", stale_book: "行情盘口已过期",
@@ -432,7 +438,7 @@
     resetRoundPanels();
     var identityNode = document.querySelector("[data-round-identity]");
     if (identityNode) {
-      identityNode.textContent = context.assetId && context.roundId ? `${context.assetId} · ${displayRound(context.roundId)}` : "等待场次信息";
+      identityNode.textContent = context.assetId && context.roundId ? displayIdentity(context) : "等待场次信息";
       identityNode.title = fullIdentity(context);
     }
     text("[data-round]", context.roundId ? displayRound(context.roundId) : "等待场次信息");
@@ -528,19 +534,23 @@
     var stale = resource.stale === true || ["stale", "unavailable", "error", "degraded"].includes(resource.status) || payload?.stale === true || payload?.available === false;
     if (!list) return;
     if (stale || resource.error || payload?.error) {
-      text("[data-activity-state]", resource.status === "unavailable" ? "暂无可用运行事件" : "事件连接中断 · 保留最近事件");
+      text("[data-activity-state]", resource.status === "unavailable" ? "暂无可用运行事件" : "事件连接中断 · 以下为最近成功事件");
+      list.classList.add("is-stale");
       return;
     }
+    list.classList.remove("is-stale");
     text("[data-activity-state]", "事件已更新");
     if (!scoped.length) {
       list.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>当前场次暂无运行事件</strong><small>运行事件接口已连接，等待本场数据</small></div><b class="activity-tag info-tag">暂无</b></li>';
       return;
     }
     list.innerHTML = scoped.slice(0, 20).map(function(event) {
-      var severity = String(event.severity || event.level || "info").toLowerCase();
+      var kind = String(event.kind || event.event || "unknown").toLowerCase();
+      var state = String(event.status || event.state || "").toLowerCase();
+      var severity = String(event.severity || event.level || "").toLowerCase();
+      if (!severity) severity = ["rejected", "failed", "error", "cancel_failed"].includes(state) || ["error", "platform_error", "order_rejected", "settlement_failed"].includes(kind) ? "error" : "info";
       var tag = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : "信息";
       var icon = severity === "error" || severity === "critical" ? "!" : severity === "warning" || severity === "warn" ? "!" : "i";
-      var kind = String(event.kind || event.event || "unknown").toLowerCase();
       var kindLabel = eventLabels[kind] || eventText(kind, "服务器事件：未分类状态");
       var message = eventText(event.message || event.reason || event.detail || kind, kindLabel);
       var rawDetail = event.detail && event.detail !== event.message ? event.detail : event.reason && event.reason !== event.message ? event.reason : null;
@@ -735,8 +745,13 @@
       if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
       if (action === "start") startReason = reason;
       if (action === "pause") button.textContent = freshPaused ? "恢复新增" : "暂停新增";
+      if (action === "start") button.textContent = commandPending ? "启动请求中…" : reason ? "启动条件未满足" : "启动自动交易";
+      if (action === "stop" && commandPending) button.textContent = "停止请求中…";
+      button.dataset.controlState = commandPending ? "pending" : reason ? "blocked" : "ready";
+      button.classList.toggle("is-pending", commandPending || sameActionCooldown);
       button.disabled = Boolean(reason);
-      button.title = reason;
+      button.title = reason || (commandPending ? "控制请求已提交，等待服务器确认" : "");
+      button.setAttribute("aria-label", button.textContent);
     });
     var feedback = document.querySelector("[data-control-feedback]");
     if (feedback) {

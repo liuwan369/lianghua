@@ -343,6 +343,13 @@ button {
   box-shadow: none;
   opacity: .78;
 }
+.hero-button.is-pending {
+  border-color: #6a9bc0;
+  background: #214361;
+  color: #d6edf9;
+  cursor: wait;
+  opacity: 1;
+}
 .hero-button.primary-action:disabled,
 .hero-button.exit-action:disabled {
   border-color: #4a5e72;
@@ -1238,7 +1245,11 @@ button {
   background: #0d243b;
   color: #dcebf4;
   color-scheme: dark;
-  appearance: auto;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, #9fc4df 50%), linear-gradient(135deg, #9fc4df 50%, transparent 50%);
+  background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px, 4px 4px;
   font: inherit;
 }
 .market-selector select:focus {
@@ -2062,6 +2073,19 @@ button {
   border-radius: 7px;
   background: #0d2034;
   list-style: none;
+}
+.activity-list.is-stale {
+  border-color: #80643b;
+  opacity: .86;
+}
+.activity-list.is-stale::before {
+  display: block;
+  padding: 7px 12px;
+  border-bottom: 1px solid #5d4a30;
+  background: #2b281e;
+  color: #e5c681;
+  content: "以下为最近成功读取的历史事件，当前连接尚未恢复";
+  font-size: 9px;
 }
 .activity-list li {
   display: grid;

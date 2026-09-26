@@ -79,6 +79,18 @@
       const raw = String(value ?? "").trim();
       if (!raw) return fallback;
       const labels = {
+        stopped: "交易进程已停止",
+        started: "交易进程已启动",
+        running: "交易进程运行中",
+        starting: "交易进程正在启动",
+        stopping: "交易进程正在停止",
+        paused: "已暂停新增订单",
+        failed: "交易进程运行失败",
+        order: "订单状态更新",
+        fill: "订单成交",
+        settlement: "结算状态更新",
+        resolved: "市场结果已确认",
+        cancel: "撤单状态更新",
         market_pool_unavailable: "运行池暂时不可用",
         account_rpc_failed: "区块链节点查询失败，请检查网络连接",
         account_check_failed: "账户检查未通过，请查看账户配置和授权",
@@ -89,6 +101,9 @@
         settlement_credentials_unavailable: "结算凭据不可用",
         account_response_invalid: "服务器返回的账户数据无效",
         ledger_projection_unavailable: "账本数据暂不可用",
+        ledger_projection_incomplete: "账本投影尚未追上运行记录",
+        remote_orders_unconfirmed: "远端挂单状态尚未确认",
+        remote_orders_state_unconfirmed: "远端挂单状态尚未确认",
         runtime_snapshot_stale: "运行状态已过期",
         strategy_config_unavailable: "策略配置暂不可用",
         order_recovery_pending: "订单状态仍在核对",
@@ -96,8 +111,25 @@
         transport_disconnected: "行情连接中断，等待恢复",
         stale_book: "行情盘口已过期，暂不用于交易"
       };
+      if (/market_feed_unhealthy/i.test(raw) && /transport_disconnected/i.test(raw)) return "行情连接中断，正在等待恢复";
+      if (/market_feed_unhealthy/i.test(raw) && /stale_book/i.test(raw)) return "行情盘口已过期，暂不用于交易";
+      if (/market_feed_unhealthy/i.test(raw) && /incomplete_book/i.test(raw)) return "行情深度不完整，暂不可交易";
       const code = raw.toLowerCase().replace(/^error[:_ -]*/, "").split(/[:：]/, 1)[0];
-      return labels[code] || raw;
+      if (labels[code]) return labels[code];
+      const words = {
+        market: "市场", feed: "行情源", unhealthy: "异常", transport: "连接", disconnected: "中断",
+        stale: "过期", book: "盘口", incomplete: "不完整", complete: "完整", connected: "已连接",
+        waiting: "等待", order: "订单", fill: "成交", settlement: "结算", reconciliation: "对账",
+        pending: "待处理", failed: "失败", error: "异常", retrying: "重试中", rejected: "未接受",
+        acknowledged: "已确认", confirmed: "已确认", unresolved: "待确认", unavailable: "暂不可用",
+        strategy: "策略", decision: "判断", skipped: "已跳过", accepted: "已接受", credentials: "账户凭据",
+        missing: "缺失", mismatch: "不匹配", timeout: "超时", rpc: "区块链节点", platform: "交易进程"
+      };
+      if (/^[a-z][a-z0-9_:\s-]*$/i.test(raw)) {
+        const translated = code.split(/[_:\s-]+/).filter(Boolean).map((word) => words[word] || word).join(" · ");
+        return translated && translated.split(" · ").every((word) => /[\u3400-\u9fff]/.test(word)) ? translated : fallback;
+      }
+      return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
     },
     money(value) { return Number.isFinite(value) ? `$${value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toFixed(0)}` : "--"; },
     escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); }

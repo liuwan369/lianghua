@@ -162,8 +162,11 @@
     const runtime = control.runtime;
     if (start) {
       const reason = overviewStartReason();
+      start.dataset.controlState = reason ? "blocked" : "ready";
+      start.textContent = reason ? "启动条件未满足" : "一键启动自动化交易";
       start.disabled = Boolean(reason);
-      start.title = reason;
+      start.title = reason || "提交启动请求，最终状态以服务器确认为准";
+      start.setAttribute("aria-label", start.textContent);
       start.setAttribute("aria-describedby", "overview-control-message");
       if (feedback) {
         feedback.id = "overview-control-message";
@@ -188,6 +191,10 @@
       if (action === "start" && overviewStartReason()) { text("[data-overview-runtime]", overviewStartReason()); return; }
       if (action === "exit" && (!control.identityMatches || control.runtime.processRunning !== true)) return;
       document.querySelectorAll('[data-overview-action="start"], [data-overview-action="exit"]').forEach((node) => { node.disabled = true; });
+      const startButton = document.querySelector('[data-overview-action="start"]');
+      const exitButton = document.querySelector('[data-overview-action="exit"]');
+      if (startButton && action === "start") { startButton.textContent = "启动请求中…"; startButton.setAttribute("aria-busy", "true"); }
+      if (exitButton && action === "exit") { exitButton.textContent = "停止请求中…"; exitButton.setAttribute("aria-busy", "true"); }
       const message = document.querySelector("[data-overview-control-message]");
       if (message) {
         message.classList.remove("is-blocked");
@@ -221,7 +228,13 @@
           text("[data-overview-runtime]", reason);
           if (message) { message.classList.add("is-blocked"); message.textContent = `${reason}，运行状态没有改变。`; }
         })
-        .finally(() => { void refreshFast().catch(() => null).finally(updateOverviewControls); });
+        .finally(() => {
+          void refreshFast().catch(() => null).finally(() => {
+            if (startButton) { startButton.textContent = "一键启动自动化交易"; startButton.removeAttribute("aria-busy"); }
+            if (exitButton) { exitButton.textContent = "退出程序"; exitButton.removeAttribute("aria-busy"); }
+            updateOverviewControls();
+          });
+        });
       return;
     }
     if (action === "strategy") return window.PolyPreview?.navigate("strategy.html");
@@ -319,9 +332,10 @@
   };
   const renderEvents = (resource) => {
     text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : "事件待接入");
+    const list = document.querySelector("[data-overview-log-list]");
+    if (list) list.classList.toggle("is-stale", resource?.status !== "ready" || resource?.stale === true);
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
-    const list = document.querySelector("[data-overview-log-list]");
     if (!list) return;
     if (!items.length) { list.innerHTML = '<li class="log-entry"><time>--</time><span class="log-icon neutral-icon">•</span><div><strong>暂无运行事件</strong><p>后端返回新的事件后会在这里追加。</p></div><span class="log-status muted-text">空闲</span></li>'; return; }
     const icon = { error: "!", warning: "!", warn: "!", success: "✓", good: "✓" };
@@ -348,9 +362,13 @@
       startup_account_recovery_pending: "启动时账户订单核对未完成",
       cash_flow_refresh_pending: "账户资金数据等待刷新",
       journal_failed: "运行记录写入失败",
-      process_failed: "交易进程异常退出"
+      process_failed: "交易进程异常退出",
+      ledger_projection_incomplete: "账本投影尚未追上运行记录",
+      remote_orders_unconfirmed: "远端挂单状态尚未确认",
+      remote_orders_state_unconfirmed: "远端挂单状态尚未确认"
     };
-    const stateNames = { running: "运行中", starting: "启动中", paused: "已暂停", stopping: "停止中", stopped: "已停止", failed: "失败", open: "挂单中", matched: "已撮合", filled: "已成交", canceled: "已撤销", cancelled: "已撤销", confirmed: "已确认", pending: "待确认", rejected: "已拒绝" };
+    const stateNames = { running: "运行中", starting: "启动中", paused: "已暂停", stopping: "停止中", stopped: "已停止", failed: "失败", open: "挂单中", matched: "已撮合", filled: "已成交", canceled: "已撤销", cancelled: "已撤销", confirmed: "已确认", pending: "待确认", rejected: "已拒绝", unconfirmed: "尚未确认", stale: "已过期", unavailable: "暂不可用" };
+    const statusNames = { stopped: "交易进程已停止", started: "交易进程已启动", running: "交易进程运行中", starting: "交易进程正在启动", stopping: "交易进程正在停止", paused: "已暂停新增订单", failed: "交易进程运行失败", order: "订单状态更新", fill: "订单成交", settlement: "结算状态更新", resolved: "市场结果已确认", cancel: "撤单状态更新" };
     const hashPattern = /0x[a-fA-F0-9]{32,}/g;
     const shorten = (value) => String(value).replace(hashPattern, (hash) => `${hash.slice(0, 10)}…${hash.slice(-7)}`).replace(/\b\d{30,}\b/g, "关联当前市场");
     const readableEvent = (value, fallback) => {
@@ -362,13 +380,18 @@
       return translated && translated !== safe ? translated : fallback;
     };
     list.innerHTML = items.slice(0, 8).map((item) => {
-      const severity = String(item.severity || item.level || "info").toLowerCase();
-      const time = item.time || item.createdAt || item.created_at || item.timestamp || "--";
+      const state = String(item.status || item.state || "").toLowerCase();
       const kind = String(item.kind || item.event || "").toLowerCase();
+      const suppliedSeverity = String(item.severity || item.level || "").toLowerCase();
+      const failure = ["rejected", "failed", "error", "unconfirmed"].includes(state)
+        || ["error", "platform_error", "order_rejected", "settlement_failed", "ledger_projection_incomplete", "remote_orders_unconfirmed"].includes(kind);
+      const severity = failure ? (state === "unconfirmed" || kind === "ledger_projection_incomplete" ? "warning" : "error") : suppliedSeverity || "info";
+      const time = item.time || item.createdAt || item.created_at || item.timestamp || "--";
       const code = String(item.code || "").toLowerCase();
-      const state = String(item.status || "").toLowerCase();
       const fallbackMessage = (kind === "platform_status" && activityNames[kind]?.[state])
+        || statusNames[state]
         || errorNames[code]
+        || errorNames[kind]
         || activityNames[kind]
         || (severity === "error" || severity === "critical" ? "交易链路发生异常" : "运行状态已更新");
       const message = readableEvent(item.message || item.reason || item.detail, fallbackMessage);
