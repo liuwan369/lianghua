@@ -6,6 +6,7 @@ import { parseAuthenticatedTrade, runUserFeed, type UserFeedControl } from "../l
 import { runBtcFeed } from "../live/feeds/btc.js";
 import { FeedQueue, type FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
+import { preflightReport } from "../live/onchain.js";
 import { polymarketFillFee } from "../models.js";
 import type { AccountSnapshot, AssetId, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketBookSnapshot, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
@@ -419,6 +420,21 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     return { ...ordinary, cashFlowCoverage: evidence.cashFlowCoverage, externalFlows: evidence.externalFlows };
   };
   account = await readAccount();
+  // A live strategy can create a redeemable position before the five-minute
+  // round ends. Check the independent settlement route before opening the
+  // feed/order path, so a missing Builder/Relayer credential cannot surface
+  // only after fills exist. Observation-only connections intentionally skip
+  // this check because they never submit or settle strategy orders.
+  if (options.settle) {
+    let settlementReady = false;
+    try {
+      const report = await preflightReport(account.accountId);
+      settlementReady = report.settlementCredentialsReady === true;
+    } catch {
+      throw new Error("settlement credentials preflight failed");
+    }
+    if (!settlementReady) throw new Error("settlement credentials are not ready");
+  }
   client = await ClobWrapper.connect({ key });
   gateway = new PolymarketGateway(client, instrument => {
     const user = usersByMarket.get(instrument.marketId);
