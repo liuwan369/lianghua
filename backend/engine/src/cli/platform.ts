@@ -419,6 +419,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const platform = connection?.platform;
     const state = platform?.account.current();
     const now = Date.now() / 1000;
+    const currentMarket = (platform?.market.list() ?? selectedMarkets)
+      .filter(market => market.startsAt <= now && now < market.endsAt)
+      .sort((left, right) => right.startsAt - left.startsAt)[0];
     const strategyStatus = reversal?.getStatus();
     const enrichRound = (round: NonNullable<typeof strategyStatus>["rounds"][number]) => {
       const tokens = new Set([round.upTokenId, round.downTokenId]);
@@ -462,6 +465,12 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: platform?.market.list() ?? selectedMarkets,
+      current_market: currentMarket ? {
+        marketId: currentMarket.id, roundId: currentMarket.roundId, assetId: currentMarket.assetId ?? options.assetId,
+        name: currentMarket.name, startsAt: currentMarket.startsAt, endsAt: currentMarket.endsAt,
+      } : null,
+      current_market_id: currentMarket?.id ?? null,
+      current_round_id: currentMarket?.roundId ?? null,
       // This is the accepted paired snapshot projection. It is cloned by the
       // platform API and is not rebuilt from legacy single-token books.
       snapshots: platform?.market.snapshots() ?? [],
@@ -480,6 +489,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       cashUsd: runtime.cash_usd, positions: runtime.positions_count, orders: runtime.orders_count,
       activeOrders: runtime.active_orders, fills: runtime.fills_count, risk: runtime.risk,
       snapshots: runtime.snapshots,
+      currentMarket: runtime.current_market,
+      currentMarketId: runtime.current_market_id,
+      currentRoundId: runtime.current_round_id,
       journal: runtime.journal,
       telemetry: platform?.telemetry.snapshot() ?? null, capabilities: platform?.capabilities() ?? null,
       reason: signalReason ?? null }));
