@@ -1937,7 +1937,9 @@ def _modern_runtime(status: dict) -> dict:
         state = "failed" if stop_reason in {"journal_failed", "market_end_event_failed", "process_failed"} else "stopped"
     source_at = _epoch(runtime.get("source_at"))
     expires_at = _epoch(runtime.get("expires_at"))
-    projection_stale = (runtime.get("stale") is True or projection.get("stale") is True
+    # A stopped process intentionally marks its last runtime snapshot stale;
+    # that is different from the low-priority ledger projection being behind.
+    projection_stale = (projection.get("stale") is True
                         or (projection.get("state") is not None and projection.get("state") != "ready"))
     stale = bool(not runtime or source_at is None or expires_at is None or expires_at <= time.time()
                  or projection_stale)
