@@ -36,6 +36,11 @@ type DiscoveryModule = typeof marketDiscovery & {
 };
 type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string; __runtimeAssetId?: AssetId };
 
+/** A prewarmed next round is expected to be unhealthy until its window starts. */
+export function isActiveMarket(market: Pick<MarketInfo, "startsAt" | "endsAt">, now = Date.now() / 1000): boolean {
+  return market.startsAt <= now && now < market.endsAt;
+}
+
 export function binaryMarketSides(market: MarketInfo): { up: Instrument; down: Instrument } | undefined {
   const up = market.instruments.find(item => ["UP", "YES"].includes(item.outcome.toUpperCase()));
   const down = market.instruments.find(item => ["DOWN", "NO"].includes(item.outcome.toUpperCase()));
@@ -55,11 +60,15 @@ export function referenceAssetFromFeedPayload(payload: Record<string, unknown>, 
   return typeof value === "string" && /^[a-z0-9_-]{1,32}$/i.test(value) ? value.toLowerCase() : undefined;
 }
 
+export function discoveryOptions(directOnly = false): { allowCollectorFallback: boolean; directOnly: boolean } {
+  return { allowCollectorFallback: !directOnly, directOnly };
+}
+
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
 export async function discoverMarket(
   asset: AssetId = "btc",
   at = Date.now() / 1000,
-  _directOnly = false,
+  directOnly = false,
   signal?: AbortSignal,
 ): Promise<MarketInfo[]> {
   const discovery = marketDiscovery as DiscoveryModule;
@@ -71,8 +80,7 @@ export async function discoverMarket(
   }
   const market = await discovery.findFiveMinuteMarket(asset, {
     now: at,
-    allowCollectorFallback: false,
-    directOnly: true,
+    ...discoveryOptions(directOnly),
     signal,
   });
   if (!market) return [];
@@ -462,6 +470,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     return eventAsset ? options.markets.find(market => market.assetId === eventAsset) : undefined;
   };
   const rejectSnapshot = (market: MarketInfo, reason: SnapshotRejectReason): void => {
+    if (!isActiveMarket(market)) return;
     const key = snapshotStateKey(market);
     if (snapshotRejectNotice.get(key) === reason) return;
     snapshotRejectNotice.set(key, reason);
@@ -524,7 +533,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       else {
         snapshotFreshAfter.set(key, Number.isFinite(previousFreshAfter)
           ? Math.max(previousFreshAfter!, event.tsUnix) : event.tsUnix);
-        if (market.endsAt > Date.now() / 1000) platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
+        if (isActiveMarket(market)) platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
           code: "market_feed_unhealthy", message: `market_feed_unhealthy:${event.reason ?? "unknown"}` });
       }
       return;
