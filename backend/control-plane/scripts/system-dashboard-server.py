@@ -647,6 +647,36 @@ def account_action(payload: dict, save: bool = False) -> dict:
         _account_check_lock.release()
 
 
+def warm_account_check() -> None:
+    """Refresh the saved account check after startup without blocking serving."""
+    global _account_report, _account_report_identity, _account_check_error
+    if not _account_check_lock.acquire(blocking=False):
+        return
+    try:
+        values = _account_values()
+        if not values.get("POLYMARKET_WALLET_ADDRESS"):
+            return
+        identity = _account_identity(values)
+        report = account_store.check_account(TRADING_ROOT, values)
+        with _trading_lock:
+            # A browser save may have replaced the credentials while the RPC
+            # check was in flight. Never attach an old report to the new account.
+            if _account_identity(_account_values()) != identity:
+                return
+            _account_report = report
+            _account_report_identity = identity
+            _account_check_error = None
+    except Exception:
+        # Startup probing is best effort. A failed probe leaves the durable
+        # config intact and deliberately keeps readiness at unknown.
+        with _trading_lock:
+            if _account_report is None:
+                _account_report_identity = None
+                _account_check_error = None
+    finally:
+        _account_check_lock.release()
+
+
 def _clear_account_run_selection() -> None:
     """Drop the last account's default selection without deleting its ledger."""
     global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
@@ -1940,23 +1970,24 @@ def _modern_runtime(status: dict) -> dict:
             market_rows.append(row)
 
     # If the runtime market list is absent, the explicit strategy round
-    # records are still valid read-only runtime identity sources. Do not add a
-    # strategy row when it has no market or round identity at all.
-    for candidate, view in candidate_views:
-        if not view["marketId"] and not view["roundId"]:
-            continue
-        row_key = (view["assetId"], view["marketId"], view["roundId"], view["name"])
-        if row_key in seen_rows:
-            continue
-        row = dict(candidate)
-        if view["marketId"]:
-            row["marketId"] = view["marketId"]
-        if view["roundId"]:
-            row["roundId"] = view["roundId"]
-        if view["assetId"]:
-            row["assetId"] = view["assetId"]
-        seen_rows.add(row_key)
-        market_rows.append(row)
+    # records are still valid read-only runtime identity sources. Do not add
+    # historical strategy rows when runtime already supplied its market list.
+    if not runtime_markets:
+        for candidate, view in candidate_views:
+            if not view["marketId"] and not view["roundId"]:
+                continue
+            row_key = (view["assetId"], view["marketId"], view["roundId"], view["name"])
+            if row_key in seen_rows:
+                continue
+            row = dict(candidate)
+            if view["marketId"]:
+                row["marketId"] = view["marketId"]
+            if view["roundId"]:
+                row["roundId"] = view["roundId"]
+            if view["assetId"]:
+                row["assetId"] = view["assetId"]
+            seen_rows.add(row_key)
+            market_rows.append(row)
 
     return {"schemaVersion": 1, "status": state, "state": state,
             "serviceState": status.get("service_state") or state,
@@ -2749,6 +2780,7 @@ def main() -> int:
     threading.Thread(target=supervise_projection, args=(stop,), daemon=True).start()
     threading.Thread(target=account_data().run, args=(stop,), daemon=True).start()
     threading.Thread(target=refresh_system_metrics, args=(stop,), daemon=True).start()
+    threading.Thread(target=warm_account_check, name="account-check-startup", daemon=True).start()
     try:
         server.serve_forever()
     finally:

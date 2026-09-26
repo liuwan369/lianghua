@@ -356,6 +356,12 @@ button {
   background: #26394c;
   color: #8da0b3;
 }
+.hero-button.primary-action[data-control-state="blocked"] {
+  border-color: #80643b;
+  background: #3d331f;
+  color: #e5c681;
+  opacity: 1;
+}
 .hero-button:hover:not(:disabled) {
   background: #20476e;
   border-color: #5a91bf;
