@@ -1,0 +1,418 @@
+"""Synchronize a committed program release; never edit trading data or start trading."""
+from pathlib import Path
+from datetime import datetime, timezone
+import hashlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import urllib.error
+import paramiko
+
+if any(argument in {"-h", "--help"} for argument in sys.argv[1:]):
+    print("Usage: python scripts/deploy-reversal-release.py\nBuild and deploy the current committed revision; accepts no options.")
+    raise SystemExit(0)
+if len(sys.argv) != 1:
+    raise SystemExit("deploy-reversal-release.py accepts no options; use --help for usage")
+
+ROOT = Path(__file__).resolve().parents[1]
+REV = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+RELEASE = "reversal-" + REV[:7] + "-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+ENGINE_ROOT = "backend/engine/"
+FRONTEND_ROOT = "frontend/console/"
+CONTROL_SCRIPTS_ROOT = "scripts/"
+CONTROL_CONFIG_ROOT = "config/"
+PROGRAM_PREFIXES = (ENGINE_ROOT + "src/", FRONTEND_ROOT, CONTROL_SCRIPTS_ROOT, CONTROL_CONFIG_ROOT, "shared/contracts/")
+ENGINE_METADATA = {ENGINE_ROOT + name for name in (".env.example", "README.md", "package.json", "package-lock.json")}
+GENERATED_PREFIXES = (ENGINE_ROOT + "dist/",)
+
+
+def target_name(source: str) -> str | None:
+    if (source.startswith(ENGINE_ROOT) or source.startswith(FRONTEND_ROOT)
+            or source.startswith(CONTROL_SCRIPTS_ROOT) or source.startswith(CONTROL_CONFIG_ROOT)
+            or source.startswith("shared/contracts/")):
+        return source
+    return None
+
+
+def release_path(name: str) -> bool:
+    return (name.startswith(PROGRAM_PREFIXES) or name.startswith(FRONTEND_ROOT)
+            or name.startswith("shared/contracts/") or name in ENGINE_METADATA
+            or name in {"README.md", "scripts/system-dashboard-server.py",
+                        "scripts/dashboard_account.py", "scripts/deploy-reversal-release.py",
+                        "config/pm-system-dashboard-dublin.service",
+                        "config/pm-clob-market-snapshot.service"})
+
+
+SOURCES = subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
+CONTENT = {}
+for source in sorted(SOURCES):
+    name = target_name(source)
+    if name is None:
+        continue
+    CONTENT[name] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+for source in ("README.md", "scripts/deploy-reversal-release.py"):
+    target = source
+    CONTENT[target] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+for source in ("scripts/system-dashboard-server.py", "scripts/dashboard_account.py"):
+    CONTENT["scripts/" + Path(source).name] = subprocess.check_output(["git", "show", REV + ":" + source], cwd=ROOT)
+# Build the chosen commit in a separate directory: workers may keep editing and
+# building their shared checkout while this immutable program is deployed.
+BUILD = ROOT / ".deploy" / (RELEASE + "-build")
+BUILD.parent.mkdir(parents=True, exist_ok=True)
+BUILD.mkdir()
+sources = subprocess.check_output(["git", "archive", REV, "backend/engine", "frontend/console", "scripts", "config", "shared/contracts"], cwd=ROOT)
+with tarfile.open(fileobj=io.BytesIO(sources)) as source_archive:
+    source_archive.extractall(BUILD, filter="data")
+engine_project = BUILD / "backend/engine"
+os.symlink(ROOT / "backend/engine" / "node_modules", engine_project / "node_modules", target_is_directory=True)
+subprocess.run([shutil.which("npm.cmd") or "npm", "run", "build"], cwd=engine_project, check=True)
+for path in (BUILD / "backend/engine/dist").rglob("*"):
+    if path.is_file():
+        CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
+baseline = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=ROOT,
+                          text=True, capture_output=True, check=True).stdout.splitlines()[-1]
+deleted = subprocess.check_output(
+    ["git", "diff", "--diff-filter=D", "--name-only", baseline, REV], cwd=ROOT, text=True
+).splitlines()
+REMOVED = sorted(name for source in deleted if (name := target_name(source)) and release_path(name) and name not in CONTENT)
+MANIFEST = {"revision": REV, "release": RELEASE,
+            "files": {name: hashlib.sha256(data).hexdigest() for name, data in CONTENT.items()},
+            "removed": REMOVED, "generatedPrefixes": list(GENERATED_PREFIXES)}
+ARCHIVE = ROOT / ".deploy" / (RELEASE + ".tar.gz")
+with tarfile.open(ARCHIVE, "w:gz") as bundle:
+    for name, data in CONTENT.items():
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        info.mode = 0o644
+        bundle.addfile(info, io.BytesIO(data))
+
+REMOTE_SCRIPT = r'''
+from pathlib import Path
+import grp, hashlib, json, os, sys, tarfile, urllib.request, subprocess
+root=Path('/root/pm-system').resolve()
+release=Path(sys.argv[1]).resolve()
+manifest=json.loads((release/'manifest.json').read_text())
+allowed_prefixes=('backend/engine/','backend/reference/','frontend/console/','scripts/','config/','shared/contracts/','docs/')
+allowed_exact={'README.md','scripts/system-dashboard-server.py','scripts/dashboard_account.py',
+               'scripts/deploy-reversal-release.py','config/pm-system-dashboard-dublin.service',
+               'config/pm-clob-market-snapshot.service'}
+def checked_target(name):
+    if not isinstance(name,str) or name.startswith('/') or name.startswith('\\'):
+        raise RuntimeError('Invalid release path')
+    target=(root/name).resolve()
+    if not target.is_relative_to(root) or not (name.startswith(allowed_prefixes) or name in allowed_exact):
+        raise RuntimeError('Release path outside program allowlist: '+name)
+    return target
+def status():
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:18766/api/v1/status',timeout=15) as response:
+            return json.load(response)
+    except urllib.error.URLError as error:
+        # The first deployment may not have installed the dashboard unit yet.
+        # Only a local connection refusal is treated as an absent service; all
+        # other failures remain deployment errors.
+        reason=str(getattr(error,'reason',error)).lower()
+        if 'connection refused' in reason or '[errno 111]' in reason:
+            return {'running':False,'live_unlocked':False,'bootstrap':True}
+        raise
+def unit_state(unit):
+    def query(action):
+        completed=subprocess.run(['systemctl', action, unit], capture_output=True, text=True, check=False)
+        return completed.stdout.strip() or 'unknown'
+    return {'active': query('is-active'), 'enabled': query('is-enabled')}
+before=status()
+if before.get('running') is not False or type(before.get('live_unlocked')) is not bool:
+    raise RuntimeError('Program sync expects stopped trading and unchanged live lock')
+changed=[]
+unit_names={'config/pm-system-dashboard-dublin.service':'pm-system-dashboard-dublin.service',
+            'config/pm-clob-market-snapshot.service':'pm-clob-market-snapshot.service'}
+nginx_specs={
+    'config/pm-system-dashboard-dublin-public.conf': '/etc/nginx/sites-available/pm-dashboard-public',
+    'config/pm-system-dashboard-dublin-renew-http.conf': '/etc/nginx/sites-available/pm-dashboard-renew-http',
+}
+obsolete=set(manifest.get('removed',[]))
+retired_units_from_manifest={unit_names[name] for name in obsolete if name in unit_names}
+# The release is the only active program tree. Remove files left by older
+# dashboard/reference builds even when those files were never part of a
+# previous release manifest. Runtime state and secrets live outside these
+# prefixes and are intentionally excluded.
+cleanup_prefixes=('backend/engine/src/','backend/engine/dist/','backend/reference/',
+                  'frontend/console/','scripts/','config/','shared/contracts/','docs/')
+for prefix in cleanup_prefixes:
+    base=root/prefix
+    if not base.is_dir():
+        continue
+    for path in base.rglob('*'):
+        if path.is_file():
+            name=path.relative_to(root).as_posix()
+            if name not in manifest['files']:
+                obsolete.add(name)
+for prefix in manifest.get('generatedPrefixes',[]):
+    generated=checked_target(prefix)
+    if generated.is_dir():
+        for path in generated.rglob('*'):
+            if path.is_file():
+                name=path.relative_to(root).as_posix()
+                if name not in manifest['files']:
+                    obsolete.add(name)
+obsolete=sorted(name for name in obsolete if checked_target(name).is_file())
+with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
+    members=bundle.getmembers()
+    if {m.name for m in members} != set(manifest['files']) or len(members)!=len(manifest['files']):
+        raise RuntimeError('Manifest mismatch')
+    for m in members:
+        target=checked_target(m.name)
+        if not m.isfile():
+            raise RuntimeError('Unexpected archive path')
+        data=bundle.extractfile(m).read()
+        if hashlib.sha256(data).hexdigest()!=manifest['files'][m.name]:
+            raise RuntimeError('Upload hash mismatch')
+        if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest()!=manifest['files'][m.name]:
+            changed.append(m.name)
+    missing=[name for name in changed if not (root/name).exists()]
+    backup_names=sorted({name for name in changed if name not in missing}|set(obsolete))
+    changed_units=[unit_names[name] for name in changed if name in unit_names]
+    removed_units=sorted(retired_units_from_manifest | {unit_names[name] for name in obsolete if name in unit_names})
+    nginx_public_link=Path('/etc/nginx/sites-enabled/pm-dashboard-public')
+    nginx_auth_file=Path('/etc/nginx/pm-dashboard.htpasswd')
+    nginx_needs_update=any(name in changed for name in nginx_specs)
+    nginx_public_target=Path(nginx_specs['config/pm-system-dashboard-dublin-public.conf'])
+    if (any(not Path(target_name).is_file() for target_name in nginx_specs.values())
+            or not nginx_public_link.is_symlink() or not nginx_auth_file.is_file()):
+        nginx_needs_update=True
+    elif os.readlink(nginx_public_link) != str(nginx_public_target):
+        nginx_needs_update=True
+    collector_unit='pm-clob-market-snapshot.service'
+    dashboard_unit='pm-system-dashboard-dublin.service'
+    collector_changed=collector_unit in changed_units or any(
+        name.startswith('backend/engine/dist/') for name in changed+obsolete)
+    dashboard_changed=(dashboard_unit in changed_units
+                       or any((name.startswith('scripts/') or name.startswith('frontend/console/'))
+                              and name.endswith(('.py', '.js', '.html', '.css'))
+                              for name in changed+obsolete))
+    affected_units=set(changed_units)|set(removed_units)
+    if collector_changed:
+        affected_units.add(collector_unit)
+    if dashboard_changed:
+        affected_units.add(dashboard_unit)
+    unit_before={unit:unit_state(unit) for unit in affected_units}
+    (release/'unit-states-before.json').write_text(json.dumps(unit_before))
+    installed_units={}
+    for unit in set(changed_units)|set(removed_units):
+        path=Path('/etc/systemd/system')/unit
+        installed_units[unit]=(path.read_bytes(),path.stat().st_mode & 0o777) if path.is_file() else None
+        if installed_units[unit]:
+            saved=release/'units-before'/unit
+            saved.parent.mkdir(exist_ok=True)
+            saved.write_bytes(installed_units[unit][0])
+    nginx_before={}
+    if nginx_needs_update:
+        nginx_backup=release/'nginx-before'
+        nginx_backup.mkdir(exist_ok=True)
+        for name,target_name in nginx_specs.items():
+            target=Path(target_name)
+            if target.is_symlink():
+                nginx_before[target_name]={'type': 'symlink', 'target': os.readlink(target)}
+            elif target.is_file():
+                saved=nginx_backup/Path(target_name).name
+                saved.write_bytes(target.read_bytes())
+                nginx_before[target_name]={'type': 'file', 'mode': target.stat().st_mode & 0o777}
+            else:
+                nginx_before[target_name]={'type': 'absent'}
+        if nginx_public_link.is_symlink():
+            nginx_before['link']={'type': 'symlink', 'target': os.readlink(nginx_public_link)}
+        elif nginx_public_link.is_file():
+            saved=nginx_backup/'enabled-public-file'
+            saved.write_bytes(nginx_public_link.read_bytes())
+            nginx_before['link']={'type': 'file', 'mode': nginx_public_link.stat().st_mode & 0o777}
+        elif nginx_public_link.exists():
+            raise RuntimeError('Expected nginx enabled-site path to be a file or symlink')
+        else:
+            nginx_before['link']={'type': 'absent'}
+        (release/'nginx-state-before.json').write_text(json.dumps(nginx_before))
+    if not nginx_auth_file.is_file() or nginx_auth_file.stat().st_size < 12:
+        raise RuntimeError('Dashboard password file is missing or empty; refusing to install a public console')
+    auth_mode=nginx_auth_file.stat().st_mode & 0o777
+    auth_group=nginx_auth_file.stat().st_gid
+    if not ((auth_group == grp.getgrnam('www-data').gr_gid and auth_mode & 0o040)
+            or auth_mode & 0o004):
+        raise RuntimeError('Dashboard password file is not readable by nginx workers')
+    auth_lines=[line for line in nginx_auth_file.read_text().splitlines() if line and not line.startswith('#')]
+    if not auth_lines or any(':' not in line or not line.split(':',1)[0] or
+                             not line.split(':',1)[1].startswith(('$apr1$','$2y$','$2b$','$5$','$6$','{SHA}'))
+                             for line in auth_lines):
+        raise RuntimeError('Dashboard password file has no supported password hash entries')
+    with tarfile.open(release/'before.tar.gz','w:gz') as backup:
+        for name in backup_names:
+            backup.add(root/name,arcname=name,recursive=False)
+    (release/'missing-before.json').write_text(json.dumps(missing))
+    written=[]
+    try:
+        for name in changed:
+            target=checked_target(name)
+            target.parent.mkdir(parents=True,exist_ok=True)
+            data=bundle.extractfile(name).read()
+            temporary=target.with_name(target.name+'.release-next')
+            temporary.write_bytes(data)
+            temporary.chmod(target.stat().st_mode & 0o777 if target.exists() else 0o644)
+            os.replace(temporary,target)
+            written.append(name)
+        for name in obsolete:
+            checked_target(name).unlink()
+        for unit in removed_units:
+            subprocess.run(['systemctl','stop',unit],check=False)
+            subprocess.run(['systemctl','disable',unit],check=False)
+            (Path('/etc/systemd/system')/unit).unlink(missing_ok=True)
+        if changed_units:
+            for unit in changed_units:
+                source = root / "config" / unit
+                subprocess.run(["install", "-m", "0644", str(source), "/etc/systemd/system/" + unit], check=True)
+        if changed_units or removed_units:
+            subprocess.run(["systemctl", "daemon-reload"], check=True)
+        for unit in removed_units:
+            retired=unit_state(unit)
+            if ((Path('/etc/systemd/system')/unit).exists()
+                    or retired['active'] not in {'inactive','failed','unknown'}
+                    or retired['enabled'] in {'enabled','enabled-runtime','linked','linked-runtime'}):
+                raise RuntimeError('Retired service remains installed or active: '+unit)
+        if collector_changed and (Path('/etc/systemd/system')/collector_unit).is_file():
+            if collector_unit in changed_units:
+                subprocess.run(['systemctl','enable',collector_unit],check=True)
+            if collector_unit in changed_units or unit_before[collector_unit]['active']=='active':
+                subprocess.run(['systemctl','restart',collector_unit],check=True)
+        if dashboard_unit in changed_units and (Path('/etc/systemd/system')/dashboard_unit).is_file():
+            subprocess.run(['systemctl','enable',dashboard_unit],check=True)
+        if nginx_needs_update:
+            for name,target_name in nginx_specs.items():
+                source=root/name
+                subprocess.run(['install','-m','0644',str(source),target_name],check=True)
+            nginx_public_link.parent.mkdir(parents=True,exist_ok=True)
+            subprocess.run(['ln','-sfn',nginx_specs['config/pm-system-dashboard-dublin-public.conf'],
+                            str(nginx_public_link)],check=True)
+            subprocess.run(['nginx','-t'],check=True)
+            subprocess.run(['systemctl','reload','nginx'],check=True)
+        mismatches=[name for name,digest in manifest['files'].items()
+                    if hashlib.sha256(checked_target(name).read_bytes()).hexdigest()!=digest]
+        if mismatches:
+            raise RuntimeError('Installed hash mismatch')
+        if any(checked_target(name).exists() for name in obsolete):
+            raise RuntimeError('Obsolete release files remain')
+        # Dashboard and the public collector have independent lifecycles.
+        restarted=dashboard_changed or bool(changed_units)
+        if restarted:
+            subprocess.run(['systemctl','restart',dashboard_unit],check=True)
+        import time
+        for attempt in range(45):
+            try:
+                after=status()
+                if (after.get('running') is False
+                        and after.get('live_unlocked') is before['live_unlocked']):
+                    break
+            except Exception:
+                after = None
+            if attempt == 44:
+                raise RuntimeError('Dashboard did not return the expected stopped/live-lock state after restart')
+            time.sleep(1)
+        if after.get('running') is not False or after.get('live_unlocked') is not before['live_unlocked']:
+            raise RuntimeError('Unexpected trading state')
+    except Exception:
+        if collector_changed:
+            subprocess.run(['systemctl','stop',collector_unit],check=False)
+        for name in written:
+            if name in missing:
+                checked_target(name).unlink(missing_ok=True)
+        with tarfile.open(release/'before.tar.gz') as backup:
+            for member in backup.getmembers():
+                target=checked_target(member.name)
+                target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes(backup.extractfile(member).read())
+                target.chmod(member.mode & 0o777)
+        for unit, saved in installed_units.items():
+            path=Path('/etc/systemd/system')/unit
+            if saved is None:
+                subprocess.run(['systemctl','disable',unit],check=False)
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(saved[0])
+                path.chmod(saved[1])
+        if nginx_needs_update:
+            for target_name, state in nginx_before.items():
+                if target_name == 'link':
+                    continue
+                target=Path(target_name)
+                if state['type'] == 'file':
+                    saved=release/'nginx-before'/target.name
+                    target.write_bytes(saved.read_bytes())
+                    target.chmod(state['mode'])
+                elif state['type'] == 'symlink':
+                    target.unlink(missing_ok=True)
+                    target.parent.mkdir(parents=True,exist_ok=True)
+                    target.symlink_to(state['target'])
+                elif state['type'] == 'absent':
+                    target.unlink(missing_ok=True)
+            link_before=nginx_before.get('link', {'type': 'absent'})
+            if link_before['type'] == 'absent':
+                nginx_public_link.unlink(missing_ok=True)
+            elif link_before['type'] == 'symlink':
+                nginx_public_link.unlink(missing_ok=True)
+                nginx_public_link.symlink_to(link_before['target'])
+            elif link_before['type'] == 'file':
+                saved=release/'nginx-before'/'enabled-public-file'
+                nginx_public_link.unlink(missing_ok=True)
+                nginx_public_link.write_bytes(saved.read_bytes())
+                nginx_public_link.chmod(link_before['mode'])
+            subprocess.run(['nginx','-t'],check=False)
+            subprocess.run(['systemctl','reload','nginx'],check=False)
+        if changed_units or removed_units:
+            subprocess.run(['systemctl','daemon-reload'], check=False)
+        for unit, previous in unit_before.items():
+            if unit in installed_units and installed_units[unit] is not None:
+                if previous['enabled'] in {'enabled', 'enabled-runtime', 'disabled'}:
+                    # Remove both persistent and runtime links created during
+                    # the failed release before restoring the exact prior mode.
+                    subprocess.run(['systemctl','disable',unit],check=False)
+                if previous['enabled']=='enabled-runtime':
+                    subprocess.run(['systemctl','enable','--runtime',unit],check=False)
+                elif previous['enabled']=='enabled':
+                    subprocess.run(['systemctl','enable',unit],check=False)
+            action='restart' if previous['active']=='active' else 'stop'
+            subprocess.run(['systemctl',action,unit],check=False)
+        if any(name.startswith('scripts/') for name in changed+obsolete) and dashboard_unit not in unit_before:
+            subprocess.run(['systemctl','restart',dashboard_unit],check=True)
+        raise
+result={'revision':manifest['revision'],'release':str(release),'files_verified':len(manifest['files']),
+        'files_changed':len(changed),'files_removed':len(obsolete),'dashboard_restarted':restarted,
+        'nginx_reloaded':nginx_needs_update,
+        'status':{k:after.get(k) for k in ('running','mode','execution','strategy_id','live_unlocked')}}
+(release/'result.json').write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result))
+'''
+
+client = paramiko.SSHClient()
+client.load_system_host_keys()
+client.connect("34.242.206.196", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
+try:
+    directory = "/root/.pm-releases/" + RELEASE
+    with client.open_sftp() as sftp:
+        sftp.mkdir(directory, mode=0o700)
+        sftp.put(str(ARCHIVE), directory + "/program.tar.gz")
+        with sftp.open(directory + "/manifest.json", "w") as out:
+            out.write(json.dumps(MANIFEST))
+        with sftp.open(directory + "/apply.py", "w") as out:
+            out.write(REMOTE_SCRIPT)
+    lock = "/root/pm-system/data/dashboard/deployment.lock"
+    _, stdout, stderr = client.exec_command("mkdir -p /root/pm-system/data/dashboard; flock -n -x " + lock + " python3 " + directory + "/apply.py " + directory, timeout=120)
+    output, error = stdout.read().decode(), stderr.read().decode()
+    if stdout.channel.recv_exit_status():
+        raise RuntimeError(error[:2500] + output[:2500])
+    result = json.loads(output)
+    result["archive_sha256"] = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
+    result["manifest"] = MANIFEST
+    (ROOT/".deploy"/(RELEASE+"-result.json")).write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")
+    print(json.dumps({k:v for k,v in result.items() if k!='manifest'}), flush=True)
+finally:
+    client.close()

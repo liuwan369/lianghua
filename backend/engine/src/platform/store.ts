@@ -1,0 +1,122 @@
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync,
+  unlinkSync, writeFileSync, writeSync } from "node:fs";
+import { dirname } from "node:path";
+import type { CoreState, OrderRecord } from "./contracts.js";
+
+/** Account/mode-scoped persistence; reserve writes are durable, event writes are coalesced. */
+export class PlatformStore {
+  private pending?: CoreState;
+  private timer?: ReturnType<typeof setTimeout>;
+  private failure?: Error;
+  private closed = false;
+  private deferred = false;
+  private lockFd: number;
+  constructor(private readonly path: string) {
+    mkdirSync(dirname(path), { recursive: true });
+    const lock = `${path}.lock`;
+    try { this.lockFd = openSync(lock, "wx", 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let stale = false;
+      try {
+        const owner = JSON.parse(readFileSync(lock, "utf8")) as { pid?: unknown };
+        const pid = typeof owner.pid === "number" && Number.isSafeInteger(owner.pid) ? owner.pid : undefined;
+        if (!pid) stale = true;
+        else {
+          try { process.kill(pid, 0); }
+          catch (probe) { stale = (probe as NodeJS.ErrnoException).code === "ESRCH"; }
+        }
+      } catch { stale = true; }
+      if (!stale) throw new Error("platform state is locked by a live process");
+      unlinkSync(lock);
+      this.lockFd = openSync(lock, "wx", 0o600);
+    }
+    writeSync(this.lockFd, JSON.stringify({ pid: process.pid }));
+  }
+  load(): CoreState | undefined {
+    const recovery = `${this.path}.next`;
+    let state: CoreState | undefined;
+    // A crash or rename failure can leave the newest complete snapshot in the
+    // recovery file. Prefer it so a durable reservation is never silently lost.
+    if (existsSync(recovery)) {
+      try { state = JSON.parse(readFileSync(recovery, "utf8")) as CoreState; }
+      catch { /* fall through to the last committed primary snapshot */ }
+    }
+    if (!state) {
+      if (!existsSync(this.path)) return undefined;
+      state = JSON.parse(readFileSync(this.path, "utf8")) as CoreState;
+    }
+    const intentPath = `${this.path}.intent`;
+    if (existsSync(intentPath)) {
+      try {
+        const intent = JSON.parse(readFileSync(intentPath, "utf8")) as { version?: unknown; order?: OrderRecord };
+        const order = intent.version === 1 && intent.order && typeof intent.order === "object" ? intent.order : undefined;
+        if (order?.clientOrderId && order.orderId && ["SUBMITTING", "UNKNOWN"].includes(order.status)) {
+          const index = state.orders.findIndex(item => item.clientOrderId === order.clientOrderId || item.orderId === order.orderId);
+          if (index < 0) state.orders.push(order);
+          else if (["SUBMITTING", "UNKNOWN"].includes(state.orders[index].status)) state.orders[index] = order;
+          state.risk.halted = true; state.risk.reason = "restored orders require reconciliation";
+        }
+      } catch { /* A complete primary snapshot remains authoritative. */ }
+    }
+    return state;
+  }
+  save(state: CoreState, critical: boolean): void {
+    if (this.closed) throw new Error("state store closed");
+    if (this.failure) throw this.failure;
+    this.pending = structuredClone(state);
+    if (critical) {
+      this.deferred = false;
+      clearTimeout(this.timer); this.timer = undefined; this.flush(); return;
+    }
+    if (this.deferred) return;
+    if (!this.timer) this.timer = setTimeout(() => {
+      this.timer = undefined;
+      try { this.flush(); } catch (error) { this.failure = error instanceof Error ? error : new Error("state write failed"); }
+    }, 25);
+  }
+  /** Persist only the signed order identity before the venue POST. */
+  savePreparedOrder(order: OrderRecord): void {
+    if (this.closed) throw new Error("state store closed");
+    if (this.failure) throw this.failure;
+    const fd = openSync(`${this.path}.intent.next`, "w", 0o600);
+    try { writeFileSync(fd, JSON.stringify({ version: 1, order })); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(`${this.path}.intent.next`, `${this.path}.intent`);
+    this.deferred = false;
+  }
+  /** Keep the newest in-memory snapshot pending without letting its timer fsync mid-signature. */
+  defer(): void {
+    if (this.closed) throw new Error("state store closed");
+    if (this.failure) throw this.failure;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    this.deferred = true;
+  }
+  private flush(): void {
+    if (!this.pending) return;
+    const fd = openSync(`${this.path}.next`, "w", 0o600);
+    try { writeFileSync(fd, JSON.stringify(this.pending)); fsyncSync(fd); } finally { closeSync(fd); }
+    renameSync(`${this.path}.next`, this.path);
+    let intentCovered = true;
+    try {
+      const intent = JSON.parse(readFileSync(`${this.path}.intent`, "utf8")) as { order?: OrderRecord };
+      const order = intent.order;
+      intentCovered = !order || this.pending.orders.some(item =>
+        item.clientOrderId === order.clientOrderId || item.orderId === order.orderId);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") intentCovered = false;
+    }
+    this.pending = undefined;
+    if (intentCovered) {
+      try { unlinkSync(`${this.path}.intent`); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
+  close(): void {
+    if (this.closed) return;
+    clearTimeout(this.timer);
+    try { this.deferred = false; this.flush(); if (this.failure) throw this.failure; }
+    finally { closeSync(this.lockFd); unlinkSync(`${this.path}.lock`); this.closed = true; }
+  }
+}

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0a1524">
+  <title>自动交易 · BTC 五分钟反转控制台</title>
+  <script>
+    window.__POLY_ASSET_VERSION__ = Date.now().toString(36);
+    document.write('<link rel="stylesheet" href="./auto-trade-block.css?v=' + window.__POLY_ASSET_VERSION__ + '">');
+    ["./shared/preview-core.js", "./shared/view-model.js", "./shared/preview-store.js", "./shared/ws-client.js", "./shared/api-adapter.js"]
+      .forEach(function(source) { document.write('<script src="' + source + '?v=' + window.__POLY_ASSET_VERSION__ + '"><\/script>'); });
+  </script>
+</head>
+<body>
+  <div id="auto-trade-block-root"></div>
+  <script>document.write('<script src="./auto-trade-block.js?v=' + window.__POLY_ASSET_VERSION__ + '"><\/script>');</script>
+</body>
+</html>
