@@ -9,7 +9,12 @@ import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePubl
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
 
 const MARKET_WINDOW_SEC = 300;
-const DISCOVERY_PREWARM_MS = 10_000;
+// The venue stops quoting an expiring 5m market well before its boundary: the
+// outgoing book was measured going stale ~40s early, so a 10s prewarm left the
+// console without any fresh paired quote for about a minute every round. Start
+// discovery early enough to have the next round's feed connected and publishing
+// before the current one dies.
+const DISCOVERY_PREWARM_MS = 75_000;
 const DISCOVERY_PREWARM_RETRY_MS = 250;
 const DISCOVERY_POST_BOUNDARY_MS = 20_000;
 
@@ -115,8 +120,22 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
         const retained = stalePublishedSnapshot(lastPublished, now, "Waiting for a fresh paired quote");
         rows.push(...retained.current_markets.filter(row => (row.assetId ?? (row.slug.split("-updown-5m-")[0] || "btc")) === asset));
       }
+      // Also publish the prewarmed upcoming round. The venue stops quoting the
+      // expiring market before its boundary, so without this the console has no
+      // fresh paired quote for the last stretch of every round. These rows are
+      // marked nextRound so consumers never mistake them for the live round; the
+      // engine's own gate still rejects any book outside the running round.
+      const upcoming = [...active.values()].filter(item => item.market.asset === asset && item.market.start > now)
+        .sort((a, b) => a.market.start - b.market.start)[0];
+      const upcomingSnapshot = upcoming?.projection.snapshot(now);
+      connected ||= upcomingSnapshot?.collector_connected === true;
+      for (const row of upcomingSnapshot?.current_markets ?? []) {
+        if (rows.some(existing => existing.marketId === row.marketId && existing.roundId === row.roundId)) continue;
+        rows.push({ ...row, nextRound: true });
+      }
     }
-    const online = rows.some(row => row.healthy);
+    // A healthy prewarmed round must not make a dead current round look online.
+    const online = rows.some(row => row.healthy && row.nextRound !== true);
     const value: MarketProjectionSnapshot = {
       checked_at: new Date(now * 1000).toISOString(), collector_online: online, collector_connected: connected,
       strategyEligible: false, stale_after_ms: options.staleAfterMs,

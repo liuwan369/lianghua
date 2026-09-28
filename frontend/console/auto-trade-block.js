@@ -660,10 +660,23 @@
       if (!severity) severity = ["rejected", "failed", "error", "cancel_failed"].includes(state) || ["error", "platform_error", "order_rejected", "settlement_failed"].includes(kind) ? "error" : "info";
       var tag = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : "信息";
       var icon = severity === "error" || severity === "critical" ? "!" : severity === "warning" || severity === "warn" ? "!" : "i";
+      var code = String(event.code || "").toLowerCase();
       var kindLabel = eventLabels[kind] || eventText(kind, "服务器事件：未分类状态");
-      var message = eventText(event.message || event.reason || event.detail || kind, kindLabel);
+      // The backend degrades an empty message to the literal kind (e.g. "error"),
+      // which would shadow the precise code-based label. Treat message === kind as
+      // absent, and let a translated code win first.
+      var codeLabel = code && code !== kind ? eventText(code, "") : "";
+      var rawMessage = event.message && String(event.message).toLowerCase() !== kind ? event.message : null;
+      var message = codeLabel || eventText(rawMessage || event.reason || event.detail || kind, kindLabel);
       var rawDetail = event.detail && event.detail !== event.message ? event.detail : event.reason && event.reason !== event.message ? event.reason : null;
-      var detail = eventText(rawDetail, kindLabel);
+      var detailParts = [];
+      if (rawDetail) detailParts.push(eventText(rawDetail, ""));
+      if (code && code !== kind) detailParts.push("错误码 " + code);
+      var phase = String(event.phase || event.failure_phase || "").trim();
+      if (phase && phase !== "event") detailParts.push("阶段 " + phase);
+      var orderRef = event.orderId || event.order_id || event.clientOrderId || event.client_order_id;
+      if (orderRef) detailParts.push("订单号 " + String(orderRef).replace(/(0x[a-fA-F0-9]{6})[a-fA-F0-9]+/, "$1…"));
+      var detail = detailParts.filter(Boolean).join(" · ") || kindLabel;
       var tagClass = severity === "error" || severity === "critical" ? "error-tag" : severity === "warning" || severity === "warn" ? "warning-tag" : "info-tag";
       return `<li><time>${window.PolyPreview.format.time(event.time || event.createdAt || event.created_at)}</time><span class="activity-icon ${severity === "error" || severity === "critical" ? "error-icon" : severity === "warning" || severity === "warn" ? "warn-icon" : "info-icon"}">${icon}</span><div><strong title="${window.PolyPreview.format.escape(message)}">${window.PolyPreview.format.escape(message)}</strong><small title="${window.PolyPreview.format.escape(detail)}">${window.PolyPreview.format.escape(detail)}</small></div><b class="activity-tag ${tagClass}">${tag}</b></li>`;
     }).join("");

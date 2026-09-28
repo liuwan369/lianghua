@@ -396,20 +396,35 @@
         || errorNames[kind]
         || activityNames[kind]
         || (severity === "error" || severity === "critical" ? "交易链路发生异常" : "运行状态已更新");
-      const message = readableEvent(item.message || item.reason || item.detail, fallbackMessage);
+      // The backend degrades an empty message to the literal kind (e.g. "error"),
+      // which is truthy and would shadow the precise errorNames[code] label. Treat
+      // a message equal to the kind as absent so the code-based label wins.
+      const rawMessage = item.message && String(item.message).toLowerCase() !== kind ? item.message : null;
+      const message = errorNames[code] || readableEvent(rawMessage || item.reason || item.detail, fallbackMessage);
       const asset = String(item.assetId || item.asset_id || "").toUpperCase();
       const marketId = item.marketId || item.market_id;
       const roundId = item.roundId || item.round_id;
       const orderState = stateNames[state] || "";
+      const phase = String(item.phase || item.failure_phase || "").trim();
+      const orderRef = item.orderId || item.order_id || item.clientOrderId || item.client_order_id;
       const identity = [asset, marketId ? `市场 ${shorten(marketId)}` : "", roundId ? `场次 ${String(roundId).slice(-10)}` : ""].filter(Boolean).join(" · ");
       const detailParts = [];
       const rawDetail = item.detail && item.detail !== item.message ? item.detail : item.reason && item.reason !== item.message ? item.reason : null;
       if (rawDetail) detailParts.push(readableEvent(rawDetail, "服务器已返回附加状态"));
+      // Surface the raw code and phase: they are the fields that actually tell an
+      // operator what happened, and were previously dropped from the log line.
+      if (code && !errorNames[code]) detailParts.push(`错误码 ${code}`);
+      if (phase && phase !== "event") detailParts.push(`阶段 ${phase}`);
       if (orderState) detailParts.push(`订单：${orderState}`);
-      if (Number.isFinite(Number(item.price))) detailParts.push(`价格 ${Number(item.price).toFixed(3)}`);
-      if (Number.isFinite(Number(item.shares ?? item.size))) detailParts.push(`${Number(item.shares ?? item.size).toFixed(2)} 份`);
+      // price/shares are null on non-trade events; Number(null) === 0 would print a
+      // misleading "价格 0.000", so require a real positive number.
+      const price = item.price == null ? null : Number(item.price);
+      if (price != null && Number.isFinite(price) && price > 0) detailParts.push(`价格 ${price.toFixed(3)}`);
+      const size = (item.shares ?? item.size);
+      const sizeNum = size == null ? null : Number(size);
+      if (sizeNum != null && Number.isFinite(sizeNum) && sizeNum > 0) detailParts.push(`${sizeNum.toFixed(2)} 份`);
+      if (orderRef) detailParts.push(`订单号 ${shorten(orderRef)}`);
       if (identity) detailParts.push(identity);
-      if (errorNames[code] && item.reason && !errorNames[String(item.reason).toLowerCase()]) detailParts.push("请检查服务器连接状态");
       const detail = detailParts.join(" · ") || (severity === "error" || severity === "critical" ? "未完成的操作不会显示为成功。" : "来自服务器的运行状态记录。");
       const statusClass = severity === "error" || severity === "warning" || severity === "warn" ? "muted-text" : severity === "success" || severity === "good" ? "good-text" : "info-text";
       const severityLabel = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : severity === "success" || severity === "good" ? "成功" : "信息";

@@ -1625,7 +1625,6 @@ button {
   border-radius: 8px;
   background: #102940;
 }
-.preview-price > span,
 .preview-price > div > span {
   display: block;
   color: #86a4b8;
@@ -1635,8 +1634,9 @@ button {
   display: block;
   margin-top: 5px;
   color: #edf6fa;
+  white-space: nowrap;
   font:
-    650 21px ui-monospace,
+    650 clamp(15px, 4.4vw, 18px) ui-monospace,
     SFMono-Regular,
     Consolas,
     monospace;

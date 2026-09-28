@@ -1862,7 +1862,10 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "error": ("accepted_snapshot_incomplete" if not complete else
                    "market_snapshot_expired" if expired else
                    "market_snapshot_unhealthy" if row_health_stale else None),
-        "nextRound": False,
+        # True when this row is an upcoming round rather than the live one, either
+        # because the collector prewarmed it or because its window starts later.
+        "nextRound": bool(row.get("nextRound") is True
+                          or (isinstance(start, (int, float)) and start > now)),
     }
 
 
@@ -1940,6 +1943,18 @@ def _modern_markets(query: dict | None = None) -> dict:
                 item.get("sourceAt") if isinstance(item.get("sourceAt"), (int, float)) else -1,
                 item.get("sequence") if isinstance(item.get("sequence"), int) else -1,
             ))
+            # The venue stops quoting an expiring round before its boundary, so the
+            # live round can be stale while the collector already has a fresh book
+            # for the upcoming one. Prefer that fresh round instead of publishing a
+            # dead book: the engine only trades rounds it owns, and the strategy
+            # already waits for the next round when started mid-round.
+            if chosen.get("stale") is not False:
+                fresh_future = [item for item in candidates
+                                if item.get("stale") is False
+                                and isinstance(item.get("startAt"), (int, float))
+                                and item.get("startAt") > now]
+                if fresh_future:
+                    chosen = min(fresh_future, key=lambda item: item.get("startAt"))
         else:
             future = [item for item in candidates
                       if isinstance(item.get("startAt"), (int, float)) and item.get("startAt") > now]

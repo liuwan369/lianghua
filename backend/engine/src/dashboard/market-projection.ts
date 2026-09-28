@@ -24,6 +24,8 @@ export interface MarketProjectionRow {
   snapshot: PairedMarketSnapshot;
   healthy: boolean;
   strategyEligible: false;
+  /** Set on a prewarmed upcoming round so consumers never treat it as the live round. */
+  nextRound?: boolean;
   slug: string;
   condition_id: string;
   up_token: string;
