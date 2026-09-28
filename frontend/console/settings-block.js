@@ -5,14 +5,8 @@
   const store = window.PolyPreviewStore;
   const adapter = window.PolyPreviewAdapter;
 
-  const navItems = [
-    ["◈", "总览", "overview.html"],
-    ["◇", "市场", "market.html"],
-    ["↗", "自动交易", "auto-trade.html"],
-    ["◐", "策略", "strategy.html"],
-    ["⚙", "设置", "settings.html"]
-  ];
-  const navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "设置" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "设置" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
+  // Sidebar markup and bindings come from PolyPreview (single definition).
+  var navMarkup = window.PolyPreview.navMarkup("settings");
 
   root.innerHTML = `
   <div class="settings-preview" data-theme="deep-sea">

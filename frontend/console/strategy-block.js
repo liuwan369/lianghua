@@ -6,14 +6,8 @@
   var store = window.PolyPreviewStore;
   var adapter = window.PolyPreviewAdapter;
   var vm = window.PolyPreviewViewModel;
-  var navItems = [
-    ["\u25C8", "\u603B\u89C8", "overview.html"],
-    ["\u25C7", "\u5E02\u573A", "market.html"],
-    ["\u2197", "\u81EA\u52A8\u4EA4\u6613", "auto-trade.html"],
-    ["\u25D2", "\u7B56\u7565", "strategy.html"],
-    ["\u2699", "\u8BBE\u7F6E", "settings.html"]
-  ];
-  var navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "\u7B56\u7565" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "\u7B56\u7565" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
+  // Sidebar markup and bindings come from PolyPreview (single definition).
+  var navMarkup = window.PolyPreview.navMarkup("strategy");
   root.innerHTML = `
   <div class="overview-preview strategy-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">

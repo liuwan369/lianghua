@@ -155,6 +155,25 @@
       return this.accountErrorLabels[key] || fallback;
     }
   };
+  // Single definition of the sidebar. Each page previously carried its own copy
+  // of this list plus the markup builder and the click binding, and marked the
+  // active entry by comparing Chinese labels.
+  const NAV_ITEMS = [
+    { key: "overview", icon: "◈", label: "总览", target: "overview.html" },
+    { key: "market", icon: "◇", label: "市场", target: "market.html" },
+    { key: "auto-trade", icon: "↗", label: "自动交易", target: "auto-trade.html" },
+    { key: "strategy", icon: "◒", label: "策略", target: "strategy.html" },
+    { key: "settings", icon: "⚙", label: "设置", target: "settings.html" }
+  ];
+  const navMarkup = (activeKey) => NAV_ITEMS.map((item) => {
+    const active = item.key === activeKey;
+    return `<button class="nav-item${active ? " active" : ""}" type="button" data-preview-nav="${item.label}" data-preview-target="${item.target}"${active ? ' aria-current="page"' : ""}><span>${item.icon}</span>${item.label}</button>`;
+  }).join("");
+  const bindNav = (root) => {
+    (root || document).querySelectorAll("[data-preview-nav]").forEach((button) => {
+      button.addEventListener("click", () => navigate(button.dataset.previewTarget));
+    });
+  };
   const selectedAssetFromUrl = new URLSearchParams(window.location.search).get("assetId");
   const setSelectedAssetUrl = (assetId) => {
     config.selectedAssetId = assetId || null;
@@ -246,5 +265,5 @@
   // Backend is the default. Preserve an explicitly supplied mode for hosts
   // that use it as metadata, while keeping local/demo data disabled.
   const config = { apiBase: "", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, mode: "backend", ...runtimeConfig, demo: false };
-  window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, navigate, setSelectedAssetUrl, on, emit });
+  window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, NAV_ITEMS, navMarkup, bindNav, navigate, setSelectedAssetUrl, on, emit });
 })();

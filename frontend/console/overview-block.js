@@ -6,14 +6,8 @@
   var store = window.PolyPreviewStore;
   var adapter = window.PolyPreviewAdapter;
   var vm = window.PolyPreviewViewModel;
-  var navItems = [
-    ["\u25C8", "\u603B\u89C8", "overview.html"],
-    ["\u25C7", "\u5E02\u573A", "market.html"],
-    ["\u2197", "\u81EA\u52A8\u4EA4\u6613", "auto-trade.html"],
-    ["\u25D2", "\u7B56\u7565", "strategy.html"],
-    ["\u2699", "\u8BBE\u7F6E", "settings.html"]
-  ];
-  var navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "\u603B\u89C8" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "\u603B\u89C8" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
+  // Sidebar markup and bindings come from PolyPreview (single definition).
+  var navMarkup = window.PolyPreview.navMarkup("overview");
   root.innerHTML = `
   <div class="overview-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
@@ -60,7 +54,7 @@
 
       <section class="server-panel" aria-labelledby="server-title">
         <div class="panel-heading"><div><h2 id="server-title">\u670D\u52A1\u5668\u72B6\u6001</h2></div><span class="panel-meta server-expired">\u670D\u52A1\u5668\u72B6\u6001\u5F85\u63A5\u5165</span></div>
-        <div class="server-metrics"><div><span>CPU</span><strong data-server="cpu">--</strong></div><div><span>\u5185\u5B58</span><strong data-server="memory">--</strong></div><div><span>\u78C1\u76D8</span><strong data-server="disk">--</strong></div><div><span>\u8D1F\u8F7D 1 / 5 / 15 \u5206\u949F</span><strong data-server="load">-- / -- / --</strong></div></div>
+        <div class="server-metrics"><div><span>CPU</span><strong data-server="cpu">--</strong><svg class="metric-spark" data-spark="cpu" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg></div><div><span>\u5185\u5B58</span><strong data-server="memory">--</strong><svg class="metric-spark" data-spark="memory" viewBox="0 0 100 24" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg></div><div><span>\u78C1\u76D8</span><strong data-server="disk">--</strong></div><div><span>\u8D1F\u8F7D 1 / 5 / 15 \u5206\u949F</span><strong data-server="load" title="1 \u5206\u949F / 5 \u5206\u949F / 15 \u5206\u949F \u5E73\u5747\u8D1F\u8F7D">-- / -- / --</strong></div></div>
         <div class="server-services" data-server-services><div><span>\u63A7\u5236\u53F0</span><strong>\u5F85\u540E\u7AEF\u786E\u8BA4</strong><small>--</small></div><div><span>\u884C\u60C5\u91C7\u96C6</span><strong>\u5F85\u63A5\u5165</strong><small>--</small></div><div><span>\u4EA4\u6613\u8FDB\u7A0B</span><strong>\u5F85\u540E\u7AEF\u786E\u8BA4</strong><small>--</small></div><div><span>\u8D26\u672C\u6295\u5F71</span><strong>\u5F85\u63A5\u5165</strong><small>--</small></div></div>
       </section>
 
@@ -235,6 +229,25 @@
     if (node && node.textContent !== String(value)) node.textContent = String(value);
   };
   const setHtml = (node, value) => { if (node && node.innerHTML !== value) node.innerHTML = value; };
+  // Client-side ring buffer for resource sparklines. The diagnostics endpoint
+  // exposes only the current sample, so the trend is built from observed polls.
+  const SPARK_POINTS = 40;
+  const sparkSeries = new Map();
+  const pushSpark = (key, value) => {
+    const series = sparkSeries.get(key) || [];
+    if (value != null) {
+      series.push(value);
+      while (series.length > SPARK_POINTS) series.shift();
+      sparkSeries.set(key, series);
+    }
+    const line = document.querySelector(`[data-spark="${key}"] polyline`);
+    if (!line) return;
+    if (series.length < 2) { if (line.getAttribute("points")) line.setAttribute("points", ""); return; }
+    const max = Math.max(100, ...series);
+    const step = 100 / (series.length - 1);
+    const points = series.map((point, index) => `${(index * step).toFixed(1)},${(24 - point / max * 22 - 1).toFixed(1)}`).join(" ");
+    if (line.getAttribute("points") !== points) line.setAttribute("points", points);
+  };
   // Uptime was printed as raw seconds, so a day-old process read "86400 秒".
   const duration = (seconds) => {
     if (seconds == null || seconds === "") return "--";
@@ -322,6 +335,11 @@
     text("[data-server=cpu]", `${percent(data.cpu?.percent)} · ${data.cpu?.cores ?? "--"} 核`);
     text("[data-server=memory]", `${percent(data.memory?.percent)} · ${bytes(data.memory?.used_bytes)} / ${bytes(data.memory?.total_bytes)}`);
     text("[data-server=disk]", `${percent(data.disk?.percent)} · 可用 ${bytes(data.disk?.free_bytes)}`);
+    // The server keeps only the latest sample, so trend comes from what this page
+    // has actually observed. No synthetic points: the line only grows as real
+    // polls arrive, and stays empty until there are at least two samples.
+    pushSpark("cpu", finite(data.cpu?.percent));
+    pushSpark("memory", finite(data.memory?.percent));
     text("[data-server=load]", [data.load?.one, data.load?.five, data.load?.fifteen].map((value) => formatMetric(value, 2)).join(" / "));
     // The server reports this service as `trading` (verified against
     // /api/diagnostics/health). `trader` is kept as a compatibility alias so an

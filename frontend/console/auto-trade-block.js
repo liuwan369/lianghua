@@ -16,14 +16,8 @@
   var selectedAssetId = [initialState.marketCatalog.selectedId, window.PolyPreview.config.selectedAssetId, poolAssetId]
     .find(function(id) { return id && initialState.marketCatalog.items.some(function(item) { return item.assetId === id; }); }) || null;
   var assetById = function(id) { return marketAssets.find(function(asset) { return asset.id === id; }); };
-  var navItems = [
-    ["\u25C8", "\u603B\u89C8", "overview.html"],
-    ["\u25C7", "\u5E02\u573A", "market.html"],
-    ["\u2197", "\u81EA\u52A8\u4EA4\u6613", "auto-trade.html"],
-    ["\u25D2", "\u7B56\u7565", "strategy.html"],
-    ["\u2699", "\u8BBE\u7F6E", "settings.html"]
-  ];
-  var navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "\u81EA\u52A8\u4EA4\u6613" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "\u81EA\u52A8\u4EA4\u6613" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
+  // Sidebar markup and bindings come from PolyPreview (single definition).
+  var navMarkup = window.PolyPreview.navMarkup("auto-trade");
   root.innerHTML = `
   <div class="overview-preview auto-trade-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">

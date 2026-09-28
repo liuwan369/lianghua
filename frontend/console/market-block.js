@@ -21,14 +21,8 @@
   const root = document.querySelector("#market-block-root");
   if (!root) throw new Error("market block root missing");
 
-  const navItems = [
-    ["◈", "总览", "overview.html"],
-    ["◇", "市场", "market.html"],
-    ["↗", "自动交易", "auto-trade.html"],
-    ["◐", "策略", "strategy.html"],
-    ["⚙", "设置", "settings.html"]
-  ];
-  const navMarkup = navItems.map(([icon, label, target]) => `<button class="nav-item${label === "市场" ? " active" : ""}" type="button" data-preview-nav="${label}" data-preview-target="${target}"${label === "市场" ? ' aria-current="page"' : ""}><span>${icon}</span>${label}</button>`).join("");
+  // Sidebar markup and bindings come from PolyPreview (single definition).
+  var navMarkup = window.PolyPreview.navMarkup("market");
 
   root.innerHTML = `
   <div class="overview-preview market-preview crypto-market-preview" data-theme="deep-sea">
