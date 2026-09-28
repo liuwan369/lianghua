@@ -649,11 +649,15 @@
       var roundId = event.roundId ?? event.round_id;
       var assetId = event.assetId ?? event.asset_id;
       if (runId != null) return assetId == null || String(assetId) === String(context.assetId);
-      return context.marketId != null && context.roundId != null
-        && marketId != null && roundId != null
-        && String(marketId) === String(context.marketId)
-        && String(roundId) === String(context.roundId)
-        && (assetId == null || String(assetId) === String(context.assetId));
+      // Global events (recovery, cash-flow, feed health) carry no market/round
+      // identity. Previously the market+round match dropped exactly those — the
+      // errors an operator most needs to see. Keep an event unless it clearly
+      // belongs to a different market or asset.
+      if (assetId != null && context.assetId != null && String(assetId) !== String(context.assetId)) return false;
+      if (marketId != null && roundId != null && context.marketId != null && context.roundId != null) {
+        return String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId);
+      }
+      return true;
     });
     var list = document.querySelector("[data-activity-list]");
     var stale = resource.stale === true || ["stale", "unavailable", "error", "degraded"].includes(resource.status) || payload?.stale === true || payload?.available === false;
@@ -989,6 +993,26 @@
     text("[data-connection-status]", available ? `接口独立刷新 · ${processState}` : `运行状态已过期 · ${processState} · 行情独立刷新`);
     text("[data-sidebar-state]", available ? `所选市场已连接 · ${processState}` : `所选市场状态待接入 · ${processState}`);
     text("[data-sidebar-detail]", available ? "五分钟反转策略" : "保留本场最近成功数据");
+    // Reflect the real trading decision instead of the permanent "观察中" placeholder.
+    // The strategy's own reason (round.reason) is surfaced when the runtime
+    // reports it; otherwise show an honest process state so the panel never
+    // implies live observation while the engine is stopped.
+    var sourceRuntime = available ? runtime : selectedRuntime;
+    var decisionReason = sourceRuntime && (sourceRuntime.reason || sourceRuntime.strategyReason
+      || sourceRuntime.currentRound?.reason);
+    if (displayProcessRunning === true) {
+      text("[data-decision]", decisionReason ? "策略运行中" : "策略运行中 · 等待信号");
+      text("[data-decision-reason]", decisionReason || "按五分钟反转规则监控当前盘口。");
+      text("[data-decision-state]", "运行中");
+    } else if (displayProcessRunning === false) {
+      text("[data-decision]", "交易进程未运行");
+      text("[data-decision-reason]", "启动交易后在此显示策略的实时判断。");
+      text("[data-decision-state]", "未运行");
+    } else {
+      text("[data-decision]", "进程状态未知");
+      text("[data-decision-reason]", "等待服务器确认交易进程状态。");
+      text("[data-decision-state]", "待确认");
+    }
     updateControls();
   };
   var scheduleRuntimeRefresh = function(delay = 2000) {
