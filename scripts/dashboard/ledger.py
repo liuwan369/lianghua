@@ -1826,7 +1826,10 @@ class Ledger:
                           fees=None if run["missing_fees"] else run["known_fees"],
                           known_fees=run["known_fees"], missing_fee_count=run["missing_fees"],
                           estimated_fees=estimated_fees,
-                          settled_pnl=run["known_settled_pnl"] if run["settled_markets"] and not run["missing_pnl"] else None,
+                          # Report the PnL that is known rather than withholding all
+                          # of it because one round is still unresolved; the pending
+                          # count travels with it as settled_pnl_pending.
+                          settled_pnl=run["known_settled_pnl"] if run["settled_markets"] else None,
                           pnl_semantics="engine_settlement_net_of_fees; not_wallet_reconciliation",
                           order_count=self._run_order_count(db, run_id),
                           order_lifecycle_available=self._has_table(db, "order_details"),
@@ -2156,7 +2159,11 @@ class Ledger:
                     "known_fill_notional": notional, "fees": None if missing_fees else fees, "known_fees": fees,
                     "estimated_fees": estimated_fees,
                     "missing_fee_count": missing_fees, "settled_markets": len(pnl_values),
-                    "settled_pnl": sum(pnl_values) if pnl_values and not missing_pnl else None,
+                    # One round without a PnL used to withhold the whole figure, so
+                    # 14 settled rounds reported nothing. Publish the sum that IS
+                    # known and report the unknown count alongside it.
+                    "settled_pnl": sum(value for value in pnl_values if value is not None)
+                        if any(value is not None for value in pnl_values) else None,
                     "settled_wins": wins, "settled_losses": losses, "settled_draws": draws,
                     "settled_pnl_pending": missing_pnl, "win_rate": wins / (wins + losses) if wins + losses else None,
                     "unsettled_cost": unsettled_cost, "unsettled_rounds": len(unsettled_rounds),

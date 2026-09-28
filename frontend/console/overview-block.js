@@ -344,6 +344,13 @@
     const exposed = finite(periodValue(data, "current", ["exposedPnl", "exposed_pnl"], ["exposedPnl", "exposed_pnl"]));
     const unsettledCost = finite(periodValue(data, "current", ["unsettledCost", "unsettled_cost"], ["unsettledCost", "unsettled_cost"]));
     const unsettledRounds = finite(periodValue(data, "current", ["unsettledRounds", "unsettled_rounds"], ["unsettledRounds", "unsettled_rounds"]));
+    // The settled figure is now published even when some rounds are unresolved,
+    // so say so rather than letting a partial sum read as the final one.
+    const pendingCount = finite(pendingPnl);
+    if (pendingCount) {
+      const heading = document.querySelector('[data-metric="pnl-current"]')?.closest(".metric-group")?.querySelector("h3 + p, p");
+      if (heading) heading.textContent = `已确认结算，已扣手续费 · ${pendingCount} 场待核对`;
+    }
     text('[data-metric="exposed-pnl"]', exposed == null ? "含未结算成本 --"
       : !unsettledRounds ? `含未结算成本 ${exposed > 0 ? "+" : ""}${exposed.toFixed(4)} · 已全部确认`
         : `含未结算成本 ${exposed > 0 ? "+" : ""}${exposed.toFixed(4)} USDC · ${unsettledRounds} 场待确认${
