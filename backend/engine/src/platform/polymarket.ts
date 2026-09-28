@@ -366,11 +366,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const fee = (order: OrderRequest, shares = order.shares) => {
     if (order.postOnly) return 0;
     const rule = client?.feeRule(order.tokenId);
-    // Warmed live markets supply current venue fee rules before an order is
-    // submitted. Only fall back to a rate when the rule is genuinely missing, and
-    // use 0 rather than 7%: the venue publishes maker/taker base fees of 0 for
-    // these markets, so a 7% reserve locked capital against a fee never charged.
-    return Math.ceil(polymarketFillFee(shares, 0.5, false, rule?.rate ?? 0, 0, rule?.exponent ?? 1) * 100_000) / 100_000;
+    // Warmed live markets supply current venue fee rules before an order is submitted.
+    return Math.ceil(polymarketFillFee(shares, 0.5, false, rule?.rate ?? 0.07, 0, rule?.exponent ?? 1) * 100_000) / 100_000;
   };
   let account: AccountSnapshot;
   let gateway: OrderGateway;
@@ -602,14 +599,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     platform.ingest({ kind: "fill", marketId: market.id, roundId: market.roundId,
       fill: { tradeId: userEvent.tradeId, orderId: userEvent.orderId, marketId: market.id, roundId: market.roundId,
       tokenId: userEvent.tokenId, direction: userEvent.direction, price: f.price, shares: f.shares,
-      // No 0.07 guess: the venue publishes maker_base_fee=0 / taker_base_fee=0
-      // across the 5m markets and reports rate 0 through market fee metadata, so
-      // a 7% fallback invented costs that were never charged (~0.077 per fill,
-      // 2.01 USDC over 26 fills) and distorted budgeting and PnL. When neither a
-      // fee rule nor a venue rate is known, derive from rate 0 and let feeSource
-      // stay "estimate" so the ledger still treats it as unconfirmed.
       feeUsd: f.isMaker ? 0 : f.feeUsd ?? Math.round(polymarketFillFee(f.shares, f.price, false,
-        feeRule?.rate ?? (f.feeRateBps != null ? f.feeRateBps / 10_000 : 0), 0, feeRule?.exponent ?? 1) * 100_000) / 100_000,
+        feeRule?.rate ?? (f.feeRateBps != null ? f.feeRateBps / 10_000 : 0.07), 0, feeRule?.exponent ?? 1) * 100_000) / 100_000,
       status: f.status, feeSource: f.isMaker || f.feeUsd != null ? "reported" : feeRule || f.feeRateBps != null ? "rate-derived" : "estimate",
       ts: f.tsUnix, isMaker: f.isMaker } });
     if (platform.orders.get(userEvent.orderId)?.status === "FILLED") allowRecoveryAfterEvidence(userEvent.orderId);
