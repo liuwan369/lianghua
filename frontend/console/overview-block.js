@@ -227,7 +227,27 @@
         .finally(() => { button.disabled = false; });
     }
   }));
-  const text = (selector, value) => { const node = document.querySelector(selector); if (node) node.textContent = value; };
+  // Skip the write when the value is unchanged. Without this, every 3s/15s poll
+  // rewrote dozens of identical textContent values and invalidated layout for
+  // each one, since the store notifies subscribers even when a slice is equal.
+  const text = (selector, value) => {
+    const node = document.querySelector(selector);
+    if (node && node.textContent !== String(value)) node.textContent = String(value);
+  };
+  const setHtml = (node, value) => { if (node && node.innerHTML !== value) node.innerHTML = value; };
+  // Uptime was printed as raw seconds, so a day-old process read "86400 秒".
+  const duration = (seconds) => {
+    if (seconds == null || seconds === "") return "--";
+    const total = Number(seconds);
+    if (!Number.isFinite(total) || total < 0) return "--";
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor(total % 86400 / 3600);
+    const minutes = Math.floor(total % 3600 / 60);
+    if (days) return `${days} 天 ${hours} 小时`;
+    if (hours) return `${hours} 小时 ${minutes} 分`;
+    if (minutes) return `${minutes} 分 ${Math.floor(total % 60)} 秒`;
+    return `${Math.floor(total)} 秒`;
+  };
   const read = (source, keys, fallback = null) => {
     for (const key of keys) {
       const value = key.split(".").reduce((current, part) => current == null ? undefined : current[part], source);
@@ -294,9 +314,14 @@
     const health = resource?.data;
     const data = health?.resources || health;
     if (!data) return;
-    text("[data-server=cpu]", `${formatMetric(data.cpu?.percent, 1)}% · ${data.cpu?.cores ?? "--"} 核`);
-    text("[data-server=memory]", `${formatMetric(data.memory?.percent, 1)}% · ${bytes(data.memory?.used_bytes)} / ${bytes(data.memory?.total_bytes)}`);
-    text("[data-server=disk]", `${formatMetric(data.disk?.percent, 1)}% · 可用 ${bytes(data.disk?.free_bytes)}`);
+    // Don't glue a percent sign onto a missing value ("--%"); degrade to "--".
+    const percent = (value, digits = 1) => {
+      const text = formatMetric(value, digits);
+      return text === "--" ? "--" : `${text}%`;
+    };
+    text("[data-server=cpu]", `${percent(data.cpu?.percent)} · ${data.cpu?.cores ?? "--"} 核`);
+    text("[data-server=memory]", `${percent(data.memory?.percent)} · ${bytes(data.memory?.used_bytes)} / ${bytes(data.memory?.total_bytes)}`);
+    text("[data-server=disk]", `${percent(data.disk?.percent)} · 可用 ${bytes(data.disk?.free_bytes)}`);
     text("[data-server=load]", [data.load?.one, data.load?.five, data.load?.fifteen].map((value) => formatMetric(value, 2)).join(" / "));
     // The server reports this service as `trading` (verified against
     // /api/diagnostics/health). `trader` is kept as a compatibility alias so an
@@ -304,11 +329,11 @@
     const names = { dashboard: "控制台", collector: "行情采集", trading: "交易进程", trader: "交易进程", projection: "账本投影" };
     const states = { active: "运行中", stopped: "未运行", inactive: "未运行", failed: "失败", activating: "启动中", deactivating: "停止中", unavailable: "不可用", unknown: "未知" };
     const services = document.querySelector("[data-server-services]");
-    if (services && data.services) services.innerHTML = Object.entries(data.services).map(([name, service]) => {
+    if (services && data.services) setHtml(services, Object.entries(data.services).map(([name, service]) => {
       const state = String(service?.state || "unknown");
       const stateClass = state === "active" ? "service-good" : state === "stopped" || state === "inactive" ? "" : "service-warning";
-      return `<div><span>${window.PolyPreview.format.escape(names[name] || name)}</span><strong class="${stateClass}">${window.PolyPreview.format.escape(states[state] || state)}</strong><small>进程号 ${service?.pid ?? "--"} · 内存 ${bytes(service?.rss_bytes)} · 运行 ${service?.uptime_seconds == null ? "--" : `${Math.floor(service.uptime_seconds)} 秒`}</small></div>`;
-    }).join("");
+      return `<div><span>${window.PolyPreview.format.escape(names[name] || name)}</span><strong class="${stateClass}">${window.PolyPreview.format.escape(states[state] || state)}</strong><small>进程号 ${service?.pid ?? "--"} · 内存 ${bytes(service?.rss_bytes)} · 运行 ${duration(service?.uptime_seconds)}</small></div>`;
+    }).join(""));
     const stamp = health.asOf == null ? "" : window.PolyPreview.format.time(health.asOf);
     text(".server-expired", resource?.status === "stale"
       ? `服务降级或采样过期${stamp ? ` · ${stamp}` : ""}`
@@ -332,7 +357,7 @@
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
     if (!list) return;
-    if (!items.length) { list.innerHTML = '<li class="log-entry"><time>--</time><span class="log-icon neutral-icon">•</span><div><strong>暂无运行事件</strong><p>后端返回新的事件后会在这里追加。</p></div><span class="log-status muted-text">空闲</span></li>'; return; }
+    if (!items.length) { setHtml(list, '<li class="log-entry"><time>--</time><span class="log-icon neutral-icon">•</span><div><strong>暂无运行事件</strong><p>后端返回新的事件后会在这里追加。</p></div><span class="log-status muted-text">空闲</span></li>'); return; }
     const icon = { error: "!", warning: "!", warn: "!", success: "✓", good: "✓" };
     const activityNames = {
       platform_status: { running: "交易进程已启动", starting: "交易进程正在启动", paused: "已暂停新增订单", stopping: "正在停止交易", stopped: "交易进程已停止", failed: "交易进程异常退出" },
@@ -374,7 +399,7 @@
       const translated = window.PolyPreview.format.readableError(safe, "");
       return translated && translated !== safe ? translated : fallback;
     };
-    list.innerHTML = items.slice(0, 8).map((item) => {
+    const markup = items.slice(0, 20).map((item) => {
       const state = String(item.status || item.state || "").toLowerCase();
       const kind = String(item.kind || item.event || "").toLowerCase();
       const suppliedSeverity = String(item.severity || item.level || "").toLowerCase();
@@ -423,6 +448,10 @@
       const severityLabel = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : severity === "success" || severity === "good" ? "成功" : "信息";
       return `<li class="log-entry"><time>${window.PolyPreview.format.escape(window.PolyPreview.format.time(time, "--:--:--"))}</time><span class="log-icon ${statusClass.replace("-text", "-icon")}">${icon[severity] || "i"}</span><div><strong>${window.PolyPreview.format.escape(message)}</strong><p title="${window.PolyPreview.format.escape(detail)}">${window.PolyPreview.format.escape(detail)}</p></div><span class="log-status ${statusClass}">${severityLabel}</span></li>`;
     }).join("");
+    // Only touch the DOM when the rendered log actually differs. The list was
+    // rebuilt on every 15s poll, which cancelled text selection, dropped :hover
+    // and replayed all entries to screen readers via aria-live.
+    setHtml(list, markup);
   };
   store.subscribe("metrics", renderMetrics);
   store.subscribe("diagnostics", renderDiagnostics);

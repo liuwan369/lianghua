@@ -281,6 +281,43 @@ def account_data() -> AccountData:
         return _account_data
 
 
+_fill_watermark: tuple | None = None
+_fill_watermark_lock = threading.Lock()
+
+
+def _note_fill_watermark(value: dict) -> None:
+    """Invalidate the cached account snapshot when a newer fill appears.
+
+    Balance only moves on fills, so instead of polling the wallet harder we let
+    the fills projection drive the refresh. Cheap: compares the newest fill
+    identity and does nothing when unchanged. Never raises into the response.
+    """
+    global _fill_watermark
+    try:
+        items = value.get("items") if isinstance(value, dict) else None
+        if not isinstance(items, list) or not items:
+            return
+        newest = items[0] if isinstance(items[0], dict) else {}
+        mark = (newest.get("id"), newest.get("tradeId") or newest.get("trade_id"),
+                newest.get("orderId") or newest.get("order_id"))
+        if not any(part is not None for part in mark):
+            return
+        with _fill_watermark_lock:
+            if _fill_watermark == mark:
+                return
+            first_seen = _fill_watermark is None
+            _fill_watermark = mark
+        # Skip the very first observation: it is the existing history, not a new
+        # fill, and invalidating there would cost a wallet read on every restart.
+        if first_seen:
+            return
+        reader = _account_data
+        if reader is not None:
+            reader.invalidate()
+    except Exception:
+        return
+
+
 def _remote_orders_empty_from_fresh_snapshot() -> bool:
     """Return true only when a fresh account read proves there are no orders.
 
@@ -2526,6 +2563,11 @@ def make_handler(root: Path):
                         return
                     value = (_modern_settlements(event_run_id, query) if path == "/api/settlements"
                              else _modern_events(event_run_id, query, kinds={"fill"} if path == "/api/fills" else None))
+                    # A new fill changes the wallet balance. Drop the account
+                    # cache so the next /api/account/snapshot reflects it instead
+                    # of waiting out the refresh interval.
+                    if path == "/api/fills":
+                        _note_fill_watermark(value)
                     self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_event_query","stale":true}', 400)

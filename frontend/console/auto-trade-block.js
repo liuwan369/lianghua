@@ -500,8 +500,24 @@
       identityNode.title = fullIdentity(context);
     }
     text("[data-round]", context.roundId ? displayRound(context.roundId) : "等待场次信息");
+    tickClock();
     return contextKey;
   };
+  // The header clock and the round countdown were static placeholders. Both are
+  // derivable locally, so a 1s ticker updates just these two text nodes (no DOM
+  // rebuild). The countdown uses the selected market's end time.
+  var tickClock = function() {
+    text("[data-live-clock]", window.PolyPreview.format.clock());
+    var asset = assetById(currentContext().assetId);
+    var end = asset && Number(asset.endAt != null ? asset.endAt : asset.end);
+    if (!Number.isFinite(end)) { text("[data-countdown]", "等待场次信息"); return; }
+    var remaining = Math.round(end - Date.now() / 1000);
+    if (remaining < 0) { text("[data-countdown]", "本场已结束 · 等待切换"); return; }
+    var minutes = Math.floor(remaining / 60);
+    var seconds = remaining % 60;
+    text("[data-countdown]", `剩余 ${minutes}:${String(seconds).padStart(2, "0")}`);
+  };
+  var clockTimer = window.setInterval(tickClock, 1000);
   var renderPosition = function(raw) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var position = raw?.position || raw;
@@ -521,8 +537,19 @@
     text('[data-outcome="up"]', yesOutcome == null ? "--" : yesOutcome.toFixed(2));
     text('[data-outcome="down"]', noOutcome == null ? "--" : noOutcome.toFixed(2));
     text("[data-invested]", occupied != null ? `${occupied.toFixed(2)} USDC` : "-- USDC");
-    text("[data-stage]", position.stage != null ? `阶段 ${position.stage}` : "--");
+    var maxStages = numeric(position.maxStages ?? position.max_stages);
+    text("[data-stage]", position.stage != null
+      ? (maxStages != null ? `阶段 ${position.stage} / ${maxStages}` : `阶段 ${position.stage}`)
+      : "--");
+    // The denominator was hardcoded "--" in the template; the ledger now supplies
+    // maxStages so the counter reads e.g. "2 / 4".
     text("[data-confirmations]", position.confirmations == null ? "--" : String(position.confirmations));
+    var confirmTotal = document.querySelector("[data-confirmations]");
+    if (confirmTotal && confirmTotal.parentNode) {
+      var totalText = maxStages != null ? `${maxStages} 次` : "-- 次";
+      var tail = confirmTotal.nextSibling;
+      if (tail && tail.nodeType === 3 && tail.textContent !== ` / ${totalText}`) tail.textContent = ` / ${totalText}`;
+    }
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
     text('[data-holding="up"]', yesShares == null ? "--" : yesShares.toFixed(2));
     text('[data-holding="down"]', noShares == null ? "--" : noShares.toFixed(2));
@@ -544,10 +571,62 @@
     }
     text('[data-average="up"]', yesAverage == null ? "--" : yesAverage.toFixed(3));
     text('[data-average="down"]', noAverage == null ? "--" : noAverage.toFixed(3));
-    var progress = numeric(position.stageProgress ?? position.stage_progress);
-    text("[data-stage-progress]", progress == null ? "--" : `${progress}%`);
+    renderStageTimeline(position, maxStages);
+    // "下一笔" was a permanent "等待信号" placeholder; the ledger reports the next
+    // stage index and its planned size.
+    var nextStage = numeric(position.stage);
+    var nextShares = numeric(position.nextShares ?? position.next_shares);
+    text("[data-next]", nextStage == null ? "等待信号"
+      : nextShares != null ? `第 ${nextStage} 阶段 · ${nextShares.toFixed(2)} 份` : `第 ${nextStage} 阶段`);
     text("[data-position-state]", `已更新 · ${window.PolyPreview.format.time(position.updatedAt ?? raw.asOf)}`);
     return true;
+  };
+  // Staged entry is this strategy's core mechanic. The timeline was a permanent
+  // "待接入" placeholder even though the ledger tracks every stage, so an operator
+  // could not see which stages had filled.
+  var stageStatusLabel = {
+    CREATED: "已创建，待提交", SUBMITTING: "提交中", OPEN: "挂单中", PARTIAL: "部分成交",
+    FILLED: "已成交", CANCELED: "已撤销", CANCELLED: "已撤销", REJECTED: "未接受",
+    EXPIRED: "已过期", ABANDONED: "本场未提交", UNKNOWN: "状态待确认", FAILED: "失败"
+  };
+  var renderStageTimeline = function(position, maxStages) {
+    var node = document.querySelector("[data-stage-timeline]");
+    if (!node) return;
+    var stages = Array.isArray(position.stages) ? position.stages : [];
+    var filled = stages.reduce(function(sum, stage) {
+      var got = numeric(stage.filledShares ?? stage.filled_shares) || 0;
+      return sum + (got > 0 ? 1 : 0);
+    }, 0);
+    var total = maxStages != null ? maxStages : (stages.length || null);
+    text("[data-stage-progress]", total ? `${filled} / ${total}` : (stages.length ? String(filled) : "--"));
+    var fill = document.querySelector("[data-progress-fill]");
+    if (fill) {
+      var pct = total ? Math.min(100, Math.max(0, filled / total * 100)) : 0;
+      var width = `${pct}%`;
+      if (fill.style.width !== width) fill.style.width = width;
+    }
+    if (!stages.length) {
+      var idle = position.reason || (position.roundStatus === "waiting_next_round"
+        ? "中途启动，等待下一场" : "本场尚未触发阶段");
+      html(node, `<li class="current"><span>·</span><div><strong>${window.PolyPreview.format.escape(idle)}</strong><small>触发跨价后在此显示每一阶段的成交进度</small></div><time>--</time></li>`);
+      return;
+    }
+    html(node, stages.map(function(stage) {
+      var status = String(stage.status || "UNKNOWN").toUpperCase();
+      var shares = numeric(stage.shares);
+      var got = numeric(stage.filledShares ?? stage.filled_shares) || 0;
+      var price = numeric(stage.price);
+      var done = got > 0 && shares != null && got >= shares;
+      var cls = done ? "done" : got > 0 ? "current" : ["ABANDONED", "REJECTED", "FAILED", "EXPIRED"].includes(status) ? "skipped" : "pending";
+      var mark = done ? "✓" : got > 0 ? "·" : cls === "skipped" ? "×" : String(stage.stage ?? "·");
+      var dir = String(stage.direction || "").toUpperCase() === "UP" ? "YES" : String(stage.direction || "").toUpperCase() === "DOWN" ? "NO" : "--";
+      var detail = [
+        dir + " · " + (price != null ? price.toFixed(3) : "--"),
+        (shares != null ? `${got.toFixed(2)} / ${shares.toFixed(2)} 份` : `${got.toFixed(2)} 份`),
+        stageStatusLabel[status] || status
+      ].join(" · ");
+      return `<li class="${cls}"><span>${window.PolyPreview.format.escape(mark)}</span><div><strong>第 ${window.PolyPreview.format.escape(String(stage.stage ?? "-"))} 阶段</strong><small>${window.PolyPreview.format.escape(detail)}</small></div><time>${window.PolyPreview.format.escape(window.PolyPreview.format.time(stage.createdAt ?? stage.created_at, "--:--:--"))}</time></li>`;
+    }).join(""));
   };
   var renderOrders = function(raw, asset) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
@@ -1141,7 +1220,15 @@
       metricsRefreshTimer = null;
       if (eventsRefreshTimer) window.clearTimeout(eventsRefreshTimer);
       eventsRefreshTimer = null;
+      // These two were previously left running while the tab was hidden.
+      if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
+      snapshotExpiryTimer = null;
+      if (clockTimer) window.clearInterval(clockTimer);
+      clockTimer = null;
+      stopStreams();
     } else {
+      if (!clockTimer) clockTimer = window.setInterval(tickClock, 1000);
+      tickClock();
       scheduleSnapshotRefresh(0);
       scheduleMarketContextRefresh(0);
       scheduleRoundRefresh(0);
@@ -1150,7 +1237,15 @@
       scheduleAccountRefresh(0);
       scheduleMetricsRefresh(0);
       scheduleEventsRefresh(0);
+      startStreams();
     }
+  });
+  // Entering bfcache does not fire visibilitychange in every browser; clear the
+  // interval there too so a restored page never runs two tickers.
+  window.addEventListener("pagehide", function() {
+    if (clockTimer) window.clearInterval(clockTimer);
+    clockTimer = null;
+    stopStreams();
   });
   var streamLifecycleReady = false;
   renderMarketPool();
@@ -1259,7 +1354,7 @@
     if (runtimeResult.status === "fulfilled") renderRuntime(runtimeResult.value, true);
     if (eventsResult.status === "fulfilled") renderEvents(eventsResult.value);
     streamLifecycleReady = true;
-    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(15000); scheduleMetricsRefresh(5000); scheduleEventsRefresh(5000); startStreams();
+    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(10000); scheduleMetricsRefresh(5000); scheduleEventsRefresh(5000); startStreams();
   }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
 })();
 

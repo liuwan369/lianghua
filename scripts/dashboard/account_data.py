@@ -23,9 +23,13 @@ _SECTIONS = ("collateral", "open_orders", "trades", "positions", "closed_positio
 
 
 class AccountData:
-    def __init__(self, engine: Path, values_loader, interval: float = 30, timeout: float = 90):
+    def __init__(self, engine: Path, values_loader, interval: float = 15, timeout: float = 90):
         self.engine, self.values_loader = Path(engine).resolve(), values_loader
-        self.interval, self.timeout = max(30., interval), timeout
+        # The floor used to be 30s, which silently ignored any smaller interval.
+        # Balance moves on every fill and a 5-minute round can fill several
+        # stages, so the old 30s server + 30s client worst case showed a
+        # minute-old balance while staged entries sized against it.
+        self.interval, self.timeout = max(5., interval), timeout
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
         self._identity = None
@@ -225,8 +229,12 @@ class AccountData:
                 self._stop_process()
 
     def invalidate(self):
+        """Drop the cached identity and clear the throttle so the next refresh
+        actually runs. Without resetting `_attempt`, an invalidate issued inside
+        the interval was swallowed by the throttle in `refresh`."""
         with self._lock:
             self._identity = None
+            self._attempt = 0.
         self._account()
 
     def close(self):

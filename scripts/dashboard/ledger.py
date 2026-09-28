@@ -1561,6 +1561,8 @@ class Ledger:
                        "roundId": round_id,
                        "marketId": None, "stage": None, "confirmations": None, "yesShares": None,
                        "noShares": None, "averagePrice": None, "occupiedUsd": None,
+                       "stages": [], "maxStages": None, "reason": None, "roundStatus": None,
+                       "nextShares": None,
                        "outcomePnl": {"yes": None, "no": None}, "updatedAt": None}
         with self._connect() as db:
             run = self._run(db, run_id)
@@ -1633,6 +1635,15 @@ class Ledger:
             "marketId": selected.get("marketId"),
             "stage": selected.get("nextStage"),
             "confirmations": selected.get("confirmationCount"),
+            # Staged entry is the core mechanic of this strategy, but the ladder
+            # itself was never exposed, so the console could not show which
+            # stages had filled. maxStages also gives the confirmation counter a
+            # real denominator instead of a hardcoded "--".
+            "stages": selected.get("stages") if isinstance(selected.get("stages"), list) else [],
+            "maxStages": (selected.get("config") or {}).get("maxStages"),
+            "reason": selected.get("reason"),
+            "roundStatus": selected.get("status"),
+            "nextShares": selected.get("nextShares"),
             "yesShares": yes_shares,
             "noShares": no_shares,
             "averagePrice": occupied / total_shares if total_shares and total_shares > 0 and occupied is not None else None,
