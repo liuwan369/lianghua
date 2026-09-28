@@ -2632,12 +2632,32 @@ def make_handler(root: Path):
                 return
             body = candidate.read_bytes()
             content_type = _static_content_type(candidate)
-            if candidate.suffix == ".html":
+            is_html = candidate.suffix == ".html"
+            if is_html:
                 config = b'<script>window.__POLY_PREVIEW_CONFIG__={mode:"backend",demo:false,apiBase:"",apiFlavor:"contract"};</script>'
                 body = body.replace(b"<head>", b"<head>" + config, 1)
+            # HTML stays uncached (it carries injected config and must reflect a
+            # deploy immediately). JS/CSS/assets are revalidated with an ETag over
+            # the served bytes: the browser caches them but always asks, and the
+            # server answers 304 with no body when unchanged. This removes the
+            # per-navigation re-download that no-store forced, while a deploy that
+            # changes the bytes changes the ETag, so assets can never go stale.
+            etag = None
+            if not is_html:
+                etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+                if self.headers.get("If-None-Match") == etag:
+                    self.send_response(304)
+                    self.send_header("ETag", etag)
+                    self.send_header("Cache-Control", "no-cache")
+                    self.end_headers()
+                    return
             self.send_response(200)
             self.send_header("Content-Type", content_type)
-            self.send_header("Cache-Control", "no-store")
+            if etag is not None:
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+            else:
+                self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)

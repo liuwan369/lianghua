@@ -147,9 +147,14 @@
   const catalogItemStartReason = (catalog = {}, item = null) => {
     if (!item) return "请先等待服务器返回完整市场身份";
     const status = String(catalog.status || "");
-    if (["unavailable", "error"].includes(status) || catalog.error) return "行情目录暂不可用，等待服务器刷新";
-    if (status !== "partial" && (status === "stale" || catalog.stale === true)) return "行情目录或行情已过期，暂不允许启动";
-    if (item.stale === true) return "行情目录或行情已过期，暂不允许启动";
+    // The selected market decides its own eligibility. With several assets
+    // collected, one asset's dead feed marks the whole catalog stale/partial and
+    // must not block trading a different asset whose own book is fresh.
+    if (item.stale === true) return "行情或场次已过期，暂不允许启动";
+    if (["unavailable", "error"].includes(status)) return "行情目录暂不可用，等待服务器刷新";
+    if (status === "partial" || catalog.partial === true) return "";
+    if (catalog.error) return "行情目录暂不可用，等待服务器刷新";
+    if (status === "stale" || catalog.stale === true) return "行情目录或行情已过期，暂不允许启动";
     return "";
   };
   const matchesIdentity = (value, context) => {

@@ -159,6 +159,35 @@
       if (!roundId) return null;
       return core.api.orders(roundId, context);
     },
+    /**
+     * Derive the runtime view for one market identity from an already-fetched
+     * runtime payload. The global /api/runtime/status response carries markets[],
+     * so callers that already hold it must not issue a second scoped request:
+     * doing so doubled the poll rate and let the global and scoped views come
+     * from two different instants.
+     */
+    scopeRuntime(raw, context) {
+      const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+      if (!data || !context) return null;
+      const markets = Array.isArray(data?.markets) ? data.markets : [];
+      const scoped = markets.map((item) => ({ ...item, assetId: item.assetId ?? item.asset_id ?? data.assetId })).find((item) => vm.matchesIdentity(item, context));
+      if (scoped) {
+        const model = vm.runtime({ ...data, ...scoped, status: data.status || data.state });
+        return { ...model, processRunningFresh: model.processRunning !== null, connectionStatus: resourceStatus(data), stale: resourceStatus(data) !== "ready" };
+      }
+      if (vm.matchesIdentity(data, context)) {
+        const model = vm.runtime(data);
+        return { ...model, processRunningFresh: model.processRunning !== null };
+      }
+      const processOnly = vm.runtime(data);
+      return {
+        status: "unavailable", state: "unavailable", source: processOnly.source,
+        processRunning: processOnly.processRunning,
+        processRunningFresh: processOnly.processRunning !== null,
+        stale: true, connectionStatus: resourceStatus(data), identityMismatch: true,
+        error: "运行状态身份与所选资产不匹配"
+      };
+    },
     async loadRuntime(context = null) {
       if (context) {
         try {
@@ -265,7 +294,12 @@
         return store.setSlice("diagnostics", { status, stale: status === "stale", data: raw || {}, error: raw?.error || null });
       });
     },
-    async loadMetrics(runId) {
+    /**
+     * `ranges` limits which windows are fetched. Auto-trade only renders the
+     * current run's latency histogram, so it passes ["run"] instead of paying for
+     * the today aggregate it never reads; overview needs both.
+     */
+    async loadMetrics(runId, ranges = ["today", "run"]) {
       return readSlice("metrics", async () => {
         const effectiveRunId = runId || store.getState().runtime.runId || rememberedRun();
         const metricContext = effectiveRunId ? { runId: effectiveRunId } : {};
@@ -274,18 +308,21 @@
           if (!activeRunId) throw new Error("当前运行标识尚未提供");
           return core.api.legacySummary(activeRunId);
         };
-        const results = await Promise.allSettled([
-          modernOrLegacy(() => core.api.metrics("today", metricContext), legacySummary),
-          modernOrLegacy(() => core.api.metrics("run", metricContext), legacySummary)
-        ]);
-        const data = { ...(store.getState().metrics.data || {}), periodStatus: {} };
-        ["today", "current"].forEach((period, index) => {
+        const wanted = Array.isArray(ranges) && ranges.length ? ranges : ["today", "run"];
+        const plan = [["today", "today"], ["run", "current"]].filter(([range]) => wanted.includes(range));
+        const results = await Promise.allSettled(
+          plan.map(([range]) => modernOrLegacy(() => core.api.metrics(range, metricContext), legacySummary))
+        );
+        const data = { ...(store.getState().metrics.data || {}), periodStatus: { ...(store.getState().metrics.data?.periodStatus || {}) } };
+        plan.forEach(([, period], index) => {
           const result = results[index];
           data.periodStatus[period] = result.status === "fulfilled" ? resourceStatus(result.value) : "stale";
           if (result.status === "fulfilled") data[period] = result.value;
         });
         if (results.every((result) => result.status === "rejected")) throw results[0].reason;
-        const stale = Object.values(data.periodStatus).some((status) => status !== "ready");
+        // Judge only the periods this call asked for; a retained status from an
+        // earlier full fetch must not mark a run-only refresh stale.
+        const stale = plan.some(([, period]) => data.periodStatus[period] !== "ready");
         const currentMetrics = store.getState().metrics;
         if (stale && currentMetrics.data && results.every((result) => result.status === "fulfilled" && resourceStatus(result.value) === "unavailable")) {
           return store.setSlice("metrics", { ...currentMetrics, status: "stale", stale: true, error: "统计接口暂时不可用，保留最近成功数据" });

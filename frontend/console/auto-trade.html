@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0a1524">
   <title>自动交易 · BTC 五分钟反转控制台</title>
-  <script>
-    window.__POLY_ASSET_VERSION__ = Date.now().toString(36);
-    document.write('<link rel="stylesheet" href="./auto-trade-block.css?v=' + window.__POLY_ASSET_VERSION__ + '">');
-    ["./shared/preview-core.js", "./shared/view-model.js", "./shared/preview-store.js", "./shared/ws-client.js", "./shared/api-adapter.js"]
-      .forEach(function(source) { document.write('<script src="' + source + '?v=' + window.__POLY_ASSET_VERSION__ + '"><\/script>'); });
-  </script>
+  <link rel="stylesheet" href="./auto-trade-block.css">
+  <script src="./shared/preview-core.js"></script>
+  <script src="./shared/view-model.js"></script>
+  <script src="./shared/preview-store.js"></script>
+  <script src="./shared/ws-client.js"></script>
+  <script src="./shared/api-adapter.js"></script>
 </head>
 <body>
   <div id="auto-trade-block-root"></div>
-  <script>document.write('<script src="./auto-trade-block.js?v=' + window.__POLY_ASSET_VERSION__ + '"><\/script>');</script>
+  <script src="./auto-trade-block.js"></script>
 </body>
 </html>

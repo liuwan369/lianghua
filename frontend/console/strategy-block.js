@@ -314,5 +314,8 @@
   if (legacyMode) root.querySelector("[data-activate]").hidden = true;
   updatePreview();
   store.subscribe("strategy", receive);
-  void adapter.loadMarkets().then(() => adapter.loadStrategy());
+  // This page reads no catalog data and always submits an explicit config.assetId,
+  // so the market catalog was fetched and discarded — serially, delaying the
+  // strategy config this page actually needs. Load the config directly.
+  void adapter.loadStrategy();
 })();

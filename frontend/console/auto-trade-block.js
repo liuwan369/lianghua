@@ -287,6 +287,17 @@
   var activeStreamConfigKey = null;
   var lastSnapshotValid = false;
   var lastFillCount = null;
+  var roundLedgerTick = 0;
+  // Fills/settlements are read on a slower cadence than position/orders, but the
+  // end of a round is exactly when settlement appears, so read them every cycle
+  // once the round is within its final seconds or already over.
+  var roundSettlementDue = function(context) {
+    var asset = assetById(context && context.assetId);
+    var end = asset && Number(asset.endAt != null ? asset.endAt : asset.end);
+    if (!Number.isFinite(end)) return false;
+    var remaining = end - Date.now() / 1000;
+    return remaining <= 15;
+  };
   var timestampMs = window.PolyPreview.format.timestampMs;
   var markSnapshotStale = function(message) {
     lastSnapshotValid = false;
@@ -812,6 +823,13 @@
     }
     var version = contextVersion;
     var asset = assetById(context.assetId);
+    // Position and orders change continuously and stay on the 3s cadence. The
+    // ledger views do not: a round settles once, so polling them every 3s spent
+    // ~99 of every 100 requests re-fetching identical data. Read them every 4th
+    // cycle (~12s); a new fill still refreshes the balance immediately via
+    // refreshAccountSoon, and settlement is re-read right after the round ends.
+    roundLedgerTick = (roundLedgerTick + 1) % 4;
+    var readLedger = roundLedgerTick === 1 || roundSettlementDue(context);
     roundRefreshInFlight = Promise.allSettled([
       Promise.resolve().then(function() { return adapter.loadPosition(context.roundId, context); }).then(function(value) {
         if (version === contextVersion) renderPosition(value);
@@ -819,13 +837,13 @@
       Promise.resolve().then(function() { return adapter.loadOrders(context.roundId, context); }).then(function(value) {
         if (version === contextVersion) renderOrders(value, asset);
       }, function() { if (version === contextVersion) text("[data-orders-state]", "读取失败 · 保留本场最近成功数据"); }),
-      Promise.resolve().then(function() { return adapter.loadFills(null, ledgerContext()); }).then(function(value) {
+      !readLedger ? null : Promise.resolve().then(function() { return adapter.loadFills(null, ledgerContext()); }).then(function(value) {
         if (version === contextVersion) renderFills(value, asset);
       }, function() { if (version === contextVersion) text("[data-fill-summary]", "成交回报读取失败"); }),
-      Promise.resolve().then(function() { return adapter.loadSettlements(null, ledgerContext()); }).then(function(value) {
+      !readLedger ? null : Promise.resolve().then(function() { return adapter.loadSettlements(null, ledgerContext()); }).then(function(value) {
         if (version === contextVersion) renderSettlements(value);
       }, function() { if (version === contextVersion) { text("[data-settlement-state]", "结算读取失败"); text("[data-settlement-detail]", "未确认结算状态，不显示成功结果。"); } })
-    ]).finally(function() {
+    ].filter(Boolean)).finally(function() {
       roundRefreshInFlight = null;
       scheduleRoundRefresh(version === contextVersion ? 3000 : 0);
     });
@@ -1030,7 +1048,8 @@
     metricsRefreshTimer = window.setTimeout(function() {
       metricsRefreshTimer = null;
       if (metricsRefreshInFlight) return;
-      metricsRefreshInFlight = Promise.resolve(adapter.loadMetrics())
+      // This page only renders the current run's latency histogram.
+      metricsRefreshInFlight = Promise.resolve(adapter.loadMetrics(null, ["run"]))
         .catch(function() { return null; })
         .finally(function() {
           metricsRefreshInFlight = null;
@@ -1043,13 +1062,17 @@
     var context = currentContext();
     if (!context.assetId || !context.marketId || !context.roundId) { scheduleRuntimeRefresh(); return Promise.resolve(); }
     var version = contextVersion;
-    runtimeRefreshInFlight = Promise.allSettled([adapter.loadRuntime(context), adapter.loadRuntime()]).then(function(results) {
+    // One request, both views. The global response already carries markets[], so
+    // the scoped view is derived locally: this halves the runtime poll rate and
+    // guarantees the global and scoped renders describe the same instant.
+    runtimeRefreshInFlight = Promise.resolve(adapter.loadRuntime()).then(function(global) {
       if (version !== contextVersion) return;
-      var scoped = results[0];
-      var global = results[1];
-      if (global.status === "fulfilled") renderRuntime(global.value, true);
-      if (scoped.status === "fulfilled") renderRuntime(scoped.value);
-      else renderRuntime({ status: "unavailable", stale: true });
+      renderRuntime(global, true);
+      var scoped = adapter.scopeRuntime(global, context);
+      renderRuntime(scoped || { status: "unavailable", stale: true });
+    }).catch(function() {
+      if (version !== contextVersion) return;
+      renderRuntime({ status: "unavailable", stale: true });
     }).finally(function() {
       runtimeRefreshInFlight = null;
       scheduleRuntimeRefresh(version === contextVersion ? 2000 : 0);
@@ -1066,9 +1089,10 @@
   };
   var refreshMarketContext = function() {
     if (marketContextRefreshInFlight) return marketContextRefreshInFlight;
-    marketContextRefreshInFlight = Promise.resolve()
-      .then(function() { return adapter.loadMarkets(); })
-      .then(function() { return adapter.loadMarketPool(); })
+    // markets and market-pool are independent (pool reads the catalog from the
+    // store, not this call's result), so fetch them in parallel rather than
+    // doubling the wall-clock of each cycle.
+    marketContextRefreshInFlight = Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool()])
       .finally(function() {
         marketContextRefreshInFlight = null;
         scheduleMarketContextRefresh();
