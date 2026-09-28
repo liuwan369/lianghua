@@ -1813,16 +1813,18 @@ class Ledger:
             # round as if it never traded — reading a loss as a profit. Report the
             # committed cost of those rounds too; the two converge on confirmation.
             unsettled = db.execute("""SELECT COUNT(*) AS rounds, COALESCE(SUM(cost),0) AS cost FROM (
-                    SELECT t.round_id,
+                    SELECT json_extract(t.payload,'$.round_id') AS round_id,
                         SUM(COALESCE(json_extract(t.payload,'$.amount'),0)
                             + COALESCE(json_extract(t.payload,'$.fee'),
                                        json_extract(t.payload,'$.fee_estimate'),0)) AS cost
                     FROM trade_details t
                     WHERE t.run_id=?
                       AND COALESCE(json_extract(t.payload,'$.trade_status'),'') != 'FAILED'
+                      AND json_extract(t.payload,'$.round_id') IS NOT NULL
                       AND NOT EXISTS (SELECT 1 FROM market_details m WHERE m.run_id=t.run_id
-                          AND m.round_id=t.round_id AND m.status='已结算' AND m.pnl IS NOT NULL)
-                    GROUP BY t.asset_id, t.round_id)""", (run_id,)).fetchone() \
+                          AND m.round_id=json_extract(t.payload,'$.round_id')
+                          AND m.status='已结算' AND m.pnl IS NOT NULL)
+                    GROUP BY t.asset_id, json_extract(t.payload,'$.round_id'))""", (run_id,)).fetchone() \
                 if self._has_table(db, "trade_details") else None
             unsettled_cost = float(unsettled["cost"] or 0) if unsettled else 0.0
             unsettled_rounds = int(unsettled["rounds"] or 0) if unsettled else 0
