@@ -299,7 +299,7 @@
      * current run's latency histogram, so it passes ["run"] instead of paying for
      * the today aggregate it never reads; overview needs both.
      */
-    async loadMetrics(runId, ranges = ["today", "run"]) {
+    async loadMetrics(runId, ranges = ["today", "month", "run"]) {
       return readSlice("metrics", async () => {
         const effectiveRunId = runId || store.getState().runtime.runId || rememberedRun();
         const metricContext = effectiveRunId ? { runId: effectiveRunId } : {};
@@ -308,8 +308,8 @@
           if (!activeRunId) throw new Error("当前运行标识尚未提供");
           return core.api.legacySummary(activeRunId);
         };
-        const wanted = Array.isArray(ranges) && ranges.length ? ranges : ["today", "run"];
-        const plan = [["today", "today"], ["run", "current"]].filter(([range]) => wanted.includes(range));
+        const wanted = Array.isArray(ranges) && ranges.length ? ranges : ["today", "month", "run"];
+        const plan = [["today", "today"], ["month", "month"], ["run", "current"]].filter(([range]) => wanted.includes(range));
         const results = await Promise.allSettled(
           plan.map(([range]) => modernOrLegacy(() => core.api.metrics(range, metricContext), legacySummary))
         );

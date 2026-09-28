@@ -2510,7 +2510,7 @@ def make_handler(root: Path):
                 return
             if path == "/api/metrics/summary":
                 requested_range = query.get("range", ["today"])[0]
-                if requested_range not in {"run", "today", "all"}:
+                if requested_range not in {"run", "today", "month", "all"}:
                     raise ValueError("invalid metrics range")
                 requested_run_id = query.get("runId", [None])[0]
                 if requested_run_id is not None:
@@ -2575,6 +2575,31 @@ def make_handler(root: Path):
                     self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_event_query","stale":true}', 400)
+                return
+            if path == "/api/rounds":
+                run_id = (_scoped_run_id(query["runId"][0]) if query.get("runId") else _api_run_id())
+                if not run_id:
+                    self._send_json(b'{"schemaVersion":1,"available":false,"stale":true,'
+                                    b'"rounds":[],"error":"\xe5\xbd\x93\xe5\x89\x8d\xe6\xb2\xa1\xe6\x9c\x89\xe8\xbf\x90\xe8\xa1\x8c\xe8\xae\xb0\xe5\xbd\x95"}')
+                    return
+                try:
+                    data = _api_ledger().rounds_page(
+                        run_id,
+                        before_round_id=(query.get("beforeRoundId") or [None])[0],
+                        limit=int((query.get("limit") or [50])[0]),
+                        asset_id=(query.get("assetId") or [None])[0],
+                        round_id=(query.get("roundId") or [None])[0])
+                    metadata = _ledger_metadata(run_id)
+                    value = {"schemaVersion": 1, "available": True, "source": "ledger", **data,
+                             "asOf": metadata.get("asOf"), "stale": metadata["stale"],
+                             "error": data.get("error") or metadata["error"]}
+                except (ValueError, TypeError):
+                    self._send_json(b'{"error":"invalid_rounds_query","stale":true}', 400)
+                    return
+                except (KeyError, OSError, sqlite3.Error, RuntimeError):
+                    value = {"schemaVersion": 1, "available": False, "stale": True, "rounds": [],
+                             "source": "ledger", "asOf": None, "error": "ledger_projection_unavailable"}
+                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path.startswith("/api/rounds/") and path.endswith("/orders"):
                 round_id = path[len("/api/rounds/"):-len("/orders")].strip("/")
@@ -2803,7 +2828,8 @@ def make_handler(root: Path):
             if modern:
                 value = json.loads(body)
                 cacheable = self.command == "GET" and (path in {
-                    "/api/events", "/api/fills", "/api/settlements", "/api/metrics/summary"} or path.startswith("/api/rounds/"))
+                    "/api/events", "/api/fills", "/api/settlements", "/api/metrics/summary",
+                    "/api/rounds"} or path.startswith("/api/rounds/"))
                 key = (_trading_run_id, self.path)
                 with _modern_cache_lock:
                     if cacheable and status >= 500 and key in _modern_response_cache:

@@ -1644,6 +1644,28 @@ class Ledger:
         when the projection has no authoritative position snapshot.
         """
         asset_id = _query_asset(asset_id)
+        # The runtime snapshot only exists while the process runs, so every
+        # "stopped" answer used to erase what the round actually traded. Fills are
+        # durable, so fall back to them and label the result historical rather
+        # than reporting 0 shares for a round that really bought.
+        def _from_fills(reason):
+            if round_id is None or str(round_id).startswith("0x"):
+                return None
+            try:
+                page = self.rounds_page(run_id, round_id=str(round_id), asset_id=asset_id, limit=1)
+            except (KeyError, OSError, ValueError, sqlite3.Error):
+                return None
+            traded = next(iter(page.get("rounds") or []), None)
+            if not traded:
+                return None
+            return {**unavailable, "available": True, "error": reason, "source": "fills",
+                    "assetId": traded["assetId"], "roundId": traded["roundId"],
+                    "marketId": traded["marketId"], "roundStatus": traded["status"],
+                    "yesShares": None, "noShares": None, "totalShares": traded["shares"],
+                    "averagePrice": traded["averagePrice"], "occupiedUsd": traded["cost"],
+                    "fees": traded["fees"], "estimatedFees": traded["estimatedFees"],
+                    "settlementState": traded["settlementState"], "creditedUsd": traded["creditedUsd"],
+                    "pnl": traded["pnl"], "updatedAt": traded["lastTime"]}
         unavailable = {"available": False, "stale": True, "runId": run_id, "assetId": asset_id,
                        "roundId": round_id,
                        "marketId": None, "stage": None, "confirmations": None, "yesShares": None,
@@ -1654,16 +1676,19 @@ class Ledger:
         with self._connect() as db:
             run = self._run(db, run_id)
             if not self._has_table(db, "platform_runtime"):
-                return {**unavailable, "error": "position projection unavailable"}
+                return _from_fills("position projection unavailable") \
+                    or {**unavailable, "error": "position projection unavailable"}
             row = db.execute("SELECT source_at,payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
         if row is None:
-            return {**unavailable, "error": "position projection pending"}
+            return _from_fills("position projection pending") \
+                or {**unavailable, "error": "position projection pending"}
         try:
             runtime = json.loads(row["payload"])
         except (TypeError, ValueError):
-            return {**unavailable, "error": "position projection invalid"}
+            runtime = None
         if not isinstance(runtime, dict):
-            return {**unavailable, "error": "position projection invalid"}
+            return _from_fills("position projection invalid") \
+                or {**unavailable, "error": "position projection invalid"}
         now, at = time.time(), row["source_at"]
         error = "position snapshot expired" if now - at > RUNTIME_MAX_AGE or at > now + 1 else None
         try:
@@ -1698,7 +1723,10 @@ class Ledger:
             return {**unavailable, "error": "ambiguous round position; supply assetId and marketId", "updatedAt": at}
         selected = next(iter(matches.values()), None)
         if selected is None or not selected.get("roundId"):
-            return {**unavailable, "error": "round position unavailable", "updatedAt": at}
+            # A stopped run keeps only its final snapshot, which no longer carries
+            # the older rounds. Those rounds still traded, so report the fills.
+            return _from_fills("round position unavailable") \
+                or {**unavailable, "error": "round position unavailable", "updatedAt": at}
         positions = runtime.get("positions") if isinstance(runtime.get("positions"), list) else []
         by_token = {item.get("tokenId"): item for item in positions if isinstance(item, dict)}
         yes = by_token.get(selected.get("upTokenId"), {})
@@ -1737,6 +1765,17 @@ class Ledger:
         total_shares = yes_shares + no_shares if yes_shares is not None and no_shares is not None else None
         if not complete:
             error = "position snapshot incomplete"
+        # A stopped run's final snapshot no longer carries per-side positions, so
+        # the panel showed 0 shares and no average price for rounds that really
+        # traded. The fills are durable; prefer them once the snapshot is unusable.
+        if error is not None and not total_shares:
+            historical = _from_fills(error)
+            if historical is not None:
+                return {**historical, "stage": selected.get("nextStage"),
+                        "confirmations": selected.get("confirmationCount"),
+                        "stages": selected.get("stages") if isinstance(selected.get("stages"), list) else [],
+                        "maxStages": (selected.get("config") or {}).get("maxStages"),
+                        "reason": selected.get("reason")}
         return {
             "available": True,
             "stale": error is not None,
@@ -1909,12 +1948,13 @@ class Ledger:
 
     def metrics_summary(self, run_id, *, range="today", asset_id=None, market_id=None, round_id=None):
         """Slow, read-only statistics scoped to one account and UTC calendar days."""
-        if range not in ("run", "today", "all"):
+        if range not in ("run", "today", "month", "all"):
             raise ValueError("invalid metrics range")
         asset_id = _query_asset(asset_id)
         now = time.time()
-        start = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() \
-            if range == "today" else None
+        midnight = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = midnight.timestamp() if range == "today" \
+            else midnight.replace(day=1).timestamp() if range == "month" else None
         if range == "run" and asset_id is None and market_id is None and round_id is None:
             return {**self.summary(run_id), "range": range, "from": None, "to": now, "as_of": now}
         with self._connect() as db:
@@ -2210,6 +2250,78 @@ class Ledger:
             items = [{"id": row["id"], **json.loads(row["payload"])} for row in rows[:limit]]
             return {"run_id": run_id, "settlements": items,
                     "next_before_id": items[-1]["id"] if len(rows) > limit else None}
+
+    def rounds_page(self, run_id, *, before_round_id=None, limit=50, asset_id=None, round_id=None):
+        """Per-round trade history: cost, shares, fees, average price and outcome.
+
+        Aggregated from the confirmed fills rather than the runtime snapshot, so a
+        stopped run still reports what it traded.
+        """
+        limit = max(1, min(int(limit), 200))
+        asset_id = _query_asset(asset_id)
+        with self._connect() as db:
+            self._run(db, run_id)
+            if not self._has_table(db, "trade_details"):
+                return {"run_id": run_id, "rounds": [], "next_before_round_id": None,
+                        "error": "trade projection unavailable"}
+            clause, args = "", [run_id]
+            if asset_id is not None:
+                clause += " AND t.asset_id=?"
+                args.append(asset_id)
+            if round_id is not None:
+                clause += " AND json_extract(t.payload,'$.round_id')=?"
+                args.append(round_id)
+            if before_round_id is not None:
+                clause += " AND json_extract(t.payload,'$.round_id')<?"
+                args.append(str(before_round_id))
+            args.append(limit + 1)
+            rows = list(db.execute(
+                """SELECT t.asset_id AS asset_id,
+                        json_extract(t.payload,'$.round_id') AS round_id,
+                        MIN(json_extract(t.payload,'$.market_id')) AS market_id,
+                        COUNT(*) AS fills,
+                        SUM(COALESCE(json_extract(t.payload,'$.amount'),0)) AS notional,
+                        SUM(COALESCE(json_extract(t.payload,'$.filled_shares'),
+                                     json_extract(t.payload,'$.shares'),0)) AS shares,
+                        SUM(COALESCE(json_extract(t.payload,'$.fee'),0)) AS fees,
+                        SUM(COALESCE(json_extract(t.payload,'$.fee_estimate'),0)) AS fee_estimates,
+                        SUM(json_extract(t.payload,'$.fee') IS NULL) AS missing_fees,
+                        MAX(COALESCE(json_extract(t.payload,'$.time'),0)) AS last_time
+                    FROM trade_details t
+                    WHERE t.run_id=?
+                      AND COALESCE(json_extract(t.payload,'$.trade_status'),'') != 'FAILED'
+                      AND json_extract(t.payload,'$.round_id') IS NOT NULL""" + clause
+                + """ GROUP BY t.asset_id, json_extract(t.payload,'$.round_id')
+                     ORDER BY json_extract(t.payload,'$.round_id') DESC LIMIT ?""", args))
+            rounds = []
+            for row in rows[:limit]:
+                outcome = db.execute("SELECT status,pnl FROM market_details WHERE run_id=? AND asset_id=? AND round_id=?",
+                                     (run_id, row["asset_id"], row["round_id"])).fetchone()
+                settlement = db.execute("SELECT payload,verified FROM settlement_details WHERE run_id=? AND asset_id=? "
+                                        "AND json_extract(payload,'$.round_id')=?",
+                                        (run_id, row["asset_id"], row["round_id"])).fetchone()
+                payload = json.loads(settlement["payload"]) if settlement else {}
+                shares, notional = row["shares"] or 0, row["notional"] or 0
+                fees = row["fees"] or 0
+                # A derived fee is not confirmed cost, so keep it separate; total
+                # cost falls back to the estimate only to show committed capital.
+                cost = notional + (fees if not row["missing_fees"] else fees + (row["fee_estimates"] or 0))
+                rounds.append({
+                    "roundId": row["round_id"], "assetId": row["asset_id"], "marketId": row["market_id"],
+                    "fills": row["fills"], "shares": shares or None,
+                    "notional": notional, "fees": None if row["missing_fees"] else fees,
+                    "estimatedFees": row["fee_estimates"] or 0, "cost": cost,
+                    "averagePrice": (notional / shares) if shares else None,
+                    "status": outcome["status"] if outcome else None,
+                    "pnl": outcome["pnl"] if outcome else None,
+                    "settlementState": payload.get("state"),
+                    "creditedUsd": payload.get("credited_usd"),
+                    "settlementReason": payload.get("reason"),
+                    "settled": bool(settlement["verified"]) if settlement else False,
+                    "lastTime": row["last_time"] or None,
+                })
+            return {"run_id": run_id, "rounds": rounds,
+                    "next_before_round_id": rounds[-1]["roundId"] if len(rows) > limit else None}
 
     def metadata(self, run_id):
         """Return projection freshness without ingesting or reading journal contents."""
