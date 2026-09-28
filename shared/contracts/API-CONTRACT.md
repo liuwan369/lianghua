@@ -52,7 +52,15 @@
 
 运行状态来自异步账本投影的最近 `platform_status` 快照；订单由 `order` 生命周期投影到订单详情，同一 client order 更新同一条记录；`/api/fills` 返回成交 journal 修订记录，汇总按经济成交身份去重；结算投影每场保留最新状态，只有验证到账的结算才进入最终盈亏和胜率。运行状态 DTO 另提供 `processRunning`，只表示控制面 `trading_status()` 直接观察到的本地交易子进程事实（`true`、`false` 或未知 `null`），不从异步账本 projection、行情新鲜度或交易所动作推导；因此 projection 追赶或过期时，前端仍能独立判断进程是否运行。日志仍在追赶或运行快照过期时，状态必须 `stale=true`。run 已选中但异步投影尚未登记时，运行、订单、成交、结算或统计查询返回 HTTP 200、`status="unavailable"`、`available=false`、`stale=true` 和空时间/业务值，稍后由 REST 重查；不能将该窗口改成 404 或零值。
 
-统计响应提供规范字段 `fill_count`、`order_count`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。为旧控制台保留 `fills=fill_count`、`orders=order_count`、`wins=settled_wins`、`losses=settled_losses`；`orders` 必须使用订单生命周期计数，不能用成交数代替。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
+统计响应提供规范字段 `fill_count`、`order_count`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。为旧控制台保留 `fills=fill_count`、`orders=order_count`、`wins=settled_wins`、`losses=settled_losses`；`orders` 必须使用订单生命周期计数，不能用成交数代替。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。
+
+费用来源分三级，只有第三级才算估算。Polymarket 的费用是**撮合时即确定的公式值**，不是事后结算数字：`fee = C × feeRate × p × (1 - p)`，四舍五入到 5 位小数，crypto 市场 taker 费率 0.07、maker 0，makers 不收费（见 <https://docs.polymarket.com/polymarket-learn/trading/fees>）。因此：
+
+- `fee_source="reported"`：交易所在成交回报里直接给出的费用，最权威。实测 maker 成交为 0。
+- `fee_source="rate-derived"`：费率取自该市场自身的费用元数据，份额与价格均为精确值，按上述官方公式算出。这是**确定性计算结果，不是估算**，计入 `fees` 与 `pnl`。交易所不会对 taker 成交回报费用，等 `reported` 等不到，若把它当估算会让 `pnl` 永久为 `null`。
+- `fee_source="estimate"`：连费率都未知时的兜底猜测，仍然只进 `estimated_fees`，并继续阻断 `pnl`（`pnl_error="cost_basis_unverified"`）。
+
+后到的 `reported` 费用仍可覆盖同一笔成交的 `rate-derived` 值。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
 
 无当前 run 或统计投影尚未建立时，`/api/metrics/summary` 使用 HTTP 200 和 `status="unavailable"`、`available=false`、`stale=true`、`completeness="unavailable"`（投影等待时为 `waiting`）；金额、计数、胜率及 `asOf` 为 `null`。投影查询成功后返回 `available=true`；若尚未追上 journal，仍可带最后投影值并同时标记 stale。账户保存回执 `{ok:true,report:{saved:true,...}}` 仅表示配置已保存；其中 `account_check_ready`、`live_start_ready` 和 `settlement_credentials_ready` 独立表达检查/启动资格，保存成功不代表账户已检查通过。
 

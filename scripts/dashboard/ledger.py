@@ -417,7 +417,15 @@ def _projection(record):
     result["trade_status"] = record.get("trade_status") if record.get("trade_status") in (
         "MATCHED", "MATCHED_NOT_BROADCASTED", "MINED", "RETRYING", "CONFIRMED", "FAILED") else None
     result["fee_source"] = record.get("fee_source") if record.get("fee_source") in ("reported", "rate-derived", "estimate") else None
-    if result["fee_source"] in ("rate-derived", "estimate"):
+    # Polymarket publishes the fee as a deterministic formula, not a post-trade
+    # settlement figure: fee = C x feeRate x p x (1-p), applied at match time,
+    # rounded to 5 decimals (docs.polymarket.com/polymarket-learn/trading/fees).
+    # Crypto markets charge taker 0.07 and maker 0, and the venue never reports a
+    # taker fee back on fills. So a "rate-derived" fee — rate taken from the
+    # market's own fee metadata, shares and price both exact — is an exact cost,
+    # not a guess, and must count as confirmed. Only "estimate" (no rate known at
+    # all) stays unconfirmed.
+    if result["fee_source"] == "estimate":
         result["fee_estimate"] = result["fee"]
         result["fee"] = None
     for field in ("client_order_id", "order_id", "token_id", "strategy_id", "trade_id", "code", "phase", "failure_phase",
@@ -1369,7 +1377,8 @@ class Ledger:
             coverage = payload.get("coverage")
             reason = "cost_basis_unverified"
             if (trades and isinstance(coverage, dict)
-                    and all(item.get("trade_status") == "CONFIRMED" and item.get("fee_source") == "reported"
+                    and all(item.get("trade_status") == "CONFIRMED"
+                            and item.get("fee_source") in ("reported", "rate-derived")
                             and item.get("amount") is not None and item.get("fee") is not None
                             and item["fee"] >= 0 and item.get("shares") is not None
                             and item.get("direction") in ("BUY", "SELL") and item.get("token_id") in coverage
