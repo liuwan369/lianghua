@@ -12,7 +12,7 @@ node dist/cli/platform.js --live --strategy btc-reversal --strategy-config resul
 
 策略配置由控制台保存。修改参数只影响下一场，当前订单继续按创建时的版本管理。关闭网页不会停止运行，停止和暂停通过控制台发起。
 
-## 本会话负责范围
+## 职责范围
 
 | 功能 | 是否需要实时行情 | 运行时依赖 |
 | --- | --- | --- |
@@ -49,7 +49,17 @@ node dist/cli/platform.js --live --strategy btc-reversal --strategy-config resul
 
 第一份完整双边盘口只建立基线，不直接下单。只有观察到一侧从低于 `triggerPrice` 真正上穿到触发价以上，才创建下一阶段的经济订单意图；双边同一帧同时上穿会进入歧义状态，等待下一次明确方向。如果一侧已经处于高价区，另一侧随后新跨过触发价，则按反转信号处理。
 
-`maxBuyPrice` 是实际 BUY 限价，`confirmationPrice` 只更新方向确认和 `confirmationCount`，当前不会延迟下一阶段下单。新创建的阶段统一使用 `trigger: "crossing"`；旧持久化状态中的 `initial_band_entry` 只为读取兼容保留。
+三个价格参数的职责必须分清（服务器当前值 `triggerPrice=0.67`、`confirmationPrice=0.70`、`maxBuyPrice=0.70`）：
+
+| 参数 | 作用 | 是否影响下单 |
+| --- | --- | --- |
+| `triggerPrice` | 触发位置：一侧 ask 上穿它才创建阶段 | 是，决定**何时**下单 |
+| `maxBuyPrice` | 挂出去的 BUY 限价，同时用于成本预算 | 是，决定**以什么价**下单 |
+| `confirmationPrice` | 只更新方向确认和 `confirmationCount`（前端「确认反转 N 次」计数） | **否** |
+
+也就是说实际行为是「`triggerPrice` 触发，挂 `maxBuyPrice` 的限价单」。在 0.67 触发而不等到 0.70 是有意的：价格不等人，等到 0.70 再下单已经晚了。`confirmationPrice` 不构成下单门槛，也不会延迟下一阶段下单；它与 `maxBuyPrice` 恰好同值，容易被误读成限价来源，不要据此认为下单价由它决定，也不要把它当成漏接的风控闸门。
+
+新创建的阶段统一使用 `trigger: "crossing"`；旧持久化状态中的 `initial_band_entry` 只为读取兼容保留。
 
 策略在返回提交动作前先把 `clientOrderId` 和阶段写入持久化状态。平台按经济订单键幂等，提交、查回、撤单和重试保持串行；HTTP 超时或进程重启后的订单会进入 `UNKNOWN`/恢复闸门，不会生成一个补偿性新订单。场次结束时仍为 `CREATED` 的未提交意图会标记为 `ABANDONED`，已有订单身份的余单进入撤单流程。
 
@@ -57,6 +67,8 @@ node dist/cli/platform.js --live --strategy btc-reversal --strategy-config resul
 
 不同订单可以并行提交；同一经济订单的提交、查回、撤单和重试保持串行。交易决策由 WebSocket 事件直接触发，不使用固定秒级采样、debounce 或 REST 盘口轮询。页面展示消息年龄、本地处理、签名、HTTP ACK、用户回报和撤单 ACK 的分段延迟，缺少真实样本时显示未知。
 
-新经济订单统一经过 `ClobWrapper.submitOrder()`，策略不直接调用 CLOB SDK；恢复只会通过 `resubmitPrepared()` 重放已经持久化的签名订单，不会生成新的经济订单。BUY/SELL、GTC/FOK/FAK 和逐单撤单仍由底座支持；旧的金额换算买单、FOK 市价卖单、单独 tick 查询、全量撤单等未使用便捷入口已移除。
+新经济订单统一经过 `ClobWrapper.submitOrder()`，策略不直接调用 CLOB SDK；恢复只会通过 `resubmitPrepared()` 重放已经持久化的签名订单，不会生成新的经济订单。BUY/SELL、GTC/FOK/FAK 和逐单撤单仍由底座支持。
+
+CLOB 封装层只保留单笔 `cancel(orderId)`，旧的金额换算买单、FOK 市价卖单、单独 tick 查询和交易所批量撤单等便捷入口已移除。平台层仍有 `orders.cancelAll(strategyId)`，用于停止流程和按策略收口未完成订单（见 `src/cli/platform.ts` 的关停阶段与 `src/platform/platform.ts` 的策略停止），它逐单调用上述单笔撤单，不是交易所批量接口。
 
 账户秘密、真实订单/成交/资金/结算数据不放入发布包。程序发布采用本地源码、Git 提交、服务器发布目录三段校验，并保留可回退版本；回退程序不会覆盖之后产生的交易账本。
