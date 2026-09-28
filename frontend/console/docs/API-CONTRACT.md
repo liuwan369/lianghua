@@ -13,7 +13,11 @@
 
 对生产尚未提供或返回不可用的能力，前端应保持 `unavailable` 或 `stale`，不能把演示数据、空值或按钮文字当成真实交易状态。旧 `/api/v1/markets` 缺少 `roundId` 时，前端只展示目录/报价并等待后端提供轮次标识；当前 `/api/markets` 已能返回有效 `marketId + roundId`，但生产盘口深度仍未提供。
 
-截至 2026-09-25 的生产只读事实：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC/ETH/SOL 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，但 `depthAvailable=false`、`strategyEligible=false`；这不会单独阻止新鲜双边 BBO 的报价展示，五档区域会明确显示深度待接入，启动仍由 BBO、账户、策略、运行池和服务器运行时资格共同决定。运行池返回 `market_pool_unavailable`；runtime 返回 `stopped`、`runtime_snapshot_stale`；账户状态 `live_start_ready=false`、`account_check_ready=false`，账户快照返回 HTTP 200 但 `available=false`、`stale=true`、`account_response_invalid`。`/api/metrics/summary?range=today` 与 `?range=run` 返回 HTTP 200，但 `available=false`、`stale=true`、错误为“当前没有运行记录”；路由已部署，但目前没有可汇总的运行记录，也没有 `runId` 可回退查询 legacy 汇总。生产 `streams=false`，页面使用独立 REST 轮询。以上只读复核没有验证真实订单、成交或结算。`strategyEligible` 不作为前端启动预检条件，避免把展示采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。
+截至 2026-09-28 的生产只读事实（从服务器本机读取，控制台只监听 loopback）：`/api/markets` 返回 HTTP 200，`collector_online=true`、`stale=false`，BTC 的 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 持续更新，`depthAvailable=true`，报价年龄稳定在 0.3–1.2 秒（阈值 2 秒）。`strategyEligible=false`（交易未运行；该字段只有运行时 accepted snapshot 才为 true），它不作为前端启动预检条件，避免把采集源当成执行资格；运行时在 start 命令内核验真实平台行情和执行资格。换场瞬间旧场会短暂 `stale=true` 并带 `market_snapshot_expired`，新场开始即恢复，属正常行为。
+
+运行池 `available=true`、`stale=false`、`desiredIds=["btc"]`，`currentIds`/`nextRoundIds` 为空且 `effectiveRoundId=null`（交易未运行；`nextRoundIds` 服务器恒为空）。runtime 返回 `stopped`、`processRunning=false`、`stale=true`、`runtime_snapshot_stale` —— 停止状态下运行快照过期属正常，不阻止启动。账户状态 `account_check_ready=true`、`settlement_credentials_ready=true`、`live_start_ready=true`、`server_live_enabled=true`，账户已就绪。`/api/diagnostics/health` 为 `degraded`（交易未运行所致），`services` 键为 `trading`/`collector`/`projection`。生产 `streams=false`，页面使用独立 REST 轮询。
+
+用部署后的前端代码对上述真实 DTO 跑启动门禁：五级全部通过，启动按钮可用。以上只读复核没有执行启动、停止、下单或账户写入，也没有验证真实订单、成交或结算。
 
 ## 现有服务可复用接口
 
@@ -161,10 +165,10 @@ legacy 模式实际使用的 DTO 边界如下：
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载 |
 | 保存策略草稿 | POST | `/api/strategy/drafts` | 校验后保存，不自动启动 |
 | 激活策略 | POST | `/api/strategy/activate` | `effectiveRoundId` |
-| 策略参考参数 | GET/POST/DELETE | `/api/strategy/presets` | 用户可增删 |
+| 策略参考参数 | — | `/api/strategy/presets` | 未接通：服务器无此路由（GET/POST 返回 404），`presets=false`。页面对应区域为固定占位，不发请求 |
 | 本场持仓 | GET | `/api/rounds/{roundId}/position` | 首次加载/切场 |
 | 本场订单 | GET | `/api/rounds/{roundId}/orders` | 分页历史 |
-| 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 明确返回 command 状态 |
+| 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 未接通：返回 501 和 `accepted=false`，`cancelOrder=false`、`flatten=false`。页面显示不可用，不模拟成功 |
 | 账户快照 | GET | `/api/account/snapshot` | 15 秒；不返回秘密 |
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
 | 系统诊断 | GET | `/api/diagnostics/health` | 总览约 15 秒，设置页手动刷新 |
@@ -191,7 +195,9 @@ legacy 模式实际使用的 DTO 边界如下：
 }
 ```
 
-`bids`/`asks` 也可使用 `{ price, size }` level 对象。新鲜的双边 BBO 只要包含 `marketId`、`roundId`、`sequence`、`sourceAt`、`expiresAt` 和四个 bid/ask，就可以更新报价，即使 `depthAvailable=false` 或 `depthUnavailable=true`；此时五档表显示“深度暂不可用”，不填充伪造档位。`stale: true`、过期、缺少身份或缺少 sequence/sourceAt/expiresAt 时，前端保留上一份盘口并显示待接入/过期，不显示实时已连接。stale 市场目录没有新条目时，Store 保留最后一次成功目录。
+`bids`/`asks` 也可使用 `{ price, size }` level 对象。新鲜的双边 BBO 只要包含 `marketId`、`roundId`、有效 `sequence` 和四个 bid/ask，且服务器未标 `stale`，就可以更新报价，即使 `depthAvailable=false` 或 `depthUnavailable=true`；此时五档表显示“深度暂不可用”，不填充伪造档位。
+
+新鲜度判定由服务器负责：前端只看 `stale` 布尔，**不再用浏览器时钟比较 `sourceAt`/`expiresAt`**（客户端时钟偏移会让有效快照被永久判成过期，从而堵死启动）。服务器必须在过期、断线或来源不健康时如实置 `stale=true`。`stale: true`、缺少身份或缺少有效 sequence 时，前端保留上一份盘口并显示待接入/过期，不显示实时已连接。本地过期倒计时使用服务器测量的寿命 `expiresAt - sourceAt`，两者都是服务器时间戳，时钟偏移相互抵消。stale 市场目录没有新条目时，Store 保留最后一次成功目录。
 
 运行池 GET/PUT 的语义如下：
 
@@ -250,7 +256,8 @@ window.__POLY_PREVIEW_CONFIG__ = {
 
 ```js
 await PolyPreviewAdapter.loadMarkets();
-await PolyPreviewAdapter.commandRuntime({ action: "start", marketIds, strategyId, requestId });
+// start 必须带正整数 revision，缺失时 adapter 直接抛错，不会发请求。
+await PolyPreviewAdapter.commandRuntime({ action: "start", strategyId, revision, requestId, assetId, marketIds });
 await PolyPreviewAdapter.saveStrategy(draft);
 ```
 

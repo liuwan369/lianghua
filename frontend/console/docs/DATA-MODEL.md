@@ -50,7 +50,16 @@ desired 是用户选择，current/next 是服务器确认结果。单实例运�
 
 系统健康包含行情节点、控制台、采集、交易、账本投影、CPU、内存、磁盘和负载。账户只返回钱包摘要、配置状态和最近检查结果，不返回私钥。事件必须有 id、time、kind、marketId、roundId、severity 和 message。
 
-账户 ViewModel 的真实数据源是服务器账户快照、独立账户状态和账户检查接口。账户状态单独存储为 `accountStatus`，不会被余额快照覆盖；账户快照中的根 `available` 是分区可用性布尔值，不能当作余额金额，金额应读取 `collateral.value` 或服务器明确的金额字段。当前前端尚未完成真实账户和交易环境联调；没有快照时显示 `unavailable`，请求失败后保留上一次快照并显示 `stale`。账户检查分为表单候选检查和服务器已保存账户检查，后者发送 `{}`。
+账户 ViewModel 的真实数据源是服务器账户快照、独立账户状态和账户检查接口。账户状态单独存储为 `accountStatus`，不会被余额快照覆盖；账户快照中的根 `available` 是分区可用性布尔值，不能当作余额金额，金额应读取 `collateral.value` 或服务器明确的金额字段。没有快照时显示 `unavailable`，请求失败后保留上一次快照并显示 `stale`。账户检查分为表单候选检查和服务器已保存账户检查，后者发送 `{}`。
+
+## 共享判定函数
+
+这些函数是单一来源，页面不要重抄判断链：
+
+- `PolyPreviewViewModel.accountStartBlockReason(accountStatusSlice)`：账户启动门禁，按序检查 `status!=="ready"||stale||error` → `account_check_ready` → `settlement_credentials_ready` → `server_live_enabled` → `live_start_ready`，通过时返回空字符串。总览页和自动交易页共用；此前两页各存一份逐字副本，正是错误字典分叉的来源。
+- `PolyPreviewViewModel.hasFreshBbo(market)`：盘口是否可用于启动。只检查身份、`sequence`、服务器 `stale` 和四价范围，**不使用浏览器时钟**。
+- `PolyPreviewViewModel.runtimeStartBlockReason` / `catalogItemStartReason` / `strategyAssetStartReason`：运行状态、目录行、策略币种三级门禁。
+- `PolyPreview.format.accountError(code, fallback)` 与 `accountErrorLabels`：12 个账户错误码的中文映射，是账户错误文案的唯一来源（此前散落在三页，分别只有 7/8/12 个键）。注意 `format.readableError` 另有一份通用错误词典，两者有重叠键；账户就绪类错误统一用 `accountError`。
 
 成交统计优先使用服务器明确的唯一成交计数字段。若响应包含 `fills`、`trades`、`executions` 或 `fill_records` 数组，前端按 `tradeId`/`fillId`、`orderId`、`marketId`、`roundId` 组合去重；缺少 `marketId` 或 `roundId` 的记录不会计入，避免把不同轮次合并。原始成交记录和 `tradeStatus`、费用、时间等生命周期字段保留在 metrics 数据中，计数逻辑不会覆盖详情。
 

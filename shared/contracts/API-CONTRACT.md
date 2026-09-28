@@ -1,6 +1,8 @@
 # 后端接口契约
 
-系统按服务器运行池中的资产提供 BTC 五分钟反转策略所需的账本和 API 投影。`btc` 仍是默认资产和旧接口别名；资产是否可交易由交易运行时能力和配置决定，市场目录可发现不等于策略已启用。以下列出已提供的接口及尚未接通的能力；前端以 `/api/bootstrap` 的 `capabilityDetails` 判断能力是否可用。
+系统按服务器运行池中的资产提供 BTC 五分钟反转策略所需的账本和 API 投影。`btc` 仍是默认资产和旧接口别名；资产是否可交易由交易运行时能力和配置决定，市场目录可发现不等于策略已启用。以下列出已提供的接口及尚未接通的能力。
+
+`/api/bootstrap` 会返回 `capabilityDetails`，但当前控制台前端并不读取它：`capabilityDetails` 在 `frontend/console/` 中没有任何消费方，`PolyPreview.api.bootstrap()` 已定义但无调用方。前端的能力判断目前分散在各页面（例如运行池按 `canEnable`、实时流按 `PolyPreview.config.streams`）。要把能力门控统一到 bootstrap，需要先补前端实现，不能假定它已生效。
 
 ## 现有服务可复用接口
 
@@ -27,13 +29,14 @@
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
 | 市场目录 | GET | `/api/markets?assetId=btc&asset=crypto&duration=5m` | `assetId` 可选过滤；运行时 accepted snapshot 优先；采集器 canonical paired snapshot 只读展示 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
-| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前控制面支持 `btc/eth/sol`，单实例只能选择一个；当前/下一场由运行时维护。`btc` 是兼容别名，未知资产拒绝保存 |
+| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前控制面支持 `btc/eth/sol`，单实例只能选择一个。`currentIds` 和 `effectiveRoundId` 仅在运行时新鲜且运行中时填充，否则为空/`null`；`nextRoundIds` 目前恒为空数组（服务器未实现下一场预告），前端不得据此推断下一场。`btc` 是兼容别名，未知资产拒绝保存 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
+| 控制会话 | POST | `/api/trading/auth/session` | 用 `X-PM-Control-Token` 换取控制会话 cookie；前端 `openControlSession()` 调用 |
 | 策略当前版本 | GET | `/api/strategy/config` | 页面加载；返回已规范化的 `assetId` |
 | 保存策略草稿 | POST | `/api/strategy/drafts` | 独立持久化，不发布、不自动启动；`config.assetId` 缺省兼容为 `btc` |
 | 激活策略 | POST | `/api/strategy/activate` | `{ expectedRevision, draftId, effectiveRoundId?: null }` |
-| 策略参考参数 | GET/POST/DELETE | `/api/strategy/presets` | 尚未提供，`presets=false` |
+| 策略参考参数 | — | `/api/strategy/presets` | 无此路由：GET/POST 返回 404，DELETE 返回 501（未实现 `do_DELETE`）。`presets=false` |
 | 本场持仓 | GET | `/api/rounds/{roundId}/position?assetId=btc&marketId=...` | 首次加载/切场；按 `assetId + marketId + roundId` 精确匹配，旧 URL 仅作为兼容入口 |
 | 本场订单 | GET | `/api/rounds/{roundId}/orders?assetId=btc&marketId=...` | 分页历史；按复合市场身份过滤，不能跨资产或跨市场合并 |
 | 撤单/清余量 | POST | `/api/orders/{orderId}/cancel`、`/api/runtime/flatten` | 尚未接通，返回 501 和 `accepted=false` |
@@ -61,9 +64,11 @@
 
 订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。`/api/fills` 返回成交 journal 修订记录，同一经济成交可能有多条状态/费用修订；每条记录必须保留 `tradeId/orderId/tradeStatus/feeUsd`（同时兼容 snake_case），不能将各页记录直接累加为成交金额；汇总以 `trade_id + order_id` 去重后的投影结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；有成交场次的 `accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`pnl_error=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算，不伪造 `payout_verified` 或 `pnl`。
 
-市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；每行还返回 `collector_online/healthy/quote_fresh/stale/strategyEligible`，顶层 `collector_online` 表示至少一行健康，`partial` 表示同批次存在健康和失效资产。采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`depthAvailable=true` 还要求 YES/NO 五档完整且各自 `depthExpiresAt`（如提供）晚于当前时间；过期深度不能冒充可用五档。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。每行还返回 `supported` 和 `canEnable`（两者都等于「`assetId` 属于服务器支持集合」，当前支持集为 `btc/eth/sol`）以及 `current`（本场是否正在进行）和 snake_case 兼容的 `market_id`/`round_id`。`canEnable` 是前端判断能否加入运行池的实际依据；前端不猜测资格，缺少该字段即视为不可启用。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；每行还返回 `collector_online/healthy/quote_fresh/stale/strategyEligible`，顶层 `collector_online` 表示至少一行健康，`partial` 表示同批次存在健康和失效资产。采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`depthAvailable=true` 还要求 YES/NO 五档完整且各自 `depthExpiresAt`（如提供）晚于当前时间；过期深度不能冒充可用五档。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
 
 行情新鲜度统一使用 `stale_after_ms`：缺省为 2000ms，显式值必须大于 0 且不超过 15000ms；非法值、过期或连接不可用时保留原始 canonical 快照并标记 `stale=true`，不得继续标记为 `strategyEligible`。运行时策略的 `maxQuoteAgeSeconds` 映射到同一阈值；YES/NO 的 `sourceAt` 只有在字段存在时校验，存在但无效或过期仍使快照失效。
+
+**新鲜度判定归服务器所有。** 浏览器不得用本地时钟判断报价是否过期：服务器和客户端之间的任何时钟偏移都会让有效快照被永久判成过期，从而彻底堵死启动。前端只信服务器的 `stale` 布尔，加上身份（`marketId`/`roundId`）、`sequence` 和双边报价是否齐全；因此服务器必须在过期、断线或来源不健康时如实置 `stale=true`，这是前端唯一的过期信号。真正的执行前闸门在服务器端 `backend/engine/src/platform/snapshot-gate.ts`，它在任何下单前重新校验序号、来源时间和有效期。前端若需本地倒计时，只能使用服务器测量出的寿命差值（`expiresAt - sourceAt`），不能把服务器的 `expiresAt` 直接与浏览器时钟比较。
 
 旧 `/api/v1/markets` 保留原始 `round_id` slug 字段供旧调用方读取；该兼容字段不代表现代 `roundId` 身份，也不会参与账本归属或结算统计。
 
@@ -93,6 +98,8 @@
 }
 ```
 
+控制台进程只允许监听本机地址（`127.0.0.1`/`localhost`/`::1`），传入其他 host 会直接拒绝启动。控制类端点没有独立的网络层鉴权，安全模型依赖「loopback 绑定 + 控制令牌 + 反向代理」三者共同成立；对外暴露必须经由 `config/` 里的反向代理配置，不能把服务直接绑到公网地址。
+
 控制命令、草稿保存和策略激活使用服务器现有控制认证。响应只代表命令处理状态；最终结果由运行状态和事件查询确认。服务状态使用 `stopped/starting/running/paused/failed` 等运行时实际状态，不能用进程存在推断所有交易动作已完成。控制响应还返回 `commandStatus=accepted|executing|confirmed|failed`；暂停最终以 `strategyRuntime.paused=true` 确认，停止后的远端订单以 `remoteOrdersState=unconfirmed` 表示尚未通过账户查询确认。
 
 账户状态只返回 `wallet` 摘要、`accountCheckState`、`accountCheckReady`、`executionCredentialsReady`、`liveStartReady`、`walletKind`、`signatureType` 和 `settlementCredentialsReady` 等非秘密诊断字段。服务器仍兼容读取既有 `POLYMARKET_SESSION_PRIVATE_KEY`、`POLY_FUNDER`、`POLY_SIGNATURE_TYPE` 环境/profile 字段；profile 成为来源时也不得静默丢弃这些字段。最近检查必须匹配当前钱包且未过期；链上余额检查与异步 CLOB 可用余额分开，未知时为 `null`。Builder/Relayer 凭据是否可用于结算只在运行时明确返回时标记为布尔值，否则为 `null`。`account/save` 在交易运行中拒绝，任何 API 响应、日志或文档都不得返回密钥、Token 或 Secret。
@@ -111,6 +118,8 @@ await PolyPreviewAdapter.commandRuntime({ action: "start", strategyId, revision,
 await PolyPreviewAdapter.saveStrategy(draft);
 ```
 
-adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。预览模式返回明确的“待接入”结果，不模拟成功，也不把本地草稿当成服务器运行状态。
+adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。数据源只有后端一个：不存在预览/演示模式（`demo` 在配置展开之后被硬编码为 `false`，外部配置无法开启），后端未连接时显示 unavailable/stale，不模拟成功，也不把本地草稿当成服务器运行状态。`preview-core.js` 里的 `storage` 已无任何调用方，运行池、行情、持仓、订单和账户都不写入浏览器本地存储。
 
-运行池编辑、策略 presets、指定场次激活、逐笔撤单、flatten 和实时流均按 bootstrap 中对应的 `false` 能力展示不可用，不模拟成功。账户页面只读取服务器保存状态；账户秘密不进入 DTO、浏览器存储或日志，如需更换账户，由服务器环境配置或部署系统完成。
+共享层文件名和全局对象仍带 `preview`/`PolyPreview` 前缀，这只是历史命名，不表示预览环境；生产就是用这些名字。
+
+策略 presets、指定场次激活、逐笔撤单、flatten 和实时流尚未接通，展示为不可用，不模拟成功。运行池编辑已接通（`capabilityDetails.editMarketPool=true`，GET/PUT `/api/runtime/market-pool` 可用），不属于这一类。账户页面只读取服务器保存状态；账户秘密不进入 DTO、浏览器存储或日志，如需更换账户，由服务器环境配置或部署系统完成。

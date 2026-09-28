@@ -1,12 +1,13 @@
 # UI 模块
 
-## 共享模块
+本文描述五个页面的职责边界。**这里的名字是设计词汇，不是代码中的组件**：控制台没有组件框架，每个页面是一个 `*-block.js`，用一次性 `innerHTML` 挂载骨架，之后只更新 `data-*` 节点的文本。不要在代码里寻找 AppShell / MetricCard 这类模块。
 
-- AppShell / Sidebar：统一导航、品牌、当前连接来源。
-- HeaderStatus：版本、连接、账户、运行状态。
-- DataStateBadge：loading/ready/stale/error。
-- MetricCard：只显示已确认的聚合数据。
-- ActivityList：运行事件，实时事件和历史事件分开。
+## 共享约定
+
+- 导航、连接来源、版本和运行状态显示在各页头部，由页面自己渲染。
+- 状态呈现统一区分 loading / ready / stale / unavailable / error，来自 store 分片上的 `status`/`stale`/`error`。
+- 聚合数值只显示服务器已确认的结果，未确定时显示 `--`，不填 0。
+- 运行事件按来源分列，不把历史事件与当前场次事件混为一谈。
 
 ## 总览
 
@@ -14,16 +15,18 @@
 
 ## 市场
 
-MarketCatalog、MarketPool、MarketDetail。选择币种只改变查看对象；启用改变 desired pool；当前场次继续由服务器决定。空目录要显示空态，不能访问第一个元素导致崩溃。
+币种目录、运行池、单市场详情。选择币种只改变查看对象；启用改变 desired pool；当前场次继续由服务器决定。能否启用以目录行的 `canEnable` 为准，前端不猜测资格。空目录要显示空态，不能访问第一个元素导致崩溃。
 
 ## 自动交易
 
-RuntimeControls、MarketSelector、OrderBook、RoundPosition、OrderTable、RuntimeActivity。盘口、持仓、订单和日志按 `marketId + roundId` 隔离，多币种不能合并成“BTC + N 个”后继续显示 BTC 数据。
+运行控制、盘口深度、本场持仓、订单表、运行日志。盘口、持仓、订单和日志按 `marketId + roundId` 隔离。当前是单实例单资产（策略页固定 `btc`），不存在多币种合并显示的场景。
+
+启动按钮的门禁顺序：市场身份 → 运行状态（须为已确认的未运行）→ 策略已激活且与所选市场一致 → 盘口快照新鲜 → 账户就绪。账户那一级统一走 `PolyPreviewViewModel.accountStartBlockReason()`，不要在页面里重抄判断链。盘口新鲜度只看服务器的 `stale`，不用浏览器时钟判断。
 
 ## 策略
 
-StrategyEditor、PresetList、ActivationNotice。阶段数应真实增删，价格和资金边界先做前端提示，再由服务器二次校验。当前页面只保存策略草稿，不启动交易；激活是独立的服务端动作，必须带 `effectiveRoundId`，并等待 runtime 状态确认后才显示生效。
+策略参数编辑与激活提示。阶段数可真实增删，价格和资金边界先做前端提示，再由服务器二次校验。保存草稿与激活是两个独立动作：保存只写草稿，激活带 `{strategyId, draftId, expectedRevision}`，**不要带 `effectiveRoundId`**（任意非空值服务器返回 501），激活后等 runtime 状态确认才显示生效。参考参数（presets）能力未接通，页面对应区域是固定占位，不发请求。
 
 ## 设置
 
-Diagnostics 和账户状态只读。账户由服务器环境变量或部署系统管理，前端只显示 configured/check status 和最近检查时间，不保存、不提交、不回显秘密。
+诊断只读。账户部分**可以提交**：页面采集账户字段后调用 `checkAccount()`（仅检查）或 `saveAccount()`（保存），两者都要求 HTTPS 同源，错误信息会脱敏后再显示。页面只回显 configured / check status 和最近检查时间，不回显任何秘密；保存成功不等于账户已检查通过。交易运行中服务器拒绝保存。
