@@ -129,7 +129,7 @@
             <div class="holding-item up-holding"><span>YES \u4EFD\u989D</span><strong data-holding="up">--</strong><small>\u5747\u4EF7 <b data-average="up">--</b></small></div>
             <div class="holding-item down-holding"><span>NO \u4EFD\u989D</span><strong data-holding="down">--</strong><small>\u5747\u4EF7 <b data-average="down">--</b></small></div>
           </div>
-          <div class="result-grid"><div><span>\u5DF2\u4E70\u5165 / \u8BA2\u5355\u5360\u7528</span><strong><b data-bought>--</b> / <b data-occupied>--</b> USDC</strong></div><div><span>YES \u80DC / NO \u80DC\u9884\u8BA1\u7ED3\u679C</span><strong class="result-values"><b data-outcome="up">--</b><em>/</em><b data-outcome="down">--</b> USDC</strong></div><div><span>\u5168\u90E8\u6301\u4ED3\u5747\u4EF7</span><strong><b data-average-total>--</b></strong></div></div>
+          <div class="result-grid"><div><span>\u5DF2\u4E70\u5165 / \u8BA2\u5355\u5360\u7528</span><strong><b data-bought>--</b> / <b data-occupied>--</b> USDC</strong></div><div><span>YES \u80DC / NO \u80DC\u9884\u8BA1\u7ED3\u679C</span><strong class="result-values"><b data-outcome="up">--</b><em>/</em><b data-outcome="down">--</b> USDC</strong></div><div title="\u6309\u672C\u573A\u51C0\u6295\u5165\u9664\u4EE5\u603B\u4EFD\u989D\u8BA1\u7B97\uFF0C\u542B\u624B\u7EED\u8D39\uFF0C\u56E0\u6B64\u53EF\u80FD\u7565\u9AD8\u4E8E\u9650\u4EF7"><span>\u5168\u90E8\u6301\u4ED3\u5747\u4EF7\uFF08\u542B\u8D39\uFF09</span><strong><b data-average-total>--</b></strong></div></div>
           <div class="stage-section">
             <div class="stage-heading"><div><span>\u9636\u6BB5\u8FDB\u5EA6</span><small>\u9636\u6BB5\u72B6\u6001\u5F52\u5165\u672C\u573A\u7ED3\u679C</small></div><b data-stage-progress>--</b></div>
             <div class="stage-track"><i data-progress-fill></i></div>
@@ -366,10 +366,20 @@
     quote("yes-bid", model.yesBid); quote("yes-ask", model.yesAsk); quote("no-bid", model.noBid); quote("no-ask", model.noAsk);
     var levels = function(side, kind) {
       var source = bookSide(side);
-      var list = Array.isArray(source) ? source : source[kind] || source[`${kind}s`] || [];
+      // A side object carries BOTH a scalar top-of-book (`bid`: 0.65) and the
+      // ladder (`bids`: [[price,size],...]). Reading `source[kind]` first let the
+      // truthy scalar shadow the array, so the depth table rendered empty even
+      // with five real levels present. Only accept arrays.
+      var pickList = function(container) {
+        if (!container || typeof container !== "object") return null;
+        if (Array.isArray(container[`${kind}s`])) return container[`${kind}s`];
+        if (Array.isArray(container[kind])) return container[kind];
+        return null;
+      };
+      var list = Array.isArray(source) ? source : pickList(source) || [];
       if (!Array.isArray(list) || list.length === 0) {
         var rawSide = source[side] || source[side.toUpperCase()];
-        if (rawSide && typeof rawSide === "object") list = rawSide[kind] || rawSide[`${kind}s`] || [];
+        list = pickList(rawSide) || [];
       }
       return Array.isArray(list) ? list.map(function(level) { return Array.isArray(level) ? { price: Number(level[0]), size: Number(level[1]) } : { price: Number(level.price), size: Number(level.size ?? level.quantity ?? level.shares) }; }).filter(function(level) { return Number.isFinite(level.price) && Number.isFinite(level.size); }) : [];
     };

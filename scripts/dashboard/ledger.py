@@ -1617,8 +1617,34 @@ class Ledger:
         yes = by_token.get(selected.get("upTokenId"), {})
         no = by_token.get(selected.get("downTokenId"), {})
         complete = runtime.get("positions_complete") is True
-        yes_shares = _number(yes.get("shares")) if yes else 0 if complete and selected.get("upTokenId") else None
-        no_shares = _number(no.get("shares")) if no else 0 if complete and selected.get("downTokenId") else None
+        # A token with no position row yields {} from by_token.get, and {} is
+        # falsy, so a missing side used to report a confident 0 shares. When the
+        # stage ladder says that side filled, 0 is simply wrong: the console showed
+        # "NO 份额 0.00 / 均价 --" while the timeline said the NO order was fully
+        # filled, and the net cost covered only the other side. Treat that
+        # disagreement as unknown (None -> "--") instead of asserting zero.
+        def _filled_for(direction):
+            total = 0.0
+            for stage in (selected.get("stages") or []):
+                if not isinstance(stage, dict):
+                    continue
+                if str(stage.get("direction") or "").upper() != direction:
+                    continue
+                filled = _number(stage.get("filledShares"))
+                if filled:
+                    total += filled
+            return total
+
+        def _side_shares(side, token_id, direction):
+            if side:
+                return _number(side.get("shares"))
+            if complete and token_id and _filled_for(direction) <= 0:
+                return 0
+            # Either the snapshot is incomplete, or the ladder reports fills this
+            # side should have. Do not claim zero.
+            return None
+        yes_shares = _side_shares(yes, selected.get("upTokenId"), "UP")
+        no_shares = _side_shares(no, selected.get("downTokenId"), "DOWN")
         costs = [_number(item.get("costUsd")) if item else 0 if complete else None for item in (yes, no)]
         occupied = sum(costs) if all(value is not None for value in costs) else None
         total_shares = yes_shares + no_shares if yes_shares is not None and no_shares is not None else None
