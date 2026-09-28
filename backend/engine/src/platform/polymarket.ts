@@ -207,9 +207,17 @@ export interface ConnectOptions {
 
 export async function connectPolymarketPlatform(options: ConnectOptions) {
   if (options.mode !== "live") throw new Error("the platform connector only supports live execution");
-  if ((options.assetId && options.assetId !== "btc")
-    || options.markets.some(market => (market.assetId ?? options.assetId ?? "btc") !== "btc")) {
-    throw new Error("live trading is limited to the btc-reversal btc market");
+  // Every market in one connection must be the same asset: feeds, the user
+  // stream and recovery are all keyed per market, and the single-instance run
+  // pool already allows only one asset at a time. The previous form of this
+  // guard pinned that asset to btc, which made eth/sol collectable but never
+  // tradable; the strategy itself has no btc-specific logic.
+  const connectionAssets = new Set(options.markets
+    .map(market => market.assetId ?? options.assetId)
+    .filter((asset): asset is AssetId => typeof asset === "string" && asset.length > 0));
+  if (options.assetId) connectionAssets.add(options.assetId);
+  if (connectionAssets.size > 1) {
+    throw new Error(`live trading runs one asset per connection; got ${[...connectionAssets].join(", ")}`);
   }
   if (!options.markets.length || options.markets.some(m => typeof m.roundId !== "string"
     || !/^\d+$/.test(m.roundId) || m.roundId !== String(m.startsAt)

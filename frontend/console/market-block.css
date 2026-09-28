@@ -1845,6 +1845,12 @@ button {
 .detail-coin-icon.doge { color: #f3d57f; background: #4a4022; }
 .coin-logo.link,
 .detail-coin-icon.link { color: #8acbfa; background: #194269; }
+/* Without a tone rule the icon chip renders unstyled. btc/eth/sol/xrp/doge were
+   already covered, so only these two were missing from the seven 5m markets. */
+.coin-logo.hype,
+.detail-coin-icon.hype { color: #8ceadd; background: #14413d; }
+.coin-logo.bnb,
+.detail-coin-icon.bnb { color: #f5d37a; background: #463c18; }
 .coin-main {
   min-width: 0;
 }

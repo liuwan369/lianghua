@@ -16,7 +16,10 @@ from .config import (ConfigStore, ConfigValidationError, ConfigConflictError,
 
 STRATEGY_ID = "btc-reversal"
 ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
-SUPPORTED_ASSET_IDS = frozenset({"btc", "eth", "sol"})
+# Polymarket runs 5m up/down markets for these seven. Verified live: every
+# "<asset>-updown-5m-<round>" slug resolves with 2 CLOB tokens and tick 0.01,
+# and all four reference venues (Binance/Coinbase/OKX/Bybit) quote each coin.
+SUPPORTED_ASSET_IDS = frozenset({"btc", "eth", "sol", "xrp", "doge", "hype", "bnb"})
 
 
 def default_config() -> dict:

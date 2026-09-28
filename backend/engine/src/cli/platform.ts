@@ -169,10 +169,10 @@ export interface PlatformCliOptions {
 }
 
 class CliInputError extends Error {}
-const SUPPORTED_ASSETS = new Set<AssetId>(["btc", "eth", "sol"]);
+const SUPPORTED_ASSETS = new Set<AssetId>(["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"]);
 const parseAsset = (value: unknown): AssetId => {
   const asset = String(value ?? "btc").trim().toLowerCase();
-  if (!SUPPORTED_ASSETS.has(asset as AssetId)) throw new CliInputError(`unsupported --asset ${asset}; choose btc, eth or sol`);
+  if (!SUPPORTED_ASSETS.has(asset as AssetId)) throw new CliInputError(`unsupported --asset ${asset}; choose one of ${[...SUPPORTED_ASSETS].join(", ")}`);
   return asset as AssetId;
 };
 const positive = (value: unknown, flag: string): number => {
@@ -214,8 +214,11 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
   const mode: TradingMode = "live";
   const assetId = parseAsset(raw.asset);
   if (raw.strategy && raw.strategy !== "btc-reversal") throw new CliInputError("unknown built-in strategy");
-  if (raw.strategy === "btc-reversal" && assetId !== "btc") {
-    throw new CliInputError("btc-reversal live trading only supports btc");
+  // The reversal strategy is asset-agnostic: it reads triggerPrice/maxBuyPrice
+  // and the paired up/down book, none of which are btc-specific. The strategy id
+  // keeps its historical name for persisted state compatibility.
+  if (raw.strategy === "btc-reversal" && !SUPPORTED_ASSETS.has(assetId)) {
+    throw new CliInputError(`btc-reversal live trading supports ${[...SUPPORTED_ASSETS].join(", ")}`);
   }
   if (!!raw.strategy !== !!raw.strategyConfig) throw new CliInputError("--strategy requires --strategy-config and vice versa");
   if (!!raw.expectedMarketId !== !!raw.expectedRoundId) {

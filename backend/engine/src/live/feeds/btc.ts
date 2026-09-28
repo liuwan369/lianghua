@@ -72,6 +72,13 @@ const REFERENCE_ASSETS: Readonly<Record<string, ReferenceAssetSpec>> = Object.fr
   btc: { binance: "btcusdt", coinbase: "BTC-USD", okx: "BTC-USDT", bybit: "BTCUSDT" },
   eth: { binance: "ethusdt", coinbase: "ETH-USD", okx: "ETH-USDT", bybit: "ETHUSDT" },
   sol: { binance: "solusdt", coinbase: "SOL-USD", okx: "SOL-USDT", bybit: "SOLUSDT" },
+  // Each product string was verified live on all four venues before being added
+  // (prices agreed across Binance/Coinbase/OKX/Bybit), including hype — the one
+  // coin that could plausibly have lacked a spot pair.
+  xrp: { binance: "xrpusdt", coinbase: "XRP-USD", okx: "XRP-USDT", bybit: "XRPUSDT" },
+  doge: { binance: "dogeusdt", coinbase: "DOGE-USD", okx: "DOGE-USDT", bybit: "DOGEUSDT" },
+  hype: { binance: "hypeusdt", coinbase: "HYPE-USD", okx: "HYPE-USDT", bybit: "HYPEUSDT" },
+  bnb: { binance: "bnbusdt", coinbase: "BNB-USD", okx: "BNB-USDT", bybit: "BNBUSDT" },
 });
 
 function normalizeReferenceAsset(asset = "btc"): string {

@@ -9,6 +9,9 @@ import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePubl
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
 
 const MARKET_WINDOW_SEC = 300;
+// Polymarket publishes 5m up/down markets for these seven; verified live that
+// every "<asset>-updown-5m-<round>" slug resolves with 2 tokens and tick 0.01.
+const SUPPORTED_SNAPSHOT_ASSETS: readonly string[] = ["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"];
 // The venue stops quoting an expiring 5m market well before its boundary: the
 // outgoing book was measured going stale ~40s early, so a 10s prewarm left the
 // console without any fresh paired quote for about a minute every round. Start
@@ -37,7 +40,7 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: market-snapshot [--assets btc,eth,sol] [--output path] [--duration-sec seconds] [--stale-after-ms ms] [--publish-ms ms] [--discovery-ms ms]");
+      console.log("Usage: market-snapshot [--assets btc,eth,sol,xrp,doge,hype,bnb] [--output path] [--duration-sec seconds] [--stale-after-ms ms] [--publish-ms ms] [--discovery-ms ms]");
       return undefined;
     }
     const value = argv[++index];
@@ -55,8 +58,8 @@ export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOption
     }
   }
   if (!Number.isFinite(options.durationSec) || options.durationSec < 0) throw new Error("--duration-sec must be non-negative");
-  if (options.assets && (!options.assets.length || options.assets.some(asset => !["btc", "eth", "sol"].includes(asset)))) {
-    throw new Error("--assets supports one or more of btc, eth and sol");
+  if (options.assets && (!options.assets.length || options.assets.some(asset => !SUPPORTED_SNAPSHOT_ASSETS.includes(asset)))) {
+    throw new Error(`--assets supports one or more of ${SUPPORTED_SNAPSHOT_ASSETS.join(", ")}`);
   }
   for (const field of ["staleAfterMs", "publishMs", "discoveryMs"] as const) {
     if (!Number.isFinite(options[field]) || options[field] <= 0) throw new Error(`${field} must be positive`);

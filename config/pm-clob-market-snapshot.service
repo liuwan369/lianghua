@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/root/pm-system/backend/engine
-ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000
+ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol,xrp,doge,hype,bnb --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000
 Restart=always
 RestartSec=1
 Environment=NODE_ENV=production
@@ -15,8 +15,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/root/pm-system/data/dashboard
-# One coin uses ~100-150MB; collecting btc/eth/sol runs three WS feeds, so the
-# cap is raised from 256M. The host has >1GB free.
+# Measured: 89MB total for three feeds, i.e. ~30MB per coin, so seven feeds land
+# near 210MB. 512M keeps roughly 2x headroom; the host has ~1GB available.
 MemoryMax=512M
 CPUQuota=100%
 
