@@ -1826,15 +1826,19 @@ class Ledger:
             if not grouped and latest_at:
                 window_seconds = None
                 # Order and cancel latencies are far rarer than book samples, so a
-                # 300s slice around the newest sample captures the feed metrics but
-                # misses the execution ones. Take the last samples per metric
-                # instead, which is what the panel is actually asking for.
-                for row in db.execute("""SELECT metric,time,duration_ms FROM latency_samples
-                        WHERE run_id=? AND rowid IN (
-                            SELECT rowid FROM latency_samples s WHERE s.run_id=latency_samples.run_id
-                            AND s.metric=latency_samples.metric ORDER BY s.time DESC LIMIT ?)
-                        ORDER BY metric,time,byte_offset""", (run_id, LATENCY_LIMIT)):
-                    grouped.setdefault(row["metric"], []).append((row["time"], float(row["duration_ms"])))
+                # fixed slice around the newest sample captures the feed metrics
+                # but misses the execution ones. Query per metric with a LIMIT so
+                # each one yields its own most recent samples. Done as N small
+                # indexed queries on purpose: a correlated subquery over this table
+                # (218k rows) made the endpoint time out.
+                metrics = [row[0] for row in db.execute(
+                    "SELECT DISTINCT metric FROM latency_samples WHERE run_id=?", (run_id,))]
+                for metric in metrics:
+                    rows = db.execute("""SELECT time,duration_ms FROM latency_samples
+                            WHERE run_id=? AND metric=? ORDER BY time DESC LIMIT ?""",
+                                      (run_id, metric, LATENCY_LIMIT)).fetchall()
+                    if rows:
+                        grouped[metric] = [(row[0], float(row[1])) for row in reversed(rows)]
             latency = {"run_id": run_id, "mode": run["mode"], "as_of": now,
                        "window_seconds": window_seconds, "sample_limit": LATENCY_LIMIT,
                        # Present but stale: the panel must say these are historical.
