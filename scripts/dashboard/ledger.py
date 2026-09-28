@@ -1808,6 +1808,28 @@ class Ledger:
                               "AND COALESCE(json_extract(payload,'$.redemption_required'),1) != 0",
                               (run_id,)).fetchone()[0] if self._has_table(db, "settlement_details") else 0,
                           win_rate=(wins / (wins + losses) if wins + losses else None))
+            # Capital leaves at fill time while proceeds are only provable after
+            # settlement, so the settled figure alone treats a spent-but-unresolved
+            # round as if it never traded — reading a loss as a profit. Report the
+            # committed cost of those rounds too; the two converge on confirmation.
+            unsettled = db.execute("""SELECT COUNT(*) AS rounds, COALESCE(SUM(cost),0) AS cost FROM (
+                    SELECT t.round_id,
+                        SUM(COALESCE(json_extract(t.payload,'$.amount'),0)
+                            + COALESCE(json_extract(t.payload,'$.fee'),
+                                       json_extract(t.payload,'$.fee_estimate'),0)) AS cost
+                    FROM trade_details t
+                    WHERE t.run_id=?
+                      AND COALESCE(json_extract(t.payload,'$.trade_status'),'') != 'FAILED'
+                      AND NOT EXISTS (SELECT 1 FROM market_details m WHERE m.run_id=t.run_id
+                          AND m.round_id=t.round_id AND m.status='已结算' AND m.pnl IS NOT NULL)
+                    GROUP BY t.asset_id, t.round_id)""", (run_id,)).fetchone() \
+                if self._has_table(db, "trade_details") else None
+            unsettled_cost = float(unsettled["cost"] or 0) if unsettled else 0.0
+            unsettled_rounds = int(unsettled["rounds"] or 0) if unsettled else 0
+            settled_pnl = result.get("settled_pnl")
+            result.update(unsettled_cost=unsettled_cost, unsettled_rounds=unsettled_rounds,
+                          exposed_pnl=(settled_pnl - unsettled_cost) if settled_pnl is not None
+                          else (-unsettled_cost if unsettled_rounds else None))
             try:
                 source_bytes = Path(run["path"]).stat().st_size
                 lag = max(0, source_bytes - run["byte_offset"])
