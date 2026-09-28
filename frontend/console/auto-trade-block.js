@@ -37,7 +37,7 @@
     <main class="preview-main auto-trade-main">
       <header class="preview-header trade-header">
         <div class="hero-copy">
-          <p class="eyebrow">BTC 五分钟反转 · 实盘控制</p>
+          <p class="eyebrow" data-asset-eyebrow>BTC 五分钟反转 · 实盘控制</p>
           <div class="hero-title-row"><h1>\u81EA\u52A8\u4EA4\u6613</h1><span class="language-chip">5 \u5206\u949F</span></div>
           <p class="subtitle">\u76D8\u53E3\u3001\u7B56\u7565\u5224\u65AD\u3001\u5F53\u524D\u6301\u4ED3\u548C\u8BA2\u5355\u72B6\u6001\u96C6\u4E2D\u67E5\u770B\uFF0C\u5B9E\u65F6\u6570\u636E\u5404\u81EA\u72EC\u7ACB\u66F4\u65B0\u3002</p>
           <div class="hero-actions">
@@ -246,6 +246,8 @@
     var selected = assetById(selectedAssetId);
     var activeMarket = selected ? `${selected.symbol} / ${selected.cycle || "5分钟"} YES-NO` : "请选择市场";
     text("[data-active-market]", activeMarket);
+    // The eyebrow said "BTC 五分钟反转" no matter which asset was selected.
+    text("[data-asset-eyebrow]", `${vm.assetSymbol(selectedAssetId, "--")} 五分钟反转 · 实盘控制`);
     text("[data-market-pool-note]", marketPool.stale ? "运行池连接中断 · 保留服务器最近确认配置" : marketPool.pendingDesiredIds ? "变更已提交 · 等待服务器确认运行池" : visibleAssets.length ? "单实例运行一个资产；详情选择只切换查看内容，运行状态以服务器确认结果为准。" : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
   var marketSelector = document.querySelector("[data-market-selector]");

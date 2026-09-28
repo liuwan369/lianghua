@@ -20,7 +20,7 @@
 
     <main class="settings-main">
       <header class="preview-header">
-        <div class="hero-copy"><p class="eyebrow">系统设置</p><div class="hero-title-row"><h1>设置</h1><span class="language-chip">BTC · 5 分钟</span></div><p class="subtitle">连接、版本和服务器账户状态集中查看。</p></div>
+        <div class="hero-copy"><p class="eyebrow">系统设置</p><div class="hero-title-row"><h1>设置</h1><span class="language-chip" data-asset-chip>BTC · 5 分钟</span></div><p class="subtitle">连接、版本和服务器账户状态集中查看。</p></div>
         <div class="header-tools"><div class="header-status-grid">
           <article class="header-status"><span>账户状态</span><strong data-header-account>未接入</strong></article>
           <article class="header-status"><span>当前版本</span><strong data-header-version>未提供</strong></article>
@@ -160,6 +160,10 @@
     const version = typeof data.version === "string" && data.version ? data.version : "未提供";
     text("[data-header-version]", version);
     connection("version", version, version === "未提供" ? "服务器未返回版本信息" : "服务器报告的版本", "neutral");
+    // The chip read "BTC · 5 分钟" regardless of the configured asset.
+    const asset = window.PolyPreviewViewModel.assetSymbol(
+      store.getState().runtime?.assetId || window.PolyPreview.config.selectedAssetId, "--");
+    text("[data-asset-chip]", `${asset} · 5 分钟`);
   };
   const boolText = (value) => value === true ? "是" : value === false ? "否" : "未知";
   const renderAccount = (resource) => {

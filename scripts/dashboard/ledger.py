@@ -102,6 +102,11 @@ LATENCY_METRICS = frozenset({
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
     "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
     "order_risk_metadata",
+    # The engine emits these four but they were absent from this whitelist, so
+    # every sample was dropped and order_http_ack (measured: median 251ms against
+    # a 32ms venue floor) could not be split into signing vs waiting vs reading.
+    # They are what localises that gap without guesswork.
+    "order_l2_headers", "order_http_post", "order_response_headers", "order_response_body",
     # Retained while old journals remain readable.
     "order_ack", "cancel_ack", "fill_report",
 })

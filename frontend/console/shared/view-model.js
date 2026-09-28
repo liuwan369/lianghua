@@ -400,5 +400,21 @@
     const candidate = config && typeof config === "object" ? config : {};
     return String(strategyAssetId(candidate) || "").toLowerCase() === "btc";
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, startBlockReason, accountBalance, runtimeStateLabel, eventSeverity, collapseEvents, payloadOf, finite, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
+  /**
+   * Does this strategy config explicitly target `assetId`? The gate itself is
+   * real — activating a config whose asset does not match the selected market
+   * must stay blocked — but hardcoding "btc" made it impossible to run eth/sol
+   * even though the backend supports them.
+   */
+  const strategyTargets = (config = {}, assetId) => {
+    const target = String(strategyAssetId(config && typeof config === "object" ? config : {}) || "").toLowerCase();
+    const wanted = String(assetId || "").toLowerCase();
+    return Boolean(target) && Boolean(wanted) && target === wanted;
+  };
+  /** Display symbol for an asset id, e.g. "btc" -> "BTC". Never hardcode a coin. */
+  const assetSymbol = (assetId, fallback = "--") => {
+    const value = String(assetId || "").trim();
+    return value ? value.split("-")[0].toUpperCase() : fallback;
+  };
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, startBlockReason, accountBalance, runtimeStateLabel, eventSeverity, collapseEvents, payloadOf, finite, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig, strategyTargets, assetSymbol });
 })();

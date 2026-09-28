@@ -929,6 +929,12 @@ export class TradingCore {
       ["order_risk_metadata", order.riskMetadataLatencyMs],
       ["order_sign", order.signLatencyMs], ["order_submit_roundtrip", order.totalLatencyMs],
       ["order_l2_headers", order.l2HeaderLatencyMs], ["order_http_post", order.postLatencyMs],
+      // Measured in the CLOB client and carried through the gateway, but never
+      // emitted, so the POST could not be split into time-to-first-byte versus
+      // body read. That split tells us whether the ~200ms above the measured
+      // 32ms venue floor is spent waiting on the venue or parsing its reply.
+      ["order_response_headers", order.responseHeadersLatencyMs],
+      ["order_response_body", order.responseBodyLatencyMs],
       ["trigger_to_http_post", order.triggerToPostLatencyMs],
       ["decision_to_http_post", order.decisionToPostLatencyMs],
     ] as const) this.emitLatency(metric, duration, order, ackOutcome);
