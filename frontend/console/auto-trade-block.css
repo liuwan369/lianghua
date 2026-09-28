@@ -1164,6 +1164,44 @@ button {
   background: #1d466d;
   color: #fff;
 }
+.position-fee {
+  display: block;
+  margin-top: 3px;
+  color: #8ca6bc;
+  font-size: 11px;
+}
+.round-history-panel {
+  margin-top: 10px;
+  max-height: 320px;
+  overflow: auto;
+  color: #b7d5e9;
+  font-size: 11px;
+}
+.round-history {
+  width: 100%;
+  border-collapse: collapse;
+}
+.round-history th,
+.round-history td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #1d3d5c;
+  text-align: right;
+  white-space: nowrap;
+}
+.round-history th:first-child,
+.round-history td:first-child {
+  text-align: left;
+}
+.round-history thead th {
+  position: sticky;
+  top: 0;
+  background: #10273d;
+  color: #8ca6bc;
+  font-weight: 600;
+}
+.round-history tbody tr:hover {
+  background: #14304b;
+}
 .latency-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

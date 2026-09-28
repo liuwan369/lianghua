@@ -124,7 +124,7 @@
             <div><p class="eyebrow">\u672C\u573A\u7ED3\u679C</p><h2 id="position-title">\u672C\u573A\u6301\u4ED3\u4E0E\u7ED3\u679C</h2></div>
             <span class="panel-meta" data-round-identity>\u5F53\u524D\u573A\u6B21 \xB7 \u7B49\u5F85\u8F6E\u6B21\u6807\u8BC6</span>
           </div>
-          <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong></div><span class="position-badge" data-position-state>\u5F85\u63A5\u5165</span></div>
+          <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong><small class="position-fee" data-position-fee>\u624B\u7EED\u8D39 --</small></div><span class="position-badge" data-position-state>\u5F85\u63A5\u5165</span></div>
           <div class="holding-grid">
             <div class="holding-item up-holding"><span>YES \u4EFD\u989D</span><strong data-holding="up">--</strong><small>\u5747\u4EF7 <b data-average="up">--</b></small></div>
             <div class="holding-item down-holding"><span>NO \u4EFD\u989D</span><strong data-holding="down">--</strong><small>\u5747\u4EF7 <b data-average="down">--</b></small></div>
@@ -143,7 +143,7 @@
       <section class="orders-panel trade-panel" aria-labelledby="orders-title">
         <div class="panel-heading">
           <div><p class="eyebrow">\u8BA2\u5355\u72B6\u6001</p><h2 id="orders-title">\u5F53\u524D\u8FD0\u884C\u8BA2\u5355</h2></div>
-          <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div>
+          <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div><div class="round-history-panel" data-round-history hidden></div>
         </div>
         <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
       </section>
@@ -527,14 +527,27 @@
   var renderPosition = function(raw) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var position = raw?.position || raw;
-    if (!position || !vm.matchesIdentity(position, currentContext()) || raw?.stale || raw?.error || raw?.available === false || position.stale || position.available === false || position.error) {
+    // A stopped run has no runtime snapshot, so the ledger answers from durable
+    // fills and labels it source="fills". That is real traded data, not a failed
+    // read: render it (marked historical) instead of blanking the panel.
+    var historical = position?.source === "fills" && position?.available !== false;
+    if (!position || !vm.matchesIdentity(position, currentContext())
+      || ((raw?.stale || raw?.error || raw?.available === false || position.stale
+        || position.available === false || position.error) && !historical)) {
       var positionReason = window.PolyPreview.format.readableError(raw?.error || position?.error, "持仓数据尚未确认");
       text("[data-position-state]", `${positionReason} · 保留本场最近成功数据`);
       return false;
     }
     var number = function(...keys) { for (var key of keys) { var value = numeric(position[key]); if (value != null) return value; } return null; };
     var occupied = number("occupiedUsd", "occupied_usd");
-    var bought = number("boughtUsd", "bought_usd", "filledUsd", "filled_usd", "purchasedUsd", "purchased_usd");
+    // The ledger never emitted boughtUsd, so 已买入 was permanently "--". Spent
+    // capital is exactly the occupied cost of the filled position.
+    var bought = number("boughtUsd", "bought_usd", "filledUsd", "filled_usd", "purchasedUsd", "purchased_usd",
+      "occupiedUsd", "occupied_usd");
+    var fees = number("fees", "confirmedFees");
+    var estimatedFees = number("estimatedFees", "estimated_fees");
+    text("[data-position-fee]", fees != null ? `手续费 ${fees.toFixed(4)}`
+      : estimatedFees != null ? `手续费 ≈${estimatedFees.toFixed(4)}（估算）` : "手续费 --");
     var outcome = position.outcomePnl && typeof position.outcomePnl === "object" ? position.outcomePnl : position.outcome_pnl && typeof position.outcome_pnl === "object" ? position.outcome_pnl : {};
     var yesOutcome = numeric(outcome.yes ?? outcome.up ?? position.yesOutcomePnl ?? position.yes_outcome_pnl);
     var noOutcome = numeric(outcome.no ?? outcome.down ?? position.noOutcomePnl ?? position.no_outcome_pnl);
@@ -557,6 +570,9 @@
       if (tail && tail.nodeType === 3 && tail.textContent !== ` / ${totalText}`) tail.textContent = ` / ${totalText}`;
     }
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
+    // The fills projection knows the round's total shares but not the per-side
+    // split, so report the total rather than asserting a false zero per side.
+    var totalShares = number("totalShares", "total_shares");
     text('[data-holding="up"]', yesShares == null ? "--" : yesShares.toFixed(2));
     text('[data-holding="down"]', noShares == null ? "--" : noShares.toFixed(2));
     var averageValue = position.averagePrice;
@@ -566,6 +582,11 @@
     var noAverage = numeric(average.no ?? average.down ?? position.noAveragePrice ?? position.no_average_price);
     // The ledger currently returns a weighted total average as a scalar. Only
     // assign it to one side when the other side is explicitly empty.
+    if (historical) {
+      text("[data-position-state]", totalShares != null
+        ? `本场已结束 · 按成交记录显示 ${totalShares.toFixed(2)} 份额`
+        : "本场已结束 · 按成交记录显示");
+    }
     if (totalAverage != null) {
       if (yesAverage == null && noAverage == null && yesShares != null && noShares != null) {
         if (yesShares > 0 && noShares === 0) yesAverage = totalAverage;
@@ -1371,11 +1392,49 @@
   // or order events. A real adapter will push independent snapshots here;
   // keeping this page static avoids flicker and prevents fake "live" states.
   document.querySelector("[data-manage-markets]")?.addEventListener("click", function(event) { event.preventDefault(); window.PolyPreview.navigate("market.html"); });
+  // Per-round history is served by /api/rounds, aggregated from durable fills,
+  // so this panel keeps working after the run stops. Only the buttons without a
+  // backing endpoint stay disabled.
+  var roundHistoryButton = document.querySelector("[data-orders-state]")
+    ?.closest(".orders-meta")?.querySelector(".quiet-button");
   document.querySelectorAll(".quiet-button").forEach(function(button) {
+    if (button === roundHistoryButton) return;
     button.disabled = true;
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
   });
+  if (roundHistoryButton) {
+    var historyPanel = document.querySelector("[data-round-history]");
+    roundHistoryButton.title = "按场次汇总投入、份额、均价、手续费与结算结果";
+    roundHistoryButton.addEventListener("click", function(event) {
+      event.preventDefault();
+      if (!historyPanel) return;
+      var open = historyPanel.hasAttribute("hidden");
+      if (!open) { historyPanel.setAttribute("hidden", ""); roundHistoryButton.textContent = "查看全部"; return; }
+      historyPanel.removeAttribute("hidden");
+      roundHistoryButton.textContent = "收起";
+      historyPanel.textContent = "读取中…";
+      window.PolyPreview.api.rounds({ limit: 50 }).then(function(data) {
+        var rounds = Array.isArray(data && data.rounds) ? data.rounds : [];
+        if (!rounds.length) { historyPanel.textContent = data && data.error ? `暂无场次记录：${data.error}` : "暂无场次记录。"; return; }
+        var num = function(value, digits) { return typeof value === "number" && isFinite(value) ? value.toFixed(digits) : "--"; };
+        historyPanel.innerHTML = `<table class="round-history"><thead><tr><th>场次</th><th>投入</th><th>份额</th>`
+          + `<th>均价</th><th>手续费</th><th>结算</th><th>到账</th><th>盈亏</th></tr></thead><tbody>`
+          + rounds.map(function(round) {
+            var fee = round.fees == null ? `≈${num(round.estimatedFees, 4)}` : num(round.fees, 4);
+            var state = round.settlementState === "confirmed" ? "已确认"
+              : round.settlementState === "pending" ? "待确认"
+                : round.settlementState ? round.settlementState : "未结算";
+            return `<tr><td>${round.roundId}</td><td>${num(round.cost, 4)}</td><td>${num(round.shares, 2)}</td>`
+              + `<td>${num(round.averagePrice, 4)}</td><td>${fee}</td><td>${state}</td>`
+              + `<td>${num(round.creditedUsd, 2)}</td><td>${round.pnl == null ? "--" : num(round.pnl, 4)}</td></tr>`;
+          }).join("")
+          + `</tbody></table>`;
+      }, function(error) {
+        historyPanel.textContent = `读取失败：${error && error.message ? error.message : "未知错误"}`;
+      });
+    });
+  }
   Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadAccount(), adapter.loadRuntime(), adapter.loadEvents(null, eventContext()), adapter.loadMetrics()]).then(function(results) {
     var runtimeResult = results[5];
     var eventsResult = results[6];

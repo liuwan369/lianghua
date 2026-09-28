@@ -1806,9 +1806,9 @@ class Ledger:
         }
 
     def summary(self, run_id, *, range=None):
-        if range not in (None, "run", "today", "all"):
+        if range not in (None, "run", "today", "month", "all"):
             raise ValueError("invalid metrics range")
-        if range in ("today", "all"):
+        if range in ("today", "month", "all"):
             return self.metrics_summary(run_id, range=range)
         with self._connect() as db:
             run = self._run(db, run_id)

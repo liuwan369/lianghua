@@ -251,6 +251,7 @@
     events: (cursor = "", context = {}) => request(`/api/events${scopedQuery({ ...context, ...(cursor ? { cursor } : {}) })}`),
     fills: (context = {}) => request(`/api/fills${scopedQuery(context)}`),
     settlements: (context = {}) => request(`/api/settlements${scopedQuery(context)}`),
+    rounds: (context = {}) => request(`/api/rounds${scopedQuery(context)}`),
     legacyStatus: () => request("/api/v1/status"),
     legacyMarkets: () => request("/api/v1/markets"),
     legacyAccount: () => request("/api/account/status"),
