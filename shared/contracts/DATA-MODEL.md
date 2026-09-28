@@ -34,7 +34,7 @@
 
 `{ runId, marketId, roundId, available, stage, confirmations, yesShares, noShares, averagePrice, occupiedUsd, outcomePnl, updatedAt, expiresAt, source, asOf, stale, error }`
 
-运行时快照过期、投影不完整或仍在追赶日志时，保留上次有效持仓并标记 stale；缺少匹配场次时为 unavailable，份额和金额为 `null`。只有来源明确确认空仓才能返回零份额。`occupiedUsd/averagePrice/outcomePnl` 缺少真实成本、费用或结算依据时保持 `null`。
+运行时快照过期、投影不完整或仍在追赶日志时，保留上次有效持仓并标记 stale；缺少匹配场次时先按成交记录回落（`source="fills"`，份额为不分腿的 `totalShares`），确实没有成交记录才是 unavailable、份额和金额为 `null`。`platform_runtime` 每个 run 只存一行最新快照，所以"交易已停止"绝不能当成"该场次没有持仓"。只有来源明确确认空仓才能返回零份额。`occupiedUsd/averagePrice/outcomePnl` 缺少真实成本、费用或结算依据时保持 `null`。
 
 ### StrategyConfigViewModel
 
@@ -58,9 +58,13 @@
 
 `/api/fills` 分页返回成交 journal 状态记录，同一经济成交可能有后续修订，前端不能直接按记录求和。`/api/settlements` 分页返回每场最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`。只有 `platform_settlement.state="confirmed"` 且 `payout_verified=true` 的结算计入确认统计；明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算。完整的已确认成交、实际手续费、核实到账及可核对成交成本的平台持仓快照缺一时，结算净盈亏为 `null`，并说明尚未核实的原因。
 
-资金投影要区分可用余额、预留资金、持仓成本、估算手续费和已确认手续费。撤单请求或进程停止不是资金已释放的证明；结算必须同时有 `payout_verified`、交易回执和到账金额才能进入确认盈亏。未决订单、未确认结算或费用缺失不能进入最终胜率。
+资金投影要区分可用余额、预留资金、持仓成本、估算手续费和已确认手续费。撤单请求或进程停止不是资金已释放的证明；结算必须同时有 `payout_verified`、交易回执和到账金额才能进入确认盈亏。到账金额可以来自平台自动赎回 relayer 的回执——判据是钱包实际收到的 pUSD，不是我们自己那笔交易的回执。未决订单、未确认结算或费用缺失不能进入最终胜率。
 
-统计区分 `settled_wins/settled_losses/settled_draws/pending_settlements`；`abs(pnl) <= 1e-9` 为平局，胜率仅计算 `wins / (wins + losses)`，分母为零时为 `null`。`range=run` 为当前运行；`today/all` 汇总同一账户已投影的实盘运行，账户标识未知时仅统计当前运行，`today` 按 UTC 当日事件时间过滤。汇总不能宣称为账户完整历史。
+成本在成交时已经支出，收益要等结算确认，所以"已成交未结算"的场次成本已知、收益未知，必须单独暴露而不能从统计里省略：省略会把亏损显示成盈利，是交易面板最危险的错误方向。`unsettled_cost/unsettled_rounds/exposed_pnl` 承担这个职责，`exposed_pnl` 与已确认 `pnl` 并列，结算确认后两者收敛。同理，个别场次算不出盈亏时要报告已知部分并用 `settled_pnl_pending` 标注未知场次数，不能因为一场缺值就隐藏整体数字。
+
+统计区分 `settled_wins/settled_losses/settled_draws/pending_settlements`；`abs(pnl) <= 1e-9` 为平局，胜率仅计算 `wins / (wins + losses)`，分母为零时为 `null`。`range=run` 为当前运行；`today/month/all` 汇总同一账户已投影的实盘运行，账户标识未知时仅统计当前运行，`today` 按 UTC 当日、`month` 按 UTC 当月一日起的事件时间过滤。汇总不能宣称为账户完整历史。
+
+延迟样本是按 run 的诊断数据，重跑即可再生，因此只保留最近若干个确实含样本的 run（`LATENCY_RUN_RETENTION`），更早的 run 整体删除，不做聚合归档。删除只释放到 SQLite freelist，可回收比例较大时在 ingest 事务外单独 `VACUUM` 回收磁盘。清理只在 ingest 时触发，重启本身不会改变体积。
 
 ## 页面状态
 

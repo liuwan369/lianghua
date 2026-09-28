@@ -51,9 +51,10 @@
 | `/api/bootstrap` | 代码已实现 | 本轮未单独验证生产响应 | 由 Adapter 读取能力与版本；不可用时保留 `unavailable` |
 | `/api/markets` | 代码已实现 | 生产 HTTP 200；目录新鲜且有 `marketId + roundId`，但 `depthAvailable=false`、`strategyEligible=false` | 不因目录有报价就开放启动 |
 | `/api/runtime/*` | 代码已实现 | `market-pool` HTTP 200 但 `market_pool_unavailable`；status HTTP 200 但 `stopped/runtime_snapshot_stale`；控制命令本轮未调用 | 运行池和最终状态以服务器为准；runtime status 另提供不受 projection stale 影响的 `processRunning` 控制事实 |
-| `/api/rounds/*` | 代码已实现 | 本轮未验证真实持仓/订单响应 | 不声称真实订单、成交或结算已验证 |
+| `/api/rounds/*` | 代码已实现 | 生产已验证：停止运行后 `/api/rounds/{roundId}/position` 返回 `source="fills"`、`totalShares=5.0`、`averagePrice=0.68` | 运行时快照消失后按成交记录回落，不再对已成交场次报 0 份额 |
+| `/api/rounds` | 代码已实现 | 生产已验证：返回 4 个场次的投入/份额/均价/手续费/结算状态/盈亏，`beforeRoundId` 游标可用 | 由 `trade_details` 聚合，与运行是否在跑无关 |
 | `/api/account/snapshot`、`/api/diagnostics/health` | 代码已实现 | 两者生产 HTTP 200；诊断 `degraded/trading_runtime_unavailable`，账户快照 `available=false/stale=true/account_response_invalid` | `/api/account/status` 当前 `live_start_ready=false`、`account_check_ready=false` |
-| `/api/metrics/summary` | 代码已实现 | `range=today` 和 `range=run` 均生产 HTTP 200、`available=false`、`stale=true`、无运行记录 | 路由已部署；没有 `runId`，因此 legacy 按运行 ID 汇总无法调用 |
+| `/api/metrics/summary` | 代码已实现 | 生产已验证四个区间（带 `runId`）：`run` `pnl=+3.1452`/`exposedPnl=-3.8309`；`today` `+4.7178`/`-19.6866`；`month` `+6.6037`/`-74.2760`（11 胜 3 负、1 场待核对）；`all` 同 month | 不带 `runId` 且无当前运行时仍是 HTTP 200、`available=false`、`stale=true`。`exposedPnl` 必须与 `pnl` 并列显示 |
 | `/api/stream/markets`、`/api/stream/runtime`、`/api/stream/orders` | 代码已实现配置入口；生产 `streams=false` | 本轮生产未建立 WebSocket，使用独立 REST 轮询 | 引擎内部 WebSocket 不等于控制台可订阅流；未配置 URL 时不建立连接 |
 
 ### `/api/v1/markets` 的 legacy DTO
@@ -172,7 +173,8 @@ legacy 模式实际使用的 DTO 边界如下：
 | 账户快照 | GET | `/api/account/snapshot` | 15 秒；不返回秘密 |
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
 | 系统诊断 | GET | `/api/diagnostics/health` | 总览约 15 秒，设置页手动刷新 |
-| 汇总统计 | GET | `/api/metrics/summary?range=today` | 总览约 15 秒/手动刷新；legacy 使用当前 run 汇总回退 |
+| 汇总统计 | GET | `/api/metrics/summary?range=today` | 总览约 15 秒/手动刷新；`run/today/month/all`；legacy 使用当前 run 汇总回退 |
+| 场次记录 | GET | `/api/rounds?limit=50&beforeRoundId=...` | 自动交易页「查看全部」按场次展开投入/份额/均价/手续费/结算/盈亏 |
 | 事件历史 | GET | `/api/events?cursor=...` | 分页，低频 |
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。`marketId` 和 `roundId` 在生产数据中都必须是非空字符串；不要让页面直接使用旧的 `up_bid/down_bid` 字段。

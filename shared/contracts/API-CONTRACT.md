@@ -43,7 +43,8 @@
 | 账户快照 | GET | `/api/account/snapshot` | 15 秒；不返回秘密 |
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
 | 系统诊断 | GET | `/api/diagnostics/health` | 15 秒，资源和进程 |
-| 汇总统计 | GET | `/api/metrics/summary?range=today&assetId=btc&marketId=...&roundId=...` | `run/today/all`，低频；过滤条件按账户和复合市场身份生效 |
+| 汇总统计 | GET | `/api/metrics/summary?range=today&assetId=btc&marketId=...&roundId=...` | `run/today/month/all`，低频；过滤条件按账户和复合市场身份生效 |
+| 场次记录 | GET | `/api/rounds?runId=...&assetId=btc&roundId=...&beforeRoundId=...&limit=50` | 按场次聚合成交：投入、份额、手续费、均价、结算状态与盈亏；`beforeRoundId` 游标分页 |
 | 事件历史 | GET | `/api/events?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 按事件 ID 游标分页，低频 |
 | 成交记录 | GET | `/api/fills?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 同一账本的成交 journal 修订记录，按复合身份过滤 |
 | 结算记录 | GET | `/api/settlements?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏，按复合身份过滤 |
@@ -52,7 +53,7 @@
 
 运行状态来自异步账本投影的最近 `platform_status` 快照；订单由 `order` 生命周期投影到订单详情，同一 client order 更新同一条记录；`/api/fills` 返回成交 journal 修订记录，汇总按经济成交身份去重；结算投影每场保留最新状态，只有验证到账的结算才进入最终盈亏和胜率。运行状态 DTO 另提供 `processRunning`，只表示控制面 `trading_status()` 直接观察到的本地交易子进程事实（`true`、`false` 或未知 `null`），不从异步账本 projection、行情新鲜度或交易所动作推导；因此 projection 追赶或过期时，前端仍能独立判断进程是否运行。日志仍在追赶或运行快照过期时，状态必须 `stale=true`。run 已选中但异步投影尚未登记时，运行、订单、成交、结算或统计查询返回 HTTP 200、`status="unavailable"`、`available=false`、`stale=true` 和空时间/业务值，稍后由 REST 重查；不能将该窗口改成 404 或零值。
 
-统计响应提供规范字段 `fill_count`、`order_count`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending` 和 `win_rate`。为旧控制台保留 `fills=fill_count`、`orders=order_count`、`wins=settled_wins`、`losses=settled_losses`；`orders` 必须使用订单生命周期计数，不能用成交数代替。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。
+统计响应提供规范字段 `fill_count`、`order_count`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending`、`win_rate`、`unsettled_cost`、`unsettled_rounds` 和 `exposed_pnl`（驼峰别名 `unsettledCost`、`unsettledRounds`、`exposedPnl`）。资本在成交时已经支出，收益只有结算确认后才可证明，所以只报已结算盈亏会把"已花钱但未确认"的场次当成没交易过，等于把亏损显示成盈利。`exposed_pnl` = 已确认盈亏 − 未结算场次的已投入成本，与 `pnl` 并列显示；结算确认后该场次移出 `unsettled_rounds`，两个数字自动收敛，全部确认后相等。`settled_pnl` 报告**已知**部分而不是因为个别场次缺盈亏就整体隐藏，未知场次数由 `settled_pnl_pending` 同时给出。为旧控制台保留 `fills=fill_count`、`orders=order_count`、`wins=settled_wins`、`losses=settled_losses`；`orders` 必须使用订单生命周期计数，不能用成交数代替。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。
 
 费用来源分三级，只有第三级才算估算。Polymarket 的费用是**撮合时即确定的公式值**，不是事后结算数字：`fee = C × feeRate × p × (1 - p)`，四舍五入到 5 位小数，crypto 市场 taker 费率 0.07、maker 0，makers 不收费（见 <https://docs.polymarket.com/polymarket-learn/trading/fees>）。因此：
 
@@ -60,7 +61,7 @@
 - `fee_source="rate-derived"`：费率取自该市场自身的费用元数据，份额与价格均为精确值，按上述官方公式算出。这是**确定性计算结果，不是估算**，计入 `fees` 与 `pnl`。交易所不会对 taker 成交回报费用，等 `reported` 等不到，若把它当估算会让 `pnl` 永久为 `null`。
 - `fee_source="estimate"`：连费率都未知时的兜底猜测，仍然只进 `estimated_fees`，并继续阻断 `pnl`（`pnl_error="cost_basis_unverified"`）。
 
-后到的 `reported` 费用仍可覆盖同一笔成交的 `rate-derived` 值。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
+后到的 `reported` 费用仍可覆盖同一笔成交的 `rate-derived` 值。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=month` 按 UTC 当月一日零点起算；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/month/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
 
 无当前 run 或统计投影尚未建立时，`/api/metrics/summary` 使用 HTTP 200 和 `status="unavailable"`、`available=false`、`stale=true`、`completeness="unavailable"`（投影等待时为 `waiting`）；金额、计数、胜率及 `asOf` 为 `null`。投影查询成功后返回 `available=true`；若尚未追上 journal，仍可带最后投影值并同时标记 stale。账户保存回执 `{ok:true,report:{saved:true,...}}` 仅表示配置已保存；其中 `account_check_ready`、`live_start_ready` 和 `settlement_credentials_ready` 独立表达检查/启动资格，保存成功不代表账户已检查通过。
 
@@ -68,9 +69,11 @@
 
 账本从交易运行时 `platform_status.runtime.markets` 取得身份映射：`marketId` 是 conditionId，`roundId` 是运行时明确提供的 BTC 五分钟边界标识。`market.name`/`market_slug` 只是兼容显示字段，不能在缺少 `roundId` 时代填。`order`/`fill` 事件即使只带 `market_slug`，也会在映射到达后补齐两个字段；结算事件即使只带 `market_id`，也会补齐 `round_id`。映射尚未发布时标识保持 `null`，不得用事件时间或当前场次猜测旧订单所属轮次。运行重启后同一账户的成交汇总按 `trade_id + order_id` 的经济身份去重，账户之间不合并；单次 journal 的 `event_id` 只用于事件记录去重，不能作为跨运行成交身份。
 
+赎回到账的判定以**钱包实际收到的 pUSD 为准，不是以我们自己那笔交易的回执为准**。Polymarket 自己运行自动赎回 relayer，可能比我们的赎回早一个区块烧掉同一批持仓；此时我们的交易成功上链但烧掉 0 份额、到账 0，不能判成付款失败。结算适配器会查是谁先把这批 tokenId 转出钱包并按对方回执记账，状态为 `confirmed`、原因标注"持仓已由平台自动赎回"。只有持仓仍在或确实无人赎回时才是 `settlement_receipt_balance_or_payout_mismatch`。
+
 `pending_settlements` 表示结算尚未确认到账的场次数；明确确认无成交且无持仓、无需赎回的场次使用 `accounting_state=no_trade` 和 `redemption_required=false`，不计入该字段。`settled_pnl_pending` 表示已确认到账但成本或费用不完整、暂时无法确定盈亏的场次数；这些状态都不能被统计成失败或零盈亏。
 
-订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。`/api/fills` 返回成交 journal 修订记录，同一经济成交可能有多条状态/费用修订；每条记录必须保留 `tradeId/orderId/tradeStatus/feeUsd`（同时兼容 snake_case），不能将各页记录直接累加为成交金额；汇总以 `trade_id + order_id` 去重后的投影结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；有成交场次的 `accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`pnl_error=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算，不伪造 `payout_verified` 或 `pnl`。
+订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。运行时快照存放在 `platform_runtime`，每个 run **只保留一行最新快照**，因此交易停止后历史场次在快照中不再存在；此时持仓 DTO 改由成交记录回落，返回 `source="fills"` 并给出 `totalShares`、`averagePrice`、`occupiedUsd`、`fees`、`settlementState`、`creditedUsd`。成交记录无法区分多空分腿，所以 `yesShares/noShares` 为 `null` 而不是断言零。前端必须把 `source="fills"` 当成可渲染的历史数据，不能当成读取失败而清空面板——这与"只有明确确认的零持仓才可表示 empty"是同一条规则。`/api/fills` 返回成交 journal 修订记录，同一经济成交可能有多条状态/费用修订；每条记录必须保留 `tradeId/orderId/tradeStatus/feeUsd`（同时兼容 snake_case），不能将各页记录直接累加为成交金额；汇总以 `trade_id + order_id` 去重后的投影结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；有成交场次的 `accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`pnl_error=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算，不伪造 `payout_verified` 或 `pnl`。
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。每行还返回 `supported` 和 `canEnable`（两者都等于「`assetId` 属于服务器支持集合」，当前支持集为 `btc/eth/sol`）以及 `current`（本场是否正在进行）和 snake_case 兼容的 `market_id`/`round_id`。`canEnable` 是前端判断能否加入运行池的实际依据；前端不猜测资格，缺少该字段即视为不可启用。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；每行还返回 `collector_online/healthy/quote_fresh/stale/strategyEligible`，顶层 `collector_online` 表示至少一行健康，`partial` 表示同批次存在健康和失效资产。采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`depthAvailable=true` 还要求 YES/NO 五档完整且各自 `depthExpiresAt`（如提供）晚于当前时间；过期深度不能冒充可用五档。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
 
