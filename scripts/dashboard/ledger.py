@@ -1816,8 +1816,30 @@ class Ledger:
             for row in db.execute("""SELECT metric,time,duration_ms FROM latency_samples
                     WHERE run_id=? AND time>? AND time<=? ORDER BY metric,time,byte_offset""", (run_id, now-300, now)):
                 grouped.setdefault(row["metric"], []).append((row["time"], float(row["duration_ms"])))
+            # The live window is anchored to now, so a stopped or idle run showed
+            # four "--" values and told the operator nothing about execution speed.
+            # Fall back to this run's most recent samples and label them historical;
+            # last known latency is useful, an empty panel is not.
+            window_seconds = 300
+            latest_at = db.execute("SELECT MAX(time) FROM latency_samples WHERE run_id=?",
+                                   (run_id,)).fetchone()[0]
+            if not grouped and latest_at:
+                window_seconds = None
+                # Order and cancel latencies are far rarer than book samples, so a
+                # 300s slice around the newest sample captures the feed metrics but
+                # misses the execution ones. Take the last samples per metric
+                # instead, which is what the panel is actually asking for.
+                for row in db.execute("""SELECT metric,time,duration_ms FROM latency_samples
+                        WHERE run_id=? AND rowid IN (
+                            SELECT rowid FROM latency_samples s WHERE s.run_id=latency_samples.run_id
+                            AND s.metric=latency_samples.metric ORDER BY s.time DESC LIMIT ?)
+                        ORDER BY metric,time,byte_offset""", (run_id, LATENCY_LIMIT)):
+                    grouped.setdefault(row["metric"], []).append((row["time"], float(row["duration_ms"])))
             latency = {"run_id": run_id, "mode": run["mode"], "as_of": now,
-                       "window_seconds": 300, "sample_limit": LATENCY_LIMIT, "metrics": {}}
+                       "window_seconds": window_seconds, "sample_limit": LATENCY_LIMIT,
+                       # Present but stale: the panel must say these are historical.
+                       "historical": window_seconds is None and bool(grouped),
+                       "latest_sample_at": latest_at, "metrics": {}}
             for metric, samples in grouped.items():
                 values = [sample[1] for sample in samples]
                 ordered = sorted(values)

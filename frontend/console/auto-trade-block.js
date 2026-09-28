@@ -756,11 +756,15 @@
       list.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>当前场次暂无运行事件</strong><small>运行事件接口已连接，等待本场数据</small></div><b class="activity-tag info-tag">暂无</b></li>';
       return;
     }
-    list.innerHTML = scoped.slice(0, 20).map(function(event) {
+    // Same treatment as the overview log: collapse consecutive repeats so a retry
+    // loop is one counted line, and classify severity from the code's meaning
+    // rather than the channel (the engine sends kind:"error" for notices too).
+    html(list, vm.collapseEvents(scoped, 20).map(function(group) {
+      var event = group.item;
+      var repeats = group.count;
       var kind = String(event.kind || event.event || "unknown").toLowerCase();
       var state = String(event.status || event.state || "").toLowerCase();
-      var severity = String(event.severity || event.level || "").toLowerCase();
-      if (!severity) severity = ["rejected", "failed", "error", "cancel_failed"].includes(state) || ["error", "platform_error", "order_rejected", "settlement_failed"].includes(kind) ? "error" : "info";
+      var severity = vm.eventSeverity(event);
       var tag = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : "信息";
       var icon = severity === "error" || severity === "critical" ? "!" : severity === "warning" || severity === "warn" ? "!" : "i";
       var code = String(event.code || "").toLowerCase();
@@ -773,6 +777,11 @@
       var message = codeLabel || eventText(rawMessage || event.reason || event.detail || kind, kindLabel);
       var rawDetail = event.detail && event.detail !== event.message ? event.detail : event.reason && event.reason !== event.message ? event.reason : null;
       var detailParts = [];
+      if (repeats > 1) {
+        var firstTime = window.PolyPreview.format.time(
+          group.oldest && (group.oldest.time || group.oldest.createdAt || group.oldest.created_at), "");
+        detailParts.push(firstTime ? "重复 " + repeats + " 次 · 最早 " + firstTime : "重复 " + repeats + " 次");
+      }
       if (rawDetail) detailParts.push(eventText(rawDetail, ""));
       if (code && code !== kind) detailParts.push("错误码 " + code);
       var phase = String(event.phase || event.failure_phase || "").trim();
@@ -782,7 +791,7 @@
       var detail = detailParts.filter(Boolean).join(" · ") || kindLabel;
       var tagClass = severity === "error" || severity === "critical" ? "error-tag" : severity === "warning" || severity === "warn" ? "warning-tag" : "info-tag";
       return `<li><time>${window.PolyPreview.format.time(event.time || event.createdAt || event.created_at)}</time><span class="activity-icon ${severity === "error" || severity === "critical" ? "error-icon" : severity === "warning" || severity === "warn" ? "warn-icon" : "info-icon"}">${icon}</span><div><strong title="${window.PolyPreview.format.escape(message)}">${window.PolyPreview.format.escape(message)}</strong><small title="${window.PolyPreview.format.escape(detail)}">${window.PolyPreview.format.escape(detail)}</small></div><b class="activity-tag ${tagClass}">${tag}</b></li>`;
-    }).join("");
+    }).join(""));
   };
   var eventsRefreshTimer = null;
   var eventsRefreshInFlight = null;
@@ -1037,11 +1046,24 @@
       text(`[data-latency="${key}"]`, values[key] == null ? "--" : String(values[key]));
     });
     var samples = Object.values(latency).reduce(function(total, item) { return total + (Number(item?.samples) || 0); }, 0);
-    var status = resource?.status === "stale" || resource?.stale === true ? "统计已过期 · 保留最近样本" : samples > 0 ? "当前运行 p95" : "当前运行暂无样本";
+    // The ledger now falls back to the run's last samples when the live window is
+    // empty, so say plainly whether these numbers are current or historical.
+    var latencyRoot = (data.current || data.today || data)?.latency || {};
+    var historical = latencyRoot.historical === true;
+    var sampleAt = window.PolyPreview.format.time(latencyRoot.latest_sample_at, "");
+    var status = resource?.status === "stale" || resource?.stale === true ? "统计已过期 · 保留最近样本"
+      : samples > 0 ? (historical ? (sampleAt ? `最近一次运行 p95 · ${sampleAt}` : "最近一次运行 p95") : "当前运行 p95")
+        : "当前运行暂无样本";
     text("[data-latency-state]", status);
+    // A bare millisecond figure is unreadable without a floor to compare against.
+    // Measured from this server to the venue: TCP 2ms, TLS 38ms, full request
+    // ~66ms, so a warm connection bottoms out near 30ms. That is the physical
+    // optimum for order acknowledgement — well above it means the code is slow,
+    // near it means there is nothing left to win.
+    var baseline = "参考:本机到交易所网络下限约 30ms(复用连接)、完整请求约 66ms;下单确认接近 30ms 即为最优，持续高于 150ms 说明代码链路有问题。";
     var caption = samples > 0
-      ? `已接收 ${samples} 个延迟样本；没有样本的链路显示 --。`
-      : (resource?.error || "交易进程尚未产生延迟样本。");
+      ? `已接收 ${samples} 个延迟样本；没有样本的链路显示 --。${baseline}`
+      : (resource?.error || "交易进程尚未产生延迟样本。") + baseline;
     text(".latency-caption", caption);
   };
   var renderRuntime = function(runtime, globalProcess = false) {

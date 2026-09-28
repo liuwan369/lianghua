@@ -46,8 +46,8 @@
         <div class="metrics-grid">
           <article class="metric-group"><div class="metric-heading"><span class="metric-mark blue-mark">\u5355</span><div><h3>\u8BA2\u5355\u6570</h3><p>\u5DF2\u8BB0\u5F55\u7684\u8BA2\u5355\u6570\u91CF</p></div></div><strong class="metric-primary" data-metric="orders-current">--</strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd data-metric="orders-today">--</dd></div><div><dt>\u5F53\u6708</dt><dd data-metric="orders-month">--</dd></div></dl></article>
           <article class="metric-group"><div class="metric-heading"><span class="metric-mark amber-mark">\u76C8</span><div><h3>\u76C8 / \u4E8F</h3><p>\u80DC\u8D1F\u573A\u6B21\u7EDF\u8BA1</p></div></div><strong class="metric-primary"><span data-metric="wins-current">--</span> <em>/</em> <span data-metric="losses-current">--</span></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="wins-today">--</span> / <span data-metric="losses-today">--</span></dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="wins-month">--</span> / <span data-metric="losses-month">--</span></dd></div></dl></article>
-          <article class="metric-group"><div class="metric-heading"><span class="metric-mark green-mark">\u7387</span><div><h3>\u80DC\u7387</h3><p>\u5DF2\u5B8C\u6210\u573A\u6B21\u7684\u6BD4\u4F8B</p></div></div><strong class="metric-primary"><span data-metric="rate-current">--</span><em>%</em></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="rate-today">--</span>%</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="rate-month">--</span>%</dd></div></dl></article>
-          <article class="metric-group"><div class="metric-heading"><span class="metric-mark violet-mark">\u51C0</span><div><h3>\u7D2F\u8BA1\u76C8\u5229</h3><p>\u5DF2\u7ED3\u7B97\u51C0\u7ED3\u679C</p></div></div><strong class="metric-primary"><span data-metric="pnl-current">--</span> <em>USDC</em></strong><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="pnl-today">--</span> USDC</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="pnl-month">--</span> USDC</dd></div></dl></article>
+          <article class="metric-group"><div class="metric-heading"><span class="metric-mark green-mark">\u7387</span><div><h3>\u80DC\u7387</h3><p>\u5DF2\u5B8C\u6210\u573A\u6B21\u7684\u6BD4\u4F8B</p></div></div><strong class="metric-primary"><span data-metric="rate-current">--</span><em>%</em></strong><small class="metric-note" data-metric="rate-sample" title="\u80DC\u7387\u5206\u6BCD\u53EA\u542B\u76C8\u4E8F\u5DF2\u786E\u5B9A\u7684\u573A\u6B21\uFF1B\u6837\u672C\u592A\u5C11\u65F6\u8BE5\u6BD4\u4F8B\u6CA1\u6709\u7EDF\u8BA1\u610F\u4E49">\u6837\u672C --</small><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="rate-today">--</span>%</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="rate-month">--</span>%</dd></div></dl></article>
+          <article class="metric-group"><div class="metric-heading"><span class="metric-mark violet-mark">\u51C0</span><div><h3>\u5DF2\u7ED3\u7B97\u51C0\u76C8\u4E8F</h3><p>\u5DF2\u786E\u8BA4\u7ED3\u7B97\uFF0C\u5DF2\u6263\u624B\u7EED\u8D39</p></div></div><strong class="metric-primary"><span data-metric="pnl-current">--</span> <em>USDC</em></strong><small class="metric-note" data-metric="fee-share" title="\u624B\u7EED\u8D39\u6309\u5B98\u65B9\u516C\u5F0F\u5728\u64AE\u5408\u65F6\u786E\u5B9A\uFF1B\u8FD9\u91CC\u663E\u793A\u5B83\u5360\u6BDB\u5229\u7684\u6BD4\u4F8B">\u624B\u7EED\u8D39 --</small><dl class="metric-rows"><div><dt>\u4ECA\u65E5</dt><dd><span data-metric="pnl-today">--</span> USDC</dd></div><div><dt>\u5F53\u6708</dt><dd><span data-metric="pnl-month">--</span> USDC</dd></div></dl></article>
         </div>
         <div class="metrics-footnote"><span class="info-dot">i</span><span><span data-metrics-state>\u4EC5\u7EDF\u8BA1\u5DF2\u53D6\u5F97\u7684\u771F\u5B9E\u8BB0\u5F55\uFF1B\u540E\u7AEF\u63A5\u5165\u540E\u518D\u663E\u793A\u771F\u5B9E\u8D26\u6237\u6570\u636E\u3002</span><small data-metrics-detail>待结算 -- · PnL 待核对 -- · 费用 --</small></span></div>
       </section>
@@ -321,6 +321,23 @@
     const fees = periodValue(data, "current", ["fees"], ["fees"]);
     const estimatedFees = periodValue(data, "current", ["estimated_fees"], ["estimated_fees"]);
     const display = (value, digits = 0) => value == null ? "--" : formatMetric(value, digits);
+    // Win-rate denominator: a high percentage over one settled round is not a
+    // track record, so show the sample size next to it.
+    const wins = finite(periodValue(data, "current", ["settled_wins"], ["settled_wins"]));
+    const losses = finite(periodValue(data, "current", ["settled_losses"], ["settled_losses"]));
+    const sample = wins == null || losses == null ? null : wins + losses;
+    text('[data-metric="rate-sample"]', sample == null ? "样本 --"
+      : sample === 0 ? "样本 0 场 · 暂无结论"
+        : `样本 ${sample} 场${sample < 20 ? " · 样本偏少" : ""}`);
+    // Fees are a material cost (they took ~20% of the first profit), so surface
+    // them and their share of gross profit instead of hiding them in the footer.
+    const netPnl = finite(periodValue(data, "current", ["pnlUsd", "pnl_usd", "profit", "settledPnl", "settled_pnl"], ["pnlUsd", "pnl_usd", "profit", "settledPnl", "settled_pnl"]));
+    const feeValue = finite(fees);
+    const gross = netPnl != null && feeValue != null ? netPnl + feeValue : null;
+    text('[data-metric="fee-share"]', feeValue == null ? "手续费 --"
+      : gross != null && gross > 0
+        ? `手续费 ${feeValue.toFixed(4)} · 占毛利 ${(feeValue / gross * 100).toFixed(1)}%`
+        : `手续费 ${feeValue.toFixed(4)}`);
     text("[data-metrics-detail]", `唯一成交 ${display(currentFills)} · 今日 ${display(todayFills)} · 待结算 ${display(pending)} · PnL 待核对 ${display(pendingPnl)} · 已确认费用 ${display(fees, 4)} · 估算费用 ${display(estimatedFees, 4)}`);
   };
   const renderDiagnostics = (resource) => {
@@ -399,6 +416,14 @@
       order_recovery_pending: "订单状态仍在核对",
       startup_account_recovery_pending: "启动时账户订单核对未完成",
       cash_flow_refresh_pending: "账户资金数据等待刷新",
+      // Codes that actually appear in production and previously rendered as raw
+      // English. account_recovery_started is a coordination signal, not a fault.
+      account_recovery_started: "账户订单开始核对",
+      settlement_drain_timeout: "结算收尾超时，仍有场次未确认",
+      settlement_pass_timeout: "结算轮询超时",
+      settlement_terminal_failure: "结算失败，已终止重试",
+      platform_run_failed: "交易进程运行失败",
+      user_feed_not_ready: "账户回报通道尚未就绪",
       journal_failed: "运行记录写入失败",
       process_failed: "交易进程异常退出",
       ledger_projection_incomplete: "账本投影尚未追上运行记录",
@@ -417,13 +442,15 @@
       const translated = window.PolyPreview.format.readableError(safe, "");
       return translated && translated !== safe ? translated : fallback;
     };
-    const markup = items.slice(0, 20).map((item) => {
+    // Collapse consecutive repeats before rendering: a retry loop must read as
+    // one line with a count, otherwise 300+ identical notices bury the one real
+    // failure. Severity comes from the code's meaning, not the channel it used.
+    const markup = window.PolyPreviewViewModel.collapseEvents(items, 20).map((group) => {
+      const item = group.item;
+      const repeats = group.count;
       const state = String(item.status || item.state || "").toLowerCase();
       const kind = String(item.kind || item.event || "").toLowerCase();
-      const suppliedSeverity = String(item.severity || item.level || "").toLowerCase();
-      const failure = ["rejected", "failed", "error", "unconfirmed"].includes(state)
-        || ["error", "platform_error", "order_rejected", "settlement_failed", "ledger_projection_incomplete", "remote_orders_unconfirmed"].includes(kind);
-      const severity = failure ? (state === "unconfirmed" || kind === "ledger_projection_incomplete" ? "warning" : "error") : suppliedSeverity || "info";
+      const severity = window.PolyPreviewViewModel.eventSeverity(item);
       const time = item.time || item.createdAt || item.created_at || item.timestamp || "--";
       const code = String(item.code || "").toLowerCase();
       const fallbackMessage = (kind === "platform_status" && activityNames[kind]?.[state])
@@ -447,6 +474,13 @@
       const detailParts = [];
       const rawDetail = item.detail && item.detail !== item.message ? item.detail : item.reason && item.reason !== item.message ? item.reason : null;
       if (rawDetail) detailParts.push(readableEvent(rawDetail, "服务器已返回附加状态"));
+      // A repeat count is the most important fact in a retry loop: it shows the
+      // action keeps running without succeeding. Lead with it.
+      if (repeats > 1) {
+        const firstTime = window.PolyPreview.format.time(
+          group.oldest?.time || group.oldest?.createdAt || group.oldest?.created_at, "");
+        detailParts.push(firstTime ? `重复 ${repeats} 次 · 最早 ${firstTime}` : `重复 ${repeats} 次`);
+      }
       // Surface the raw code and phase: they are the fields that actually tell an
       // operator what happened, and were previously dropped from the log line.
       if (code && !errorNames[code]) detailParts.push(`错误码 ${code}`);

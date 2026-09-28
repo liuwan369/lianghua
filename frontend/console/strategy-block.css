@@ -1936,3 +1936,9 @@ button {
 }
 
 [data-draft-state] { overflow-wrap: anywhere; }
+
+/* A parameter that looks like a risk gate but has no effect on trading must say
+   so plainly; the old wording ("只用于记录方向确认") read as a mild caveat. */
+.strategy-field small.field-inert {
+  color: #e0a86a;
+}

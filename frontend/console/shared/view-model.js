@@ -217,6 +217,61 @@
       ?? finite(first(funds.availableUsd, funds.available_usd));
     return { totalUsd, availableUsd, stale: resource?.stale === true || resource?.status === "stale" };
   };
+  /**
+   * Classify an event's severity from its meaning, not from the channel it
+   * arrived on. The engine emits `kind:"error"` for anything it wants the console
+   * to notice — including `account_recovery_started`, which is a coordination
+   * signal, not a failure — and never sets `severity`. Judging by channel painted
+   * 325 recovery notices red and buried the one real timeout.
+   *
+   * Rules, in order: an explicit severity wins; a code whose name states an
+   * outcome (`*_failed`, `*_timeout`, `*_rejected`) is an error; a code that
+   * states a beginning or a wait (`*_started`, `*_pending`, `*_not_ready`) is
+   * informational or a warning; health codes are warnings because the runtime
+   * retries them itself.
+   */
+  const eventSeverity = (item = {}) => {
+    const supplied = String(first(item.severity, item.level) || "").toLowerCase();
+    if (["error", "critical", "warning", "warn", "info", "success"].includes(supplied)) {
+      return supplied === "warn" ? "warning" : supplied === "critical" ? "error" : supplied;
+    }
+    const code = String(item.code || "").toLowerCase();
+    const kind = String(first(item.kind, item.event) || "").toLowerCase();
+    const state = String(first(item.status, item.state) || "").toLowerCase();
+    // Terminal failures: the action is over and it did not succeed.
+    if (/(_failed|_failure|_timeout|_rejected|_mismatch|_invalid|_exhausted)$/.test(code)
+      || ["failed", "rejected"].includes(state)
+      || ["platform_error", "order_rejected", "settlement_failed"].includes(kind)) return "error";
+    // Started / pending / not-ready describe progress, not an outcome. The
+    // runtime is still working on them, so they are informational.
+    if (/(_started|_begin|_completed|_confirmed|_resolved)$/.test(code)) return "info";
+    if (/(_pending|_not_ready|_waiting|_retrying|_unconfirmed|_incomplete|_unhealthy|_disconnected|_stale)$/.test(code)
+      || ["unconfirmed", "pending", "retrying"].includes(state)) return "warning";
+    if (kind === "error") return "warning";
+    return "info";
+  };
+  /**
+   * Collapse consecutive repeats of the same event so a retry loop reads as one
+   * line with a count. 325 identical recovery notices pushed the real failure off
+   * screen; the operator needs "retrying N times since HH:MM", which is also the
+   * only form that reveals a retry is *not succeeding*.
+   */
+  const collapseEvents = (items = [], limit = 20) => {
+    const groups = [];
+    for (const item of Array.isArray(items) ? items : []) {
+      const key = [String(item.code || ""), String(first(item.kind, item.event) || ""),
+        String(first(item.status, item.state) || ""), String(item.message || "")].join("");
+      const last = groups[groups.length - 1];
+      if (last && last.key === key) {
+        last.count += 1;
+        last.oldest = item;
+        continue;
+      }
+      groups.push({ key, count: 1, item, oldest: item });
+      if (groups.length >= limit) break;
+    }
+    return groups;
+  };
   // Single source for runtime state labels. Four copies had drifted, so the same
   // backend status rendered differently on each page.
   const runtimeStateLabel = (status) => {
@@ -345,5 +400,5 @@
     const candidate = config && typeof config === "object" ? config : {};
     return String(strategyAssetId(candidate) || "").toLowerCase() === "btc";
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, startBlockReason, accountBalance, runtimeStateLabel, payloadOf, finite, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, startBlockReason, accountBalance, runtimeStateLabel, eventSeverity, collapseEvents, payloadOf, finite, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
 })();
