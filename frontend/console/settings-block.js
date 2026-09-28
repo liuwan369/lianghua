@@ -157,9 +157,9 @@
       collector ? `行情时间 ${window.PolyPreview.format.time(collector.asOf)}${collectorStale ? " · 保留最近快照" : ""}` : "诊断未提供行情服务状态",
       collector && collector.stale === false && !collectorStale ? "good" : "warning");
     const trading = isObject(services.trading) ? services.trading : null;
-    const tradingLabels = { running: "运行中", paused: "已暂停", stopped: "已停止", starting: "启动中", stopping: "停止中", failed: "运行失败", unavailable: "运行状态不可用", idle: "空闲" };
+    const tradingLabel_ = (status) => window.PolyPreviewViewModel.runtimeStateLabel(status);
     const tradingStale = transportStale || trading?.stale === true;
-    const tradingLabel = trading ? tradingLabels[trading.status] || "状态未知" : "未检查";
+    const tradingLabel = trading ? (tradingLabel_(trading.status) || "状态未知") : "未检查";
     connection("trade", `${tradingLabel}${tradingStale && trading ? " · 过期" : ""}`,
       trading ? `运行时间 ${window.PolyPreview.format.time(trading.asOf)}${tradingStale ? " · 保留最近快照" : ""}` : "诊断未提供交易运行状态",
       trading && !tradingStale && trading.status === "running" ? "good" : trading && !tradingStale && ["stopped", "idle"].includes(trading.status) ? "neutral" : "warning");

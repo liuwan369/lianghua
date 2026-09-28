@@ -191,6 +191,34 @@
     if (!assetId || String(target) !== String(assetId)) return "激活策略与所选市场不一致，请切换市场或重新激活策略";
     return "";
   };
+  // Single source for account balances. Overview and auto-trade previously used
+  // different field chains, so the same snapshot could show a number on one page
+  // and "--" on the other. `runtime` is the optional runtime slice used as a last
+  // resort for the available figure.
+  const accountBalance = (resource = {}, runtime = {}) => {
+    const data = resource?.data && typeof resource.data === "object" ? resource.data : {};
+    const collateralValue = data.collateral?.value;
+    const collateralAvailable = data.collateral?.available === true
+      ? (collateralValue && typeof collateralValue === "object"
+        ? finite(first(collateralValue.availableUsd, collateralValue.available_usd, collateralValue.value, collateralValue.amount))
+        : finite(collateralValue))
+      : null;
+    const lastCheck = data.last_check || data.lastCheck || {};
+    const funds = runtime?.funds && typeof runtime.funds === "object" ? runtime.funds : {};
+    const totalUsd = finite(first(data.totalUsd, data.total_usd, data.equity)) ?? collateralAvailable;
+    const availableUsd = finite(first(data.availableUsd, data.available_usd, data.balance_occupancy?.spendable_balance))
+      ?? collateralAvailable
+      ?? finite(first(lastCheck.balance, lastCheck.availableUsd, lastCheck.available_usd))
+      ?? finite(first(funds.availableUsd, funds.available_usd));
+    return { totalUsd, availableUsd, stale: resource?.stale === true || resource?.status === "stale" };
+  };
+  // Single source for runtime state labels. Four copies had drifted, so the same
+  // backend status rendered differently on each page.
+  const runtimeStateLabel = (status) => {
+    const key = String(status ?? "").toLowerCase();
+    return { running: "运行中", starting: "启动中", paused: "已暂停", stopping: "停止中",
+      stopped: "已停止", failed: "运行失败", idle: "空闲", unavailable: "运行状态不可用" }[key] || "";
+  };
   // Shared account-readiness ladder. Overview and auto-trade previously kept
   // byte-identical copies of this chain, which is how their error dictionaries
   // drifted apart. `resource` is the accountStatus slice ({status, stale, error,
@@ -212,6 +240,35 @@
         : account.execution_credentials_ready === true && account.account_check_ready === true;
     if (liveReady !== true) return "服务器尚未确认账户可启动交易";
     return "";
+  };
+  /**
+   * Single source for the start-gate ladder. Overview and auto-trade each kept a
+   * copy in a different order with different wording, so the two pages could
+   * disagree about whether trading may start. Callers pass their own
+   * `snapshotFresh` fact (overview judges the catalog row, auto-trade its
+   * dedicated snapshot poll) plus the store slices; the order and the messages
+   * live here. Returns "" when every gate passes.
+   */
+  const startBlockReason = (input = {}) => {
+    const { catalog, pool, strategy, accountStatus, runtime, assetId, snapshotFresh, poolInitializable } = input;
+    if (input.initialRead) return "正在读取服务器状态…";
+    const runtimeBlock = runtimeStartBlockReason(runtime || {});
+    if (runtimeBlock) return runtimeBlock;
+    const item = (catalog?.items || []).find((market) => market.assetId === assetId);
+    if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";
+    if (item.canEnable !== true) return "服务器尚未确认该市场可加入运行池";
+    const catalogReason = catalogItemStartReason(catalog || {}, item);
+    if (catalogReason) return catalogReason;
+    if (!poolInitializable && (pool?.status !== "ready" || pool?.stale || !(pool?.desiredIds || []).includes(assetId))) {
+      return "请先在市场页面确认运行池";
+    }
+    if (snapshotFresh !== true) return "当前盘口快照未新鲜确认，暂不允许启动";
+    if (strategy?.status !== "ready" || strategy?.stale === true || strategy?.error || !(strategy?.revision > 0)) {
+      return "请先在策略页面保存并激活有效版本";
+    }
+    const strategyAssetReason = strategyAssetStartReason(strategy, assetId);
+    if (strategyAssetReason) return strategyAssetReason;
+    return accountStartBlockReason(accountStatus || {});
   };
   const fillRecords = (payload) => {
     const raw = payloadOf(payload) || {};
@@ -278,5 +335,5 @@
     const candidate = config && typeof config === "object" ? config : {};
     return String(strategyAssetId(candidate) || "").toLowerCase() === "btc";
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, startBlockReason, accountBalance, runtimeStateLabel, payloadOf, finite, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
 })();

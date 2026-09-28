@@ -86,25 +86,21 @@
       || (state.strategy.status === "unavailable" && state.strategy.error === "策略配置尚未接入")
       || (state.accountStatus.status === "unavailable" && state.accountStatus.error === "账户配置状态尚未接入")
       || (state.runtime.status === "unavailable" && state.runtime.error === "后端尚未接入");
-    if (initialRead) return "正在读取服务器状态…";
     const assetId = state.marketPool.desiredIds[0] || state.marketCatalog.selectedId || window.PolyPreview.config.selectedAssetId;
-    const runtime = state.runtime || {};
-    const runtimeBlock = window.PolyPreviewViewModel.runtimeStartBlockReason(runtime);
-    if (runtimeBlock) return runtimeBlock;
     const item = state.marketCatalog.items.find((market) => market.assetId === assetId);
-    if (!assetId || !item?.marketId || !item.roundId) return "请先等待服务器返回完整市场身份";
-    if (item.canEnable !== true) return "服务器尚未确认该市场可加入运行池";
-    const catalogReason = window.PolyPreviewViewModel.catalogItemStartReason(state.marketCatalog, item);
-    if (catalogReason) return catalogReason;
-    const initialPool = store.canInitializeMarketPool(state.marketPool);
-    if ((!initialPool && (state.marketPool.status !== "ready" || state.marketPool.stale || !state.marketPool.desiredIds.includes(assetId)))) return "请先在市场页面确认运行池";
-    const snapshotFresh = window.PolyPreviewViewModel.hasFreshBbo(item);
-    if (!snapshotFresh) return "当前盘口快照未新鲜确认，暂不允许启动";
-    const strategy = state.strategy || {};
-    if (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
-    const strategyAssetReason = window.PolyPreviewViewModel.strategyAssetStartReason(strategy, assetId);
-    if (strategyAssetReason) return strategyAssetReason;
-    return window.PolyPreviewViewModel.accountStartBlockReason(state.accountStatus);
+    return window.PolyPreviewViewModel.startBlockReason({
+      initialRead,
+      assetId,
+      catalog: state.marketCatalog,
+      pool: state.marketPool,
+      strategy: state.strategy,
+      accountStatus: state.accountStatus,
+      runtime: state.runtime,
+      poolInitializable: store.canInitializeMarketPool(state.marketPool),
+      // Overview has no dedicated snapshot poll, so the catalog row is its
+      // freshness fact.
+      snapshotFresh: window.PolyPreviewViewModel.hasFreshBbo(item)
+    });
   };
   const overviewEventContext = () => {
     const state = store.getState();
@@ -321,12 +317,9 @@
   const renderAccount = (resource) => {
     const data = resource?.data;
     if (!data) return;
-    const collateralValue = data.collateral?.value;
-    const collateralAvailable = data.collateral?.available === true
-      ? (collateralValue && typeof collateralValue === "object" ? read(collateralValue, ["availableUsd", "available_usd", "value", "amount"]) : collateralValue)
-      : null;
-    const total = read(data, ["totalUsd", "total_usd", "equity"], collateralAvailable);
-    const available = read(data, ["availableUsd", "available_usd", "balance_occupancy.spendable_balance"], collateralAvailable);
+    const balance = window.PolyPreviewViewModel.accountBalance(resource, store.getState().runtime);
+    const total = balance.totalUsd;
+    const available = balance.availableUsd;
     const formatUsd = (value) => { const amount = finite(value); return amount == null ? "--" : `${amount.toFixed(2)} USDC`; };
     text("[data-account-total]", formatUsd(total));
     text("[data-account-available]", formatUsd(available));

@@ -286,6 +286,7 @@
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
   var lastSnapshotValid = false;
+  var lastFillCount = null;
   var timestampMs = window.PolyPreview.format.timestampMs;
   var markSnapshotStale = function(message) {
     lastSnapshotValid = false;
@@ -581,16 +582,20 @@
     var confirmed = scoped.filter(function(fill) { return String(fill.tradeStatus || fill.trade_status || fill.status || "").toUpperCase() !== "FAILED"; });
     // The fills endpoint intentionally exposes journal revisions (MATCHED ->
     // MINED -> CONFIRMED). Keep those rows available to the detail view, but
-    // make the headline match the economic fill count used by the ledger.
-    var economicIds = new Set();
-    confirmed.forEach(function(fill, index) {
-      var tradeId = fill.tradeId ?? fill.trade_id;
-      var orderId = fill.orderId ?? fill.order_id;
-      economicIds.add(tradeId && orderId ? `${tradeId}:${orderId}` : `row:${index}`);
-    });
-    var fillLabel = `成交 ${economicIds.size} 笔`;
-    if (confirmed.length !== economicIds.size) fillLabel += ` · 状态回报 ${confirmed.length} 条`;
+    // make the headline match the economic fill count used by the ledger. Use the
+    // shared dedup so this count cannot disagree with the overview page: it keys
+    // on trade+order+market+round and drops rows without market/round identity
+    // instead of counting them per row.
+    var deduped = vm.uniqueFills({ fills: confirmed }, ledgerContext());
+    var economicCount = deduped.count == null ? 0 : deduped.count;
+    var fillLabel = `成交 ${economicCount} 笔`;
+    if (confirmed.length !== economicCount) fillLabel += ` · 状态回报 ${confirmed.length} 条`;
+    if (deduped.unidentified) fillLabel += ` · ${deduped.unidentified} 条缺少场次标识`;
     text("[data-fill-summary]", fillLabel);
+    // A new economic fill changes the balance; refresh it promptly rather than
+    // waiting for the next account poll.
+    if (lastFillCount != null && economicCount > lastFillCount) refreshAccountSoon();
+    lastFillCount = economicCount;
     return true;
   };
   var renderSettlements = function(raw) {
@@ -860,17 +865,26 @@
       if (!reason && action === "start" && initialRead) reason = "正在读取服务器状态…";
       if (!reason && action === "stop" && (!runtimeIdentityMatches || !running) && !stopAfterAcceptedStart) reason = !runtimeIdentityMatches ? "当前市场没有匹配的服务器运行身份" : "没有服务器确认的可停止运行";
       if (!reason && action === "pause" && (processRunning !== true || selectedRuntime?.stale || !runtimeIdentityMatches)) reason = selectedRuntime?.stale ? "运行状态已过期，暂不允许暂停或恢复" : !runtimeIdentityMatches ? "当前市场没有匹配的服务器运行身份" : "服务器未确认进程正在运行";
-      if (!reason && action === "start") reason = vm.runtimeStartBlockReason({ ...startRuntime, processRunning: effectiveProcessRunning });
-      if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
-      if (!reason && action === "start") reason = vm.strategyAssetStartReason(strategy, context.assetId);
-      if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
-      if (!reason && action === "start") reason = vm.accountStartBlockReason(accountStatus);
+      // Shared start ladder: same order and wording as the overview page so the
+      // two cannot disagree. This page's freshness fact is its dedicated snapshot
+      // poll rather than the catalog row.
       var initialPool = store.canInitializeMarketPool(marketPool);
       var poolSelected = marketPool.desiredIds.includes(context.assetId);
       var catalogReason = vm.catalogItemStartReason(catalog, asset);
       var initialPoolAsset = initialPool && asset?.canEnable === true && !catalogReason
         && asset?.cycle === "5m" && Boolean(asset?.marketId && asset?.roundId);
-      if (!reason && action === "start" && (!asset?.canEnable || catalogReason || (!poolSelected && !initialPoolAsset))) reason = catalogReason || !asset?.canEnable ? (catalogReason || "服务器尚未确认该市场可加入运行池") : "请先在市场页启用所选币种并等待服务器确认";
+      if (!reason && action === "start") {
+        reason = vm.startBlockReason({
+          assetId: context.assetId,
+          catalog: catalog,
+          pool: marketPool,
+          strategy: strategy,
+          accountStatus: accountStatus,
+          runtime: { ...startRuntime, processRunning: effectiveProcessRunning },
+          poolInitializable: poolSelected || initialPoolAsset,
+          snapshotFresh: lastSnapshotValid === true
+        });
+      }
       if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
       if (action === "start") startReason = reason;
       if (action === "pause") button.textContent = freshPaused ? "恢复新增" : "暂停新增";
@@ -893,19 +907,9 @@
     text("[data-strategy-revision]", Number.isInteger(revision) && revision > 0 ? `参数版本 ${revision}` : "参数版本待接入");
   };
   var renderAccount = function(resource) {
-    var data = resource?.data || {};
-    var collateral = data.collateral?.value;
-    var fallback = data.collateral?.available === true
-      ? (collateral && typeof collateral === "object" ? numeric(collateral.availableUsd ?? collateral.available_usd ?? collateral.value ?? collateral.amount) : numeric(collateral))
-      : null;
-    var accountCheck = data.last_check || data.lastCheck || {};
-    var runtimeFunds = store.getState().runtime?.funds || {};
-    var value = numeric(data.availableUsd ?? data.available_usd ?? data.balance_occupancy?.spendable_balance)
-      ?? fallback
-      ?? numeric(accountCheck.balance ?? accountCheck.availableUsd ?? accountCheck.available_usd)
-      ?? numeric(runtimeFunds.availableUsd ?? runtimeFunds.available_usd);
-    var stale = resource?.stale === true || resource?.status === "stale";
-    text("[data-auto-account-available]", value == null ? "-- USDC" : `${value.toFixed(2)} USDC${stale ? " · 过期" : ""}`);
+    var balance = vm.accountBalance(resource, store.getState().runtime);
+    var value = balance.availableUsd;
+    text("[data-auto-account-available]", value == null ? "-- USDC" : `${value.toFixed(2)} USDC${balance.stale ? " · 过期" : ""}`);
   };
   var renderMetrics = function(resource) {
     var data = resource?.data || {};
@@ -992,7 +996,10 @@
         .then(function(delay) { scheduleAccountStatusRefresh(delay); });
     }, Math.max(0, delay));
   };
-  var scheduleAccountRefresh = function(delay = 15000) {
+  // Balance moves on fills, so poll faster than the old 15s (the server still
+  // throttles the underlying RPC) and also refresh immediately when a new fill is
+  // observed — see refreshAccountSoon below.
+  var scheduleAccountRefresh = function(delay = 10000) {
     if (document.hidden) return;
     if (accountRefreshTimer) window.clearTimeout(accountRefreshTimer);
     accountRefreshTimer = window.setTimeout(function() {
@@ -1002,9 +1009,20 @@
         .catch(function() { return null; })
         .finally(function() {
           accountRefreshInFlight = null;
-          scheduleAccountRefresh(15000);
+          scheduleAccountRefresh(10000);
         });
     }, Math.max(0, delay));
+  };
+  // Refresh the balance almost immediately after a new fill is observed, instead
+  // of waiting up to a full poll interval. Debounced so a burst of fill revisions
+  // triggers a single reload.
+  var accountSoonTimer = null;
+  var refreshAccountSoon = function() {
+    if (document.hidden || accountSoonTimer) return;
+    accountSoonTimer = window.setTimeout(function() {
+      accountSoonTimer = null;
+      scheduleAccountRefresh(0);
+    }, 400);
   };
   var scheduleMetricsRefresh = function(delay = 5000) {
     if (document.hidden) return;
