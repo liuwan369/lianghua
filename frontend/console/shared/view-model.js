@@ -318,8 +318,12 @@
     const redemptionRequired = first(item.redemptionRequired, item.redemption_required);
     // Older no-trade rows exposed settlementRequired=false without noTrade.
     const noTrade = item.noTrade === true || item.no_trade === true || accounting === "no_trade" || settlementRequired === false;
+    // A long-expired market is no longer listed by the venue, so its settlement
+    // can never be resolved. Terminal, not pending — and never a loss.
+    const unresolvable = accounting === "unresolvable";
     let label;
-    if (noTrade) label = state === "confirmed" ? "无成交 · 无需赎回" : "无成交 · 等待结算确认";
+    if (unresolvable) label = "场次已过期 · 交易所不再提供结算,无法核实";
+    else if (noTrade) label = state === "confirmed" ? "无成交 · 无需赎回" : "无成交 · 等待结算确认";
     else if (redemptionRequired === false) {
       label = state === "confirmed" ? "有成交 · 结算已确认 · 无需赎回"
         : state === "failed" ? "有成交 · 结算失败 · 无需赎回" : "有成交 · 等待结算确认 · 无需赎回";
@@ -329,6 +333,7 @@
     }
     return {
       state,
+      unresolvable,
       noTrade,
       redemptionRequired,
       accounting,

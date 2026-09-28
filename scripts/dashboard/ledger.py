@@ -199,6 +199,36 @@ def _explicit_zero_coverage(value):
             and all(_number(amount) == 0 for amount in value.values()))
 
 
+# A 5-minute market disappears from the catalog once it is long expired, so
+# settlement can never look it up again. Keeping such a round in
+# pending_settlements forever misreports it as actionable work.
+# `settlement_market_not_found`: the venue no longer lists the expired market.
+# `settlement_receipt_balance_or_payout_mismatch`: the redemption transaction was
+# submitted but never mined (verified: neither hash has an on-chain receipt), so
+# nothing was ever credited and there is no payout left to reconcile.
+_UNRESOLVABLE_SETTLEMENT_REASONS = ("settlement_market_not_found",
+                                    "settlement_receipt_balance_or_payout_mismatch")
+# Only treat lookup failure as terminal well after the round closed, so a
+# transient catalog gap right after expiry still gets retried.
+_SETTLEMENT_ABANDON_AFTER_SEC = 6 * 3600
+
+
+def _settlement_unresolvable(payload, round_id, now=None):
+    """True when a settlement can no longer be resolved and must stop pending."""
+    if not isinstance(payload, dict):
+        return False
+    reason = str(payload.get("reason") or payload.get("message") or "")
+    if not any(code in reason for code in _UNRESOLVABLE_SETTLEMENT_REASONS):
+        return False
+    if payload.get("payout_verified") is True or payload.get("credited_usd") is not None:
+        return False
+    try:
+        closed_at = int(str(round_id)) + 300
+    except (TypeError, ValueError):
+        return False
+    return (time.time() if now is None else now) - closed_at >= _SETTLEMENT_ABANDON_AFTER_SEC
+
+
 def _explicit_no_redemption(payload):
     """Recognize the live adapter's terminal no-holdings response."""
     if not isinstance(payload, dict):
@@ -520,10 +550,16 @@ class Ledger:
                     db.execute("UPDATE trade_details SET payload=? WHERE rowid=?",
                                (json.dumps(payload, ensure_ascii=False), row[0]))
                     repaired_fees = True
-                if repaired_fees:
-                    # Settlement rows cached pnl=null / cost_basis_unverified from
-                    # the old fee shape. Recompute them now that the cost basis is
-                    # complete; _refresh_settlement re-derives pnl from the trades.
+                # Refresh settlement projections when either the cost basis was
+                # just repaired, or rows still carry a state this build now
+                # classifies differently (pending rows that are actually
+                # terminally unresolvable). _refresh_settlement re-derives pnl and
+                # the accounting state from the stored trades.
+                stale_states = db.execute(
+                    "SELECT COUNT(*) FROM settlement_details WHERE verified=0 "
+                    "AND COALESCE(json_extract(payload,'$.accounting_state'),'') "
+                    "NOT IN ('no_trade','unresolvable')").fetchone()[0]
+                if repaired_fees or stale_states:
                     for row in db.execute(
                             "SELECT DISTINCT run_id, market, asset_id FROM settlement_details").fetchall():
                         try:
@@ -1385,7 +1421,16 @@ class Ledger:
         pnl = None
         reason = "payout_unverified"
         accounting_state = "pending"
-        if no_trade:
+        # A long-expired market that the venue no longer lists can never be
+        # redeemed or verified. Mark it terminal so it leaves pending_settlements
+        # instead of inflating that counter indefinitely; pnl stays null because
+        # the payout genuinely was never confirmed.
+        unresolvable = (not row["verified"] and not no_trade
+                        and _settlement_unresolvable(payload, row["round_id"]))
+        if unresolvable:
+            reason = "settlement_unresolvable"
+            accounting_state = "unresolvable"
+        elif no_trade:
             # A confirmed no-holdings response is a terminal no-op. It is not
             # a payout failure and must not keep the run in pending settlement.
             reason = "no_trade"
@@ -1422,7 +1467,7 @@ class Ledger:
                     reason = None if pnl is not None else "invalid_pnl"
         payload.update(pnl=pnl, accounting_state=accounting_state, pnl_error=reason,
                       settlement_required=not no_trade,
-                      redemption_required=not (no_trade or no_redemption))
+                      redemption_required=not (no_trade or no_redemption or unresolvable))
         db.execute("UPDATE settlement_details SET pnl=?,payload=? WHERE run_id=? AND asset_id=? AND market=?",
                    (pnl, json.dumps(payload, allow_nan=False), run_id, asset_id, market))
         prior = db.execute("SELECT m.settled,m.fills,d.pnl FROM markets m JOIN market_details d "
@@ -1753,7 +1798,8 @@ class Ledger:
                           settled_draws=int(settled["draws"] or 0), settled_pnl_pending=run["missing_pnl"],
                           pending_settlements=db.execute(
                               "SELECT COUNT(*) FROM settlement_details WHERE run_id=? AND verified=0 "
-                              "AND COALESCE(json_extract(payload,'$.accounting_state'),'') != 'no_trade' "
+                              "AND COALESCE(json_extract(payload,'$.accounting_state'),'') "
+                              "NOT IN ('no_trade','unresolvable') "
                               "AND COALESCE(json_extract(payload,'$.redemption_required'),1) != 0",
                               (run_id,)).fetchone()[0] if self._has_table(db, "settlement_details") else 0,
                           win_rate=(wins / (wins + losses) if wins + losses else None))
@@ -1963,7 +2009,10 @@ class Ledger:
                 return (item["asset_id"], item.get("market_id") or item["market"], item["round_id"])
             def redemption_pending(item):
                 payload = json.loads(item["payload"])
-                return (not item["verified"] and payload.get("accounting_state") != "no_trade"
+                # `unresolvable` is terminal like `no_trade`: the market is gone
+                # from the venue, so there is nothing left to redeem or await.
+                return (not item["verified"]
+                        and payload.get("accounting_state") not in ("no_trade", "unresolvable")
                         and payload.get("redemption_required", True))
             pending_markets = {settlement_identity(item) for item in settlements.values()
                                if redemption_pending(item)
