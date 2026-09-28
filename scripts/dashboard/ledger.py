@@ -502,6 +502,34 @@ class Ledger:
                 db.execute("CREATE INDEX IF NOT EXISTS market_detail_asset ON market_details(run_id,asset_id,market)")
                 db.execute("CREATE INDEX IF NOT EXISTS alias_asset ON market_aliases(run_id,asset_id,market_id,market,round_id)")
                 db.execute("CREATE INDEX IF NOT EXISTS settlement_asset ON settlement_details(run_id,asset_id,market)")
+                # Rows projected before rate-derived fees were recognised as exact
+                # cost kept fee=null with the value parked in fee_estimate, which
+                # left pnl permanently null for those rounds. Restore the fee in
+                # place; the value is the official deterministic formula result,
+                # not a guess. Idempotent: only touches rows still shaped the old
+                # way, and never promotes a genuine "estimate".
+                repaired_fees = False
+                for row in db.execute(
+                        "SELECT rowid, payload FROM trade_details "
+                        "WHERE json_extract(payload,'$.fee_source')='rate-derived' "
+                        "AND json_extract(payload,'$.fee') IS NULL "
+                        "AND json_extract(payload,'$.fee_estimate') IS NOT NULL").fetchall():
+                    payload = json.loads(row[1])
+                    payload["fee"] = payload.get("fee_estimate")
+                    payload["fee_estimate"] = None
+                    db.execute("UPDATE trade_details SET payload=? WHERE rowid=?",
+                               (json.dumps(payload, ensure_ascii=False), row[0]))
+                    repaired_fees = True
+                if repaired_fees:
+                    # Settlement rows cached pnl=null / cost_basis_unverified from
+                    # the old fee shape. Recompute them now that the cost basis is
+                    # complete; _refresh_settlement re-derives pnl from the trades.
+                    for row in db.execute(
+                            "SELECT DISTINCT run_id, market, asset_id FROM settlement_details").fetchall():
+                        try:
+                            self._refresh_settlement(db, row[0], row[1], row[2])
+                        except (ValueError, TypeError, KeyError, sqlite3.Error):
+                            continue
                 # Keep identity backfill independent from the older settlement
                 # migration marker. Existing databases may already have the
                 # settlement marker while still lacking round_id projections.
