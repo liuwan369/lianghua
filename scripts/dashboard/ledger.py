@@ -111,6 +111,10 @@ LATENCY_METRICS = frozenset({
     "order_ack", "cancel_ack", "fill_report",
 })
 LATENCY_LIMIT = 5000
+# Latency is per-run diagnostic data that is cheap to regenerate by running again,
+# so only the newest runs keep samples. Without this the table grows by ~25k rows
+# per run forever and dominates the database (243k of 250k rows at 70 MB).
+LATENCY_RUN_RETENTION = 5
 RUNTIME_MAX_AGE = 10
 ORDER_STATUSES = frozenset({"SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN"})
 ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
@@ -732,6 +736,32 @@ class Ledger:
         finally:
             db.close()
 
+    def _reclaim_free_pages(self):
+        """Return space freed by retention pruning to the filesystem.
+
+        Deleting rows only moves pages to SQLite's freelist, so pruning latency
+        samples left the file at its high-water mark (70 MB for 36 MB of data).
+        VACUUM must run outside a transaction and takes an exclusive lock, so it
+        is only attempted when a lot is reclaimable and it is allowed to fail:
+        readers use a 2s busy timeout and the next pass will retry.
+        """
+        if self.readonly:
+            return False
+        try:
+            with self._connect() as db:
+                free, total = (db.execute("PRAGMA freelist_count").fetchone()[0],
+                               db.execute("PRAGMA page_count").fetchone()[0])
+            if total <= 0 or free / total < 0.25 or free < 2000:
+                return False
+            db = sqlite3.connect(str(self.path), timeout=2, isolation_level=None)
+            try:
+                db.execute("VACUUM")
+            finally:
+                db.close()
+            return True
+        except sqlite3.Error:
+            return False
+
     def register_run(self, run_id, mode, account_id, path, config_revision=None):
         if not isinstance(run_id, str) or not run_id or len(run_id) > 200:
             raise ValueError("Invalid run ID")
@@ -1036,6 +1066,7 @@ class Ledger:
             offset = run["byte_offset"]
             result = {"run_id": run_id, "records": 0, "inserted": 0, "bytes": 0,
                       "byte_offset": offset, "pending": False, "error": run["source_error"]}
+            pruned_latency_runs = False
             if run["source_error"]:
                 return result
             try:
@@ -1197,6 +1228,29 @@ class Ledger:
                         (SELECT byte_offset FROM latency_samples WHERE run_id=? AND metric=?
                          ORDER BY time DESC,byte_offset DESC LIMIT -1 OFFSET ?)""",
                                (run_id, run_id, metric, LATENCY_LIMIT))
+                # The per-metric cap above is scoped to one run, so the table still
+                # grew without bound as runs accumulated. Drop whole older runs, but
+                # only once per ingest pass and only when there is something to drop:
+                # the full DELETE scans 243k rows and costs ~44ms even as a no-op,
+                # while the distinct-run probe is an index lookup.
+                if not pruned_latency_runs:
+                    # Rank runs that actually hold samples: a newer run with no
+                    # latency rows would otherwise consume a retention slot. The
+                    # ranking reads `runs` (14 rows) and probes the sample table
+                    # once per candidate by primary key, instead of DISTINCT over
+                    # 243k rows, which costs ~20ms even when nothing is stale.
+                    ranked = [row[0] for row in db.execute(
+                        "SELECT run_id FROM runs ORDER BY created_at DESC")]
+                    kept = 0
+                    for candidate in ranked:
+                        has_samples = db.execute(
+                            "SELECT 1 FROM latency_samples WHERE run_id=? LIMIT 1", (candidate,)).fetchone()
+                        if not has_samples:
+                            continue
+                        kept += 1
+                        if kept > LATENCY_RUN_RETENTION:
+                            db.execute("DELETE FROM latency_samples WHERE run_id=?", (candidate,))
+                    pruned_latency_runs = True
                 if not cursor and len(block) == max_bytes and b"\n" not in block:
                     result["error"] = "Journal line exceeds ingestion byte budget"
                 prefix_length = min(new_offset, 256)
@@ -1238,6 +1292,7 @@ class Ledger:
         except OSError:
             before = None
         result = self.ingest(run_id, **limits)
+        self._reclaim_free_pages()
         if not result["pending"] and not result["error"] and before is not None:
             try:
                 if before == self._source_stamp(path):
