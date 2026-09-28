@@ -104,29 +104,7 @@
     if (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0)) return "请先在策略页面保存并激活有效版本";
     const strategyAssetReason = window.PolyPreviewViewModel.strategyAssetStartReason(strategy, assetId);
     if (strategyAssetReason) return strategyAssetReason;
-    const account = state.accountStatus?.data || {};
-    if (state.accountStatus?.status !== "ready" || state.accountStatus?.stale === true || state.accountStatus?.error) return "账户状态已过期，正在自动重检；如持续失败请到设置页检查账户";
-    const accountErrors = {
-      account_rpc_failed: "区块链节点查询失败，请检查网络连接",
-      account_check_failed: "账户检查未通过，请查看账户配置和授权",
-      account_checker_unavailable: "服务器账户检查程序暂不可用",
-      account_check_busy: "已有账户检查正在进行，请稍候",
-      invalid_account_config: "账户配置格式不正确",
-      wallet_address_mismatch: "钱包地址与签名私钥不匹配",
-      approvals_missing: "交易授权未完成",
-      settlement_credentials_unavailable: "结算凭据不可用"
-    };
-    const errorCode = String(account.last_check_error || "").toLowerCase().split(/[:：]/, 1)[0];
-    if (account.account_check_ready !== true) return account.last_check_error
-      ? `账户检查未通过：${accountErrors[errorCode] || "请查看设置页账户检查结果"}`
-      : "账户尚未检查通过，请到设置页检查已保存账户";
-    if (account.settlement_credentials_ready !== true) return "结算凭据尚未确认，请到设置页重新检查账户";
-    if (account.server_live_enabled === false) return "服务器尚未开启实盘交易配置";
-    const liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
-      : typeof account.liveStartReady === "boolean" ? account.liveStartReady
-        : account.execution_credentials_ready === true && account.account_check_ready === true;
-    if (liveReady !== true) return "服务器尚未确认账户可启动交易";
-    return "";
+    return window.PolyPreviewViewModel.accountStartBlockReason(state.accountStatus);
   };
   const overviewEventContext = () => {
     const state = store.getState();
@@ -324,7 +302,10 @@
     text("[data-server=memory]", `${formatMetric(data.memory?.percent, 1)}% · ${bytes(data.memory?.used_bytes)} / ${bytes(data.memory?.total_bytes)}`);
     text("[data-server=disk]", `${formatMetric(data.disk?.percent, 1)}% · 可用 ${bytes(data.disk?.free_bytes)}`);
     text("[data-server=load]", [data.load?.one, data.load?.five, data.load?.fifteen].map((value) => formatMetric(value, 2)).join(" / "));
-    const names = { dashboard: "控制台", collector: "行情采集", trader: "交易进程", projection: "账本投影" };
+    // The server reports this service as `trading` (verified against
+    // /api/diagnostics/health). `trader` is kept as a compatibility alias so an
+    // older payload still renders a Chinese label instead of a raw key.
+    const names = { dashboard: "控制台", collector: "行情采集", trading: "交易进程", trader: "交易进程", projection: "账本投影" };
     const states = { active: "运行中", stopped: "未运行", inactive: "未运行", failed: "失败", activating: "启动中", deactivating: "停止中", unavailable: "不可用", unknown: "未知" };
     const services = document.querySelector("[data-server-services]");
     if (services && data.services) services.innerHTML = Object.entries(data.services).map(([name, service]) => {

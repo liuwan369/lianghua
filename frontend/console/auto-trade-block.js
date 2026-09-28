@@ -299,7 +299,6 @@
     var sequence = Number(source.sequence);
     var sourceAt = timestampMs(source.sourceAt ?? source.source_at);
     var expiresAt = timestampMs(source.expiresAt ?? source.expires_at);
-    var now = Date.now();
     var model = vm.market(source);
     var marketId = model.marketId;
     var roundId = model.roundId;
@@ -330,11 +329,11 @@
     var depthPresent = !model.depthUnavailable && hasDepth;
     var watermarkKey = identityKey(context);
     var previousSequence = snapshotWatermarks.get(watermarkKey);
-    var valid = Boolean(marketId && roundId) && vm.hasFreshBbo(source, now) && source.stale !== true && raw.stale !== true
+    var valid = Boolean(marketId && roundId) && vm.hasFreshBbo(source) && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence >= previousSequence);
     var staleBook = !valid && hasDepth;
     if (!valid && !staleBook) {
-      markSnapshotStale(raw.stale === true || source.stale === true ? "行情源报告数据过期 · 保留最近快照" : !vm.hasFreshBbo(source, now) ? "买卖报价已过期或未接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");
+      markSnapshotStale(raw.stale === true || source.stale === true ? "行情源报告数据过期 · 保留最近快照" : !vm.hasFreshBbo(source) ? "买卖报价已过期或未接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");
       return false;
     }
     if (valid && sequence === previousSequence && lastSnapshotValid) return true;
@@ -342,9 +341,17 @@
       lastSnapshotValid = true;
       snapshotWatermarks.set(watermarkKey, sequence);
       if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
+      // Anchor local expiry to the snapshot's server-measured lifetime
+      // (expiresAt - sourceAt, both server timestamps so any client/server clock
+      // skew cancels out) started from receipt, rather than comparing the server
+      // expiresAt to the browser clock. A skewed browser clock must not expire a
+      // valid snapshot the instant it arrives. Fall back to the default max quote
+      // age when either timestamp is missing.
+      var lifetimeMs = expiresAt != null && sourceAt != null && expiresAt > sourceAt
+        ? expiresAt - sourceAt : 2000;
       snapshotExpiryTimer = window.setTimeout(function() {
         markSnapshotStale("行情快照已过期 · 保留最近快照");
-      }, Math.max(0, expiresAt - Date.now()));
+      }, Math.max(0, lifetimeMs));
     } else {
       lastSnapshotValid = false;
       markSnapshotStale("行情快照已过期 · 展示最近五档，暂不触发交易");
@@ -844,19 +851,7 @@
       if (!reason && action === "start" && (strategy.status !== "ready" || strategy.stale === true || strategy.error || !(strategy.revision > 0))) reason = "请先在策略页面保存并激活有效版本";
       if (!reason && action === "start") reason = vm.strategyAssetStartReason(strategy, context.assetId);
       if (!reason && action === "start" && !lastSnapshotValid) reason = "当前盘口快照未新鲜确认，暂不允许启动";
-      if (!reason && action === "start") {
-        var account = accountStatus?.data || {};
-        var liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
-          : typeof account.liveStartReady === "boolean" ? account.liveStartReady
-            : account.execution_credentials_ready === true && account.account_check_ready === true;
-        var accountErrors = { account_rpc_failed: "区块链节点查询失败，请检查网络连接", account_check_failed: "账户检查未通过，请查看账户配置和授权", account_checker_unavailable: "服务器账户检查程序暂不可用", invalid_account_config: "账户配置格式不正确", wallet_address_mismatch: "钱包地址与签名私钥不匹配", approvals_missing: "交易授权未完成", settlement_credentials_unavailable: "结算凭据不可用" };
-        var accountError = String(account.last_check_error || "").toLowerCase().split(/[:：]/, 1)[0];
-        if (accountStatus.status !== "ready" || accountStatus.stale === true || accountStatus.error) reason = "账户状态已过期，正在自动重检；如持续失败请到设置页检查账户";
-        if (!reason && account.account_check_ready !== true) reason = accountErrors[accountError] || "账户尚未检查通过，请到设置页检查已保存账户";
-        if (!reason && account.settlement_credentials_ready !== true) reason = "结算凭据尚未确认，请到设置页重新检查账户";
-        if (!reason && account.server_live_enabled === false) reason = "服务器尚未开启实盘交易配置";
-        if (!reason && liveReady !== true) reason = "服务器尚未确认账户可启动交易";
-      }
+      if (!reason && action === "start") reason = vm.accountStartBlockReason(accountStatus);
       var initialPool = store.canInitializeMarketPool(marketPool);
       var poolSelected = marketPool.desiredIds.includes(context.assetId);
       var catalogReason = vm.catalogItemStartReason(catalog, asset);

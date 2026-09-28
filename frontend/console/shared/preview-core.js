@@ -132,7 +132,28 @@
       return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
     },
     money(value) { return Number.isFinite(value) ? `$${value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toFixed(0)}` : "--"; },
-    escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); }
+    escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); },
+    // Single source for account-readiness error codes. Previously copy-pasted
+    // into overview/settings/auto-trade blocks, which drifted (7 vs 8 vs 12
+    // keys). Union of all keys; pass a code to accountError(code, fallback).
+    accountErrorLabels: {
+      account_rpc_failed: "区块链节点查询失败，请检查网络连接",
+      account_check_failed: "账户检查未通过，请查看账户配置和授权",
+      account_checker_unavailable: "服务器账户检查程序暂不可用",
+      account_check_busy: "已有账户检查正在进行，请稍候",
+      invalid_account_config: "账户配置格式不正确",
+      account_changed_during_check: "检查期间账户配置发生变化，请重新检查",
+      wallet_address_mismatch: "钱包地址与签名私钥不匹配",
+      approvals_missing: "交易授权未完成",
+      settlement_credentials_unavailable: "结算凭据不可用",
+      settlement_credentials_not_ready: "结算凭据尚未准备好",
+      account_response_invalid: "服务器返回的账户数据无效",
+      account_reader_unavailable: "账户读取程序暂不可用"
+    },
+    accountError(code, fallback = "账户尚未检查通过，请到设置页检查已保存账户") {
+      const key = String(code ?? "").toLowerCase().split(/[:：]/, 1)[0];
+      return this.accountErrorLabels[key] || fallback;
+    }
   };
   const selectedAssetFromUrl = new URLSearchParams(window.location.search).get("assetId");
   const setSelectedAssetUrl = (assetId) => {

@@ -160,14 +160,7 @@
     return Boolean(context?.assetId && context?.marketId && context?.roundId && assetId != null && marketId != null && roundId != null
       && String(assetId) === String(context.assetId) && String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId));
   };
-  const timestampMs = (value) => {
-    if (value === null || value === undefined || value === "") return null;
-    const number = Number(value);
-    if (Number.isFinite(number)) return Math.abs(number) < 1e12 ? number * 1000 : number;
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  };
-  const hasFreshBbo = (value, now = Date.now()) => {
+  const hasFreshBbo = (value) => {
     const raw = payloadOf(value) || {};
     const quotes = [
       first(raw.yesBid, raw.yes_bid, raw.up_bid, raw.YES?.bid, raw.YES?.yesBid, raw.yes?.bid),
@@ -175,16 +168,18 @@
       first(raw.noBid, raw.no_bid, raw.down_bid, raw.NO?.bid, raw.NO?.noBid, raw.no?.bid),
       first(raw.noAsk, raw.no_ask, raw.down_ask, raw.NO?.ask, raw.NO?.noAsk, raw.no?.ask)
     ];
-    const sourceAt = timestampMs(first(raw.sourceAt, raw.source_at));
-    const expiresAt = timestampMs(first(raw.expiresAt, raw.expires_at));
     const sequence = raw.sequence;
+    // Freshness is decided by the server, which owns the authoritative clock and
+    // snapshot gate. A browser cannot judge quote age against its own clock: any
+    // client/server skew would permanently block trading. Trust the server's
+    // `stale` verdict (set on expiry/disconnect per the API contract) plus the
+    // presence of a valid identity, sequence, and priced two-sided book. The
+    // real freshness gate runs server-side in snapshot-gate before any order.
     return Boolean(first(raw.marketId, raw.market_id) && first(raw.roundId, raw.round_id))
       && sequence !== null && sequence !== undefined && sequence !== "" && typeof sequence !== "boolean"
       && Number.isFinite(Number(sequence)) && Number(sequence) >= 0
       && raw.stale !== true
-      && sourceAt != null && expiresAt != null
-      && sourceAt > 0 && sourceAt >= now - 5000 && sourceAt <= now + 5000 && expiresAt > now
-      && quotes.every((quote) => Number.isFinite(Number(quote)) && Number(quote) > 0 && Number(quote) < 1);
+      && quotes.every((quote) => Number.isFinite(Number(quote)) && Number(quote) >= 0 && Number(quote) <= 1);
   };
   const strategyAssetId = (strategy = {}) => {
     const value = strategy && typeof strategy === "object" ? strategy : {};
@@ -194,6 +189,28 @@
     const target = strategyAssetId(strategy);
     if (!target) return "激活策略尚未确认目标币种";
     if (!assetId || String(target) !== String(assetId)) return "激活策略与所选市场不一致，请切换市场或重新激活策略";
+    return "";
+  };
+  // Shared account-readiness ladder. Overview and auto-trade previously kept
+  // byte-identical copies of this chain, which is how their error dictionaries
+  // drifted apart. `resource` is the accountStatus slice ({status, stale, error,
+  // data}). Returns "" when the account is cleared to start.
+  const accountStartBlockReason = (resource = {}) => {
+    const account = resource?.data && typeof resource.data === "object" ? resource.data : {};
+    if (resource?.status !== "ready" || resource?.stale === true || resource?.error) {
+      return "账户状态已过期，正在自动重检；如持续失败请到设置页检查账户";
+    }
+    if (account.account_check_ready !== true) {
+      return account.last_check_error
+        ? `账户检查未通过：${window.PolyPreview.format.accountError(account.last_check_error, "请查看设置页账户检查结果")}`
+        : "账户尚未检查通过，请到设置页检查已保存账户";
+    }
+    if (account.settlement_credentials_ready !== true) return "结算凭据尚未确认，请到设置页重新检查账户";
+    if (account.server_live_enabled === false) return "服务器尚未开启实盘交易配置";
+    const liveReady = typeof account.live_start_ready === "boolean" ? account.live_start_ready
+      : typeof account.liveStartReady === "boolean" ? account.liveStartReady
+        : account.execution_credentials_ready === true && account.account_check_ready === true;
+    if (liveReady !== true) return "服务器尚未确认账户可启动交易";
     return "";
   };
   const fillRecords = (payload) => {
@@ -261,5 +278,5 @@
     const candidate = config && typeof config === "object" ? config : {};
     return String(strategyAssetId(candidate) || "").toLowerCase() === "btc";
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig });
 })();
