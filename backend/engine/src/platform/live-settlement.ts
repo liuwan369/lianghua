@@ -26,6 +26,8 @@ const zero = `0x${"0".repeat(40)}` as Address;
 const hashPattern = /^0x[0-9a-fA-F]{64}$/;
 const depositWalletFactory = "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07" as Address;
 const assetIdPattern = /^[a-z0-9_-]{1,32}$/;
+/** ~1h of Polygon blocks: a 5m round resolves long before this, and RPC log windows are capped. */
+const REDEMPTION_LOOKBACK_BLOCKS = 1800n;
 
 export interface PreparedSettlementTransaction {
   kind: "eoa" | "deposit";
@@ -76,6 +78,13 @@ export interface LiveSettlementBackend {
   prepare(call: RedemptionTransaction): Promise<PreparedSettlementTransaction>;
   submit(tx: PreparedSettlementTransaction): Promise<{ transactionHash?: Hex; relayerId?: string }>;
   receipt(record: LiveSettlementRecord): Promise<SettlementReceipt | undefined>;
+  /**
+   * pUSD credited by SOMEBODY ELSE redeeming the same positions before us — the
+   * venue runs its own auto-redeem relayer and can win the race by a block. Our
+   * own transaction then burns nothing and credits nothing, which is a payout we
+   * already received, not a payout that went missing.
+   */
+  externalPayout?(record: LiveSettlementRecord, upToBlock: bigint): Promise<bigint | undefined>;
   /** True only when the chain clock proves this signed deposit batch can no longer execute. */
   expired?(record: LiveSettlementRecord): Promise<boolean>;
 }
@@ -256,18 +265,26 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
         record = undefined;
       } else {
         const after = await backend.balances(record.tokenIds, receipt.block);
-        if (after.balances.some(amount => amount !== 0n)
-          || receipt.creditedPusd < BigInt(record.expectedPayout)) {
+        const expected = BigInt(record.expectedPayout);
+        let credited = receipt.creditedPusd;
+        if (after.balances.every(amount => amount === 0n) && credited < expected) {
+          // The positions are gone but our transaction paid nothing: another
+          // redeemer (the venue's auto-redeem relayer) burned them first. The
+          // payout still reached this wallet, so credit it from THEIR receipt.
+          credited = await backend.externalPayout?.(record, receipt.block) ?? credited;
+        }
+        if (after.balances.some(amount => amount !== 0n) || credited < expected) {
           record.status = "failed";
           record.reason = "settlement_receipt_balance_or_payout_mismatch";
           await save();
           return result(request, "unsupported", record.reason, record);
         }
         record.status = "confirmed";
-        record.creditedPusd = receipt.creditedPusd.toString();
+        record.creditedPusd = credited.toString();
         record.cashAfter = after.cash.toString();
         await save();
-        return result(request, "confirmed", "pUSD到账已由链上回执确认", record);
+        return result(request, "confirmed", credited === receipt.creditedPusd
+          ? "pUSD到账已由链上回执确认" : "持仓已由平台自动赎回，pUSD到账已由链上回执确认", record);
       }
     }
     const market = await backend.market(request);
@@ -275,8 +292,21 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     if (market.denominator === 0n) return result(request, "pending", "等待官方结算结果");
     const before = await backend.balances(market.tokenIds);
     if (before.balances.every(amount => amount === 0n)) {
-      // No holdings means nothing to do, not proof of a historical payout.
-      return result(request, "confirmed", "链上无该场持仓，无需赎回；未记录赎回收益");
+      // Empty by the time we look: either we never held these, or the venue's
+      // auto-redeem relayer already cashed them out. Search a bounded window for
+      // its receipt so a real payout is recorded instead of silently dropped.
+      const lookback = before.block > REDEMPTION_LOOKBACK_BLOCKS ? before.block - REDEMPTION_LOOKBACK_BLOCKS : 0n;
+      const scan: LiveSettlementRecord = {
+        marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
+        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem",
+        prepared: { kind: "eoa" }, fromBlock: lookback.toString(),
+        balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(), expectedPayout: "0",
+      };
+      const external = await backend.externalPayout?.(scan, before.block);
+      if (external === undefined) return result(request, "confirmed", "链上无该场持仓，无需赎回；未记录赎回收益");
+      return result(request, "confirmed", "持仓已由平台自动赎回，pUSD到账已由链上回执确认", {
+        ...scan, creditedPusd: external.toString(), expectedPayout: external.toString(), cashAfter: before.cash.toString(),
+      });
     }
     if (market.numerators.length !== 2 || market.numerators.some(value => value < 0n)
       || market.numerators[0]! + market.numerators[1]! !== market.denominator) {
@@ -485,6 +515,34 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       const hit = single.find(log => isRedemptionTarget(log.args.to) && record.tokenIds.includes(String(log.args.id)))
         ?? batch.find(log => isRedemptionTarget(log.args.to) && log.args.ids?.some(id => record.tokenIds.includes(String(id))));
       return hit?.transactionHash ? receiptFor(hit.transactionHash) : undefined;
+    },
+    async externalPayout(record, upToBlock) {
+      // Find who moved these exact positions out of the wallet before us. The
+      // venue's relayer routes them through its own adapter address, so match on
+      // the tokenIds leaving the wallet rather than on a burn destination.
+      const fromBlock = BigInt(record.fromBlock);
+      const held = new Set(record.tokenIds);
+      const [single, batch] = await Promise.all([
+        client.getLogs({ address: CTF, event: singleBurn, args: { from: wallet }, fromBlock, toBlock: upToBlock }),
+        client.getLogs({ address: CTF, event: batchBurn, args: { from: wallet }, fromBlock, toBlock: upToBlock }),
+      ]);
+      const moved = (hash?: Hex, ids?: readonly bigint[], values?: readonly bigint[]): Hex | undefined =>
+        hash && hash !== record.transactionHash
+          && ids?.some((id, i) => held.has(String(id)) && (values?.[i] ?? 0n) > 0n) ? hash : undefined;
+      const hashes = new Set<Hex>();
+      for (const log of single) {
+        const hit = moved(log.transactionHash, [log.args.id!], [log.args.value!]);
+        if (hit) hashes.add(hit);
+      }
+      for (const log of batch) {
+        const hit = moved(log.transactionHash, log.args.ids, log.args.values);
+        if (hit) hashes.add(hit);
+      }
+      if (!hashes.size) return undefined;
+      // Only a settled receipt proves cash arrived; sum every such redemption.
+      const receipts = await Promise.all([...hashes].map(hash => receiptFor(hash)));
+      return receipts.reduce((sum, item) => item?.status === "success"
+        && item.creditedPusd > 0n ? sum + item.creditedPusd : sum, 0n) || undefined;
     },
     async expired(record) {
       if (record.prepared.kind !== "deposit" || !record.prepared.deadline) return false;

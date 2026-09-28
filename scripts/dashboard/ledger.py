@@ -2050,6 +2050,29 @@ class Ledger:
                                and (start is None or start <= item["source_at"] <= now)}
             pending_markets.difference_update(settlement_identity(item)
                                              for item in settlements.values() if item["verified"])
+            # Capital leaves the account at fill time, while proceeds are only
+            # provable after settlement confirms. Publishing the settled figure
+            # alone reports a spent-but-unresolved round as if it never traded,
+            # which reads a loss as a profit. Expose the committed cost of those
+            # rounds so the worst case is visible next to the confirmed one.
+            settled_keys = set(settled_markets)
+            unsettled_cost, unsettled_rounds = 0.0, set()
+            for fill in latest_fills.values():
+                if fill.get("trade_status") == "FAILED":
+                    continue
+                fill_round = fill.get("round_id") or fill.get("roundId")
+                fill_market = fill.get("market_id") or fill.get("marketId")
+                fill_asset = _asset_from(fill)
+                if asset_id is not None and fill_asset != asset_id:
+                    continue
+                if round_id is not None and fill_round != round_id:
+                    continue
+                if market_id is not None and fill_market != market_id:
+                    continue
+                if (fill_asset, fill_market, fill_round) in settled_keys:
+                    continue
+                unsettled_cost += (fill.get("amount") or 0) + (fill.get("fee") or _number(fill.get("fee_estimate")) or 0)
+                unsettled_rounds.add((fill_asset, fill_market, fill_round))
             wins = sum(value is not None and value > 1e-9 for value in pnl_values)
             losses = sum(value is not None and value < -1e-9 for value in pnl_values)
             draws = sum(value is not None and abs(value) <= 1e-9 for value in pnl_values)
@@ -2072,6 +2095,9 @@ class Ledger:
                     "settled_pnl": sum(pnl_values) if pnl_values and not missing_pnl else None,
                     "settled_wins": wins, "settled_losses": losses, "settled_draws": draws,
                     "settled_pnl_pending": missing_pnl, "win_rate": wins / (wins + losses) if wins + losses else None,
+                    "unsettled_cost": unsettled_cost, "unsettled_rounds": len(unsettled_rounds),
+                    "exposed_pnl": (sum(pnl_values) - unsettled_cost) if pnl_values and not missing_pnl
+                        else (-unsettled_cost if unsettled_rounds else None),
                     "pending_settlements": len(pending_markets),
                     "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
                     "completeness": "incomplete" if stale else "caught_up", "lag_bytes": lag,

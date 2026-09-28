@@ -2366,6 +2366,7 @@ def _unavailable_metrics_summary(run_id: str | None, range_name: str, error: str
             "settled_markets": None, "settled_pnl": None, "pnl": None,
             "settled_wins": None, "wins": None, "settled_losses": None, "losses": None,
             "settled_draws": None, "settled_pnl_pending": None, "win_rate": None,
+            "unsettled_cost": None, "unsettled_rounds": None, "exposed_pnl": None,
             "pending_settlements": None,
             "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
             "completeness": completeness, "lag_bytes": None, "source": "ledger",
@@ -2549,6 +2550,9 @@ def make_handler(root: Path):
                          "fills": stats.get("fill_count"), "orders": stats.get("order_count"),
                          "wins": stats.get("settled_wins"), "losses": stats.get("settled_losses"),
                          "pnl": stats.get("settled_pnl"),
+                         "exposedPnl": stats.get("exposed_pnl"),
+                         "unsettledCost": stats.get("unsettled_cost"),
+                         "unsettledRounds": stats.get("unsettled_rounds"),
                          "stale": stale,
                          "error": metadata["error"] or stats.get("error")}
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))

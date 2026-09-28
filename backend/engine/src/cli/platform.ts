@@ -847,7 +847,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
           const runSettlementPass = async (draining = false) => {
             const state = connection!.platform.account.current(), now = Date.now() / 1000;
             const runMarketIds = currentRunMarketIds();
-            for (const market of connection!.platform.market.list()) {
+            // Redeem this run's own rounds first. The drain budget is shared with
+            // historical recovery, and recovering long-dead markets must never
+            // starve the round we just traded out of its only redemption pass.
+            const queue = connection!.platform.market.list()
+              .map(market => ({ market, mine: runMarketIds.has(market.id) }))
+              .sort((left, right) => Number(right.mine) - Number(left.mine)
+                || right.market.endsAt - left.market.endsAt);
+            for (const { market } of queue) {
               if (market.endsAt > now || terminalSettlements.has(market.id)) continue;
               // Historical recovery remains available during normal runtime,
               // but shutdown only waits for markets traded by this run.
@@ -886,7 +893,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
             return settlementJob;
           };
           drainSettlements = async () => {
-            const deadline = Date.now() + SETTLEMENT_DRAIN_MAX_MS;
+            // A round that ends around shutdown cannot be redeemed before it
+            // ends, and an on-chain redemption then needs block confirmations.
+            // Measure the budget from the last traded round's close, not from
+            // the stop request, or the final round loses its only chance.
+            const lastClose = Math.max(0, ...connection!.platform.market.list()
+              .filter(market => currentRunMarketIds().has(market.id))
+              .map(market => market.endsAt * 1000));
+            const deadline = Math.max(Date.now(), lastClose) + SETTLEMENT_DRAIN_MAX_MS;
             let needsMore = true;
             while (needsMore && Date.now() < deadline) {
               const remainingMs = Math.max(1, deadline - Date.now());
