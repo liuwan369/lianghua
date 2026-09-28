@@ -230,9 +230,17 @@ export class ClobMarketProjection {
     };
   }
 
-  snapshot(now = Date.now() / 1000): MarketProjectionSnapshot {
+  /**
+   * `beforeStart` opts into reporting a not-yet-started round as healthy when its
+   * quotes are fresh. The venue quotes the upcoming 5m market while the expiring
+   * one goes dark, so the console needs that book to stay usable across the
+   * boundary. Callers must mark such rows `nextRound` — the trading engine's own
+   * gate still refuses any book outside the round it owns.
+   */
+  snapshot(now = Date.now() / 1000, options: { beforeStart?: boolean } = {}): MarketProjectionSnapshot {
     if (!Number.isFinite(now)) throw new Error("now must be finite");
-    const inWindow = (this.start == null || now >= this.start) && (this.end == null || now < this.end);
+    const started = this.start == null || now >= this.start || options.beforeStart === true;
+    const inWindow = started && (this.end == null || now < this.end);
     const row = this.row(now); const online = Boolean(this.connected && inWindow && row?.quote_fresh);
     const result: MarketProjectionSnapshot = {
       checked_at: iso(now), collector_online: online, collector_connected: this.connected,
@@ -240,6 +248,7 @@ export class ClobMarketProjection {
       current_markets: row ? [{ ...row, healthy: online }] : [],
     };
     if (!this.connected) result.stale_reason = "CLOB Market WebSocket 未连接";
+    else if (!started) result.stale_reason = "市场窗口尚未开始";
     else if (!inWindow) result.stale_reason = "当前市场窗口已结束";
     else if (!row) result.stale_reason = "等待完整 YES/NO 双边盘口";
     else if (!row.quote_fresh) result.stale_reason = "CLOB Market WebSocket 行情过期";

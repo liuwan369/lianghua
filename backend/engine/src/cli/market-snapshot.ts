@@ -127,7 +127,7 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
       // engine's own gate still rejects any book outside the running round.
       const upcoming = [...active.values()].filter(item => item.market.asset === asset && item.market.start > now)
         .sort((a, b) => a.market.start - b.market.start)[0];
-      const upcomingSnapshot = upcoming?.projection.snapshot(now);
+      const upcomingSnapshot = upcoming?.projection.snapshot(now, { beforeStart: true });
       connected ||= upcomingSnapshot?.collector_connected === true;
       for (const row of upcomingSnapshot?.current_markets ?? []) {
         if (rows.some(existing => existing.marketId === row.marketId && existing.roundId === row.roundId)) continue;
