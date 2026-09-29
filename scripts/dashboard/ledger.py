@@ -1841,6 +1841,9 @@ class Ledger:
             "roundId": selected.get("roundId"),
             "marketId": selected.get("marketId"),
             "stage": selected.get("nextStage"),
+            # Rungs actually consumed. "stage" is the NEXT rung, so labelling it
+            # 当前阶段 read one too high (2 filled showed "阶段 3").
+            "consumedStages": selected.get("consumedStages"),
             "confirmations": selected.get("confirmationCount"),
             # Staged entry is the core mechanic of this strategy, but the ladder
             # itself was never exposed, so the console could not show which
@@ -2384,7 +2387,9 @@ class Ledger:
                 rounds.append({
                     "roundId": row["round_id"], "assetId": row["asset_id"], "marketId": row["market_id"],
                     "fills": row["fills"], "shares": shares or None,
-                    "notional": notional, "fees": None if row["missing_fees"] else fees,
+                    # Publish the confirmed fee sum with its caveat count rather
+                    # than blanking a round whose fees are mostly known.
+                    "notional": notional, "fees": fees, "missingFees": row["missing_fees"],
                     "estimatedFees": row["fee_estimates"] or 0, "cost": cost,
                     "averagePrice": (notional / shares) if shares else None,
                     "status": outcome["status"] if outcome else None,

@@ -557,17 +557,21 @@
     text('[data-outcome="down"]', noOutcome == null ? "--" : noOutcome.toFixed(2));
     text("[data-invested]", occupied != null ? `${occupied.toFixed(2)} USDC` : "-- USDC");
     var maxStages = numeric(position.maxStages ?? position.max_stages);
-    text("[data-stage]", position.stage != null
-      ? (maxStages != null ? `阶段 ${position.stage} / ${maxStages}` : `阶段 ${position.stage}`)
-      : "--");
-    // The denominator was hardcoded "--" in the template; the ledger now supplies
-    // maxStages so the counter reads e.g. "2 / 4".
+    // `stage` is the NEXT rung the ladder will use, so showing it as 当前阶段 read
+    // one too high (two rungs filled displayed "阶段 3 / 4") and went "--" at the
+    // cap while the final rung was still working. Prefer the consumed count.
+    var consumedStages = number("consumedStages", "consumed_stages");
+    var currentStage = consumedStages != null ? consumedStages
+      : position.stage != null ? Math.max(0, position.stage - 1) : null;
+    text("[data-stage]", currentStage == null ? "--"
+      : maxStages != null ? `阶段 ${currentStage} / ${maxStages}` : `阶段 ${currentStage}`);
+    // Reversal confirmations count direction flips and are not capped, so a
+    // maxStages denominator produced nonsense like "6 / 4 次". Show the count.
     text("[data-confirmations]", position.confirmations == null ? "--" : String(position.confirmations));
     var confirmTotal = document.querySelector("[data-confirmations]");
     if (confirmTotal && confirmTotal.parentNode) {
-      var totalText = maxStages != null ? `${maxStages} 次` : "-- 次";
       var tail = confirmTotal.nextSibling;
-      if (tail && tail.nodeType === 3 && tail.textContent !== ` / ${totalText}`) tail.textContent = ` / ${totalText}`;
+      if (tail && tail.nodeType === 3 && tail.textContent !== " 次") tail.textContent = " 次";
     }
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
     // The fills projection knows the round's total shares but not the per-side
@@ -1062,7 +1066,10 @@
       return null;
     };
     var values = {
-      decision: metricValue(["strategy_decision", "ws_receive_to_decision"]),
+      // 行情到决策 means quote arrival -> decision, which is ws_receive_to_decision.
+      // strategy_decision is in-process compute only, so preferring it understated
+      // the figure the 30ms/150ms baseline tells the operator to judge against.
+      decision: metricValue(["ws_receive_to_decision", "strategy_decision"]),
       order: metricValue(["order_submit_roundtrip", "order_http_ack", "decision_to_http_post"]),
       cancel: metricValue(["cancel_submit_roundtrip", "cancel_http_ack", "cancel_ack"]),
       round: metricValue(["reaction", "trigger_to_http_post"])
@@ -1424,7 +1431,10 @@
       var rounds = Array.isArray(data && data.rounds) ? data.rounds : [];
       var num = function(value, digits) { return typeof value === "number" && isFinite(value) ? value.toFixed(digits) : "--"; };
       var body = rounds.map(function(round) {
-        var fee = round.fees == null ? `≈${num(round.estimatedFees, 4)}` : num(round.fees, 4);
+        // Confirmed fees are always published now; mark the row partial rather
+        // than hiding a figure that is mostly known.
+        var fee = round.fees == null ? `≈${num(round.estimatedFees, 4)}`
+          : round.missingFees ? `${num(round.fees, 4)}+` : num(round.fees, 4);
         return `<tr><td>${round.roundId}</td><td>${num(round.cost, 4)}</td><td>${num(round.shares, 2)}</td>`
           + `<td>${num(round.averagePrice, 4)}</td><td>${fee}</td><td>${settlementLabel(round)}</td>`
           + `<td>${num(round.creditedUsd, 2)}</td><td>${round.pnl == null ? "--" : num(round.pnl, 4)}</td></tr>`;
