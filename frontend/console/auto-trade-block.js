@@ -13,7 +13,10 @@
   var accountStatus = store.getState().accountStatus;
   var initialState = store.getState();
   var poolAssetId = initialState.marketPool.currentIds[0] || initialState.marketPool.desiredIds[0] || null;
-  var selectedAssetId = [initialState.marketCatalog.selectedId, window.PolyPreview.config.selectedAssetId, poolAssetId]
+  // The pool is what actually trades. Preferring the browsed row made this page
+  // claim a coin the engine was not running: selecting ETH to look at it showed
+  // "ETH · 本场持仓与结果" while the pool and engine were on BTC.
+  var selectedAssetId = [poolAssetId, initialState.marketCatalog.selectedId, window.PolyPreview.config.selectedAssetId]
     .find(function(id) { return id && initialState.marketCatalog.items.some(function(item) { return item.assetId === id; }); }) || null;
   var assetById = function(id) { return marketAssets.find(function(asset) { return asset.id === id; }); };
   // Sidebar markup and bindings come from PolyPreview (single definition).
@@ -1314,13 +1317,23 @@
   store.subscribe("metrics", renderMetrics);
   store.subscribe("marketPool", function(value) {
     marketPool = value;
+    // The pool decides which coin is trading, so a pool change must move this
+    // page with it instead of waiting for the next catalog refresh.
+    var poolAsset = value.currentIds[0] || value.desiredIds[0] || null;
+    var resolved = [poolAsset, selectedAssetId]
+      .find(function(id) { return id && marketAssets.some(function(item) { return item.id === id; }); }) || null;
+    if (resolved !== selectedAssetId) {
+      selectedAssetId = resolved;
+      syncMarketContext();
+    }
     renderMarketPool();
     updateControls();
   });
   store.subscribe("marketCatalog", function(value) {
     marketAssets = value.items.map(function(item) { return { ...item, id: item.assetId }; });
     var poolAssetId = marketPool.currentIds[0] || marketPool.desiredIds[0] || null;
-    selectedAssetId = [value.selectedId, window.PolyPreview.config.selectedAssetId, poolAssetId]
+    // Same ordering as init: the running pool wins over the browsed row.
+    selectedAssetId = [poolAssetId, value.selectedId, window.PolyPreview.config.selectedAssetId]
       .find(function(id) { return id && marketAssets.some(function(item) { return item.id === id; }); }) || null;
     renderMarketPool();
     var previousContext = currentMarketContextKey;
