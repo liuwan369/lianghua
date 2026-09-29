@@ -534,7 +534,15 @@
     // fills and labels it source="fills". That is real traded data, not a failed
     // read: render it (marked historical) instead of blanking the panel.
     var historical = position?.source === "fills" && position?.available !== false;
-    if (!position || !vm.matchesIdentity(position, currentContext())
+    // A stopped run has rolled to a new round, so currentContext() points at the
+    // live window, never the traded one — the strict identity match would blank a
+    // fills answer that IS the round being viewed. For historical fills, matching
+    // the asset is enough; the response carries its own round identity.
+    var ctx = currentContext();
+    var identityOk = historical
+      ? (position.assetId == null || ctx.assetId == null || String(position.assetId) === String(ctx.assetId))
+      : vm.matchesIdentity(position, ctx);
+    if (!position || !identityOk
       || ((raw?.stale || raw?.error || raw?.available === false || position.stale
         || position.available === false || position.error) && !historical)) {
       var positionReason = window.PolyPreview.format.readableError(raw?.error || position?.error, "持仓数据尚未确认");
