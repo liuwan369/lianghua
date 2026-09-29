@@ -37,6 +37,56 @@ const DEFAULT_RPC = "https://polygon-bor-rpc.publicnode.com";
 export const DEFAULT_HOST =
   process.env.CLOB_HOST ?? "https://clob.polymarket.com";
 
+/** Measured on the Dublin host against clob.polymarket.com: a fresh connection
+ * costs 80-139ms to first byte, a reused one 24-29ms. Node's default dispatcher
+ * drops an idle socket after 4s, so a five-minute round always paid the full
+ * handshake on its one and only order — the probe saw 5 reconnects in 6 requests.
+ * With these settings the same probe reused a single socket across a 60s idle
+ * gap, which is the whole point: the round's one order starts warm. */
+const TRANSPORT_KEEPALIVE_TIMEOUT_MS = 60_000;
+const TRANSPORT_KEEPALIVE_MAX_TIMEOUT_MS = 600_000;
+/** Order posting is order-sensitive; pipelining would head-of-line block it.
+ * `connections` is deliberately left unset: on an Agent it caps concurrent
+ * sockets per origin, and market discovery alone runs four CLOB reads at once,
+ * so any cap would let the order POST queue behind them and time out unsent. */
+const TRANSPORT_PIPELINING = 1;
+/** With the Agent installed the probe kept one socket across a 60s idle gap but
+ * reconnected after 180s — our own keepAliveTimeout expiring. Rounds are 300s
+ * apart, so the Agent alone cannot carry a warm socket from one order to the
+ * next; the touch renews it inside the 60s window. */
+const TRANSPORT_TOUCH_INTERVAL_MS = 30_000;
+const TRANSPORT_TOUCH_TIMEOUT_MS = 2_000;
+
+let transportInstalled = false;
+
+/** Reuse one warm TLS connection per origin for the whole process.
+ *
+ * Node's global `fetch` reads its dispatcher from a well-known symbol shared
+ * with the npm `undici` copy, so replacing it here reaches the order POST in
+ * `fetchJson` without touching the call sites. An `Agent` (not a `Pool`) is
+ * required: this process also fetches Gamma, the Polygon RPCs, the relayer and
+ * polymarket.com through the same global `fetch`, and a `Pool` is bound to a
+ * single origin and would fail every one of them.
+ *
+ * Keep-alive is an optimisation, never a precondition for trading, so any
+ * failure here degrades to the default dispatcher instead of refusing orders. */
+async function installKeepAliveTransport(): Promise<void> {
+  if (transportInstalled) return;
+  transportInstalled = true;
+  try {
+    const { Agent, setGlobalDispatcher } = await import("undici");
+    setGlobalDispatcher(new Agent({
+      keepAliveTimeout: TRANSPORT_KEEPALIVE_TIMEOUT_MS,
+      keepAliveMaxTimeout: TRANSPORT_KEEPALIVE_MAX_TIMEOUT_MS,
+      pipelining: TRANSPORT_PIPELINING,
+      connect: { timeout: 10_000, keepAlive: true, keepAliveInitialDelay: 10_000 },
+    }));
+    console.info(`CLOB transport keep-alive installed (idle ${TRANSPORT_KEEPALIVE_TIMEOUT_MS / 1000}s)`);
+  } catch (error) {
+    console.warn(`CLOB transport keep-alive unavailable (${error instanceof Error ? error.message : String(error)})`);
+  }
+}
+
 export interface ClobWrapperOptions {
   key: string;
   /** Optional override — auto-detected via Gamma + on-chain when omitted. */
@@ -196,6 +246,7 @@ export class ClobWrapper {
   readonly signatureType: number;
 
   private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private transportKeepAliveTimer?: ReturnType<typeof setInterval>;
   private heartbeatId?: string;
   private orderVersion: 2 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
@@ -219,6 +270,9 @@ export class ClobWrapper {
   }
 
   static async connect(opts: ClobWrapperOptions): Promise<ClobWrapper> {
+    // Install before the first request so wallet resolution and the transport
+    // warmup below already run on the pooled connection.
+    await installKeepAliveTransport();
     const pk = (opts.key.startsWith("0x") ? opts.key : `0x${opts.key}`) as Hex;
     const account = privateKeyToAccount(pk);
     const rpc = process.env.POLYGON_RPC ?? DEFAULT_RPC;
@@ -358,6 +412,46 @@ export class ClobWrapper {
     if (this.heartbeatTimer != null) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = undefined;
+    }
+  }
+
+  /** Keep the order POST's own connection warm.
+   *
+   * `startHeartbeat` above posts through the SDK, which uses axios and therefore
+   * a different connection than the one `fetchJson` opens for `POST /order`.
+   * Keeping the SDK session alive never kept the order path's socket alive, so
+   * every round still paid a fresh handshake. This touches the same origin the
+   * order uses, through the same global `fetch`. */
+  private async touchTransport(): Promise<void> {
+    try {
+      const response = await fetch(`${DEFAULT_HOST}/time`, {
+        method: "GET",
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(TRANSPORT_TOUCH_TIMEOUT_MS),
+      });
+      // The body must be consumed for the socket to return to the idle pool.
+      // Abandoning it leaks the connection and would eventually starve the
+      // order POST of the very pool this exists to keep warm.
+      await response.text();
+    } catch {
+      // A missed touch only costs the next order its handshake. The order path
+      // reports its own failures; this must never surface as a trading error.
+    }
+  }
+
+  startTransportKeepAlive(intervalMs = TRANSPORT_TOUCH_INTERVAL_MS): () => void {
+    this.stopTransportKeepAlive();
+    // `connect()` just fetched /time through warmTransport, so the connection is
+    // already warm; an immediate touch here would be a redundant request.
+    this.transportKeepAliveTimer = setInterval(() => void this.touchTransport(), intervalMs);
+    this.transportKeepAliveTimer.unref?.();
+    return () => this.stopTransportKeepAlive();
+  }
+
+  stopTransportKeepAlive(): void {
+    if (this.transportKeepAliveTimer != null) {
+      clearInterval(this.transportKeepAliveTimer);
+      this.transportKeepAliveTimer = undefined;
     }
   }
 

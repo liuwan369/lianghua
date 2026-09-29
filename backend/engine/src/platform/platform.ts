@@ -309,8 +309,11 @@ export class TradingPlatform {
           break;
         }
         const current = this.queued[this.queueStart++]!;
+        // `freeze` is deep, so one frozen copy is safe to hand to every observer
+        // and strategy; cloning per consumer tripled the per-tick copy work.
+        const shared = freeze(clone(current));
         for (const listener of this.listeners) {
-          try { listener(freeze(clone(current))); } catch { /* Observers cannot block execution. */ }
+          try { listener(shared); } catch { /* Observers cannot block execution. */ }
         }
         if (this.closing || current.kind === "latency"
           || (current.kind === "error" && (!current.strategyId || current.code === "strategy_callback_failed"))
@@ -319,7 +322,7 @@ export class TradingPlatform {
           if (current.kind === "error" && current.strategyId !== strategy.id) continue;
           try {
             const decisionStarted = performance.now();
-            const actions = strategy.onEvent(freeze(clone(current)), this.context());
+            const actions = strategy.onEvent(shared, this.context());
             const decisionAtMonoMs = performance.now();
             if (!Array.isArray(actions)) throw new Error("strategy callbacks must be synchronous action arrays");
             const currentBook = current.kind === "book" && current.book !== undefined ? current.book : undefined;

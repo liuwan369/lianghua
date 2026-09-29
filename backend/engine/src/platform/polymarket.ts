@@ -292,6 +292,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   let stopped = false;
   let acceptUserEvents = true;
   let stopHeartbeat: (() => void) | undefined;
+  let stopTransportKeepAlive: (() => void) | undefined;
   let recoveryJob: Promise<void> | undefined;
   // A missing venue order has no safe terminal interpretation. Track the
   // affected IDs by market while account recovery retries; reconnect
@@ -1109,7 +1110,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (started || stopped) throw new Error("connection already started or stopped");
       started = true;
       feedDeadline = Date.now() / 1000 + (options.durationSec ?? 3600);
-      if (client) stopHeartbeat = client.startHeartbeat();
+      if (client) {
+        stopHeartbeat = client.startHeartbeat();
+        // Separate from the SDK heartbeat above: that one keeps the account
+        // session alive over axios, this one keeps the order POST's socket warm.
+        stopTransportKeepAlive = client.startTransportKeepAlive();
+      }
       // Close the execution gate before any feed can deliver its first book.
       // Recovery is still deliberately not awaited, so feed startup and the
       // five-minute scheduler can proceed while account reads run in parallel.
@@ -1139,7 +1145,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         await startupRecovery?.catch(() => undefined);
         await stopFeedConsumer();
         for (const control of controls) control.stop();
-        stopHeartbeat?.(); stopped = true; cashFlowAbort.abort(); throw error;
+        stopHeartbeat?.(); stopTransportKeepAlive?.();
+        stopped = true; cashFlowAbort.abort(); throw error;
       }
     },
     async stop(reason = "operator stop") {
@@ -1156,7 +1163,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       catch (error) { stopError = error; }
       finally {
         for (const control of controls) control.stop();
-        bookHealth.clear(); feedQueues.clear(); wakeFeedConsumer(); stopHeartbeat?.(); client?.stopHeartbeat();
+        bookHealth.clear(); feedQueues.clear(); wakeFeedConsumer();
+        stopHeartbeat?.(); client?.stopHeartbeat();
+        stopTransportKeepAlive?.(); client?.stopTransportKeepAlive();
       }
       if (stopError) throw stopError;
     },
