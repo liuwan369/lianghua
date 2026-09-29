@@ -1181,6 +1181,10 @@ button {
   width: 100%;
   border-collapse: collapse;
 }
+.round-history-more {
+  margin: 8px auto 2px;
+  display: block;
+}
 .round-history th,
 .round-history td {
   padding: 5px 8px;

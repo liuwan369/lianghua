@@ -1403,6 +1403,61 @@
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
   });
+  // Settlement states are internal identifiers; the panel must not leak raw
+  // values like "unsupported" to the operator.
+  var settlementLabel = function(round) {
+    if (round.settlementState === "confirmed") return "已确认";
+    if (round.settlementState === "pending") return "待确认";
+    if (round.settlementState === "unsupported") {
+      return round.settled ? "已确认" : "无法赎回";
+    }
+    return round.settlementState ? round.settlementState : "未结算";
+  };
+  // The endpoint pages by roundId cursor, so append instead of replacing and
+  // keep the scroll position: the operator is reading the rows already shown.
+  var loadRoundHistory = function(panel, beforeRoundId) {
+    var query = { limit: 50 };
+    if (beforeRoundId) query.beforeRoundId = beforeRoundId;
+    return window.PolyPreview.api.rounds(query).then(function(data) {
+      var rounds = Array.isArray(data && data.rounds) ? data.rounds : [];
+      var num = function(value, digits) { return typeof value === "number" && isFinite(value) ? value.toFixed(digits) : "--"; };
+      var body = rounds.map(function(round) {
+        var fee = round.fees == null ? `≈${num(round.estimatedFees, 4)}` : num(round.fees, 4);
+        return `<tr><td>${round.roundId}</td><td>${num(round.cost, 4)}</td><td>${num(round.shares, 2)}</td>`
+          + `<td>${num(round.averagePrice, 4)}</td><td>${fee}</td><td>${settlementLabel(round)}</td>`
+          + `<td>${num(round.creditedUsd, 2)}</td><td>${round.pnl == null ? "--" : num(round.pnl, 4)}</td></tr>`;
+      }).join("");
+      var next = data && data.next_before_round_id;
+      if (!beforeRoundId) {
+        if (!rounds.length) {
+          panel.textContent = data && data.error ? `暂无场次记录：${data.error}` : "暂无场次记录。";
+          return;
+        }
+        panel.innerHTML = `<table class="round-history"><thead><tr><th>场次</th><th>投入</th><th>份额</th>`
+          + `<th>均价</th><th>手续费</th><th>结算</th><th>到账</th><th>盈亏</th></tr></thead>`
+          + `<tbody>${body}</tbody></table>`
+          + `<button type="button" class="quiet-button round-history-more" hidden>加载更早场次</button>`;
+      } else {
+        panel.querySelector("tbody")?.insertAdjacentHTML("beforeend", body);
+      }
+      var more = panel.querySelector(".round-history-more");
+      if (!more) return;
+      if (!next) { more.setAttribute("hidden", ""); return; }
+      more.removeAttribute("hidden");
+      more.textContent = "加载更早场次";
+      more.onclick = function() {
+        more.disabled = true;
+        more.textContent = "读取中…";
+        loadRoundHistory(panel, next).catch(function() {
+          more.disabled = false;
+          more.textContent = "读取失败，重试";
+        });
+      };
+    }, function(error) {
+      if (!beforeRoundId) panel.textContent = `读取失败：${error && error.message ? error.message : "未知错误"}`;
+      throw error;
+    });
+  };
   if (roundHistoryButton) {
     var historyPanel = document.querySelector("[data-round-history]");
     roundHistoryButton.title = "按场次汇总投入、份额、均价、手续费与结算结果";
@@ -1414,25 +1469,7 @@
       historyPanel.removeAttribute("hidden");
       roundHistoryButton.textContent = "收起";
       historyPanel.textContent = "读取中…";
-      window.PolyPreview.api.rounds({ limit: 50 }).then(function(data) {
-        var rounds = Array.isArray(data && data.rounds) ? data.rounds : [];
-        if (!rounds.length) { historyPanel.textContent = data && data.error ? `暂无场次记录：${data.error}` : "暂无场次记录。"; return; }
-        var num = function(value, digits) { return typeof value === "number" && isFinite(value) ? value.toFixed(digits) : "--"; };
-        historyPanel.innerHTML = `<table class="round-history"><thead><tr><th>场次</th><th>投入</th><th>份额</th>`
-          + `<th>均价</th><th>手续费</th><th>结算</th><th>到账</th><th>盈亏</th></tr></thead><tbody>`
-          + rounds.map(function(round) {
-            var fee = round.fees == null ? `≈${num(round.estimatedFees, 4)}` : num(round.fees, 4);
-            var state = round.settlementState === "confirmed" ? "已确认"
-              : round.settlementState === "pending" ? "待确认"
-                : round.settlementState ? round.settlementState : "未结算";
-            return `<tr><td>${round.roundId}</td><td>${num(round.cost, 4)}</td><td>${num(round.shares, 2)}</td>`
-              + `<td>${num(round.averagePrice, 4)}</td><td>${fee}</td><td>${state}</td>`
-              + `<td>${num(round.creditedUsd, 2)}</td><td>${round.pnl == null ? "--" : num(round.pnl, 4)}</td></tr>`;
-          }).join("")
-          + `</tbody></table>`;
-      }, function(error) {
-        historyPanel.textContent = `读取失败：${error && error.message ? error.message : "未知错误"}`;
-      });
+      loadRoundHistory(historyPanel, null);
     });
   }
   Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadAccount(), adapter.loadRuntime(), adapter.loadEvents(null, eventContext()), adapter.loadMetrics()]).then(function(results) {
