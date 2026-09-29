@@ -20,7 +20,11 @@ export class TradingCore {
   private preparationTail: Promise<void> = Promise.resolve();
   private fillByKey = new Map<string, TradeFill>();
   private fillIndexByKey = new Map<string, number>();
-  private fillOrderByTradeId = new Map<string, string>();
+  /** One venue trade can match SEVERAL of our resting orders (the ladder rests
+   * same-token rungs at one price), and the venue then reports one maker leg per
+   * matched order, all sharing the trade id. Track every order a trade touched
+   * rather than assuming a single one. */
+  private fillOrderByTradeId = new Map<string, Set<string>>();
   private clock: () => number;
   private stopped = false;
   private recovering = false;
@@ -80,9 +84,12 @@ export class TradingCore {
     if (!options.restored) this.applyCashFlowEvidence(this.state, initial);
     this.state.fills.forEach((fill, index) => {
       if (!fill.tradeId || !fill.orderId) throw new Error("invalid persisted fill identity");
-      const existingOrderId = this.fillOrderByTradeId.get(fill.tradeId);
-      if (existingOrderId && existingOrderId !== fill.orderId) throw new Error("duplicate persisted trade identity");
-      this.fillOrderByTradeId.set(fill.tradeId, fill.orderId);
+      // Distinct legs of one trade are distinct fills, keyed by (tradeId, orderId)
+      // below; only a repeat of the SAME pair is a duplicate.
+      const legs = this.fillOrderByTradeId.get(fill.tradeId) ?? new Set<string>();
+      if (legs.has(fill.orderId)) throw new Error("duplicate persisted trade identity");
+      legs.add(fill.orderId);
+      this.fillOrderByTradeId.set(fill.tradeId, legs);
       const key = this.fillKey(fill);
       this.fillByKey.set(key, fill);
       this.fillIndexByKey.set(key, index);
@@ -1033,6 +1040,12 @@ export class TradingCore {
   }
 
   private fillKey(fill: TradeFill): string { return JSON.stringify([fill.tradeId, fill.orderId]); }
+  /** Record that this trade touched one more of our orders. */
+  private registerTradeLeg(tradeId: string, orderId: string): void {
+    const legs = this.fillOrderByTradeId.get(tradeId);
+    if (legs) legs.add(orderId);
+    else this.fillOrderByTradeId.set(tradeId, new Set([orderId]));
+  }
   confirmCancelled(id: string, releaseReservation = false, source: CancellationSource = "account_read", observedAt?: number): void {
     const order = this.find(id);
     if (!order) throw new Error("unowned cancellation");
@@ -1060,10 +1073,10 @@ export class TradingCore {
   }
   applyFill(fill: TradeFill): boolean {
     if (!fill.tradeId || !fill.orderId) throw new Error("invalid trade identity");
-    const existingOrderId = this.fillOrderByTradeId.get(fill.tradeId);
-    if (existingOrderId && existingOrderId !== fill.orderId) {
-      throw new Error("trade identity collision requires reconciliation");
-    }
+    // A second leg of the same trade against a DIFFERENT order of ours is normal:
+    // one taker can sweep several of our resting rungs. Rejecting it threw out of
+    // the feed consumer and lost both legs, after which reconcile() refused the
+    // market forever. Order ownership is still verified by this.find() below.
     const key = this.fillKey(fill);
     const previous = this.fillByKey.get(key);
     if (previous) return this.updateFill(previous, fill);
@@ -1083,7 +1096,7 @@ export class TradingCore {
       const saved = copy(fill), failedKey = this.fillKey(saved);
       this.fillIndexByKey.set(failedKey, this.state.fills.length);
       this.fillByKey.set(failedKey, saved);
-      this.fillOrderByTradeId.set(saved.tradeId, saved.orderId);
+      this.registerTradeLeg(saved.tradeId, saved.orderId);
       this.state.fills.push(saved);
       this.notify(order, true); this.emitFill(fill); return true;
     }
@@ -1130,7 +1143,7 @@ export class TradingCore {
     const saved = copy(fill), savedKey = this.fillKey(saved);
     this.fillIndexByKey.set(savedKey, this.state.fills.length);
     this.fillByKey.set(savedKey, saved);
-    this.fillOrderByTradeId.set(saved.tradeId, saved.orderId);
+    this.registerTradeLeg(saved.tradeId, saved.orderId);
     this.state.fills.push(saved);
     this.persist(true);
     // Inventory is authoritative in the event context before the strategy sees the fill.
@@ -1320,8 +1333,9 @@ export class TradingCore {
     this.persist(true); this.emit({ kind: "account", snapshot: copy(account) });
   }
   private reindexFills(): void {
-    this.fillByKey.clear(); this.fillIndexByKey.clear();
+    this.fillByKey.clear(); this.fillIndexByKey.clear(); this.fillOrderByTradeId.clear();
     this.state.fills.forEach((fill, index) => {
+      this.registerTradeLeg(fill.tradeId, fill.orderId);
       const key = this.fillKey(fill);
       this.fillByKey.set(key, fill);
       this.fillIndexByKey.set(key, index);
