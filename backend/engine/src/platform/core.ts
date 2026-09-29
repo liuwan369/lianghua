@@ -7,6 +7,9 @@ const reservationPending = (order: OrderRecord) => active(order) || order.reconc
 const copy = <T>(value: T): T => structuredClone(value);
 const finite = (value: number) => Number.isFinite(value);
 const dayOf = (ts: number) => new Date(ts * 1000 + 8 * 3600_000).toISOString().slice(0, 10);
+/** Marks a caller-demanded halt. Deliberately avoids the word "reconciliation"
+ * so no substring test can mistake it for one this core may clear on its own. */
+const OPERATOR_HALT_SUFFIX = "operator halt requires manual release";
 
 /** Account-wide accounting and execution. No price selection or strategy lifecycle rules. */
 export class TradingCore {
@@ -314,8 +317,12 @@ export class TradingCore {
       ? new Set(marketIds ?? ["*"])
       : new Set<string>();
   }
+  /** Operator/caller-demanded halt. Unlike the scoped reconciliation halts this
+   * core raises for itself, it is NEVER cleared automatically: the caller
+   * declared the account unsafe, so only an explicit clear may release it. */
   requireReconciliation(reason: string): void {
-    this.state.risk.halted = true; this.state.risk.reason = `${reason}: reconciliation required`;
+    this.state.risk.halted = true;
+    this.state.risk.reason = `${reason}: ${OPERATOR_HALT_SUFFIX}`;
     this.persist(true);
   }
   isOrderQuarantined(id: string): boolean { return this.state.quarantinedOrderIds?.includes(id) === true; }
@@ -370,6 +377,11 @@ export class TradingCore {
       && order.cancellationSource === "local_http" && order.cancelAckAt !== undefined;
   }
   private isScopedReconciliationReason(reason: string | undefined): boolean {
+    // An operator-demanded halt is never self-clearing. It used to end with
+    // "reconciliation required", which the trailing substring test below treated
+    // as scoped, so the next refresh silently resumed trading on a condition the
+    // caller had declared unsafe.
+    if (reason?.endsWith(OPERATOR_HALT_SUFFIX)) return false;
     return reason === "unknown order requires reconciliation"
       || reason === "signed identity requires reconciliation"
       || reason === "failed trade requires reconciliation"
