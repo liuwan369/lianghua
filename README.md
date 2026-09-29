@@ -19,6 +19,10 @@ python -m http.server 5175
 
 打开 `http://127.0.0.1:5175/overview.html`。
 
+## 架构
+
+完整的技术架构、热路径、风控、部署和路线图见 [ARCHITECTURE.md](ARCHITECTURE.md)。所有 AI 开工前先读它。
+
 ## 运行与部署
 
 真实交易状态只来自服务器；账户配置由服务器环境和账户配置文件提供，不进入浏览器或源码。部署脚本位于 `scripts/deploy-reversal-release.py`，服务配置位于 `config/`。
