@@ -952,7 +952,7 @@
     } catch (error) { if (version === contextVersion) markSnapshotStale(error.message || "快照读取失败 · 保留本场最近快照"); }
     return contextKey;
   };
-  var scheduleSnapshotRefresh = function(delay = 1000) {
+  var scheduleSnapshotRefresh = function(delay = 500) {
     if (document.hidden) return;
     if (snapshotRefreshTimer) window.clearTimeout(snapshotRefreshTimer);
     snapshotRefreshTimer = window.setTimeout(function() {
@@ -965,11 +965,11 @@
     var version = contextVersion;
     snapshotRefreshInFlight = Promise.resolve(loadCurrentMarket()).finally(function() {
       snapshotRefreshInFlight = null;
-      scheduleSnapshotRefresh(version === contextVersion ? 1000 : 0);
+      scheduleSnapshotRefresh(version === contextVersion ? 500 : 0);
     });
     return snapshotRefreshInFlight;
   };
-  var scheduleRoundRefresh = function(delay = 3000) {
+  var scheduleRoundRefresh = function(delay = 1000) {
     if (document.hidden) return;
     if (roundRefreshTimer) window.clearTimeout(roundRefreshTimer);
     roundRefreshTimer = window.setTimeout(function() { roundRefreshTimer = null; void refreshRoundData(); }, delay);
@@ -1022,7 +1022,7 @@
       }, function() { if (version === contextVersion) { text("[data-settlement-state]", "结算读取失败"); text("[data-settlement-detail]", "未确认结算状态，不显示成功结果。"); } })
     ].filter(Boolean)).finally(function() {
       roundRefreshInFlight = null;
-      scheduleRoundRefresh(version === contextVersion ? 3000 : 0);
+      scheduleRoundRefresh(version === contextVersion ? 1000 : 0);
     });
     return roundRefreshInFlight;
   };
