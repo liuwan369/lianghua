@@ -601,7 +601,14 @@ export class TradingCore {
       order.venueStatusAfterAckLatencyMs = Math.max(0, (observedAt - order.httpAckAt) * 1000);
     }
     this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
-    if (status !== "canceled" && status !== "cancelled" && status !== "expired") order.reconciliationPending = false;
+    if (status !== "canceled" && status !== "cancelled" && status !== "expired") {
+      order.reconciliationPending = false;
+      // Clearing the flag on an already-terminal order stops it counting as a
+      // pending reservation, so updateRisk() released its capital while the
+      // cancel/fill race was still open — and it also broke the "no reservation
+      // on a settled order" invariant, after which every reconcile() threw.
+      if (!active(order)) { order.reservedUsd = 0; order.reservedShares = 0; }
+    }
     if (["live", "delayed", "unmatched"].includes(status) && order.status === "UNKNOWN") {
       order.status = order.filledShares > 0 ? "PARTIAL" : "OPEN";
     }
