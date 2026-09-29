@@ -272,7 +272,7 @@
     const budgets = [optional("roundBudget"), optional("totalBudget"), optional("lossLimit")];
     if (budgets.some((value) => value !== null && (!Number.isFinite(value) || value <= 0))) throw new Error("资金上限和亏损线必须为空或正数。");
     const rounds = optional("rounds") ?? 0;
-    if (!Number.isFinite(duration) || duration < 0 || duration * 60000 > 2147483647) throw new Error("运行时长须为有效非负分钟数；持续运行请填 0。");
+    if (!Number.isInteger(rounds) || rounds < 0 || rounds > 10000) throw new Error("运行场次须为 0 到 10000 之间的整数；持续运行请填 0。");
     return { strategyId: core.config.strategyId, assetId: selectedAsset(), expectedRevision: baselineRevision,
       triggerPrice: trigger / 100, confirmationPrice: confirmation / 100, maxBuyPrice: maximum / 100,
       stageShares: stages, maxStages, roundBudgetUsd: budgets[0], totalBudgetUsd: budgets[1], dailyLossUsd: budgets[2],
