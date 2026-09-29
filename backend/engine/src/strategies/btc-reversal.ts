@@ -497,14 +497,24 @@ export class BtcReversalStrategy implements StrategyPlugin {
    * `stages.length` turned a rejected first rung into an 18-share entry where 5
    * was intended (stageShares default [5, 18, 54, 130]). */
   private static consumedRungs(round: ReversalRound): number {
-    return round.stages.filter(stage => stage.status !== "REJECTED" && stage.status !== "ABANDONED").length;
+    return round.stages.filter(stage => BtcReversalStrategy.consumedRung(stage)).length;
+  }
+  /** A rung is consumed only if it actually bought something. A stage that ended
+   * REJECTED/ABANDONED, or was CANCELLED with nothing filled, committed no capital,
+   * so advancing the ladder past it skips a rung: stage 1 cancelled at 0 filled
+   * made the next entry buy the 18-share rung where 5 was intended. */
+  private static consumedRung(stage: ReversalStage): boolean {
+    if (stage.status === "REJECTED" || stage.status === "ABANDONED") return false;
+    const filled = Number(stage.filledShares) || 0;
+    const terminal = ["CANCELLED", "REJECTED", "ABANDONED", "FAILED"].includes(String(stage.status));
+    return !(terminal && filled <= EPS);
   }
   /** Direction of the last rung that survived, so a rejection does not lock out
    * the direction it was going to take. */
   private static lastLiveDirection(round: ReversalRound): "UP" | "DOWN" | undefined {
     for (let index = round.stages.length - 1; index >= 0; index -= 1) {
       const stage = round.stages[index]!;
-      if (stage.status !== "REJECTED" && stage.status !== "ABANDONED") return stage.direction;
+      if (BtcReversalStrategy.consumedRung(stage)) return stage.direction;
     }
     return undefined;
   }

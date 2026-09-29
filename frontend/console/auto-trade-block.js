@@ -421,9 +421,25 @@
     return valid;
   };
   var streams = [];
-  var currentContext = function() {
+  // Identity of the newest round that actually traded, from /api/rounds. When the
+  // live round has no activity of its own (typically right after a stop, or after
+  // the 5-minute boundary rolls), the panels follow this instead of polling an
+  // empty new round and rendering 0 shares / no orders for a round that traded.
+  var tradedContext = null;
+  var liveContext = function() {
     var asset = assetById(selectedAssetId);
     return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { assetId: null, marketId: null, roundId: null };
+  };
+  var currentContext = function() {
+    var live = liveContext();
+    if (!tradedContext || !tradedContext.roundId) return live;
+    if (tradedContext.assetId !== live.assetId) return live;
+    // Prefer the live round only while it is the one that traded, or while the
+    // engine is running and may still trade it.
+    if (String(tradedContext.roundId) === String(live.roundId)) return live;
+    var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
+    if (runtime.processRunning === true) return live;
+    return { assetId: tradedContext.assetId, marketId: tradedContext.marketId, roundId: tradedContext.roundId };
   };
   var eventContext = function() {
     var context = currentContext();
@@ -672,20 +688,27 @@
       return `<li class="${cls}"><span>${window.PolyPreview.format.escape(mark)}</span><div><strong>第 ${window.PolyPreview.format.escape(String(stage.stage ?? "-"))} 阶段</strong><small>${window.PolyPreview.format.escape(detail)}</small></div><time>${window.PolyPreview.format.escape(window.PolyPreview.format.time(stage.createdAt ?? stage.created_at, "--:--:--"))}</time></li>`;
     }).join(""));
   };
-  var renderOrders = function(raw, asset) {
+  var renderOrders = function(raw, asset, requested) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     var orders = Array.isArray(raw?.items) ? raw.items : Array.isArray(raw?.orders) ? raw.orders : Array.isArray(raw) ? raw : null;
-    var mismatched = orders && asset && orders.some(function(order) {
+    // Validate against the round this response was REQUESTED for, not the live
+    // one. Once a round rolls over, comparing to the current context rejected the
+    // correct rows for the round being viewed, so all four stages vanished from
+    // the table a moment after appearing.
+    var scope = requested && requested.roundId ? requested : currentContext();
+    var scopeAsset = asset && asset.id === scope.assetId
+      ? asset : { id: scope.assetId, marketId: scope.marketId, roundId: scope.roundId };
+    var mismatched = orders && orders.some(function(order) {
       var hasIdentity = ["assetId", "asset_id", "marketId", "market_id", "roundId", "round_id"].some(function(key) { return order[key] != null && String(order[key]) !== ""; });
-      return hasIdentity && !itemMatchesContext(order, asset);
+      return hasIdentity && !itemMatchesContext(order, scopeAsset);
     });
-    if (!orders || !asset || raw?.stale || raw?.error || raw?.available === false || mismatched) {
+    if (!orders || !scope.assetId || raw?.stale || raw?.error || raw?.available === false || mismatched) {
       var orderReason = window.PolyPreview.format.readableError(raw?.error, "订单数据尚未确认");
       text("[data-orders-state]", `${orderReason} · 保留本场最近成功数据`);
       return false;
     }
     // Empty pages are valid for this scoped REST request; non-empty rows must all identify this asset and round.
-    if (!Array.isArray(raw) && ["assetId", "marketId", "roundId"].some(function(key) { return raw[key] != null && String(raw[key]) !== String(currentContext()[key]); })) {
+    if (!Array.isArray(raw) && ["assetId", "marketId", "roundId"].some(function(key) { return raw[key] != null && scope[key] != null && String(raw[key]) !== String(scope[key]); })) {
       text("[data-orders-state]", "订单身份不匹配 · 保留本场最近成功数据");
       return false;
     }
@@ -966,12 +989,25 @@
     // refreshAccountSoon, and settlement is re-read right after the round ends.
     roundLedgerTick = (roundLedgerTick + 1) % 4;
     var readLedger = roundLedgerTick === 1 || roundSettlementDue(context);
+    // Keep the traded-round identity current so the panels can fall back to the
+    // round that actually traded once the live one rolls over or the run stops.
+    if (readLedger) {
+      void window.PolyPreview.api.rounds({ limit: 1 }).then(function(page) {
+        var top = (page && Array.isArray(page.rounds) ? page.rounds : [])[0];
+        if (!top || !top.roundId) return;
+        var next = { assetId: top.assetId, marketId: top.marketId, roundId: String(top.roundId) };
+        var changed = !tradedContext || tradedContext.roundId !== next.roundId
+          || tradedContext.assetId !== next.assetId;
+        tradedContext = next;
+        if (changed) syncMarketContext();
+      }, function() { /* history is advisory; keep the last known identity */ });
+    }
     roundRefreshInFlight = Promise.allSettled([
       Promise.resolve().then(function() { return adapter.loadPosition(context.roundId, context); }).then(function(value) {
         if (version === contextVersion) renderPosition(value);
       }, function() { if (version === contextVersion) text("[data-position-state]", "读取失败 · 保留本场最近成功数据"); }),
       Promise.resolve().then(function() { return adapter.loadOrders(context.roundId, context); }).then(function(value) {
-        if (version === contextVersion) renderOrders(value, asset);
+        if (version === contextVersion) renderOrders(value, asset, context);
       }, function() { if (version === contextVersion) text("[data-orders-state]", "读取失败 · 保留本场最近成功数据"); }),
       !readLedger ? null : Promise.resolve().then(function() { return adapter.loadFills(null, ledgerContext()); }).then(function(value) {
         if (version === contextVersion) renderFills(value, asset);
