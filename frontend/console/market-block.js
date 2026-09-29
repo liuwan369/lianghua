@@ -265,8 +265,28 @@
       poolSaving = false;
       renderList(); renderDetail();
       if (resultMessage) text("[data-selection-note]", resultMessage);
+      // Enabling a coin only rewrites the run pool. The activated strategy keeps
+      // its own assetId, and the engine trades that one — so a pool of eth with a
+      // btc strategy silently keeps trading btc and the start gate blocks. Say so
+      // here instead of letting the operator discover it on the overview page.
+      void reportStrategyAssetMismatch(desiredIds);
     }
   }
+
+  const reportStrategyAssetMismatch = async (desiredIds) => {
+    const note = document.querySelector("[data-selection-note]");
+    if (!note || !Array.isArray(desiredIds) || !desiredIds.length) return;
+    try {
+      const raw = await window.PolyPreview.api.strategyConfig();
+      const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+      const target = data?.config?.assetId ?? data?.assetId;
+      if (!target || desiredIds.includes(String(target))) return;
+      note.textContent = `运行池已设为 ${desiredIds.join("、").toUpperCase()}，但当前激活策略的币种仍是 ${String(target).toUpperCase()}。`
+        + `交易按激活策略执行，请到策略页把币种改为 ${desiredIds[0].toUpperCase()} 并重新激活，否则启动会被拦住或仍按 ${String(target).toUpperCase()} 交易。`;
+    } catch {
+      /* The pool change already reported its own outcome; do not overwrite it. */
+    }
+  };
 
   document.querySelector("[data-detail-enable]")?.addEventListener("click", () => { void toggleEnabled(selectedId); });
   document.querySelector("[data-coin-search]")?.addEventListener("input", (event) => { search = event.target.value; renderList(); });

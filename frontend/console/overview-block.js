@@ -30,7 +30,7 @@
           <p class="eyebrow">控制台总览</p>
           <div class="hero-title-row"><h1>\u603B\u89C8</h1><span class="language-chip">\u7B80\u4E2D</span></div>
           <p class="subtitle">\u67E5\u770B\u5F53\u524D\u4EA4\u6613\u72B6\u6001\u3001\u8D26\u6237\u6458\u8981\u3001\u670D\u52A1\u5668\u72B6\u6001\u548C\u8FD0\u884C\u4E8B\u4EF6\u3002</p>
-          <div class="hero-actions"><button class="hero-button primary-action" type="button" data-overview-action="start">\u4E00\u952E\u542F\u52A8\u81EA\u52A8\u5316\u4EA4\u6613</button><button class="hero-button" type="button" data-overview-action="strategy">\u4FDD\u5B58\u914D\u7F6E</button><button class="hero-button" type="button" data-overview-action="refresh">\u5237\u65B0\u72B6\u6001</button><button class="hero-button exit-action" type="button" data-overview-action="exit">\u9000\u51FA\u7A0B\u5E8F</button></div>
+          <div class="hero-actions"><button class="hero-button primary-action" type="button" data-overview-action="start">\u4E00\u952E\u542F\u52A8\u81EA\u52A8\u5316\u4EA4\u6613</button><button class="hero-button" type="button" data-overview-action="strategy">\u4FDD\u5B58\u914D\u7F6E</button><button class="hero-button" type="button" data-overview-action="refresh">\u5237\u65B0\u72B6\u6001</button><button class="hero-button exit-action" type="button" data-overview-action="exit">\u9000\u51FA\u7A0B\u5E8F</button><button class="hero-button danger-action" type="button" data-overview-action="reset" title="\u5220\u9664\u6240\u6709\u8FD0\u884C\u65E5\u5FD7\u548C\u7EDF\u8BA1\u6570\u636E\uFF1B\u94FE\u4E0A\u7ED3\u7B97\u8BB0\u5F55\u548C\u7B56\u7565\u914D\u7F6E\u4E0D\u4F1A\u5220\u9664">\u6E05\u7A7A\u6570\u636E</button></div>
           <p class="control-feedback" data-overview-control-message role="status" aria-live="polite">正在检查启动条件…</p>
         </div>
         <div class="header-tools"><div class="header-status-grid">
@@ -154,6 +154,37 @@
   };
   document.querySelectorAll("[data-overview-action]").forEach((button) => button.addEventListener("click", async () => {
     const action = button.dataset.overviewAction;
+    if (action === "reset") {
+      if (button.disabled) return;
+      const message = document.querySelector("[data-overview-control-message]");
+      // Irreversible and it deletes real trade history, so require an explicit
+      // confirmation. On-chain settlement state and strategy config survive.
+      if (!window.confirm("清空全部运行日志和交易统计？\n\n删除：运行日志、成交/订单/结算投影、全部统计数字。\n保留：链上结算记录（未赎回的持仓不会丢）、策略配置、运行池。\n\n此操作不可撤销。")) return;
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = "清空中…";
+      button.setAttribute("aria-busy", "true");
+      if (message) { message.classList.remove("is-blocked"); message.textContent = "正在清空运行数据…"; }
+      try {
+        const result = await adapter.resetLedger();
+        const report = result?.report || {};
+        if (message) {
+          const freed = typeof report.bytes === "number" ? ` · 释放 ${(report.bytes / 1e6).toFixed(0)} MB` : "";
+          message.textContent = `已清空 ${report.journals ?? 0} 份运行日志和统计投影${freed}。链上结算记录与策略配置已保留。`;
+        }
+        await Promise.allSettled([adapter.loadRuntime(), adapter.loadMetrics(), adapter.loadEvents(null, overviewEventContext())]);
+      } catch (error) {
+        if (message) {
+          message.classList.add("is-blocked");
+          message.textContent = `清空失败：${error?.message || "未知错误"}`;
+        }
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+        button.removeAttribute("aria-busy");
+      }
+      return;
+    }
     if (action === "start" || action === "exit") {
       if (button.disabled) return;
       const state = store.getState();

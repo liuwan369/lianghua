@@ -381,6 +381,18 @@ button {
       #b63e62);
   box-shadow: inset 0 1px 0 #ffd5df3d;
 }
+/* Destructive but not the primary action: outlined, not filled like 退出程序. */
+.hero-button.danger-action {
+  border-color: #8a5566;
+  border-radius: 14px;
+  background: transparent;
+  color: #e6a8ba;
+}
+.hero-button.danger-action:hover:not(:disabled) {
+  border-color: #c95073;
+  background: #3a1f2a;
+  color: #ffd5df;
+}
 .hero-button.exit-action:hover:not(:disabled) {
   background:
     linear-gradient(

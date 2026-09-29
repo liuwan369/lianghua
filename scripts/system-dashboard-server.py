@@ -2205,6 +2205,52 @@ def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
 
 
+def reset_ledger_data() -> dict:
+    """Delete run journals and the projection so statistics start from empty.
+
+    Deliberately preserved:
+    - `*.platform-state.json*` — the on-chain settlement records. A `prepared` or
+      `submitted` record is an unfinished redemption; losing it would abandon
+      winnings that are still on chain. Money state is never console-resettable.
+    - strategy config, drafts and the market pool — configuration, not run data.
+
+    The caller must already have refused while a trading process is running.
+    """
+    results = TRADING_ROOT / "results"
+    live, dashboard = results / "live", results / "dashboard"
+    report = {"journals": 0, "logs": 0, "controls": 0, "bytes": 0, "projection": False, "preserved": []}
+    for path in sorted(live.glob("*")) if live.exists() else []:
+        if not path.is_file():
+            continue
+        name = path.name
+        if ".platform-state.json" in name:
+            report["preserved"].append(name)
+            continue
+        key = ("journals" if name.endswith(".jsonl") else "logs" if name.endswith(".console.log")
+               else "controls" if name.endswith(".control.json") else None)
+        if key is None:
+            continue
+        size = path.stat().st_size
+        path.unlink()
+        report[key] += 1
+        report["bytes"] += size
+    for suffix in ("", "-wal", "-shm"):
+        projection = dashboard / f"ledger.sqlite3{suffix}"
+        if projection.exists():
+            projection.unlink()
+            report["projection"] = True
+    # Recreate an empty projection so readers get "no runs" instead of an error.
+    Ledger(dashboard / "ledger.sqlite3")
+    # Drop cached responses, or the console would keep serving the old figures
+    # from before the wipe.
+    global _trading_run_id
+    with _modern_cache_lock:
+        _modern_response_cache.clear()
+    with _trading_lock:
+        _trading_run_id = None
+    return report
+
+
 def _current_account_id() -> str | None:
     with _trading_lock:
         account_id = _trading_account_id
@@ -2871,7 +2917,7 @@ def make_handler(root: Path):
             if path not in {"/api/account/check", "/api/account/save", "/api/strategy-config",
                             "/api/trading/control", "/api/trading/auth/session", "/api/runtime/commands",
                             "/api/strategy/drafts", "/api/strategy/activate", "/api/runtime/flatten",
-                            "/api/runtime/market-pool"} and not modern_order_path:
+                            "/api/runtime/market-pool", "/api/ledger/reset"} and not modern_order_path:
                 self._send_json(b'{"error":"not found"}', 404)
                 return
             try:
@@ -2883,7 +2929,7 @@ def make_handler(root: Path):
                 if not isinstance(payload, dict):
                     raise ValueError("request body must be an object")
                 if path in {"/api/runtime/commands", "/api/strategy/drafts", "/api/strategy/activate",
-                            "/api/runtime/flatten", "/api/runtime/market-pool"} or modern_order_path:
+                            "/api/runtime/flatten", "/api/runtime/market-pool", "/api/ledger/reset"} or modern_order_path:
                     auth_error = _control_request_error(self.headers, "live")
                     if auth_error:
                         code, message = auth_error
@@ -2979,6 +3025,29 @@ def make_handler(root: Path):
                         "activationScope": "future_uncreated_round", "status": "published",
                         "source": "control-plane", "asOf": time.time(), "stale": False},
                         ensure_ascii=False, allow_nan=False).encode("utf-8"))
+                    return
+                if path == "/api/ledger/reset":
+                    if payload.get("confirm") != "RESET":
+                        self._send_json(json.dumps({"accepted": False, "error": "缺少确认标记，未清空任何数据"},
+                                                   ensure_ascii=False).encode("utf-8"), 400)
+                        return
+                    # Wiping the projection while a run is writing to it would
+                    # discard records for capital already committed on chain.
+                    status = trading_status(include_stats=False)
+                    if status.get("running") or status.get("processRunning"):
+                        self._send_json(json.dumps({"accepted": False,
+                            "error": "交易进程仍在运行，请先停止交易再清空数据"},
+                            ensure_ascii=False).encode("utf-8"), 409)
+                        return
+                    try:
+                        report = reset_ledger_data()
+                    except (OSError, sqlite3.Error, RuntimeError) as exc:
+                        self._send_json(json.dumps({"accepted": False, "error": f"清空失败：{exc}"},
+                                                   ensure_ascii=False).encode("utf-8"), 503)
+                        return
+                    self._send_json(json.dumps({"accepted": True, "report": report,
+                        "source": "control-plane", "asOf": time.time(), "stale": False, "error": None},
+                        ensure_ascii=False).encode("utf-8"))
                     return
                 if path == "/api/runtime/flatten" or modern_order_path:
                     self._send_json(json.dumps({"accepted": False, "status": "unsupported",

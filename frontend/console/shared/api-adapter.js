@@ -504,6 +504,18 @@
       // stale or unavailable, the existing draft remains recoverable.
       await adapter.loadStrategy();
       return result;
+    },
+    async resetLedger() {
+      const raw = await core.api.ledgerReset();
+      const result = raw?.data && typeof raw.data === "object" ? { ...raw, ...raw.data } : raw;
+      if (result?.accepted !== true) throw new Error(result?.error || "服务器未确认清空操作");
+      // Every slice now describes deleted runs. Clear them so the console cannot
+      // keep rendering figures for data that no longer exists.
+      ["metrics", "events", "fills", "orders", "settlements", "position"].forEach((slice) => {
+        const current = store.getState()[slice];
+        if (current) store.setSlice(slice, { status: "unavailable", stale: true, data: null, error: null });
+      });
+      return result;
     }
   };
   window.PolyPreviewAdapter = Object.freeze(adapter);

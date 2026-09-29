@@ -252,6 +252,8 @@
     fills: (context = {}) => request(`/api/fills${scopedQuery(context)}`),
     settlements: (context = {}) => request(`/api/settlements${scopedQuery(context)}`),
     rounds: (context = {}) => request(`/api/rounds${scopedQuery(context)}`),
+    ledgerReset: () => request("/api/ledger/reset", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: "RESET" }), timeout: 30000 }),
     legacyStatus: () => request("/api/v1/status"),
     legacyMarkets: () => request("/api/v1/markets"),
     legacyAccount: () => request("/api/account/status"),
