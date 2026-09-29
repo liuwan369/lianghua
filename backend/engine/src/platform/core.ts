@@ -1311,7 +1311,21 @@ export class TradingCore {
       }
     }
     this.state = next;
+    // `copy` is a structuredClone, so every fill in `next` is a NEW object. The
+    // fill indexes still referenced the discarded ones, so a later fee
+    // correction or FAILED reversal mutated a detached copy while applying its
+    // cash side effects to live state — leaving the persisted fill ledger
+    // permanently disagreeing with cash and realized PnL.
+    this.reindexFills();
     this.persist(true); this.emit({ kind: "account", snapshot: copy(account) });
+  }
+  private reindexFills(): void {
+    this.fillByKey.clear(); this.fillIndexByKey.clear();
+    this.state.fills.forEach((fill, index) => {
+      const key = this.fillKey(fill);
+      this.fillByKey.set(key, fill);
+      this.fillIndexByKey.set(key, index);
+    });
   }
   async idle(): Promise<void> { while (this.jobs.size) await Promise.allSettled([...this.jobs]); }
   async stop(reason = "operator stop"): Promise<void> {
