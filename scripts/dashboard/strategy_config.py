@@ -26,7 +26,7 @@ def default_config() -> dict:
     return {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
             "stageShares": [5, 18, 54, 130], "maxStages": 4,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
-            "durationMinutes": 0, "mode": "live",
+            "durationMinutes": 0, "maxRounds": 0, "mode": "live",
             "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5}
 
 
@@ -83,6 +83,12 @@ def validate_config(config: dict) -> dict:
     duration = number(result["durationMinutes"], "运行分钟数", positive=False)
     if duration * 60_000 > 2_147_483_647:
         raise ConfigValidationError("运行时长过大；持续运行请填0")
+    # Rounds are the natural unit: they are five minutes wide, so a minute count
+    # can stop mid round and abandon a position it just opened.
+    rounds = number(result["maxRounds"], "运行场次数", positive=False)
+    if rounds != int(rounds) or rounds < 0 or rounds > 10_000:
+        raise ConfigValidationError("运行场次数必须是0到10000之间的整数；持续运行请填0")
+    result["maxRounds"] = int(rounds)
     for key in ("maxQuoteAgeSeconds", "maxQuoteSkewSeconds"):
         number(result[key], key)
     if result["mode"] != "live":

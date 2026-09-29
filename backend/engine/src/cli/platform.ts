@@ -154,6 +154,10 @@ export interface PlatformCliOptions {
   mode: TradingMode;
   limits: HardLimits;
   durationSec: number;
+  /** Stop after this many rounds have closed. 0 disables. Preferred over
+   * durationSec: rounds are 5 minutes wide, so a minute count can cut off mid
+   * round and abandon a position it just opened. */
+  maxRounds: number;
   timerMs: number;
   statusSec: number;
   stateFile: string;
@@ -198,6 +202,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     .option("--order-usd <number>", "Maximum order notional (defaults to capital ceiling)")
     .option("--max-open-orders <number>", "Shared active-order count ceiling", "100")
     .option("--duration-sec <number>", "Stop after this many seconds; 0 runs until an operator signal", "300")
+    .option("--max-rounds <number>", "Stop once this many rounds have closed; 0 disables", "0")
     .option("--timer-ms <number>", "Strategy timer event interval; feed events remain immediate", "1000")
     .option("--status-sec <number>", "JSON status output interval", "30")
     .option("--state-file <path>", "Durable state and exclusive lock file")
@@ -242,6 +247,8 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
   if (maxOrderUsd > capitalUsd) throw new CliInputError("--order-usd must not exceed --capital-usd");
   const durationSec = Number(raw.durationSec);
   if (!Number.isFinite(durationSec) || durationSec < 0) throw new CliInputError("--duration-sec must be a finite nonnegative number");
+  const maxRounds = raw.maxRounds === undefined ? 0 : Number(raw.maxRounds);
+  if (!Number.isInteger(maxRounds) || maxRounds < 0) throw new CliInputError("--max-rounds must be a nonnegative integer");
   const timerMs = positive(raw.timerMs, "--timer-ms");
   const statusSec = positive(raw.statusSec, "--status-sec");
   if (durationSec * 1000 > 2_147_483_647 || timerMs > 2_147_483_647 || statusSec * 1000 > 2_147_483_647) {
@@ -269,7 +276,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     throw new CliInputError("--strategy-config must be separate from execution state and control files");
   }
   if (raw.live !== true) throw new CliInputError("--live is required; simulated platform execution has been removed");
-  return { mode, limits: { capitalUsd, dailyLossUsd, maxOrderUsd, maxOpenOrders }, durationSec, timerMs,
+  return { mode, limits: { capitalUsd, dailyLossUsd, maxOrderUsd, maxOpenOrders }, durationSec, maxRounds, timerMs,
     statusSec, stateFile, journalFile, stopFile, controlFile, strategy: raw.strategy,
     strategyConfigFile,
     marketsFile: raw.markets ? resolve(raw.markets) : undefined,
@@ -455,6 +462,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       marketEndsProcessed.add(market.id);
       try { connection?.platform.ingest({ kind: "timer", ts: Math.max(market.endsAt, Date.now() / 1000) }); }
       catch (error) { primaryFailure ??= error; requestStop("market_end_event_failed"); }
+      // Stopping after a whole number of rounds is what an operator actually
+      // means by "run a few rounds". A wall-clock window cannot express it: the
+      // rounds are five minutes wide, so any minute count risks cutting off mid
+      // round, buying into a round that then gets abandoned. Counting closed
+      // rounds also stops on a boundary, which is when the drain can finish.
+      if (options.maxRounds > 0 && marketEndsProcessed.size >= options.maxRounds) {
+        requestStop("round_limit_reached");
+      }
     };
     trigger();
   };

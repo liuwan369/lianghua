@@ -1542,6 +1542,14 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         raise ValueError("duration_min must be a finite JSON number") from None
     if not math.isfinite(duration_min) or duration_min < 0:
         raise ValueError("duration_min 必须为非负数字")
+    # Rounds are the operator's real unit; a five-minute window means any minute
+    # count can cut off mid round. 0 keeps the previous time-only behaviour.
+    rounds_raw = payload.get("max_rounds", (strategy_config or {}).get("config", {}).get("maxRounds", 0) or 0)
+    if type(rounds_raw) not in {int, float}:
+        raise ValueError("max_rounds must be a finite JSON number")
+    if not math.isfinite(float(rounds_raw)) or float(rounds_raw) < 0 or float(rounds_raw) != int(rounds_raw):
+        raise ValueError("max_rounds 必须为非负整数")
+    max_rounds = int(rounds_raw)
     if not math.isfinite(duration_min) or duration_min < 0 or (duration_min != 0 and duration_min < 0.1):
         raise ValueError("duration_min 必须为 0（一直运行）或至少 0.1 分钟")
     with _trading_lock:
@@ -1585,6 +1593,7 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         args = [
             "node", "dist/cli/platform.js", "--live",
             "--duration-sec", str(duration_min * 60), "--status-sec", "2",
+            "--max-rounds", str(max_rounds),
             "--journal-file", str(candidate_log), "--state-file", str(candidate_state),
             "--stop-file", str(candidate_log.with_suffix(".stop")),
         ]

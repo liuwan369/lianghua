@@ -52,7 +52,7 @@
               <label class="strategy-field"><span>\u5355\u573A\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="roundBudget"><b>USDC</b></div><small>\u5305\u62EC\u672C\u573A\u6301\u4ED3\u3001\u672A\u5B8C\u6210\u4E70\u5355\u548C\u8D39\u7528\u9884\u7559\u3002</small></label>
               <label class="strategy-field"><span>\u7B56\u7565\u603B\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="totalBudget"><b>USDC</b></div><small>\u9650\u5236\u672C\u7B56\u7565\u540C\u65F6\u5360\u7528\u7684\u8D44\u91D1\u3002</small></label>
               <label class="strategy-field"><span>\u6BCF\u65E5\u4E8F\u635F\u505C\u6B62\u7EBF</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="lossLimit"><b>USDC</b></div><small>\u8FBE\u5230\u540E\u6682\u505C\u65B0\u589E\u8BA2\u5355\uFF0C\u4FDD\u7559\u5DF2\u6709\u8BA2\u5355\u3002</small><small class="loss-basis" data-loss-basis>\u5224\u65AD\u57FA\u7840\u8BFB\u53D6\u4E2D\u2026</small></label>
-              <label class="strategy-field"><span>\u8FD0\u884C\u65F6\u957F</span><div><input type="number" value="0" data-runtime-field="duration"><b>\u5206\u949F</b></div><small>0 \u8868\u793A\u6301\u7EED\u8FD0\u884C\uFF0C\u76F4\u5230\u624B\u52A8\u505C\u6B62\u3002</small></label>
+              <label class="strategy-field"><span>\u8FD0\u884C\u573A\u6B21</span><div><input type="number" value="0" min="0" step="1" data-runtime-field="rounds"><b>\u573A</b></div><small>\u6BCF\u573A 5 \u5206\u949F\uFF1B\u8DD1\u6EE1\u540E\u5728\u573A\u6B21\u8FB9\u754C\u505C\u6B62\uFF0C\u4E0D\u4F1A\u505C\u5728\u534A\u573A\u30020 \u8868\u793A\u6301\u7EED\u8FD0\u884C\u3002</small></label>
             </div></div><div class="runtime-note"><span class="info-dot">i</span><span>\u6682\u505C\u65B0\u589E\u4F1A\u4FDD\u7559\u73B0\u6709\u8BA2\u5355\uFF1B\u505C\u6B62\u4F1A\u64A4\u9500\u4F59\u91CF\uFF0C\u5DF2\u6210\u4EA4\u6301\u4ED3\u4FDD\u7559\u3002\u8FD0\u884C\u65F6\u957F\u5728\u4E0B\u6B21\u542F\u52A8\u65F6\u751F\u6548\u3002</span></div>
           </div>
 
@@ -177,7 +177,7 @@
     }
     renderStages(config.stageShares);
     root.querySelector("[data-max-stages]").value = String(config.maxStages ?? config.stageShares.length);
-    for (const [key, name] of Object.entries({ roundBudget: "roundBudgetUsd", totalBudget: "totalBudgetUsd", lossLimit: "dailyLossUsd", duration: "durationMinutes" })) {
+    for (const [key, name] of Object.entries({ roundBudget: "roundBudgetUsd", totalBudget: "totalBudgetUsd", lossLimit: "dailyLossUsd", rounds: "maxRounds" })) {
       root.querySelector(`[data-runtime-field="${key}"]`).value = config[name] == null ? "" : String(config[name]);
     }
     dirty = false;
@@ -271,12 +271,14 @@
     };
     const budgets = [optional("roundBudget"), optional("totalBudget"), optional("lossLimit")];
     if (budgets.some((value) => value !== null && (!Number.isFinite(value) || value <= 0))) throw new Error("资金上限和亏损线必须为空或正数。");
-    const duration = optional("duration") ?? 0;
+    const rounds = optional("rounds") ?? 0;
     if (!Number.isFinite(duration) || duration < 0 || duration * 60000 > 2147483647) throw new Error("运行时长须为有效非负分钟数；持续运行请填 0。");
     return { strategyId: core.config.strategyId, assetId: selectedAsset(), expectedRevision: baselineRevision,
       triggerPrice: trigger / 100, confirmationPrice: confirmation / 100, maxBuyPrice: maximum / 100,
       stageShares: stages, maxStages, roundBudgetUsd: budgets[0], totalBudgetUsd: budgets[1], dailyLossUsd: budgets[2],
-      durationMinutes: duration, mode: "live", maxQuoteAgeSeconds: formConfig?.maxQuoteAgeSeconds ?? 2,
+      // Rounds are the operator's unit; keep durationMinutes at 0 so the wall
+      // clock cannot cut a round short behind the round limit's back.
+      maxRounds: rounds, durationMinutes: 0, mode: "live", maxQuoteAgeSeconds: formConfig?.maxQuoteAgeSeconds ?? 2,
       maxQuoteSkewSeconds: formConfig?.maxQuoteSkewSeconds ?? 1.5 };
   };
   root.querySelector("[data-save]").addEventListener("click", async () => {
