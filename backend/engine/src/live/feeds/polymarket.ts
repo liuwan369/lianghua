@@ -68,6 +68,8 @@ export interface MarketFeedIdentity {
   marketId?: string;
   roundId?: string;
   sequenceBase?: number;
+  /** Venue endpoint. Only tests override it, to drive this code over a local server. */
+  url?: string;
 }
 
 function num(value: unknown): number | undefined {
@@ -434,13 +436,112 @@ function connectWs(url: string, signal: AbortSignal, timeoutMs = 10_000): Promis
 }
 
 /** Polymarket CLOB book websocket feed. */
+/** Independent sockets per market. The venue closes a market-channel socket
+ * with `1013 slow consumer: send buffer full` when its per-socket buffer fills
+ * during busy trading; measured on the Dublin host, 4 parallel sockets on the
+ * same round were each closed on their own (6 closes, one pair within 3s).
+ * Every one of the 11 live-round disconnects in the logs was such a close. With
+ * two sockets the round keeps a live quote while one of them reconnects. */
+export const PM_WS_REDUNDANT_SOCKETS = 2;
+
+type Feed = { stop: () => void; isHealthy: (maxStaleMs?: number) => boolean };
+type BookEvent = Extract<Parameters<FeedSink>[0], { kind: "book" }>;
+
+/** Run `PM_WS_REDUNDANT_SOCKETS` copies of the single-socket feed and merge them
+ * into one stream that looks exactly like one feed to its consumer.
+ *
+ * - A book is forwarded only if it carries a newer exchange time than the last
+ *   forwarded book on at least one side, and no side goes back. Both sockets
+ *   see the same venue events, so this drops the duplicate copy and keeps
+ *   whichever arrived first.
+ * - Forwarded books are renumbered so `sequence` is strictly increasing across
+ *   both sockets; each copy numbers its own frames independently.
+ * - Status is reported for the pair: connected while either socket is up,
+ *   healthy while either has a fresh complete book. A single socket reconnecting
+ *   no longer reaches the consumer, so the strategy keeps its baseline.
+ * - tickSize and marketTrade are forwarded once, by exchange time and trade id. */
 export function runPolymarketFeed(
   sink: FeedSink,
   upToken: string,
   downToken: string,
   deadline: number,
   identity: MarketFeedIdentity = {},
-): { stop: () => void; isHealthy: (maxStaleMs?: number) => boolean } {
+  sockets = PM_WS_REDUNDANT_SOCKETS,
+): Feed {
+  if (sockets <= 1) return runSingleSocketFeed(sink, upToken, downToken, deadline, identity);
+  const sequenceBase = identity.sequenceBase ?? 0;
+  if (!Number.isSafeInteger(sequenceBase) || sequenceBase < 0) throw new Error("sequenceBase must be a non-negative safe integer");
+  let sequence = sequenceBase;
+  let lastUpAt = -Infinity, lastDownAt = -Infinity;
+  const tickSizeAt = new Map<string, number>();
+  const seenTrades = new Set<string>();
+  const connected: boolean[] = new Array(sockets).fill(false);
+  const healthy: boolean[] = new Array(sockets).fill(false);
+  let reportedConnected: boolean | undefined;
+  let reportedHealthy: boolean | undefined;
+  let reportedReason: string | undefined;
+  let stopped = false;
+
+  const status = (base: Extract<Parameters<FeedSink>[0], { kind: "bookStatus" }>, index: number) => {
+    if (base.connected !== undefined) connected[index] = base.connected;
+    healthy[index] = base.healthy;
+    const anyConnected = connected.some(Boolean);
+    const anyHealthy = healthy.some(Boolean);
+    // One reason for the pair: the best state any socket is in.
+    const reason = anyHealthy ? "complete_book" : !anyConnected ? "transport_disconnected"
+      : base.healthy ? base.reason : (base.reason === "transport_disconnected" ? "connected_waiting_book" : base.reason);
+    if (anyConnected === reportedConnected && anyHealthy === reportedHealthy && reason === reportedReason) return;
+    reportedConnected = anyConnected; reportedHealthy = anyHealthy; reportedReason = reason;
+    sink({ ...base, healthy: anyHealthy, connected: anyConnected, reason: reason as typeof base.reason, tsUnix: nowUnix() });
+  };
+
+  const book = (event: BookEvent) => {
+    const s = event.snapshot;
+    const upAt = s.YES?.sourceAt ?? s.upExchangeTsUnix ?? -Infinity;
+    const downAt = s.NO?.sourceAt ?? s.downExchangeTsUnix ?? -Infinity;
+    // Never move a side back, and require real progress on at least one side.
+    if (upAt < lastUpAt || downAt < lastDownAt) return;
+    if (upAt === lastUpAt && downAt === lastDownAt) return;
+    lastUpAt = upAt; lastDownAt = downAt;
+    const next = ++sequence;
+    sink({ ...event, snapshot: { ...s, sequence: next,
+      YES: s.YES && { ...s.YES, sequence: next }, NO: s.NO && { ...s.NO, sequence: next } } });
+  };
+
+  const feeds: Feed[] = [];
+  for (let index = 0; index < sockets; index += 1) {
+    feeds.push(runSingleSocketFeed(event => {
+      if (stopped) return;
+      if (event.kind === "book") book(event);
+      else if (event.kind === "bookStatus") status(event, index);
+      else if (event.kind === "tickSize") {
+        if (event.tsUnix <= (tickSizeAt.get(event.token) ?? -Infinity)) return;
+        tickSizeAt.set(event.token, event.tsUnix); sink(event);
+      } else if (event.kind === "marketTrade") {
+        const key = `${event.token}:${event.tsUnix}:${event.price}:${event.shares}:${event.takerSide}`;
+        if (seenTrades.has(key)) return;
+        seenTrades.add(key);
+        if (seenTrades.size > 4096) seenTrades.delete(seenTrades.values().next().value!);
+        sink(event);
+      } else sink(event);
+    }, upToken, downToken, deadline, { ...identity, sequenceBase: 0 }));
+  }
+  return {
+    stop: () => {
+      for (const feed of feeds) feed.stop();
+      stopped = true;
+    },
+    isHealthy: maxStaleMs => feeds.some(feed => feed.isHealthy(maxStaleMs)),
+  };
+}
+
+function runSingleSocketFeed(
+  sink: FeedSink,
+  upToken: string,
+  downToken: string,
+  deadline: number,
+  identity: MarketFeedIdentity = {},
+): Feed {
   if (!upToken || !downToken || upToken === downToken) throw new Error("distinct outcome tokens are required");
   const roundStart = identity.roundId && /^\d+$/.test(identity.roundId) ? Number(identity.roundId) : undefined;
   if (roundStart != null && Number.isSafeInteger(roundStart) && roundStart % 300 === 0) {
@@ -477,7 +578,7 @@ export function runPolymarketFeed(
 
   const connect = (): Promise<WebSocket> => {
     if (connectingWs) return connectingWs;
-    const task = connectWs(PM_WS, stopSignal.signal);
+    const task = connectWs(identity.url ?? PM_WS, stopSignal.signal);
     connectingWs = task;
     // Keep one in-flight connection attempt per feed. This also prevents a
     // stop/reconnect race from opening a second socket before the first settles.

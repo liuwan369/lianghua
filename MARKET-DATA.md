@@ -69,7 +69,7 @@ NO:  assetId 16758...933930  bid 0.37  ask 0.38   （其余同构）
 
 **看门狗**（每秒跑一次，[polymarket.ts:569](backend/engine/src/live/feeds/polymarket.ts#L569)），三种断线原因（`watchdogReason`，[polymarket.ts:47](backend/engine/src/live/feeds/polymarket.ts#L47)）：
 - `message_timeout` 15s：完全没有可用行情事件 → socket 假活，重连。
-- `bilateral_quote_timeout` 5s：有完整盘口但某一边静默 5 秒。**这是实盘最常见的断线原因**（见下）。
+- `bilateral_quote_timeout` 5s：有完整盘口但某一边静默 5 秒。实盘触发过 12 次，**全部落在已结束或未开始的场次**（那时场馆本就不推报价），交易中的场次从未触发。门槛不需要改（见 §6.1）。
 - `source_age_timeout` 5s：帧还在来，但交易所时间戳持续陈旧（>2s）5 秒。
 
 命中任一原因：`hasCompleteBook=false` → `setConnected(false)` → `ws.terminate()`，然后**全指数退避重连**：`250ms × 2^n` 上限 30s，带满抖动（[polymarket.ts:342](backend/engine/src/live/feeds/polymarket.ts#L342)）；连续稳定 30 秒后重连计数归零（[polymarket.ts:766](backend/engine/src/live/feeds/polymarket.ts#L766)）。
@@ -78,7 +78,29 @@ NO:  assetId 16758...933930  bid 0.37  ask 0.38   （其余同构）
 
 **消费端拒绝陈旧帧**（`snapshot-gate.ts`）：断线会发 `bookStatus{healthy:false}`，消费端把 `snapshotFreshAfter[场次]` 设成断线时刻，之后**只接收 `receivedAtUnix >= 断线时刻` 的帧**（[polymarket.ts:551](backend/engine/src/platform/polymarket.ts#L551)），断线前排在队列里的旧帧一律 `awaiting_fresh_snapshot` 拒掉。`validateMarketSnapshot`（[snapshot-gate.ts:71](backend/engine/src/platform/snapshot-gate.ts#L71)）逐条校验：marketId/roundId/assetId 身份、场次未结束、健康、sequence 有效且不回退、未过期、YES/NO 报价合法、深度合法、sourceAt 不回退。拒绝原因见 `SnapshotRejectReason`（13 种，[snapshot-gate.ts:3](backend/engine/src/platform/snapshot-gate.ts#L3)）。
 
-**策略侧**：收到 `market_feed_unhealthy` / `account_recovery_started` 就清掉该场次的参考基线（[btc-reversal.ts](backend/engine/src/strategies/btc-reversal.ts)），断线期间不交易，恢复后重新建立基线再等跨价——**断线期间出现的反转会被跳过**。
+**策略侧**：收到 `market_feed_unhealthy` / `account_recovery_started` 就清掉该场次的参考基线（[btc-reversal.ts](backend/engine/src/strategies/btc-reversal.ts)），断线期间不交易，恢复后重新建立基线再等跨价——**断线期间出现的反转会被跳过**。所以断线越少越值钱，见 §6.1。
+
+### 6.1 场馆主动断开（1013）与双连接
+
+**真正在交易场次里断线的，是场馆主动关 socket**，不是我们的看门狗。把实盘所有断线分类：
+
+| 来源 | 次数 | 落在哪 |
+|---|---|---|
+| 我们的看门狗 `bilateral_quote_timeout` | 12 | 全在已结束/未开始的场次，不花钱 |
+| **场馆主动关闭** | **11** | **全在交易中的场次**，最早开盘第 41 秒 |
+
+场馆给的关闭码是 **`1013 slow consumer: send buffer full`**。实测（2026-09-29，都柏林）：
+- 同一场开 4 个独立进程各一条连接，10 分钟里被关 6 次、**各断各的**（只有一对在 3 秒内撞上），1 号连接一次没断。说明不是场馆整体或网络整体故障，而是**场馆每条连接的发送缓冲各自在行情活跃时被挤满**。
+- 服务器不忙（2 核、负载 0.4），而且空闲的纯接收进程也会被关，所以大概率不是我们读得慢。
+- 场馆推送量：每秒 600–1200 条消息、370–800 KB。
+
+**对策：每场开 2 条独立连接，合并成一路**（`runPolymarketFeed` 外包一层，[polymarket.ts](backend/engine/src/live/feeds/polymarket.ts) `PM_WS_REDUNDANT_SOCKETS = 2`；原单连接逻辑改名 `runSingleSocketFeed`，一行未改）：
+- **盘口**：只转发在至少一边带来更新交易所时间、且没有一边倒退的帧——两条连接收到同一事件时丢掉后到的那份，慢连接迟到的旧帧也丢掉。转发时重新编号，保证 `sequence` 跨两条连接严格连续（每条连接各自从 0 计数，直接转发会回退）。
+- **状态**：任一连接在线即 connected，任一连接有新鲜完整盘口即 healthy。**单条连接重连不再传到消费端**，策略不会清基线。两条都断才报 `transport_disconnected`。
+- **tickSize / 成交**：按交易所时间和成交字段去重，只转发一次。
+- 对外接口不变，引擎和采集器两个调用方都不用改。
+
+**验证**：[check-redundant-feed.mjs](backend/engine/scripts/check-redundant-feed.mjs) 用本地 WebSocket 服务驱动真实代码，7 项全过：单条断不报断线且盘口继续、两条都断才报断线、无重复、sequence 连续、两条连接不同步时编号仍连续、慢连接的旧帧被丢、消费端校验全部接受、stop 关掉所有连接。**6 种故意改坏的写法全部被测试抓到**。服务器上同场 A/B 10 分钟：单连接在交易中场次断 1 次（开盘 238.9 秒），双连接 0 次。
 
 ## 7. 场次切换（重点）
 
@@ -95,7 +117,9 @@ NO:  assetId 16758...933930  bid 0.37  ask 0.38   （其余同构）
 
 **已完成并验证**：数据结构、订阅/读取、消息→盘口映射、sequence（换场归零正确）、三层时间戳与未来时钟过滤、报价/深度双时钟过期、发布门、看门狗三原因 + 全抖动退避、消费端 `snapshotFreshAfter` 拒绝断线前旧帧、13 种拒绝原因校验、场次叠加式切换与硬身份校验。服务器实盘取到的快照字段与代码一致。
 
-**待确认（L0 下一步要查的）**：
-1. **`bilateral_quote_timeout` 5 秒是否过严** —— 实盘 5 次运行里 4 次每 10 分钟断 6–8 次，几乎全是这个原因。要判断：是场馆真的一边静默 5s，还是我们门槛太紧、把正常的单边稀疏更新误判为断线。这是断线丢机会的主要来源。
-2. 断线恢复后重建基线要等一个完整配对帧，最坏情况在一场里损失多少可交易时间——需量化。
+**已解决**：~~`bilateral_quote_timeout` 5 秒是否过严~~ —— 不严。它从未在交易中场次触发；真正的断线来源是场馆 1013 主动关闭，已用双连接处理（§6.1）。
+
+**待确认**：
+1. **行情单边缺失 `incomplete_book`**：A/B 里两路都在交易中场次出现过（开盘 171、254 秒），并且持续到场次结束。这是场馆本身某一边没有顶档，不是连接问题，双连接也修不了。要查的是：这时策略停着是对的（没有报价就不该交易），还是有一边其实可交易却被整场挡住。
+2. 双连接的实盘样本只有 10 分钟、1 次对比。上线后要继续看交易中场次的断线次数。
 3. `runPolymarketFeed` 未传 `sequenceBase`，换场 sequence 从 0 起；确认这在多币种并发下不会造成跨场 key 混淆（`FeedQueue` 用 token 对做 key，理论上安全，待实测）。
