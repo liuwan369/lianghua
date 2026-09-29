@@ -87,7 +87,7 @@
   }));
 
   const coinRow = (coin) => `<article class="coin-row${coin.id === selectedId ? " selected" : ""}" data-coin-row="${escape(coin.id)}">
-    <button class="coin-select" type="button" data-select-coin="${escape(coin.id)}"><span class="coin-logo ${escape(coin.tone)}">${escape(coin.icon)}</span><span class="coin-main"><strong>${escape(coin.symbol)}<small>${escape(coin.name)} · ${escape(coin.english)}</small></strong><span class="coin-market-meta"><b>5 分钟</b><span>结束 ${escape(coin.close)}</span></span></span></button>
+    <button class="coin-select" type="button" data-select-coin="${escape(coin.id)}"><span class="coin-logo ${escape(coin.tone)}">${escape(coin.icon)}</span><span class="coin-main"><strong>${escape(coin.symbol)}<small>${escape(coin.label || coin.name)}</small></strong><span class="coin-market-meta"><b>5 分钟</b><span>结束 ${escape(coin.closeText || coin.close)}</span></span></span></button>
     <div class="coin-quotes"><span><small>YES</small><b>${Number.isFinite(coin.yes) ? coin.yes.toFixed(3) : "--"}</b></span><span><small>NO</small><b>${Number.isFinite(coin.no) ? coin.no.toFixed(3) : "--"}</b></span></div>
     <div class="coin-volume"><strong>${money(coin.volume)}</strong><small>交易量</small></div>
     <button class="coin-enable${coin.enabled ? " enabled" : ""}" type="button" data-enable-coin="${escape(coin.id)}" aria-pressed="${String(Boolean(coin.enabled))}"><i></i><span>${coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用"}</span></button>
@@ -111,7 +111,9 @@
     let previous = null;
     filtered.forEach((coin) => {
       let row = rows.get(coin.id);
-      const identity = JSON.stringify([coin.symbol, coin.name, coin.english, coin.icon, coin.tone]);
+      // label/closeText change when the round rolls over, so they belong in the
+      // identity key or the row keeps the previous round's time.
+      const identity = JSON.stringify([coin.symbol, coin.name, coin.english, coin.icon, coin.tone, coin.label, coin.closeText]);
       if (!row || row.dataset.identity !== identity) {
         const template = document.createElement("template");
         template.innerHTML = coinRow(coin);
@@ -128,7 +130,7 @@
       const quotes = row.querySelectorAll(".coin-quotes b");
       [coin.yes, coin.no].forEach((value, index) => { const rendered = Number.isFinite(value) ? value.toFixed(3) : "--"; if (quotes[index].textContent !== rendered) quotes[index].textContent = rendered; });
       set(".coin-volume strong", money(coin.volume));
-      set(".coin-market-meta span", `结束 ${coin.close}`);
+      set(".coin-market-meta span", `结束 ${coin.closeText || coin.close}`);
       const button = row.querySelector("[data-enable-coin]");
       const state = store.getState();
       const pool = state.marketPool;
@@ -180,14 +182,15 @@
       text("[data-detail-yes-caption]", "买一 · --"); text("[data-detail-no-caption]", "买一 · --");
       return;
     }
-    text("[data-detail-title]", `${coin.name} · ${coin.symbol}`);
-    text("[data-detail-name]", coin.name);
-    text("[data-detail-english]", `${coin.english} · ${coin.symbol}`);
+    // Short Chinese title (e.g. "BTC 5分钟 · 22:15 场") instead of the raw slug.
+    text("[data-detail-title]", coin.label || `${coin.symbol} ${coin.cycle}`);
+    text("[data-detail-name]", coin.label || coin.name);
+    text("[data-detail-english]", coin.name);
     text("[data-detail-yes]", Number.isFinite(coin.yes) ? coin.yes.toFixed(3) : "--");
     text("[data-detail-no]", Number.isFinite(coin.no) ? coin.no.toFixed(3) : "--");
     text("[data-detail-yes-caption]", Number.isFinite(coin.yes) ? `买一 · ${(coin.yes * 100).toFixed(1)}%` : "买一 · --");
     text("[data-detail-no-caption]", Number.isFinite(coin.no) ? `买一 · ${(coin.no * 100).toFixed(1)}%` : "买一 · --");
-    text("[data-detail-close]", coin.close);
+    text("[data-detail-close]", coin.closeText || coin.close);
     text("[data-detail-remaining]", coin.remaining);
     text("[data-detail-volume]", money(coin.volume));
     text("[data-detail-liquidity]", money(coin.liquidity));

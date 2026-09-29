@@ -82,8 +82,30 @@
       staleReason: first(raw.staleReason, raw.stale_reason, null),
       enabled: raw.enabled === true,
       current: raw.current === true || raw.running === true,
-      nextRound: raw.nextRound === true || raw.next_round === true
+      nextRound: raw.nextRound === true || raw.next_round === true,
+      // A short Chinese label instead of the raw slug (btc-updown-5m-1790647800).
+      // Cycle from "5m" -> "5分钟", plus the round-close time when known.
+      label: shortLabel(symbol, first(raw.cycle, raw.duration, "5m"), first(raw.endAt, raw.end, raw.closeAt, null)),
+      closeText: closeTimeText(first(raw.close, raw.closeAt, raw.endAt, null)),
     };
+  };
+  const cycleText = (cycle) => {
+    const value = String(cycle || "5m").toLowerCase();
+    const match = value.match(/^(\d+)\s*([mhd])$/);
+    if (!match) return value;
+    return `${match[1]}${{ m: "分钟", h: "小时", d: "天" }[match[2]]}`;
+  };
+  const closeTimeText = (value) => {
+    if (value == null || value === "--") return "--";
+    const ms = value > 1e12 ? value : value > 1e9 ? value * 1000 : null;
+    if (ms == null) return String(value);
+    const date = new Date(ms);
+    return Number.isNaN(date.getTime()) ? "--"
+      : date.toLocaleTimeString("zh-CN", { hour12: false, hour: "2-digit", minute: "2-digit" });
+  };
+  const shortLabel = (symbol, cycle, endAt) => {
+    const close = closeTimeText(endAt);
+    return close === "--" ? `${symbol} ${cycleText(cycle)}` : `${symbol} ${cycleText(cycle)} · ${close} 场`;
   };
   const catalog = (payload = {}) => {
     payload = payloadOf(payload) || {};
