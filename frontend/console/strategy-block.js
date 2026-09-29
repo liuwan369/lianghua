@@ -51,7 +51,7 @@
             <div class="config-section"><div class="config-section-heading"><div><span class="section-number">03</span><div><h3>\u8D44\u91D1\u4E0E\u8FD0\u884C\u65F6\u95F4</h3><p>\u9650\u5236\u5355\u573A\u6295\u5165\u3001\u7B56\u7565\u603B\u5360\u7528\u548C\u81EA\u52A8\u505C\u6B62\u6761\u4EF6\u3002</p></div></div><span class="section-state">\u53EF\u9009\u8FB9\u754C</span></div><div class="field-grid runtime-fields">
               <label class="strategy-field"><span>\u5355\u573A\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="roundBudget"><b>USDC</b></div><small>\u5305\u62EC\u672C\u573A\u6301\u4ED3\u3001\u672A\u5B8C\u6210\u4E70\u5355\u548C\u8D39\u7528\u9884\u7559\u3002</small></label>
               <label class="strategy-field"><span>\u7B56\u7565\u603B\u8D44\u91D1\u4E0A\u9650</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="totalBudget"><b>USDC</b></div><small>\u9650\u5236\u672C\u7B56\u7565\u540C\u65F6\u5360\u7528\u7684\u8D44\u91D1\u3002</small></label>
-              <label class="strategy-field"><span>\u6BCF\u65E5\u4E8F\u635F\u505C\u6B62\u7EBF</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="lossLimit"><b>USDC</b></div><small>\u8FBE\u5230\u540E\u6682\u505C\u65B0\u589E\u8BA2\u5355\uFF0C\u4FDD\u7559\u5DF2\u6709\u8BA2\u5355\u3002</small></label>
+              <label class="strategy-field"><span>\u6BCF\u65E5\u4E8F\u635F\u505C\u6B62\u7EBF</span><div><input type="number" placeholder="\u672A\u8BBE\u7F6E" data-runtime-field="lossLimit"><b>USDC</b></div><small>\u8FBE\u5230\u540E\u6682\u505C\u65B0\u589E\u8BA2\u5355\uFF0C\u4FDD\u7559\u5DF2\u6709\u8BA2\u5355\u3002</small><small class="loss-basis" data-loss-basis>\u5224\u65AD\u57FA\u7840\u8BFB\u53D6\u4E2D\u2026</small></label>
               <label class="strategy-field"><span>\u8FD0\u884C\u65F6\u957F</span><div><input type="number" value="0" data-runtime-field="duration"><b>\u5206\u949F</b></div><small>0 \u8868\u793A\u6301\u7EED\u8FD0\u884C\uFF0C\u76F4\u5230\u624B\u52A8\u505C\u6B62\u3002</small></label>
             </div></div><div class="runtime-note"><span class="info-dot">i</span><span>\u6682\u505C\u65B0\u589E\u4F1A\u4FDD\u7559\u73B0\u6709\u8BA2\u5355\uFF1B\u505C\u6B62\u4F1A\u64A4\u9500\u4F59\u91CF\uFF0C\u5DF2\u6210\u4EA4\u6301\u4ED3\u4FDD\u7559\u3002\u8FD0\u884C\u65F6\u957F\u5728\u4E0B\u6B21\u542F\u52A8\u65F6\u751F\u6548\u3002</span></div>
           </div>
@@ -326,4 +326,32 @@
   // so the market catalog was fetched and discarded — serially, delaying the
   // strategy config this page actually needs. Load the config directly.
   void adapter.loadStrategy();
+  // The daily loss limit trips on verified PnL when external cash flows are fully
+  // reconciled and on an estimate otherwise. Taker fills carry a derived fee, so
+  // in practice this often runs on estimates — the operator has to be able to see
+  // which, or they will read the stop line as a precise guarantee.
+  void (async () => {
+    const note = root.querySelector("[data-loss-basis]");
+    if (!note) return;
+    try {
+      const raw = await core.api.runtimeStatus();
+      const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
+      const risk = data?.risk || {};
+      const status = risk.dailyLossStatus ?? risk.daily_loss_status;
+      const pnl = typeof risk.dailyPnlUsd === "number" ? risk.dailyPnlUsd : null;
+      const today = pnl == null ? "" : ` · 当前当日盈亏 ${pnl > 0 ? "+" : ""}${pnl.toFixed(4)} USDC`;
+      if (status === "disabled") {
+        note.textContent = "未设置停止线，不会自动停止开仓。";
+      } else if (status === "active") {
+        note.textContent = `判断基础：已核对资金流水，止损按可证明盈亏触发${today}`;
+      } else if (status === "estimated") {
+        note.textContent = `判断基础：资金流水未对齐，止损按估算盈亏触发，可能早停或晚停${today}`;
+      } else {
+        note.textContent = "判断基础未提供，请以服务器运行状态为准。";
+      }
+      note.dataset.basis = status || "unknown";
+    } catch {
+      note.textContent = "判断基础读取失败，请以服务器运行状态为准。";
+    }
+  })();
 })();

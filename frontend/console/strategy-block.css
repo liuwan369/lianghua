@@ -1942,3 +1942,13 @@ button {
 .strategy-field small.field-inert {
   color: #e0a86a;
 }
+/* An estimated stop line is not a precise guarantee; colour says so at a glance. */
+.strategy-field small.loss-basis {
+  margin-top: 4px;
+}
+.strategy-field small.loss-basis[data-basis="active"] {
+  color: #6cc08a;
+}
+.strategy-field small.loss-basis[data-basis="estimated"] {
+  color: #e0a86a;
+}
