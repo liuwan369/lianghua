@@ -657,7 +657,16 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       reversal.onEvent = (event, context) => {
         // Shutdown is local to this run. Do not persist it as an operator
         // pause, or the next run would inherit a permanent admission lock.
-        if (signalReason || primaryFailure) return [];
+        // Still record order/fill/settlement evidence though: short-circuiting
+        // before onEvent left a fill that landed in the shutdown window out of
+        // the stage ledger, so the round reported filledShares: 0 and
+        // currentRunMarketIds() excluded it — the drain then skipped the very
+        // round whose capital was just committed. Suppress the actions, not the
+        // bookkeeping.
+        if (signalReason || primaryFailure) {
+          if (["order", "fill", "settlement"].includes(event.kind)) onEvent(event, context);
+          return [];
+        }
         const actions = onEvent(event, context);
         const active = reversal!.exportState().rounds.find(round => round.startsAt <= context.now && context.now < round.endsAt);
         const limits = resolveReversalLimits(operatorLimits, active?.config ?? strategyConfig!.config);
@@ -913,7 +922,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
                   message: safeEventMessage(error instanceof Error ? error.message : undefined),
                 });
                 needsMore = true;
-                break;
+                // One slow redeem or RPC stall used to abandon the whole
+                // remaining budget, leaving the round just traded with a single
+                // attempt and its winnings unredeemed. Keep retrying until the
+                // deadline instead.
+                const backoffMs = Math.min(SETTLEMENT_DRAIN_POLL_MS, Math.max(1, deadline - Date.now()));
+                if (backoffMs <= 1) break;
+                await new Promise<void>(resolveWait => setTimeout(resolveWait, backoffMs));
+                continue;
               }
               const state = connection!.platform.account.current();
               const runMarketIds = currentRunMarketIds();
@@ -981,18 +997,24 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     }
     if (reversal) {
       reversal.setPaused(true);
-      try {
-        await waitForShutdownStage(connection?.platform.orders.cancelAll("btc-reversal"),
-          SHUTDOWN_STAGE_MAX_MS, "cancel_all");
-        await waitForShutdownStage(connection?.platform.idle(), SHUTDOWN_STAGE_MAX_MS, "order_idle");
-        await waitForShutdownStage(connection?.recoverAccount(), SHUTDOWN_STAGE_MAX_MS, "account_recovery");
-      } catch (error) {
-        const timeout = isShutdownTimeout(error,
-          error instanceof Error && error.message.endsWith("_timeout") ? error.message.slice(0, -8) : "settlement_preparation");
-        if (!timeout) primaryFailure ??= error;
-        reportError("shutdown", timeout ? "settlement_preparation_timeout" : "settlement_preparation_failed", {
-          message: safeEventMessage(error instanceof Error ? error.message : undefined),
-        });
+      // Each stage gets its own guard. Chained in one try, a slow cancel_all
+      // skipped both the order drain and the account re-read, so the settlement
+      // pass then ran against stale order state and refused to redeem anything
+      // (it declines any market with a locally-active order).
+      for (const [stage, work] of [
+        ["cancel_all", async () => { await connection?.platform.orders.cancelAll("btc-reversal"); }],
+        ["order_idle", async () => { await connection?.platform.idle(); }],
+        ["account_recovery", async () => { await connection?.recoverAccount(); }],
+      ] as const) {
+        try {
+          await waitForShutdownStage(work(), SHUTDOWN_STAGE_MAX_MS, stage);
+        } catch (error) {
+          const timeout = isShutdownTimeout(error, stage);
+          if (!timeout) primaryFailure ??= error;
+          reportError("shutdown", timeout ? `${stage}_timeout` : `${stage}_failed`, {
+            message: safeEventMessage(error instanceof Error ? error.message : undefined),
+          });
+        }
       }
     }
     try { await drainSettlements?.(); }

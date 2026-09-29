@@ -1049,8 +1049,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (market.endsAt > now) continue;
       const feed = bookFeeds.get(market.id);
       if (feed) { feed.stop(); controls.delete(feed); bookFeeds.delete(market.id); bookHealth.delete(market.id); booksHealthy.delete(market.id); }
-      feedQueues.delete(market.id);
-      feedQueueCursor = feedQueues.size ? feedQueueCursor % feedQueues.size : 0;
       const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
       const needsUser = account.orders.some(order => tokens.has(order.tokenId)
         && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending))
@@ -1059,6 +1057,15 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (user && !needsUser) {
         user.stop(); controls.delete(user); usersByMarket.delete(market.id); userHealthy.delete(market.id);
         const index = users.indexOf(user); if (index >= 0) users.splice(index, 1);
+      }
+      // The user feed is deliberately kept alive while an order is unresolved,
+      // because it carries the trade/cancel evidence that resolves it. Deleting
+      // the queue first made `sink` discard exactly that evidence, so the order
+      // stayed UNKNOWN forever and its capital stayed reserved. Retire the queue
+      // only once nothing can still deliver into it.
+      if (!usersByMarket.has(market.id)) {
+        feedQueues.delete(market.id);
+        feedQueueCursor = feedQueues.size ? feedQueueCursor % feedQueues.size : 0;
       }
     }
   };
