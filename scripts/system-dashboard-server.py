@@ -2247,10 +2247,14 @@ def reset_ledger_data() -> dict:
     """Delete run journals and the projection so statistics start from empty.
 
     Deliberately preserved:
-    - `*.platform-state.json*` — the on-chain settlement records. A `prepared` or
+    - `*.settlements.json` — the on-chain settlement records. A `prepared` or
       `submitted` record is an unfinished redemption; losing it would abandon
       winnings that are still on chain. Money state is never console-resettable.
     - strategy config, drafts and the market pool — configuration, not run data.
+
+    Deleted (this was the gap): the main `*.platform-state.json` engine state —
+    orders, fills, positions, cash. It is run data, so a reset that kept it left
+    the next run replaying old fills.
 
     The caller MUST hold `_trading_lock` and must already have proven that no
     trading process is running: this deletes the journal a live run is appending
@@ -2259,7 +2263,7 @@ def reset_ledger_data() -> dict:
     global _read_model
     results = TRADING_ROOT / "results"
     live, dashboard = results / "live", results / "dashboard"
-    report = {"journals": 0, "logs": 0, "controls": 0, "bytes": 0, "projection": False, "preserved": []}
+    report = {"journals": 0, "logs": 0, "controls": 0, "state": 0, "bytes": 0, "projection": False, "preserved": []}
     # The projection worker opens ledger.sqlite3 once and never reopens it, and
     # the supervisor only respawns a *dead* worker. Unlinking under it would
     # leave it ingesting into a deleted inode, so every later run would report
@@ -2272,11 +2276,17 @@ def reset_ledger_data() -> dict:
         if not path.is_file():
             continue
         name = path.name
-        if ".platform-state.json" in name:
+        # Only the SETTLEMENT side is money state (an unfinished redemption would
+        # be abandoned if deleted). The main platform-state file is run data —
+        # orders, fills, positions, cash — but the old `.platform-state.json`
+        # substring preserved it too, so a reset left 42 terminal orders and 38
+        # fills behind for the next run's recovery scan to replay as new fills.
+        if ".settlements.json" in name:
             report["preserved"].append(name)
             continue
         key = ("journals" if name.endswith(".jsonl") else "logs" if name.endswith(".console.log")
-               else "controls" if name.endswith(".control.json") else None)
+               else "controls" if name.endswith(".control.json")
+               else "state" if ".platform-state.json" in name else None)
         if key is None:
             continue
         size = path.stat().st_size
