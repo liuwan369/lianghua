@@ -447,6 +447,23 @@ def _process_matches(pid: int | None, log_path: Path | None) -> bool:
     return index < len(args) and os.path.normcase(args[index]) == expected
 
 
+def _engine_process_present() -> bool | None:
+    """True if any trading engine process exists, None when that cannot be determined.
+
+    `_process_matches` answers "is THIS pid still our run", and returns False
+    whenever the persisted state was lost — which must never be read as "nothing
+    is running" before a destructive action. This asks the OS instead.
+    """
+    try:
+        listing = subprocess.run(["ps", "-eo", "args="], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if listing.returncode != 0:
+        return None
+    target = "dist/cli/platform.js"
+    return any(target in line.replace("\\", "/") for line in listing.stdout.splitlines())
+
+
 def _restore_trading_state() -> None:
     with _trading_lock:
         _restore_trading_state_locked()
@@ -2214,11 +2231,22 @@ def reset_ledger_data() -> dict:
       winnings that are still on chain. Money state is never console-resettable.
     - strategy config, drafts and the market pool — configuration, not run data.
 
-    The caller must already have refused while a trading process is running.
+    The caller MUST hold `_trading_lock` and must already have proven that no
+    trading process is running: this deletes the journal a live run is appending
+    to, and the engine would keep writing to an unlinked inode.
     """
+    global _read_model
     results = TRADING_ROOT / "results"
     live, dashboard = results / "live", results / "dashboard"
     report = {"journals": 0, "logs": 0, "controls": 0, "bytes": 0, "projection": False, "preserved": []}
+    # The projection worker opens ledger.sqlite3 once and never reopens it, and
+    # the supervisor only respawns a *dead* worker. Unlinking under it would
+    # leave it ingesting into a deleted inode, so every later run would report
+    # zero fills and flat PnL until the server restarted. Stop it first and let
+    # the supervisor rebuild it against the new file.
+    if _read_model is not None:
+        _read_model.close()
+        _read_model = None
     for path in sorted(live.glob("*")) if live.exists() else []:
         if not path.is_file():
             continue
@@ -2241,13 +2269,13 @@ def reset_ledger_data() -> dict:
             report["projection"] = True
     # Recreate an empty projection so readers get "no runs" instead of an error.
     Ledger(dashboard / "ledger.sqlite3")
-    # Drop cached responses, or the console would keep serving the old figures
-    # from before the wipe.
-    global _trading_run_id
-    with _modern_cache_lock:
-        _modern_response_cache.clear()
-    with _trading_lock:
-        _trading_run_id = None
+    for name in ("selection.json", "snapshot.json", "heartbeat.json"):
+        stale = dashboard / name
+        if stale.exists():
+            stale.unlink()
+    # Drop this run's identity, cached responses and projection bookkeeping. The
+    # caller holds _trading_lock, which these globals are guarded by.
+    _clear_account_run_selection()
     return report
 
 
@@ -3032,16 +3060,26 @@ def make_handler(root: Path):
                                                    ensure_ascii=False).encode("utf-8"), 400)
                         return
                     # Wiping the projection while a run is writing to it would
-                    # discard records for capital already committed on chain.
-                    status = trading_status(include_stats=False)
-                    if status.get("running") or status.get("processRunning"):
-                        self._send_json(json.dumps({"accepted": False,
-                            "error": "交易进程仍在运行，请先停止交易再清空数据"},
-                            ensure_ascii=False).encode("utf-8"), 409)
-                        return
+                    # discard records for capital already committed on chain, so
+                    # the liveness check and the delete must be atomic: without
+                    # the lock, _start_trading can win the gap and the engine
+                    # ends up appending to an unlinked journal. The guard also
+                    # fails closed — "cannot prove it is stopped" is not
+                    # "stopped", because _process_matches() reports False
+                    # whenever the persisted trading state was lost.
                     try:
-                        report = reset_ledger_data()
-                    except (OSError, sqlite3.Error, RuntimeError) as exc:
+                        with _trading_lock:
+                            present = _engine_process_present()
+                            if present is None:
+                                raise RuntimeError("无法确认交易进程是否已停止，未清空任何数据")
+                            if present or _process_matches(_trading_pid, _trading_log):
+                                raise RuntimeError("交易进程仍在运行，请先停止交易再清空数据")
+                            report = reset_ledger_data()
+                    except RuntimeError as exc:
+                        self._send_json(json.dumps({"accepted": False, "error": str(exc)},
+                                                   ensure_ascii=False).encode("utf-8"), 409)
+                        return
+                    except (OSError, sqlite3.Error) as exc:
                         self._send_json(json.dumps({"accepted": False, "error": f"清空失败：{exc}"},
                                                    ensure_ascii=False).encode("utf-8"), 503)
                         return
