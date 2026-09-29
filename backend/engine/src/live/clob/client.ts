@@ -1,7 +1,7 @@
+import { createHmac } from "node:crypto";
 import {
   AssetType,
   ClobClient,
-  createL2Headers,
   isV2Order,
   OrderType,
   orderToJsonV1,
@@ -157,6 +157,8 @@ const MAX_VENUE_CLOCK_SKEW_SECONDS = 3;
 const DEFAULT_WARM_ATTEMPTS = 2;
 const DEFAULT_ORDER_TIMEOUT_MS = 3_000;
 const POST_ORDER_PATH = "/order";
+/** Signing settles at ~3ms by the fourth call in a fresh process. */
+const SIGNING_WARM_ITERATIONS = 6;
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, signal?: AbortSignal): Promise<T> {
   if (signal?.aborted) return Promise.reject(signal.reason);
@@ -245,6 +247,7 @@ export class ClobWrapper {
   readonly creds: ApiKeyCreds;
   readonly signatureType: number;
 
+  private readonly hmacKey: Buffer;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private transportKeepAliveTimer?: ReturnType<typeof setInterval>;
   private heartbeatId?: string;
@@ -267,6 +270,9 @@ export class ClobWrapper {
     this.funder = funder;
     this.creds = creds;
     this.signatureType = signatureType;
+    if (!creds.secret) throw new Error("CLOB API secret unavailable");
+    // The secret is URL-safe base64; decode it once instead of on every order.
+    this.hmacKey = Buffer.from(creds.secret.replace(/-/g, "+").replace(/_/g, "/"), "base64");
   }
 
   static async connect(opts: ClobWrapperOptions): Promise<ClobWrapper> {
@@ -506,6 +512,26 @@ export class ClobWrapper {
     return payload;
   }
 
+  /** Same headers as the SDK's `createL2Headers`, computed synchronously.
+   *
+   * The SDK imports the HMAC key through WebCrypto on every call and awaits
+   * three promises; on the server that measured 4.2-4.7ms per order against
+   * 0.4ms here. The message and the URL-safe base64 output are identical — the
+   * equivalence is asserted in scripts/check-l2-headers.mjs. */
+  private l2Headers(method: string, requestPath: string, body: string | undefined): Record<string, string> {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = createHmac("sha256", this.hmacKey)
+      .update(`${timestamp}${method}${requestPath}${body ?? ""}`)
+      .digest("base64").replace(/\+/g, "-").replace(/\//g, "_");
+    return {
+      POLY_ADDRESS: this.signerAddress,
+      POLY_SIGNATURE: signature,
+      POLY_TIMESTAMP: `${timestamp}`,
+      POLY_API_KEY: this.creds.key,
+      POLY_PASSPHRASE: this.creds.passphrase,
+    };
+  }
+
   private async l2Json(
     path: string,
     method: "POST" | "DELETE",
@@ -514,14 +540,8 @@ export class ClobWrapper {
     onTiming?: RequestTimingSink,
   ): Promise<unknown> {
     const body = data == null ? undefined : JSON.stringify(data);
-    const signer = this.client.signer;
-    if (!signer) throw new Error("CLOB signer unavailable");
     const headerStarted = performance.now();
-    const headers = await createL2Headers(
-      signer,
-      this.creds,
-      { method, requestPath: path, body },
-    );
+    const headers = this.l2Headers(method, path, body);
     const l2HeaderLatencyMs = Math.max(0, performance.now() - headerStarted);
     onTiming?.({ requestStartMonoMs: 0, l2HeaderLatencyMs });
     return this.fetchJson(path, {
@@ -601,16 +621,24 @@ export class ClobWrapper {
             for (const token of market.t) {
               if (token?.t) this.negRiskByToken.set(token.t, negRisk);
             }
-            await this.client.createOrder(
-              {
-                tokenID: tokenId,
-                price: 0.5,
-                size: minOrderSize,
-                side: ClobSide.BUY,
-              },
-              { tickSize, negRisk: market.nr ?? false, version },
-            );
-            signal?.throwIfAborted();
+            // Run the exact pre-POST work of submitOrder on a throwaway order,
+            // several times: sign, derive the durable identity hash, serialise,
+            // and build the L2 headers. A fresh process measured 15-17ms for its
+            // first signature and ~3ms from the fourth, and a round sends only
+            // one order, so without this every order paid the cold path.
+            // Nothing here is sent; the signed payloads are discarded.
+            for (let warm = 0; warm < SIGNING_WARM_ITERATIONS; warm += 1) {
+              const order = await this.client.createOrder(
+                { tokenID: tokenId, price: 0.5, size: minOrderSize, side: ClobSide.BUY },
+                { tickSize, negRisk, version },
+              );
+              signedV2OrderHash(order, negRisk);
+              const payload = isV2Order(order)
+                ? orderToJsonV2(order, this.creds.key, OrderType.GTC, false, true)
+                : orderToJsonV1(order, this.creds.key, OrderType.GTC, false, true);
+              this.l2Headers("POST", POST_ORDER_PATH, JSON.stringify(payload));
+              signal?.throwIfAborted();
+            }
           })(),
           timeoutMs,
           "CLOB market warmup",

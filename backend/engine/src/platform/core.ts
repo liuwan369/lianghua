@@ -469,7 +469,9 @@ export class TradingCore {
   }
   setStrategyState(strategyId: string, state: unknown): void {
     this.state.strategyStates ??= {};
-    this.state.strategyStates[strategyId] = copy(state);
+    // The strategy hands over `exportState()`, already its own fresh clone, and
+    // keeps no reference to it; copying it a second time was redundant.
+    this.state.strategyStates[strategyId] = state;
     // A live signed-order commit immediately following this update makes the
     // stage and order identity durable together. Non-order changes batch normally.
     this.persist();

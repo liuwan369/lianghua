@@ -64,7 +64,11 @@ export class PlatformStore {
   save(state: CoreState, critical: boolean): void {
     if (this.closed) throw new Error("state store closed");
     if (this.failure) throw this.failure;
-    this.pending = structuredClone(state);
+    // Callers pass a snapshot that is already a private copy (TradingCore
+    // .snapshot() returns copy(state)), so cloning it again only doubled the
+    // cost of every persist on the order path. Keep the reference; nothing
+    // retains or mutates it after handing it over.
+    this.pending = state;
     if (critical) {
       this.deferred = false;
       clearTimeout(this.timer); this.timer = undefined; this.flush(); return;
