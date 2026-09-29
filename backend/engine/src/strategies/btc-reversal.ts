@@ -155,9 +155,13 @@ export class BtcReversalStrategy implements StrategyPlugin {
     const state = this.exportState();
     const rounds = state.rounds.map(round => ({ ...round, configRevision: round.config.revision,
       isRunning: round.status === "running" && !state.paused,
-      nextStage: round.stages.length < round.config.maxStages ? round.stages.length + 1 : null,
-      nextShares: round.stages.length < round.config.maxStages ? round.config.stageShares[round.stages.length] : null,
-      nextDirection: round.lastStageDirection === "UP" ? "DOWN" : round.lastStageDirection === "DOWN" ? "UP" : null }));
+      // Report the ladder position actually consumed, so a rejected stage does
+      // not advertise a rung the next entry will not use.
+      consumedStages: BtcReversalStrategy.consumedRungs(round),
+      nextStage: BtcReversalStrategy.consumedRungs(round) < round.config.maxStages ? BtcReversalStrategy.consumedRungs(round) + 1 : null,
+      nextShares: BtcReversalStrategy.consumedRungs(round) < round.config.maxStages ? round.config.stageShares[BtcReversalStrategy.consumedRungs(round)] : null,
+      nextDirection: BtcReversalStrategy.lastLiveDirection(round) === "UP" ? "DOWN"
+        : BtcReversalStrategy.lastLiveDirection(round) === "DOWN" ? "UP" : null }));
     const currentRound = [...rounds].sort((a, b) => b.startsAt - a.startsAt).find(round =>
       (round.status === "running" || round.status === "waiting_next_round")
       && (this.latestNow === undefined || (round.startsAt <= this.latestNow && this.latestNow < round.endsAt)));
@@ -350,17 +354,22 @@ export class BtcReversalStrategy implements StrategyPlugin {
         : previous !== undefined && previous.downAsk < threshold && pair.downAsk >= threshold;
       round.reference = pair;
       const direction = this.uniqueDirection(upCross, downCross);
-      if (round.stages.length >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
+      const consumed = BtcReversalStrategy.consumedRungs(round);
+      if (consumed >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
       if (!direction) {
         round.reason = resolvingAmbiguity ? "双边均已回落，本次冲突信号作废"
-          : round.stages.length ? "等待相反方向跨价" : "等待触发跨价";
+          : consumed ? "等待相反方向跨价" : "等待触发跨价";
         continue;
       }
-      if (direction === round.lastStageDirection) { round.reason = "方向明确但与上一阶段同向，等待相反方向跨价"; continue; }
+      // Compare against the last rung that survived. A rejected stage committed
+      // nothing, so it must not lock its direction out of being retried.
+      if (direction === BtcReversalStrategy.lastLiveDirection(round)) {
+        round.reason = "方向明确但与上一阶段同向，等待相反方向跨价"; continue;
+      }
       const market = context.markets.find(m => m.id === round.marketId);
       const tokenId = direction === "UP" ? round.upTokenId : round.downTokenId;
       const instrument = market?.instruments.find(i => i.tokenId === tokenId);
-      const shares = round.config.stageShares[round.stages.length];
+      const shares = round.config.stageShares[consumed];
       if (!instrument || !this.validSizeAndPrice(instrument, shares, round.config.maxBuyPrice)) {
         round.reason = "当前阶段数量或价格不符合交易所规则"; continue;
       }
@@ -482,6 +491,22 @@ export class BtcReversalStrategy implements StrategyPlugin {
     if (round.status === "ended" && activeOrder(stage.status) && stage.orderId
       && stage.filledShares < stage.shares - EPS) this.workingRounds.set(round.marketId, round);
     return true;
+  }
+  /** Ladder rungs actually consumed. A REJECTED/ABANDONED stage never reached the
+   * venue and committed no capital, so it must not advance the ladder: sizing off
+   * `stages.length` turned a rejected first rung into an 18-share entry where 5
+   * was intended (stageShares default [5, 18, 54, 130]). */
+  private static consumedRungs(round: ReversalRound): number {
+    return round.stages.filter(stage => stage.status !== "REJECTED" && stage.status !== "ABANDONED").length;
+  }
+  /** Direction of the last rung that survived, so a rejection does not lock out
+   * the direction it was going to take. */
+  private static lastLiveDirection(round: ReversalRound): "UP" | "DOWN" | undefined {
+    for (let index = round.stages.length - 1; index >= 0; index -= 1) {
+      const stage = round.stages[index]!;
+      if (stage.status !== "REJECTED" && stage.status !== "ABANDONED") return stage.direction;
+    }
+    return undefined;
   }
   private indexStage(round: ReversalRound, stage: ReversalStage): void {
     this.stagesByClient.set(stage.clientOrderId, { round, stage });
