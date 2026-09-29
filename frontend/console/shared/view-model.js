@@ -233,7 +233,16 @@
     const lastCheck = data.last_check || data.lastCheck || {};
     const funds = runtime?.funds && typeof runtime.funds === "object" ? runtime.funds : {};
     const totalUsd = finite(first(data.totalUsd, data.total_usd, data.equity)) ?? collateralAvailable;
-    const availableUsd = finite(first(data.availableUsd, data.available_usd, data.balance_occupancy?.spendable_balance))
+    // The snapshot has no availableUsd/spendable_balance (the latter is always
+    // null server-side), so this fell through to the GROSS collateral value and
+    // overstated spendable capital by the whole open-buy notional — which staged
+    // entries are then sized against. occupancy carries the net figure.
+    const occupancy = data.occupancy && typeof data.occupancy === "object" ? data.occupancy : {};
+    const netOfOpenBuys = occupancy.available === true
+      ? finite(first(occupancy.balance_after_open_buy_notional, occupancy.spendable_balance))
+      : null;
+    const availableUsd = finite(first(data.availableUsd, data.available_usd))
+      ?? netOfOpenBuys
       ?? collateralAvailable
       ?? finite(first(lastCheck.balance, lastCheck.availableUsd, lastCheck.available_usd))
       ?? finite(first(funds.availableUsd, funds.available_usd));

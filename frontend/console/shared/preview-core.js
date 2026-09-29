@@ -197,6 +197,10 @@
     if (context.roundId) params.set("roundId", context.roundId);
     if (context.runId) params.set("runId", context.runId);
     if (context.cursor) params.set("cursor", context.cursor);
+    // Unlisted keys are dropped silently, so a new query parameter must be added
+    // here or the request goes out without it and the server answers page 1.
+    if (context.beforeRoundId) params.set("beforeRoundId", context.beforeRoundId);
+    if (context.limit) params.set("limit", context.limit);
     const query = params.toString();
     return query ? `?${query}` : "";
   };

@@ -332,6 +332,9 @@
           : error ? `统计读取失败：${error}` : "统计接口待接入。"
         : "主值为当前运行；今日与当月均按 UTC 统计。");
     if (!data) {
+      // Returning early left the previous run's PnL and win counts in the DOM,
+      // so after 清空数据 the console kept showing figures for deleted runs.
+      root.querySelectorAll("[data-metric]").forEach((node) => { node.textContent = "--"; });
       return;
     }
     const setMetric = (name, value) => text(`[data-metric="${name}"]`, value);

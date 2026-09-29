@@ -605,7 +605,9 @@
     var nextShares = numeric(position.nextShares ?? position.next_shares);
     text("[data-next]", nextStage == null ? "等待信号"
       : nextShares != null ? `第 ${nextStage} 阶段 · ${nextShares.toFixed(2)} 份` : `第 ${nextStage} 阶段`);
-    text("[data-position-state]", `已更新 · ${window.PolyPreview.format.time(position.updatedAt ?? raw.asOf)}`);
+    // Keep the historical marker set above; overwriting it would present a
+    // fills-sourced position as live current-round data.
+    if (!historical) text("[data-position-state]", `已更新 · ${window.PolyPreview.format.time(position.updatedAt ?? raw.asOf)}`);
     return true;
   };
   // Staged entry is this strategy's core mechanic. The timeline was a permanent
