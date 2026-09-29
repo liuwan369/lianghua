@@ -426,16 +426,19 @@
   // the 5-minute boundary rolls), the panels follow this instead of polling an
   // empty new round and rendering 0 shares / no orders for a round that traded.
   var tradedContext = null;
-  var liveContext = function() {
+  // Quotes, depth, streams and controls must ALWAYS follow the live round: pointing
+  // them at an expired round asks the venue for a market it has already dropped,
+  // which is what produced "market not found" and an empty order book.
+  var currentContext = function() {
     var asset = assetById(selectedAssetId);
     return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { assetId: null, marketId: null, roundId: null };
   };
-  var currentContext = function() {
-    var live = liveContext();
+  /** Scope for the ledger panels only (position / orders). Falls back to the round
+   * that actually traded when the live round is not it and nothing is running. */
+  var ledgerScope = function() {
+    var live = currentContext();
     if (!tradedContext || !tradedContext.roundId) return live;
     if (tradedContext.assetId !== live.assetId) return live;
-    // Prefer the live round only while it is the one that traded, or while the
-    // engine is running and may still trade it.
     if (String(tradedContext.roundId) === String(live.roundId)) return live;
     var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
     if (runtime.processRunning === true) return live;
@@ -554,7 +557,7 @@
     // live window, never the traded one — the strict identity match would blank a
     // fills answer that IS the round being viewed. For historical fills, matching
     // the asset is enough; the response carries its own round identity.
-    var ctx = currentContext();
+    var ctx = ledgerScope();
     var identityOk = historical
       ? (position.assetId == null || ctx.assetId == null || String(position.assetId) === String(ctx.assetId))
       : vm.matchesIdentity(position, ctx);
@@ -982,6 +985,7 @@
     }
     var version = contextVersion;
     var asset = assetById(context.assetId);
+    var ledger = ledgerScope();
     // Position and orders change continuously and stay on the 3s cadence. The
     // ledger views do not: a round settles once, so polling them every 3s spent
     // ~99 of every 100 requests re-fetching identical data. Read them every 4th
@@ -1003,11 +1007,12 @@
       }, function() { /* history is advisory; keep the last known identity */ });
     }
     roundRefreshInFlight = Promise.allSettled([
-      Promise.resolve().then(function() { return adapter.loadPosition(context.roundId, context); }).then(function(value) {
+      // These two are the only reads allowed to look at a past round.
+      Promise.resolve().then(function() { return adapter.loadPosition(ledger.roundId, ledger); }).then(function(value) {
         if (version === contextVersion) renderPosition(value);
       }, function() { if (version === contextVersion) text("[data-position-state]", "读取失败 · 保留本场最近成功数据"); }),
-      Promise.resolve().then(function() { return adapter.loadOrders(context.roundId, context); }).then(function(value) {
-        if (version === contextVersion) renderOrders(value, asset, context);
+      Promise.resolve().then(function() { return adapter.loadOrders(ledger.roundId, ledger); }).then(function(value) {
+        if (version === contextVersion) renderOrders(value, assetById(ledger.assetId), ledger);
       }, function() { if (version === contextVersion) text("[data-orders-state]", "读取失败 · 保留本场最近成功数据"); }),
       !readLedger ? null : Promise.resolve().then(function() { return adapter.loadFills(null, ledgerContext()); }).then(function(value) {
         if (version === contextVersion) renderFills(value, asset);
