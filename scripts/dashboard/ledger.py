@@ -1918,7 +1918,11 @@ class Ledger:
                     WHERE t.run_id=?
                       AND COALESCE(json_extract(t.payload,'$.trade_status'),'') != 'FAILED'
                       AND json_extract(t.payload,'$.round_id') IS NOT NULL
+                      -- round_id is the 5-minute window shared by every asset's
+                      -- slug, so without the asset match one asset settling that
+                      -- window erased another asset's committed cost.
                       AND NOT EXISTS (SELECT 1 FROM market_details m WHERE m.run_id=t.run_id
+                          AND m.asset_id=t.asset_id
                           AND m.round_id=json_extract(t.payload,'$.round_id')
                           AND m.status='已结算' AND m.pnl IS NOT NULL)
                     GROUP BY t.asset_id, json_extract(t.payload,'$.round_id'))""", (run_id,)).fetchone() \
@@ -2177,7 +2181,11 @@ class Ledger:
             # alone reports a spent-but-unresolved round as if it never traded,
             # which reads a loss as a profit. Expose the committed cost of those
             # rounds so the worst case is visible next to the confirmed one.
-            settled_keys = set(settled_markets)
+            # A round that settled but whose pnl could not be derived contributes
+            # no proceeds, so its spend must stay visible as committed cost;
+            # treating it as settled dropped that spend from the exposure figure
+            # entirely — optimistic by the full amount.
+            settled_keys = {key for key, value in settled_markets.items() if value is not None}
             unsettled_cost, unsettled_rounds = 0.0, set()
             for fill in latest_fills.values():
                 if fill.get("trade_status") == "FAILED":
@@ -2195,6 +2203,8 @@ class Ledger:
                     continue
                 unsettled_cost += (fill.get("amount") or 0) + (fill.get("fee") or _number(fill.get("fee_estimate")) or 0)
                 unsettled_rounds.add((fill_asset, fill_market, fill_round))
+            known_pnl = (sum(value for value in pnl_values if value is not None)
+                         if any(value is not None for value in pnl_values) else None)
             wins = sum(value is not None and value > 1e-9 for value in pnl_values)
             losses = sum(value is not None and value < -1e-9 for value in pnl_values)
             draws = sum(value is not None and abs(value) <= 1e-9 for value in pnl_values)
@@ -2217,13 +2227,16 @@ class Ledger:
                     # One round without a PnL used to withhold the whole figure, so
                     # 14 settled rounds reported nothing. Publish the sum that IS
                     # known and report the unknown count alongside it.
-                    "settled_pnl": sum(value for value in pnl_values if value is not None)
-                        if any(value is not None for value in pnl_values) else None,
+                    "settled_pnl": known_pnl,
                     "settled_wins": wins, "settled_losses": losses, "settled_draws": draws,
                     "settled_pnl_pending": missing_pnl, "win_rate": wins / (wins + losses) if wins + losses else None,
                     "unsettled_cost": unsettled_cost, "unsettled_rounds": len(unsettled_rounds),
-                    "exposed_pnl": (sum(pnl_values) - unsettled_cost) if pnl_values and not missing_pnl
-                        else (-unsettled_cost if unsettled_rounds else None),
+                    # Publish the exposure that IS known. Requiring every round to
+                    # have a pnl discarded the confirmed total whenever one round
+                    # was incomplete — the same withholding this field exists to
+                    # replace. settled_pnl_pending carries the caveat.
+                    "exposed_pnl": (known_pnl - unsettled_cost)
+                        if known_pnl is not None or unsettled_rounds else None,
                     "pending_settlements": len(pending_markets),
                     "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
                     "completeness": "incomplete" if stale else "caught_up", "lag_bytes": lag,
