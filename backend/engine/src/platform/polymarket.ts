@@ -250,6 +250,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   const bookHealth = new Map<string, () => boolean>();
   const userHealthy = new Map<string, boolean>();
   const usersByMarket = new Map<string, UserFeedControl>();
+  /** Trades already ingested by a recovery scan. The scan used to pass a fresh
+   * empty set, so every scan re-emitted the same historical trades as if they
+   * were new fills — days-old rounds landed in a new run's ledger and the balance
+   * appeared to move on its own. Dedup must outlive a single scan. */
+  const recoveredTrades = new Set<string>();
   const connectedMarkets = new Set<string>();
   const registered = new Map<string, Set<string>>();
   // Keep the venue identity as a queue boundary. FeedQueue also keys by round
@@ -704,7 +709,14 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       const tradeScanPromise = Promise.all(options.markets.map(async market => {
         try {
           const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
-          const owned = local.orders.filter(order => tokens.has(order.tokenId) && order.strategyId !== "external");
+          // Only orders that still need venue evidence justify a scan. Including
+          // long-settled FILLED/CANCELLED orders pushed `after` back to the oldest
+          // order ever persisted — days — so the venue returned historical trades
+          // that were then ingested as new fills.
+          const owned = local.orders.filter(order => tokens.has(order.tokenId)
+            && order.strategyId !== "external"
+            && (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
+              || order.reconciliationPending === true));
           if (!owned.length) return;
           const after = Math.max(0, Math.min(...owned.map(order => order.createdAt)) - 5);
           const rows = await client!.getRecentTrades(market.id, after);
@@ -714,7 +726,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
             creds: client!.creds, conditionId: market.id, upToken: sides.up.tokenId,
             downToken: sides.down.tokenId, accountAddress: client!.funder,
             isOurOrder: id => !!platform.orders.get(id), orderDirection: id => platform.orders.get(id)?.direction,
-          }, new Set())) sink(market)({ kind: "user", event });
+          }, recoveredTrades)) sink(market)({ kind: "user", event });
           for (const order of owned) if (order.orderId) tradeScanComplete.add(order.orderId);
           return undefined;
         } catch (error) {
