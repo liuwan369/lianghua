@@ -28,6 +28,10 @@ export class TradingCore {
    * matched order, all sharing the trade id. Track every order a trade touched
    * rather than assuming a single one. */
   private fillOrderByTradeId = new Map<string, Set<string>>();
+  /** Last bid ever seen per token, so a position stays markable when the book
+   * goes quiet. Without it an illiquid position is valued at cost and reports no
+   * loss, which is exactly when the daily-loss halt must still fire. */
+  private lastBidByToken = new Map<string, number>();
   private clock: () => number;
   private stopped = false;
   private recovering = false;
@@ -276,6 +280,9 @@ export class TradingCore {
     // validation. This keeps the bilateral update atomic while avoiding a
     // second clone/write pass on every websocket frame.
     this.books = staged;
+    for (const book of books) {
+      if (book.bid != null) this.lastBidByToken.set(book.tokenId, book.bid);
+    }
     this.updateRisk();
     return true;
   }
@@ -628,13 +635,24 @@ export class TradingCore {
     }
     return position;
   }
+  /** Mark-to-market value of a position, falling back to the last bid ever seen
+   * and only then to cost. Valuing an unmarkable position at cost reports zero
+   * loss on it, so the daily-loss halt went silent precisely on stale or illiquid
+   * exposure: the same 100 shares halted at a 0.10 bid and did not halt once the
+   * bid was gone. */
+  private markValue(position: Position): number {
+    const mark = this.books.get(position.tokenId)?.bid ?? this.lastBidByToken.get(position.tokenId);
+    return mark == null ? position.costUsd : position.shares * mark;
+  }
   private updateRisk(): void {
     const held = this.state.positions.reduce((sum, p) => sum + p.costUsd, 0);
     const reserved = this.state.orders.filter(reservationPending).reduce((sum, o) => sum + o.reservedUsd, 0);
-    const equity = this.state.cashUsd + this.state.positions.reduce((sum, p) => {
-      const bid = this.books.get(p.tokenId)?.bid;
-      return sum + (bid == null ? p.costUsd : p.shares * bid);
-    }, 0);
+    // Valuing an unmarkable position at cost reports zero loss on it, so the
+    // daily-loss halt went silent precisely on stale or illiquid exposure: the
+    // same 100 shares halted at a 0.10 bid and did not halt once the bid was
+    // gone. Retain the last observed bid as the mark; cost is only a fallback
+    // when this token has never had one.
+    const equity = this.state.cashUsd + this.state.positions.reduce((sum, p) => sum + this.markValue(p), 0);
     const risk = this.state.risk;
     // An observed day boundary establishes a new baseline; it is not a claim of a midnight snapshot.
     const day = dayOf(this.clock());
@@ -1348,7 +1366,7 @@ export class TradingCore {
     next.risk.baselineEquityUsd += netCashFlowUsd;
     if (next.risk.reason === "daily loss limit" && next.risk.baselineEquityUsd !== priorBaseline) {
       const equity = next.cashUsd + next.positions.reduce((sum, position) =>
-        sum + (this.books.get(position.tokenId)?.bid == null ? position.costUsd : position.shares * this.books.get(position.tokenId)!.bid!), 0);
+        sum + this.markValue(position), 0);
       if (this.options.limits.dailyLossUsd != null && equity - next.risk.baselineEquityUsd > -this.options.limits.dailyLossUsd + EPS) {
         next.risk.halted = false; delete next.risk.reason;
       }
