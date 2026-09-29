@@ -174,7 +174,8 @@ legacy 模式实际使用的 DTO 边界如下：
 | 账户检查 | POST | `/api/account/check` | 仅检查，不保存 |
 | 系统诊断 | GET | `/api/diagnostics/health` | 总览约 15 秒，设置页手动刷新 |
 | 汇总统计 | GET | `/api/metrics/summary?range=today` | 总览约 15 秒/手动刷新；`run/today/month/all`；legacy 使用当前 run 汇总回退 |
-| 场次记录 | GET | `/api/rounds?limit=50&beforeRoundId=...` | 自动交易页「查看全部」按场次展开投入/份额/均价/手续费/结算/盈亏 |
+| 场次记录 | GET | `/api/rounds?limit=50&beforeRoundId=...` | 自动交易页「查看全部」按场次展开投入/份额/均价/手续费/结算/盈亏；`beforeRoundId` 翻页追加，不覆盖已显示行 |
+| 清空运行数据 | POST | `/api/ledger/reset` | 总览页「清空数据」；需控制会话 + `{"confirm":"RESET"}`，交易运行中返回 409。前端须二次确认并说明保留项 |
 | 事件历史 | GET | `/api/events?cursor=...` | 分页，低频 |
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/enabled/nextRound`。`marketId` 和 `roundId` 在生产数据中都必须是非空字符串；不要让页面直接使用旧的 `up_bid/down_bid` 字段。

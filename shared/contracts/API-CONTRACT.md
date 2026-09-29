@@ -48,6 +48,7 @@
 | 事件历史 | GET | `/api/events?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 按事件 ID 游标分页，低频 |
 | 成交记录 | GET | `/api/fills?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 同一账本的成交 journal 修订记录，按复合身份过滤 |
 | 结算记录 | GET | `/api/settlements?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏，按复合身份过滤 |
+| 清空运行数据 | POST | `/api/ledger/reset` | 需控制会话 + `{"confirm":"RESET"}`；交易进程运行中返回 409。删除运行日志与投影，**保留链上结算状态文件**（`prepared`/`submitted` 是未完成赎回，删除等于放弃链上资金）、策略配置与运行池 |
 
 `/api/bootstrap` 保留兼容字段 `capabilityDetails.streams=false`，并提供 `streams.available=false`、`streams.transport=null` 和空的逐主题 endpoint。没有真实 WebSocket/SSE 服务时不得填入 URL 或宣称可用；`streams.fallbackTransport="rest"` 与 `capabilityDetails.restRefresh=true` 表示可由控制台读取下列 REST 接口。该标志说明查询接口存在，不承诺服务器推送或替前端执行轮询。
 
@@ -76,6 +77,8 @@
 订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。运行时快照存放在 `platform_runtime`，每个 run **只保留一行最新快照**，因此交易停止后历史场次在快照中不再存在；此时持仓 DTO 改由成交记录回落，返回 `source="fills"` 并给出 `totalShares`、`averagePrice`、`occupiedUsd`、`fees`、`settlementState`、`creditedUsd`。成交记录无法区分多空分腿，所以 `yesShares/noShares` 为 `null` 而不是断言零。前端必须把 `source="fills"` 当成可渲染的历史数据，不能当成读取失败而清空面板——这与"只有明确确认的零持仓才可表示 empty"是同一条规则。`/api/fills` 返回成交 journal 修订记录，同一经济成交可能有多条状态/费用修订；每条记录必须保留 `tradeId/orderId/tradeStatus/feeUsd`（同时兼容 snake_case），不能将各页记录直接累加为成交金额；汇总以 `trade_id + order_id` 去重后的投影结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；有成交场次的 `accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`pnl_error=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算，不伪造 `payout_verified` 或 `pnl`。
 
 市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。每行还返回 `supported` 和 `canEnable`（两者都等于「`assetId` 属于服务器支持集合」，当前支持集为 `btc/eth/sol`）以及 `current`（本场是否正在进行）和 snake_case 兼容的 `market_id`/`round_id`。`canEnable` 是前端判断能否加入运行池的实际依据；前端不猜测资格，缺少该字段即视为不可启用。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；每行还返回 `collector_online/healthy/quote_fresh/stale/strategyEligible`，顶层 `collector_online` 表示至少一行健康，`partial` 表示同批次存在健康和失效资产。采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`depthAvailable=true` 还要求 YES/NO 五档完整且各自 `depthExpiresAt`（如提供）晚于当前时间；过期深度不能冒充可用五档。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+
+`name` 是后端 slug（例如 `btc-updown-5m-1790647800`），是身份字段而不是展示字段：直接当标题会把时间戳怼给用户。前端视图模型据此派生 `label`（例如 `BTC 5分钟 · 10:20 场`）和 `closeText`（本地时分），标题与列表用派生值，完整 slug 降到副行保留可追溯性。派生字段随场次翻滚变化，必须参与行重绘比对键，否则行会停留在上一场的时间。同理 `endAt` 是 Unix 秒，任何界面都不能原样显示。
 
 行情新鲜度统一使用 `stale_after_ms`：缺省为 2000ms，显式值必须大于 0 且不超过 15000ms；非法值、过期或连接不可用时保留原始 canonical 快照并标记 `stale=true`，不得继续标记为 `strategyEligible`。运行时策略的 `maxQuoteAgeSeconds` 映射到同一阈值；YES/NO 的 `sourceAt` 只有在字段存在时校验，存在但无效或过期仍使快照失效。
 
