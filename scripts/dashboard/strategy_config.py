@@ -35,10 +35,14 @@ def validate_config(config: dict) -> dict:
         raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
     result = copy.deepcopy(config)
     expected = set(default_config())
-    legacy_expected = expected - {"assetId"}
-    if set(result) == legacy_expected:
-        result["assetId"] = "btc"
-    elif set(result) != expected:
+    # A config saved before a field existed must keep loading, or adding a field
+    # makes the already-saved revision unreadable. Backfill only these known
+    # additions from their defaults; any other key mismatch is still rejected.
+    defaults = default_config()
+    for added in ("assetId", "maxRounds"):
+        if added not in result and not (set(result) - expected):
+            result[added] = defaults[added]
+    if set(result) != expected:
         raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
 
     asset_id = result.get("assetId")
