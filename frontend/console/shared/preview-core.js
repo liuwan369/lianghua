@@ -92,6 +92,11 @@
         resolved: "市场结果已确认",
         cancel: "撤单状态更新",
         market_pool_unavailable: "运行池暂时不可用",
+        // Writing the run pool needs a control session. The raw venue wording
+        // ("交易控制密码错误") reads like a wrong password even when none was
+        // entered, so name the action the operator has to take instead.
+        "交易控制密码错误": "需要先在设置页连接控制会话，才能修改运行池或控制交易",
+        "未配置交易控制密码": "服务器尚未配置交易控制密码，无法修改运行池",
         account_rpc_failed: "区块链节点查询失败，请检查网络连接",
         account_check_failed: "账户检查未通过，请查看账户配置和授权",
         account_checker_unavailable: "服务器账户检查程序暂不可用",

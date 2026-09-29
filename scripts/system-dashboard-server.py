@@ -1781,7 +1781,12 @@ def _money(value):
     return value if type(value) in (int, float) and math.isfinite(value) else None
 
 
-def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None) -> dict:
+def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None,
+                   pool_desired: set[str] | None = None) -> dict:
+    # `enabled` was hardcoded True for every asset, so the DTO claimed all seven
+    # coins were in the run pool. The console overrode it from the pool, but any
+    # other consumer would read a value that is simply false. None means the pool
+    # could not be read — unknown, not "enabled".
     """Map runtime accepted pairs; keep collector fallback display-only."""
     now = time.time() if now is None else now
     book_status = row.get("bookStatus") if isinstance(row.get("bookStatus"), dict) else row.get("book_status")
@@ -1844,7 +1849,8 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
                 "quoteAt": quote_at, "sourceAt": quote_at, "expiresAt": expires_at, "sequence": None,
                 "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
                               "sequence": None, "sourceAt": quote_at, "expiresAt": expires_at, "stale": True},
-                "depthAvailable": False, "strategyEligible": False, "enabled": True,
+                "depthAvailable": False, "strategyEligible": False,
+                "enabled": None if pool_desired is None else (row.get("assetId") in pool_desired),
                 "current": isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= now < end,
                 "stale": True, "source": row.get("source") or "collector",
                 "error": "accepted_runtime_snapshot_unavailable", "nextRound": False}
@@ -1918,7 +1924,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "orderBook": {"marketId": market_id, "roundId": round_id, "yes": yes, "no": no,
                       "sequence": sequence if type(sequence) is int else None,
                       "sourceAt": source_at, "expiresAt": expires_at, "stale": stale},
-        "enabled": True,
+        "enabled": None if pool_desired is None else (row.get("assetId") in pool_desired),
         "current": isinstance(start, (int, float)) and isinstance(end, (int, float)) and start <= now < end,
         "stale": stale,
         "source": row.get("source") or "platform-runtime",
@@ -1938,13 +1944,19 @@ def _modern_markets(query: dict | None = None) -> dict:
     runtime = _running_engine_market_status()
     collector = cached_live_status()
 
+    # Resolve the run pool once per request; _modern_market runs per row.
+    try:
+        pool_desired = set(market_pool().get("desiredIds") or [])
+    except (OSError, ValueError, RuntimeError):
+        pool_desired = None
     def mapped(raw):
         if not isinstance(raw, dict):
             return []
         rows = raw.get("current_markets") or []
         return [_modern_market({**row, "source": row.get("source") or raw.get("source"),
                                 "stale_after_ms": row.get("stale_after_ms", raw.get("stale_after_ms")),
-                                "_collector_online": row.get("collector_online", raw.get("collector_online")) is True})
+                                "_collector_online": row.get("collector_online", raw.get("collector_online")) is True},
+                               pool_desired=pool_desired)
                 for row in rows if isinstance(row, dict)]
 
     runtime_items = mapped(runtime)

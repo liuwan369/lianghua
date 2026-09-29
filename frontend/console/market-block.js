@@ -263,7 +263,11 @@
       text("[data-market-refresh-note]", pool.pendingDesiredIds ? "已提交 · 等待服务器确认运行池" : `运行池已确认 · ${window.PolyPreview.format.clock()}`);
       if (pool.pendingDesiredIds) resultMessage = "服务器已接收变更请求，生效状态仍以确认后的运行池为准。";
     } catch (error) {
-      resultMessage = error.message || "运行池更新失败，保留当前状态";
+      // The switch must not keep showing the coin as enabled after a rejected
+      // write: renderList() below re-derives it from the server's pool, and this
+      // message has to name the blocker rather than read as a generic failure.
+      resultMessage = `${coin.symbol} 未写入运行池：`
+        + window.PolyPreview.format.readableError(error?.message, "运行池更新失败，保留当前状态");
     } finally {
       poolSaving = false;
       renderList(); renderDetail();
