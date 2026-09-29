@@ -100,6 +100,10 @@ export interface SubmitOrderResult {
 }
 
 const DEFAULT_WARM_TIMEOUT_MS = 3_000;
+/** The reconnect recovery window starts 5s before the observed gap, so an offset
+ * beyond that can place the window after the disconnect and lose the fills it
+ * exists to recover. Measured skew on a healthy NTP-synced host is 0-1s. */
+const MAX_VENUE_CLOCK_SKEW_SECONDS = 3;
 const DEFAULT_WARM_ATTEMPTS = 2;
 const DEFAULT_ORDER_TIMEOUT_MS = 3_000;
 const POST_ORDER_PATH = "/order";
@@ -196,6 +200,8 @@ export class ClobWrapper {
   private orderVersion: 2 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
   private negRiskByToken = new Map<string, boolean>();
+  /** Local clock minus venue clock, in seconds. Undefined until measured. */
+  private venueClockOffsetSeconds?: number;
   private feeRulesByToken = new Map<string, { rate: number; exponent: number; takerDelayMs: number }>();
 
   private constructor(
@@ -277,13 +283,31 @@ export class ClobWrapper {
         headers: { accept: "application/json" },
         signal: AbortSignal.timeout(DEFAULT_WARM_TIMEOUT_MS),
       });
-      await response.arrayBuffer();
+      const body = await response.text();
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      // The reconnect recovery window is computed from OUR clock but filters the
+      // venue's trades by VENUE time, so a fast local clock makes the window start
+      // after the disconnect and the missed fills are never fetched. This response
+      // was previously read and discarded; keep the offset so the caller can refuse
+      // to trade when it exceeds what that window's 5s slack absorbs.
+      const venueUnix = Number(body.trim());
+      if (Number.isFinite(venueUnix) && venueUnix > 0) {
+        this.venueClockOffsetSeconds = Date.now() / 1000 - venueUnix;
+      }
       console.info(`CLOB HTTP connection ready in ${(performance.now() - started).toFixed(1)}ms`);
     } catch (error) {
       // The SDK balance sync below remains authoritative. A failed optional
       // warmup must not make a valid account unusable.
       console.warn(`CLOB HTTP warmup unavailable (${error instanceof Error ? error.message : String(error)})`);
+    }
+    // Checked outside the try: an unusable clock is a refusal, not a warmup miss.
+    const offset = this.venueClockOffsetSeconds;
+    if (offset !== undefined && Math.abs(offset) > MAX_VENUE_CLOCK_SKEW_SECONDS) {
+      throw new Error(`server clock is ${offset.toFixed(1)}s off the venue clock; `
+        + "reconnect trade recovery would miss fills — fix time synchronisation before trading");
+    }
+    if (offset !== undefined && Math.abs(offset) > 1) {
+      console.warn(`CLOB venue clock offset ${offset.toFixed(1)}s`);
     }
   }
 
