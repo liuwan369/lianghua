@@ -1200,7 +1200,11 @@ export class TradingCore {
           position.realizedPnlUsd -= delta * (1 - retained);
         }
         else position.realizedPnlUsd -= delta;
-        this.state.cashUsd -= delta;
+        // Charge cash only if no authoritative read has already priced this fill.
+        // reconcile() overwrites cashUsd with the venue balance, which nets the
+        // real fee, so charging the delta again subtracted the same fee twice.
+        // The cost-basis and realized-PnL reallocation above applies either way.
+        if (!previous.accountingCashSuperseded) this.state.cashUsd -= delta;
         previous.feeUsd = incoming.feeUsd; previous.feeSource = "reported";
       }
       previous.status = nextStatus;
@@ -1289,6 +1293,13 @@ export class TradingCore {
       }
     }
     next.cashUsd = account.cashUsd; next.positions = copy(account.positions); next.accountAt = account.at; next.cashAt = account.cashAt ?? account.at;
+    // This balance is authoritative and already nets the real fees of every fill
+    // it observed, so those fills must never charge cash again when a reported
+    // fee arrives late.
+    const pricedThrough = account.cashAt ?? account.at;
+    for (const fill of next.fills) {
+      if (fill.ts <= pricedThrough + EPS) fill.accountingCashSuperseded = true;
+    }
     for (const incoming of account.openOrders) {
       const current = incoming.orderId && next.orders.find(o => o.orderId === incoming.orderId || o.clientOrderId === incoming.orderId);
       if (current) {

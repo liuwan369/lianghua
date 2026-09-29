@@ -200,6 +200,10 @@ export interface TradeFill {
   /** Basis removed by a provisional SELL, retained for an exact failure compensation. */
   accountingBasisUsd?: number;
   accountingInventoryBeforeShares?: number;
+  /** Set once an authoritative account read has superseded our local cash for this
+   * fill. A later reported-fee correction must then NOT charge cash again: the
+   * venue balance already nets the real fee. */
+  accountingCashSuperseded?: boolean;
 }
 export interface Position {
   tokenId: string;
