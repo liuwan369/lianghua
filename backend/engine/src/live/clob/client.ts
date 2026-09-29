@@ -15,7 +15,6 @@ import {
 } from "@polymarket/clob-client-v2";
 import {
   createWalletClient,
-  http,
   hashTypedData,
   type Address,
   type Hex,
@@ -26,6 +25,7 @@ import { polygon } from "viem/chains";
 import {
   envWalletOverrides,
   resolveWallet,
+  rpcTransport,
   signatureTypeLabel,
 } from "./wallet.js";
 import { normalizeVenueOrderStatus, type PreparedOrder, type VenueOrderStatus } from "../../platform/contracts.js";
@@ -292,7 +292,7 @@ export class ClobWrapper {
     const walletClient = createWalletClient({
       account,
       chain: polygon,
-      transport: http(rpc),
+      transport: rpcTransport(rpc),
     }) as WalletClient;
 
     const l1 = new ClobClient({

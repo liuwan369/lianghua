@@ -1,9 +1,11 @@
 import { SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import {
   createPublicClient,
+  fallback,
   http,
   type Address,
   type PublicClient,
+  type Transport,
 } from "viem";
 import { polygon } from "viem/chains";
 
@@ -50,8 +52,14 @@ function addrEq(a: Address, b: Address): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
-function rpcUrl(explicit?: string): string {
-  return explicit ?? process.env.POLYGON_RPC ?? DEFAULT_RPC;
+/** Public Polygon RPCs shed load with "upstream overloaded"; one such answer
+ * during wallet detection used to fail the whole engine start. Every URL the
+ * server already configures is tried in order before giving up. */
+export function rpcTransport(explicit?: string): Transport {
+  const urls = [...new Set([explicit, process.env.POLYGON_RPC, process.env.PM_ACCOUNT_RPC_URL,
+    process.env.PM_ACCOUNT_RPC_FALLBACK_URL, "https://polygon.drpc.org", DEFAULT_RPC]
+    .map(value => value?.trim()).filter((value): value is string => !!value))];
+  return fallback(urls.map(url => http(url, { timeout: 8_000, retryCount: 0 })), { retryCount: 1 });
 }
 
 /** Optional env overrides — detection runs when these are unset. */
@@ -183,7 +191,7 @@ export async function inspectWalletAddress(
 ): Promise<PublicWalletInspection> {
   const client = createPublicClient({
     chain: polygon,
-    transport: http(rpcUrl(rpc)),
+    transport: rpcTransport(rpc),
   });
   const isContract = await hasContractCode(client, address);
   if (!isContract) {
@@ -243,7 +251,7 @@ export async function resolveWallet(
 ): Promise<ResolvedWallet> {
   const client = createPublicClient({
     chain: polygon,
-    transport: http(rpcUrl(opts.rpcUrl)),
+    transport: rpcTransport(opts.rpcUrl),
   });
 
   let funder = opts.funderOverride;
