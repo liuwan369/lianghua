@@ -324,7 +324,7 @@ def _strategy_projection(value):
         result["roundId"] = result.get("roundId") or result.get("round_id")
         result.pop("round_id", None)
         result.update({key: _number(source.get(key)) for key in (
-            "startsAt", "endsAt", "confirmationCount", "nextStage", "nextShares",
+            "startsAt", "endsAt", "confirmationCount", "nextStage", "nextShares", "consumedStages",
             "costUsd", "reservedUsd", "upShares", "downShares", "netIfUpUsd", "netIfDownUsd")})
         result["feesVerified"] = source.get("feesVerified") if isinstance(source.get("feesVerified"), bool) else None
         result["configRevision"] = _text(str(source["configRevision"])) if source.get("configRevision") is not None else None
