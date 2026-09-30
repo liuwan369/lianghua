@@ -97,6 +97,23 @@ export interface LiveSettlementOptions {
   requireCredentials?: boolean;
 }
 
+/** Look a round up on Gamma by condition id. /markets defaults to closed=false,
+ * so a round drops out of the default listing the moment it closes, which is
+ * exactly when it becomes redeemable (BUGS P1-13). Ask the open listing first
+ * (ended but unresolved rounds), then the closed one. */
+export async function gammaMarketRow(marketId: string, fetchImpl: typeof fetch = fetch)
+  : Promise<Record<string, unknown> | undefined> {
+  const base = `https://gamma-api.polymarket.com/markets?condition_ids=${encodeURIComponent(marketId)}&limit=1`;
+  for (const url of [base, `${base}&closed=true`]) {
+    const response = await fetchImpl(url, { signal: AbortSignal.timeout(12_000) });
+    if (!response.ok) throw new Error("settlement_market_unavailable");
+    const rows = await response.json() as Record<string, unknown>[];
+    const row = rows.find(item => String(item.conditionId).toLowerCase() === marketId.toLowerCase());
+    if (row) return row;
+  }
+  return undefined;
+}
+
 export class UnsupportedSettlement extends Error {}
 export class RetryableSettlement extends Error {}
 
@@ -344,6 +361,19 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       return result(request, "unsupported", "settlement_invalid_payout_vector");
     }
     const expectedPayout = before.balances.reduce((sum, amount, i) => sum + amount * market.numerators[i]! / market.denominator, 0n);
+    if (expectedPayout === 0n) {
+      // Only losing tokens are held: redeeming pays nothing and would burn gas or
+      // relayer quota, and block real redeems behind it (BUGS P1-13 review).
+      const lost: LiveSettlementRecord = {
+        marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
+        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" },
+        fromBlock: before.block.toString(), balancesBefore: before.balances.map(String),
+        cashBefore: before.cash.toString(), expectedPayout: "0", creditedPusd: "0", cashAfter: before.cash.toString(),
+      };
+      state.records[key] = lost;
+      try { await save(); } catch (error) { delete state.records[key]; throw error; }
+      return result(request, "confirmed", "本场持仓全部落败，赎回收益为 0，无需链上交易", lost);
+    }
     const otherPending = Object.values(state.records).find(item => (item.assetId !== request.assetId
       || item.marketId !== request.marketId || item.roundId !== request.roundId)
       && (item.status === "prepared" || item.status === "submitted"));
@@ -463,11 +493,7 @@ async function createBackend(): Promise<LiveSettlementBackend> {
   return {
     wallet,
     async market(request) {
-      const url = `https://gamma-api.polymarket.com/markets?condition_ids=${encodeURIComponent(request.marketId)}&limit=1`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-      if (!response.ok) throw new Error("settlement_market_unavailable");
-      const rows = await response.json() as Record<string, unknown>[];
-      const row = rows.find(item => String(item.conditionId).toLowerCase() === request.marketId.toLowerCase());
+      const row = await gammaMarketRow(request.marketId);
       if (!row) throw new UnsupportedSettlement("settlement_market_not_found");
       const ids: unknown = typeof row.clobTokenIds === "string" ? JSON.parse(row.clobTokenIds) : row.clobTokenIds;
       if (!Array.isArray(ids) || ids.length !== 2 || ids.some(id => typeof id !== "string" || !request.tokenIds.includes(id))) {
