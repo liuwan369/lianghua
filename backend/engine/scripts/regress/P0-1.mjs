@@ -44,6 +44,17 @@ const restores = (st) => { try { createStrategy(st.config, st); return true; } c
     stage(3, "DOWN", 18, "FILLED", 18)], "DOWN", cfg)]);
   assert.ok(restores(st), "C: a rejected rung plus a full ladder must restore (count > maxStages)");
 }
+// --- bug D (found deploying batch 2): legacy ladder written before consumed-rung
+// sizing. Live round 1790687700: stage 1 DOWN 5 CANCELLED at 0 filled, and the
+// code of that time still moved stage 2 to the 18-share rung. Every account's
+// state file keeps this history, so restore must accept the index-sized shape
+// too, or the engine cannot start at all. ---
+{
+  const cfg = { ...CFG, stageShares: [5, 18, 60, 120] };
+  const st = state([round([stage(1, "DOWN", 5, "CANCELLED", 0), stage(2, "UP", 18, "FILLED", 18),
+    stage(3, "DOWN", 60, "FILLED", 60), stage(4, "UP", 120, "CANCELLED", 101.95)], "UP", cfg)]);
+  assert.ok(restores(st), "D: a legacy index-sized ladder from the live state file must restore");
+}
 // --- control 1: a normal ladder [5 then 18] must still restore ---
 {
   const st = state([round([stage(1, "UP", 5, "FILLED", 5), stage(2, "DOWN", 18, "FILLED", 18)], "DOWN")]);
