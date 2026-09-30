@@ -46,7 +46,8 @@
 | A2 | ☐ **P0-1** 一次被拒订单后引擎可能起不来 | `backend/engine/src/strategies/btc-reversal.ts` restore / 建阶段 | 恢复校验改用"已用级数"规则 | 无 |
 | A3 | ☐ **P0-3** 策略状态只增不减，约 17 小时后自停 | `btc-reversal.ts` 426、`platform/platform.ts` 四个 Map、`cli/platform.ts` 581-641 | 状态行只输出当前场 + 最近 8 场 + 未结算场；裁剪时绝不能删未结算场（会丢赎回） | 无 |
 | A4 | ☐ 验证 | `backend/engine/scripts/` | 给 A1/A2 加回归测试（复用 `check-order-path.mjs` 的场景）；A3 用 dist 模拟 1000 场确认单行 < 256KB | A1-A3 |
-| A5 | ☐ **P1-11** 部署会删掉 `config/` 下未纳入 git 的服务器密钥文件 | `scripts/deploy-reversal-release.py` | 清理前缀排除 `config/` 里服务器专属文件。**下一次部署之前必须修，并入第 2 批一起上**，否则部署本身会删密钥。回归测试 `scripts/regress/P1-11.py` | 无 |
+| A5 | ☐ **P1-11** 部署会删掉 `config/` 下未纳入 git 的服务器密钥文件 | `scripts/deploy-reversal-release.py` | 清理前缀排除 `config/` 里服务器专属文件。**下一次部署之前必须修，并入第 2 批一起上**，否则部署本身会删密钥。回归测试 `scripts/regress/P1-11.py` — `8f9f273` | 无 |
+| A6b | ☐ **P1-12** 心跳每 25 秒一次，场馆 10 秒收不到就撤光挂单，加仓后几级挂不住 | `backend/engine/src/live/clob/client.ts` `startHeartbeat` | 改 5 秒、失败立即重试、每次心跳 2 秒超时。并入第 2 批。回归测试 `scripts/regress/P1-12.mjs` — `ca120c1` | 无 |
 
 ### A 阶段的 core.ts 三连（和 A1 同文件，一起改）
 
