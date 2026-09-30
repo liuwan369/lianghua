@@ -11,41 +11,6 @@
 
 ## 未修复
 
-### P0-1 出现一次被拒的订单后，引擎可能再也启动不了
-
-- **位置**：`backend/engine/src/strategies/btc-reversal.ts` 的 `restore()`（约 548、564 行）和创建阶段的逻辑（约 357、372、376 行）。
-- **原因**：创建新阶段时，份数按"已用级数"取（被拒的阶段不算），编号按 `stages.length + 1` 取；恢复状态时的校验却要求第 N 阶段份数等于 `stageShares[N-1]`，并且阶段数不超过 `maxStages`。两条规则互相矛盾。
-- **复现**（用编译后的 dist 代码）：阶段 1 UP 5 份被拒 → UP 再次穿越 → 阶段 2 UP 5 份。落盘内容是 `[1 UP 5 REJECTED], [2 UP 5 CREATED]`，恢复时抛错 `invalid persisted reversal stage`。一次被拒再加上满阶梯时，阶段数超过 `maxStages`，恢复时抛错 `invalid persisted reversal round`。
-- **影响**：状态文件每个账户一份（`scripts/system-dashboard-server.py` 约 1582 行，`btc-reversal-<钱包哈希>.platform-state.json`），每次启动都会恢复（`cli/platform.ts` 665-668 行）。坏数据写进去以后，之后的每次启动都会在 `state_open` 阶段失败，只能手动改或删状态文件，删掉就丢了订单和持仓的恢复信息。交易所拒单、预留落盘失败、签名前进程中断都会产生被拒订单（`core.ts` 108、885、956 行）。
-- **线上**：9 个 journal 里被拒订单为 0，还没触发过。零成交撤单不会触发（已测）。
-- **修法**：恢复校验改用和创建阶段相同的"已用级数"规则；另加回归测试。
-
-### P0-3 策略状态只增不减，连续运行约 17 小时后引擎自停，之后每次启动即停
-
-- **位置**：`backend/engine/src/strategies/btc-reversal.ts` 426 行 `discover` 只 push，全仓没有裁剪 `state.rounds`；`platform/platform.ts` 的 markets/books/snapshots 四个 Map 也只 set 不 delete。`cli/platform.ts` 581-641 行每 2 秒把它们全部写进一条 `platform_status`；`platform/journal.ts` 60 行关键写单行超过 1MB 就失败；657-658 行失败即 `requestStop("journal_failed")`。
-- **复现**（dist 里的真实 PlatformJournal，按真实状态行结构放大）：
-  - 只看 rounds：约 740 场时单行 1,062,798 字节，`write()` 返回 false，引擎停机。
-  - 连同 markets/snapshots/books 一起增长（真实 journal 里 12 分钟内 markets 2→4、books 0→6，已结束的场仍在列表里）：约 **205 场（连续约 17 小时）** 超限。
-- **更早的连锁**：账本投影每次只读 256KB（`projection_worker.py` 67 行）。单行超过 256KB 后，`ledger.py` 1254-1260 行把 `source_error` 写死，这个 run 之后的成交、订单、结算全部不再投影。实测累计约 175 场、或连续运行约 4 小时，控制台统计就冻结了，引擎却还在实盘交易。
-- **为什么是 P0**：状态文件每个账户一份、跨运行复用（`system-dashboard-server.py` 1582 行），超限之后每次启动的第一条 running 状态行就超限，一启动就停，只能"清空数据"。`maxRounds=0` 的连续模式下一天之内必到；P1-1 又会把 `maxRounds` 悄悄改成 0。
-- **修法**：summary 只输出当前场和最近 K 场（K≥8，账本只用 `rounds[-8:]`），加上仍有活动订单或未结算的场；markets/snapshots/books 只输出未结束和需要结算恢复的场，让每条状态行远小于 256KB。裁剪 `state.rounds` 时，只能删"已结束、无活动订单、无成交或结算已 confirmed"的场，否则会丢赎回。
-
-### P1-9 `--max-rounds` 把不能交易的场也算进去，设 1 场一场都跑不了
-
-- **位置**：`backend/engine/src/cli/platform.ts` 451-475 行 `scheduleMarketEnd`：任何一场只要结束就加进 `marketEndsProcessed`，再和 `maxRounds` 比较。779 行对 `selectedMarkets` 全量调度，其中包含 731-733 行从状态文件回灌的已结束旧市场。策略对中途启动的那一场（`now > startsAt`）直接标 `waiting_next_round`、不交易（`btc-reversal.ts` 421-425 行），但它结束时照样计数。
-- **线上实证**：run `174516` 设 `maxRounds=3`。启动时 markets=[1790703900（中途）、1790691600（3.3 小时前就结束的旧场）]，1790703900 全场 0 阶段，只有 1790704200 交易了，然后 `round_limit_reached` 停止。**要 3 场，实际可交易 1 场。**
-- **复现**（从 dist 抽出编译后的 `scheduleMarketEnd`，喂真实市场和发现时间）：`maxRounds=3` 停在 1790704500、可交易 1 场，与线上完全一致；`maxRounds=2` 可交易 0 场；`maxRounds=1` 启动即停、可交易 0 场；干净状态下 `maxRounds=1` 也是 0 场。
-- **影响**：设 N 场，实际最多 N-1 场；每有一个回灌的旧市场再少 1 场。只会少跑，不会多跑。
-- **修法**：`marketEndsProcessed` 保持不变（它负责去重和定时器事件），另加一个只计"本次运行能交易的场"的计数：`if (market.startsAt >= startedAt) roundsCounted += 1`，用它和 `maxRounds` 比较。
-
-### P2-19 一个查不到的旧场会被永久回灌，每 15 秒重试一次，每次启动还吃掉一个场次计数
-
-- **位置**：`backend/engine/src/cli/platform.ts` 78 行 `settlementRecoveryCandidates` 只把 `status==="confirmed"` 当终态，52 行只有时间下界没有上界；713-733 行据候选回灌 markets；902-909 行非终态结果进 pending 每轮重试。`live-settlement.ts` 290/440 行 `market()` 在建记录之前就抛 `settlement_market_not_found`，345 行捕获后不落任何记录。
-- **线上实证**：上次运行的 46 条结算事件里有 39 条是场次 1790691600，全部 `unsupported / settlement_market_not_found`，从启动到停止约每 15 秒一条。
-- **根因**（复核员补充）：这一场其实早在 run `141802` 里就 confirmed 过（"持仓已由平台自动赎回"），但那次走的是零余额分支，confirmed 没有落盘，就是 P1-5。落盘缺失导致它永远是候选，Gamma 又已经查不到它。
-- **影响**：每次启动把死市场灌回 markets，每 15 秒一次 Gamma 请求和一条结算事件；和 P1-9 叠加，每次启动当场吃掉一个 `--max-rounds` 计数。没有资金风险，shutdown drain 不会被它拖住。
-- **修法**：先修 P1-5（零余额分支也要写 `state.records` 并 `save()`）。`settlement_market_not_found` 时先查这组 token 的链上余额：全零就按 confirmed 落盘；非零才继续重试。不要只加年龄上界，那会丢掉仍有可赎回代币的场。
-
 ### P2-16 诊断接口一旦报 degraded，前端就冻结在上一次"正常"的快照上
 
 - **位置**：`frontend/console/shared/api-adapter.js` 291-293 行 `loadDiagnostics`：`resourceStatus` 对 `status=degraded` 返回 `degraded`，不等于 `ready`，又已有旧数据，于是只改 slice 状态、丢弃新的响应体。
@@ -74,48 +39,6 @@
 - **线上实证**：两条 3 行的失败 run 就是 `market_discovery` 阶段 `platform_run_failed`，创建时刻分别在本场第 287、264 秒（都落在末段窗口）。用真实 DTO + dist 复现：`markets-btc.json` 在 now=1790726958 只有下一场一行，`assertInitialMarketIdentity` 抛 `initial discovered market does not match requested marketId and roundId`。
 - **影响**：末段窗口内启动全部失败，报的是通用错误（P2-7）。fail-closed，不下单不亏钱，但每场末段确定性挡住进场。
 - **修法**：启动不要用 `nextRound` 行作为初始身份——`_start_trading` 里若选中行 `current!=true`/`nextRound=true` 则拒绝或改用当前直播场；或启动时不传 `--expected-market-id`，让引擎发现当前场后再由连续发现推进。修 P2-5（末段不提前切场）后这条也会消失。
-
-### P1-12 心跳每 25 秒才发一次，场馆 10 秒没收到就撤光账户所有挂单
-
-- **位置**：`backend/engine/src/live/clob/client.ts` 399 行 `startHeartbeat(intervalMs = 25_000)`，由 `platform/polymarket.ts` 1144 行 `client.startHeartbeat()` 用默认值启动。线上 dist 同样是 25 秒（`reversal-2f6f6ce`，`dist/live/clob/client.js` 280 行）。
-- **场馆规则**（用户转述的官方文档）：账户一旦开始发心跳，**10 秒内没收到下一次就撤掉账户全部挂单**；官方建议每 5 秒发一次。
-- **线上实证（不依赖文档，从真实订单反推出来的）**：所有实盘里只有 2 笔单是被**场馆**撤的（`cancellation_source=user_ws`，不是我们撤的），都在 run `131143`：
-  - `…c15:1`：挂上后活了 20.7 秒，被场馆撤；
-  - `…c15:4`：挂上后活了 18.1 秒，被场馆撤。
-  - 按 25 秒心跳周期对齐（心跳在引擎进入 running 时发第 1 次，之后每 25 秒一次）：**两笔都在上一次心跳之后 14.0 秒被撤**，一模一样。14 秒 = 10 秒超时 + 场馆清扫/推送延迟。两笔分别是在距离上次心跳 18.3 秒、21.0 秒处挂出的，还没等到下一次心跳就超时了。
-  - 其余 7 笔单都在 0.3–2.1 秒内成交，活不到 10 秒，所以没被撤。**也就是说：凡是在盘口上挂超过约 10 秒没成交的单，都会被场馆撤掉。**
-- **影响**：策略下的是 GTC 限价单（`btc-reversal.ts` 465-470 行），本意是挂着等成交。现在任何一笔没立刻吃到的单，最多挂 10-25 秒就被场馆撤光，**加仓阶梯的后几级几乎都会被撤**。实盘里"只成交一部分就被撤"（`…c15:4` 是 PARTIAL 后被撤）就是这个。另外场馆撤的是**账户全部挂单**，多币（阶段 H）后一个币的空档会撤掉所有币的单。
-- **为什么 P1**：直接改变真钱行为，让限价单挂不住。不会多亏钱（撤单不扣钱），但该成交的单成交不了。
-- **修法**：心跳改为每 5 秒（官方建议）。`startHeartbeat(5_000)`，或把 399 行默认值改成 5 秒。**同时要保证心跳本身稳定**：心跳走 SDK 的 axios，一次网络抖动若让连续两次心跳失败（10 秒），照样会被撤；失败时立刻重试一次，不等下一个周期。线上验证：挂一笔远离盘口、不会成交的单，观察 60 秒不被场馆撤。
-
-### P1-13 场次一收盘，结算就查不到这个市场，自己的赎回永远走不了（第 2 批实盘发现）
-
-- **位置**：`backend/engine/src/platform/live-settlement.ts` 结算后端 `market()` 用 `gamma-api /markets?condition_ids=…` 查市场，没带 `closed=true`。
-- **实证**：Gamma `/markets` 默认只返回 `closed=false`。2026-09-30 线上对照：未收盘的市场只在默认查询里，已收盘的只在 `&closed=true` 里。run `20260930-162501` 里本场 1790785800（持 5 股 DOWN）先 pending 24 次，收盘后变成 `unsupported settlement_market_not_found`，20 次，直到停机。
-- **影响**：收盘正是可以赎回的时候，却恰好查不到。赢的场只能靠场馆自动赎回；输的场一直持有归零的代币，每 15 秒按 not_found 重试一次，而且每次启动都会重来（P2-19 的同一种症状，换了个成因）。
-- **修法**：抽出 `gammaMarketRow()`，先查默认列表，查不到再查 `closed=true`。审查补了一条：找得到已收盘的场后，只持有输家代币的场赎回收益为 0，直接记为已结算，不发链上交易（否则白花 gas 或 relayer 额度，还会挡住后面真正的赎回）。
-
-### P2-23 已确认结算的场每 15 秒重结算一次，每次都跑一遍全账户恢复（第 2 批实盘发现）
-
-- **位置**：`backend/engine/src/cli/platform.ts` `runSettlementPass`，只跳过 `terminalSettlements`，没跳过 `confirmedSettlements`。
-- **实证**：run `20260930-162501` 23 分钟里 `account_recovery_started` 160 次（第 1 批一整场只有 2 次），1790773800 和 1790691600 各重复 confirmed 65 次。P1-5/P2-19 修好后这两场有了已确认记录，adapter 直接从记录返回 confirmed，但 CLI 每次拿到 confirmed 都调 `recoverAccount()`。
-- **影响**：每次恢复都会发 `account_recovery_started`，策略收到后清掉所有行情基线（P3-6）。等于每 15 秒把触发判断重置一次，热路径不该承受这个。这次 3 场都照常下单成交，没造成损失。
-- **修法**：`settlementPassWants()` 跳过本进程已确认或已终态的场。
-
-### P1-11 部署清理会删掉 config/ 下未纳入 git 的运行时密钥文件（当前潜伏，服务器上暂无该文件）
-
-- **位置**：`scripts/deploy-reversal-release.py` 远端脚本 143-162 行 `cleanup_prefixes` 含 `'config/'`，会把 config/ 下所有不在 manifest 的文件并入 `obsolete`，264-265 行逐个 `unlink`；manifest 只含 git 跟踪文件。单元 `config/pm-system-dashboard-dublin.service` 19 行 `EnvironmentFile=-/root/pm-system/config/dashboard-secret.env` 引用它。
-- **现状（已核实）**：服务器 `/root/pm-system/config/` 下**目前没有** `dashboard-secret.env`，只有 git 跟踪的那几个文件，所以当前每次部署没有东西可删，控制令牌来自 `account.json`。这条是潜伏风险，不是正在发生的故障。
-- **触发**：一旦运维在服务器 `config/` 放任何未被 git 跟踪的文件（单元明确引用的 `dashboard-secret.env`，或其他运维文件），下一次成功部署就会删掉它；`before.tar.gz` 只在部署异常时回滚，成功部署不恢复。
-- **影响**：该文件被永久删除；靠它提供的控制令牌等 env 丢失，控制面鉴权可能失效或回退到 `account.json` 里保存的那份。
-- **修法**：清理白名单排除已知运行时/密钥文件，或把 config/ 清理限定到发布真正管理的扩展名/清单集合内。
-
-### P1-5 场馆自动赎回在"无持仓"路径上被识别，却没有保存
-
-- **位置**：`backend/engine/src/platform/live-settlement.ts`，无持仓分支里通过 `externalPayout` 识别到场馆已自动赎回并得到确认到账后，没有调用 `save()` 落盘。
-- **现象**（审查员用真实 dist 复现、复核员确认）：确认到账的结果只存在于这次调用的返回值里；下一次结算轮询重新计算，返回不同的结果，已确认的到账被丢掉。
-- **影响**：赢的场次结算状态来回变，和 P1-4 叠加，让已到账的赢利更难进统计。
-- **修法**：无持仓路径识别出外部赎回后，与主路径一样写入 `state.records` 并 `save()`。
 
 ### P2-11 `/api/runtime/status` 在每次启动的头 0–3 秒崩溃，连接直接断开
 
@@ -367,6 +290,21 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### 第 2 批：启动与状态 — 已部署 `4dd1745`，两次小额实盘通过（2026-09-30）
+
+每条都有回归测试 `backend/engine/scripts/regress/<编号>`（P1-11 在 `scripts/regress/P1-11.py`），旧代码上失败、新代码上通过，每条都做过独立审查。
+
+- **P0-1 被拒订单后引擎起不来** — `6c7dd95`，补丁 `1167868`。恢复时按"已用级数"校验阶段份数。**首次部署 `d19f76b` 在线上启动即失败**（`state_open`，没下单）：线上状态文件里有旧代码按下标定份数的历史场 1790687700（0 成交撤单后第 2 级是 18 股），新规则拒收。补丁同时接受两种份数，其他份数仍拒收；测试加了该场原样的 D 场景。教训：改恢复校验必须先用**当前线上状态文件**重放。
+- **P0-3 状态行无限增长** — `136d258`。状态行只带当前场、最近 8 场和还没办完的场。本地 1000 场：旧写法超过 256KB，新写法 4.6KB；线上两次运行单行最大 38.9KB、37.4KB（大头是盘口，场数不再累加）。
+- **P1-9 场次计数** — `2a2308c`。两次运行都设 `maxRounds=3`：中途启动那场停在 `waiting_next_round`、不计数，之后正好跑 3 场，按 `round_limit_reached` 停机。run 1 三场都成交；run 2 两场成交，一场没触发。
+- **P1-5 + P2-19 死市场回灌** — `f6370fd`。1790691600 在 run 1 记为 confirmed，run 2 里一次都没再出现（之前每次运行 36-39 次）。
+- **P1-11 部署删 config/ 文件** — `8f9f273`。三次部署删掉的只有 git 已删的文件和 `__pycache__`，`config/` 下 7 个文件都在。
+- **P1-12 心跳 25 秒** — `ca120c1`。线上 dist 确认 5 秒，两次运行心跳失败日志都是 0 条。**没走到的路径**：5 笔单都在 0.3 秒内成交，没有挂单超过 10 秒，所以"挂单不再被场馆撤"这次没有线上证据，由 `regress/P1-12.mjs` 保证。
+- **P1-13 收盘后结算查不到市场**（run 1 发现）— `95f14af`。run 2 里 1790785800（输的场，run 1 一直卡在 not_found）记为"持仓全部落败，赎回收益为 0，无需链上交易"，没发交易。
+- **P2-23 已确认的场每 15 秒重结算**（run 1 发现）— `3cdf3d6`。`account_recovery_started`：run 1 23 分钟 160 次，run 2 19 分钟 5 次；旧场不再重复 confirmed。
+- **两次实盘**：run `20260930-162501-1fb3a0266703`（`1167868`）、run `20260930-170531-cb02c3f1c1d8`（`4dd1745`）。一共 5 笔成交，每笔 5 股，价格 0.67-0.69；账户 211.12 → 208.64（-2.48）。两次都没有全账户 halt，没有 `invalid account order`，也没有 `apply missing fills`。
+- **结算等待上限**：实测后保持 5 分钟不变，理由见 `1586428`。run 2 里本场两轮都在运行期内由场馆自动赎回确认。
 
 ### 第 1 批：对账链 — 已修复 `a395db6`，已部署 `2f6f6ce`，小额实盘通过（2026-09-30）
 

@@ -43,11 +43,13 @@
 | # | 条目 | 文件 | 要点 | 依赖 |
 |---|---|---|---|---|
 | A1 | ☑ **P0-2** 本地撤单后仍占资金，对账和重启都抛错 — `4ded4ed`（已部署 `2f6f6ce`，小额实盘通过） | `backend/engine/src/platform/core.ts` 1048 | 改成 `pending = 仍持有预留`，**不是** `??=` 改 `=`：独立审查发现 `= true` 会在"撤单在途时预留已被释放"时引入新 bug，见 BUGS.md 已修复 P0-2。回归测试 `scripts/regress/P0-2.mjs` | 无 |
-| A2 | ☐ **P0-1** 一次被拒订单后引擎可能起不来 | `backend/engine/src/strategies/btc-reversal.ts` restore / 建阶段 | 恢复校验改用"已用级数"规则 | 无 |
-| A3 | ☐ **P0-3** 策略状态只增不减，约 17 小时后自停 | `btc-reversal.ts` 426、`platform/platform.ts` 四个 Map、`cli/platform.ts` 581-641 | 状态行只输出当前场 + 最近 8 场 + 未结算场；裁剪时绝不能删未结算场（会丢赎回） | 无 |
-| A4 | ☐ 验证 | `backend/engine/scripts/` | 给 A1/A2 加回归测试（复用 `check-order-path.mjs` 的场景）；A3 用 dist 模拟 1000 场确认单行 < 256KB | A1-A3 |
-| A5 | ☐ **P1-11** 部署会删掉 `config/` 下未纳入 git 的服务器密钥文件 | `scripts/deploy-reversal-release.py` | 清理前缀排除 `config/` 里服务器专属文件。**下一次部署之前必须修，并入第 2 批一起上**，否则部署本身会删密钥。回归测试 `scripts/regress/P1-11.py` — `8f9f273` | 无 |
-| A6b | ☐ **P1-12** 心跳每 25 秒一次，场馆 10 秒收不到就撤光挂单，加仓后几级挂不住 | `backend/engine/src/live/clob/client.ts` `startHeartbeat` | 改 5 秒、失败立即重试、每次心跳 2 秒超时。并入第 2 批。回归测试 `scripts/regress/P1-12.mjs` — `ca120c1` | 无 |
+| A2 | ☑ **P0-1** 一次被拒订单后引擎可能起不来 — `6c7dd95`+`1167868`（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/src/strategies/btc-reversal.ts` restore / 建阶段 | 恢复校验改用"已用级数"规则 | 无 |
+| A3 | ☑ **P0-3** 策略状态只增不减，约 17 小时后自停 — `136d258`（第 2 批已部署 `4dd1745`，小额实盘通过） | `btc-reversal.ts` 426、`platform/platform.ts` 四个 Map、`cli/platform.ts` 581-641 | 状态行只输出当前场 + 最近 8 场 + 未结算场；裁剪时绝不能删未结算场（会丢赎回） | 无 |
+| A4 | ☑ 验证 — regress/ 下全部（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/scripts/` | 给 A1/A2 加回归测试（复用 `check-order-path.mjs` 的场景）；A3 用 dist 模拟 1000 场确认单行 < 256KB | A1-A3 |
+| A5 | ☑ **P1-11** 部署会删掉 `config/` 下未纳入 git 的服务器密钥文件 — `8f9f273`（第 2 批已部署 `4dd1745`，小额实盘通过） | `scripts/deploy-reversal-release.py` | 清理前缀排除 `config/` 里服务器专属文件。**下一次部署之前必须修，并入第 2 批一起上**，否则部署本身会删密钥。回归测试 `scripts/regress/P1-11.py` — `8f9f273` | 无 |
+| A6b | ☑ **P1-12** 心跳每 25 秒一次，场馆 10 秒收不到就撤光挂单，加仓后几级挂不住 — `ca120c1`（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/src/live/clob/client.ts` `startHeartbeat` | 改 5 秒、失败立即重试、每次心跳 2 秒超时。并入第 2 批。回归测试 `scripts/regress/P1-12.mjs` — `ca120c1` | 无 |
+| A6c | ☑ **P1-13** 收盘后结算查不到市场（Gamma 默认 closed=false）— `95f14af`（第 2 批实盘发现，已部署 `4dd1745`，实盘通过） | `platform/live-settlement.ts` | 先查默认列表再查 `closed=true`；赎回收益为 0 的场不发交易 | 无 |
+| A6d | ☑ **P2-23** 已确认的场每 15 秒重结算、每次跑全账户恢复 — `3cdf3d6`（第 2 批实盘发现，已部署 `4dd1745`，实盘通过） | `cli/platform.ts` `runSettlementPass` | 跳过本进程已确认/已终态的场 | 无 |
 
 ### A 阶段的 core.ts 三连（和 A1 同文件，一起改）
 
@@ -70,12 +72,12 @@ A3 顺带大幅改善 **P2-13**（每事件深拷贝导致下单变慢，根因�
 |---|---|---|---|---|
 | B1 | ☐ **P1-1** 界面保存策略时 `maxRounds` 被清零 | `frontend/console/shared/api-adapter.js` 462-476 | 白名单加一行。和 A3 叠加时会把"跑 N 场"变成"一直跑"，所以排在前面 | 无 |
 | B2 | ☐ **P2-12** 预热场次的配置没冻结（开盘前 10 秒发布的配置会在本场生效） | `btc-reversal.ts` 271-272 | 删掉重新克隆的两行。影响真钱下单份数，按 P1 对待 | A2（同文件） |
-| B3 | ☐ **P1-5** 场馆自动赎回在"无持仓"路径识别了却没保存 | `backend/engine/src/platform/live-settlement.ts` | 识别后写入 records 并 `save()` | 无 |
+| B3 | ☑ **P1-5** 场馆自动赎回在"无持仓"路径识别了却没保存 — `f6370fd`（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/src/platform/live-settlement.ts` | 识别后写入 records 并 `save()` | 无 |
 | B4 | ☐ **P1-4** 赢的场次盈亏永远算不出来（胜率一直 0%） | `scripts/dashboard/ledger.py` 1437-1466、1512-1528 | coverage 改用成交累计的净份额，不用结算那一刻已归零的持仓 | B3（同一条链：结算→账本） |
 | B5 | ☐ **P1-6** MATCHED 后 FAILED 的成交被当成真实成交 | `ledger.py` 276 `_trade_revision` | `>` 改 `>=`，或"非终态收到 FAILED 一律接受" | B4（同文件） |
 | B6 | ☐ **P1-3** 今日盈亏两套日界（UTC vs UTC+8） | `ledger.py` 2020-2022、`core.ts` 9 | 统一成 UTC+8；总览标签注明口径 | B4、B5（同文件） |
-| B7 | ☐ **P1-9** `--max-rounds` 把不能交易的场也算进去，设 1 场一场都跑不了 | `backend/engine/src/cli/platform.ts` 451-475 | 另加"本次运行能交易的场"计数 | 无 |
-| B8 | ☐ **P2-19** 查不到的旧场被永久回灌、每 15 秒重试、每次启动吃掉一个场次计数 | `cli/platform.ts`、`live-settlement.ts` | **先修 B3（P1-5）**；not_found 时查链上余额，全零按 confirmed 落盘 | B3、B7 |
+| B7 | ☑ **P1-9** `--max-rounds` 把不能交易的场也算进去，设 1 场一场都跑不了 — `2a2308c`（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/src/cli/platform.ts` 451-475 | 另加"本次运行能交易的场"计数 | 无 |
+| B8 | ☑ **P2-19** 查不到的旧场被永久回灌、每 15 秒重试、每次启动吃掉一个场次计数 — `f6370fd`（第 2 批已部署 `4dd1745`，小额实盘通过） | `cli/platform.ts`、`live-settlement.ts` | **先修 B3（P1-5）**；not_found 时查链上余额，全零按 confirmed 落盘 | B3、B7 |
 | B9 | ☐ **P1-10** 在场次末尾启动必然失败 | `scripts/system-dashboard-server.py`、`cli/platform.ts` | 启动时按真正在进行的场绑定身份 | B7（同一处启动逻辑） |
 
 ---
