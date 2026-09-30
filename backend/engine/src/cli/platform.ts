@@ -39,6 +39,20 @@ export interface SettlementRecoveryCandidate {
 }
 
 /** Identify ended traded rounds that still need the idempotent settlement adapter. */
+/** Does this closed market count toward --max-rounds? Only a round that began at
+ * or after the run started can have been traded: the strategy admits a round only
+ * when it is discovered before it starts (btc-reversal discover: now <= startsAt),
+ * parks the round already running at startup as waiting_next_round, and old
+ * markets restored for settlement recovery ended before the run (BUGS P1-9). */
+export function countsTowardRoundLimit(market: Pick<MarketInfo, "startsAt">, runStartedAtSec: number,
+  strategyParked?: boolean): boolean {
+  // The strategy's own verdict wins when known: a round it parked as
+  // waiting_next_round was never tradeable, even if it started a moment after
+  // the process did (its boundary passed before discovery finished).
+  if (strategyParked === true) return false;
+  return market.startsAt >= runStartedAtSec;
+}
+
 export function settlementRecoveryCandidates(
   strategyState: unknown,
   settlementState: unknown,
@@ -448,6 +462,12 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     if (remainingMs <= 0) { requestStop("markets_expired"); return; }
     marketTimer = setTimeout(watchMarketExpiry, Math.min(remainingMs, 2_147_483_647));
   };
+  // Rounds this run could actually trade. marketEndsProcessed also holds the
+  // round that was already running when we started (the strategy parks it as
+  // waiting_next_round and never trades it) and old markets restored from the
+  // state file for settlement recovery; counting those toward --max-rounds made
+  // "run N rounds" trade at most N-1, and maxRounds=1 trade none (BUGS P1-9).
+  let roundsCounted = 0;
   const scheduleMarketEnd = (market: MarketInfo) => {
     if (!continuousMarkets || signalReason || primaryFailure || marketEndsProcessed.has(market.id) || marketEndTimers.has(market.id)) return;
     const trigger = () => {
@@ -467,7 +487,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       // rounds are five minutes wide, so any minute count risks cutting off mid
       // round, buying into a round that then gets abandoned. Counting closed
       // rounds also stops on a boundary, which is when the drain can finish.
-      if (options.maxRounds > 0 && marketEndsProcessed.size >= options.maxRounds) {
+      const parked = reversal?.getStatus().rounds
+        .find(round => round.marketId === market.id)?.status === "waiting_next_round";
+      if (countsTowardRoundLimit(market, startedAt, parked)) roundsCounted += 1;
+      if (options.maxRounds > 0 && roundsCounted >= options.maxRounds) {
         requestStop("round_limit_reached");
       }
     };
