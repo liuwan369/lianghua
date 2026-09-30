@@ -17,9 +17,9 @@
 
 **本计划里的条目分三类**：① 带 P 编号 = 要修的 bug（来自 BUGS.md）；② 不带 P 编号的 D/G/H 步骤 = 要做的改造/升级；③ E 阶段 = 待确认，不一定动代码，看实盘数据再定。
 
-> **和 [FIX-PROCESS.md](FIX-PROCESS.md) 的分工**（另一个 AI/Polymarket Codex 写的）：本文件按**依赖顺序**排"先做哪条"；FIX-PROCESS 按**文件车道**排"每条怎么修、同文件串行不并行"。两者是同一批 bug 的两个视角，不冲突：**先看 WORK-PLAN 定顺序，再按 FIX-PROCESS 的车道和 7 步流程动手**。
+> **和 [FIX-PROCESS.md](FIX-PROCESS.md) 的分工**（另一个 agent 写的，现在由 Claude Opus 接手执行）：本文件按**依赖顺序**排"先做哪条"；FIX-PROCESS 按**文件车道**排"每条怎么修、同文件串行不并行"。两者是同一批 bug 的两个视角，不冲突：**先看 WORK-PLAN 定顺序，再按 FIX-PROCESS 的车道和 7 步流程动手**。
 >
-> **编号协调**：我新增的启动按钮 bug 原编号 P2-16 与 FIX-PROCESS 车道表里的 P2-16（诊断 degraded 冻结）撞号，已改为 **P2-21**。FIX-PROCESS.md 第 189 行 F 车道里的 "P2-16" 若指启动按钮那条，应更新为 P2-21；BUGS.md 现在两条各自独立。
+> **编号**：启动按钮误报是 **P2-21**，诊断 degraded 冻结是 **P2-16**，两条独立，FIX-PROCESS 的 F 车道已分开写。
 
 最后整理：2026-09-30，版本 `3a49b4a`。BUGS.md 共 **51 条**未修复（本文件全部收录，脚本逐条比对：无遗漏、无错号）。另含界面重构（阶段 G）与真多币并行（阶段 H）。
 
@@ -46,7 +46,7 @@
 | A2 | ☐ **P0-1** 一次被拒订单后引擎可能起不来 | `backend/engine/src/strategies/btc-reversal.ts` restore / 建阶段 | 恢复校验改用"已用级数"规则 | 无 |
 | A3 | ☐ **P0-3** 策略状态只增不减，约 17 小时后自停 | `btc-reversal.ts` 426、`platform/platform.ts` 四个 Map、`cli/platform.ts` 581-641 | 状态行只输出当前场 + 最近 8 场 + 未结算场；裁剪时绝不能删未结算场（会丢赎回） | 无 |
 | A4 | ☐ 验证 | `backend/engine/scripts/` | 给 A1/A2 加回归测试（复用 `check-order-path.mjs` 的场景）；A3 用 dist 模拟 1000 场确认单行 < 256KB | A1-A3 |
-| A5 | ☐ **P1-11** 部署会删掉 `config/` 下未纳入 git 的服务器密钥文件 | `scripts/deploy-reversal-release.py` | 清理前缀排除 `config/` 里服务器专属文件。**下一次部署之前必须修**，否则部署本身会删密钥 | 无 |
+| A5 | ☐ **P1-11** 部署会删掉 `config/` 下未纳入 git 的服务器密钥文件 | `scripts/deploy-reversal-release.py` | 清理前缀排除 `config/` 里服务器专属文件。**下一次部署之前必须修，并入第 2 批一起上**，否则部署本身会删密钥。回归测试 `scripts/regress/P1-11.py` | 无 |
 
 ### A 阶段的 core.ts 三连（和 A1 同文件，一起改）
 
