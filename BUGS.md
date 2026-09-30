@@ -88,6 +88,20 @@
 - **为什么 P1**：直接改变真钱行为，让限价单挂不住。不会多亏钱（撤单不扣钱），但该成交的单成交不了。
 - **修法**：心跳改为每 5 秒（官方建议）。`startHeartbeat(5_000)`，或把 399 行默认值改成 5 秒。**同时要保证心跳本身稳定**：心跳走 SDK 的 axios，一次网络抖动若让连续两次心跳失败（10 秒），照样会被撤；失败时立刻重试一次，不等下一个周期。线上验证：挂一笔远离盘口、不会成交的单，观察 60 秒不被场馆撤。
 
+### P1-13 场次一收盘，结算就查不到这个市场，自己的赎回永远走不了（第 2 批实盘发现）
+
+- **位置**：`backend/engine/src/platform/live-settlement.ts` 结算后端 `market()` 用 `gamma-api /markets?condition_ids=…` 查市场，没带 `closed=true`。
+- **实证**：Gamma `/markets` 默认只返回 `closed=false`。2026-09-30 线上对照：未收盘的市场只在默认查询里，已收盘的只在 `&closed=true` 里。run `20260930-162501` 里本场 1790785800（持 5 股 DOWN）先 pending 24 次，收盘后变成 `unsupported settlement_market_not_found`，20 次，直到停机。
+- **影响**：收盘正是可以赎回的时候，却恰好查不到。赢的场只能靠场馆自动赎回；输的场一直持有归零的代币，每 15 秒按 not_found 重试一次，而且每次启动都会重来（P2-19 的同一种症状，换了个成因）。
+- **修法**：抽出 `gammaMarketRow()`，先查默认列表，查不到再查 `closed=true`。审查补了一条：找得到已收盘的场后，只持有输家代币的场赎回收益为 0，直接记为已结算，不发链上交易（否则白花 gas 或 relayer 额度，还会挡住后面真正的赎回）。
+
+### P2-23 已确认结算的场每 15 秒重结算一次，每次都跑一遍全账户恢复（第 2 批实盘发现）
+
+- **位置**：`backend/engine/src/cli/platform.ts` `runSettlementPass`，只跳过 `terminalSettlements`，没跳过 `confirmedSettlements`。
+- **实证**：run `20260930-162501` 23 分钟里 `account_recovery_started` 160 次（第 1 批一整场只有 2 次），1790773800 和 1790691600 各重复 confirmed 65 次。P1-5/P2-19 修好后这两场有了已确认记录，adapter 直接从记录返回 confirmed，但 CLI 每次拿到 confirmed 都调 `recoverAccount()`。
+- **影响**：每次恢复都会发 `account_recovery_started`，策略收到后清掉所有行情基线（P3-6）。等于每 15 秒把触发判断重置一次，热路径不该承受这个。这次 3 场都照常下单成交，没造成损失。
+- **修法**：`settlementPassWants()` 跳过本进程已确认或已终态的场。
+
 ### P1-11 部署清理会删掉 config/ 下未纳入 git 的运行时密钥文件（当前潜伏，服务器上暂无该文件）
 
 - **位置**：`scripts/deploy-reversal-release.py` 远端脚本 143-162 行 `cleanup_prefixes` 含 `'config/'`，会把 config/ 下所有不在 manifest 的文件并入 `obsolete`，264-265 行逐个 `unlink`；manifest 只含 git 跟踪文件。单元 `config/pm-system-dashboard-dublin.service` 19 行 `EnvironmentFile=-/root/pm-system/config/dashboard-secret.env` 引用它。
