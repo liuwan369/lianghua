@@ -42,7 +42,7 @@
 
 | # | 条目 | 文件 | 要点 | 依赖 |
 |---|---|---|---|---|
-| A1 | ☑ **P0-2** 本地撤单后仍占资金，对账和重启都抛错 — `4ded4ed`（本地已验证，待线上验证） | `backend/engine/src/platform/core.ts` 1048 | 改成 `pending = 仍持有预留`，**不是** `??=` 改 `=`：独立审查发现 `= true` 会在"撤单在途时预留已被释放"时引入新 bug，见 BUGS.md 已修复 P0-2。回归测试 `scripts/regress/P0-2.mjs` | 无 |
+| A1 | ☑ **P0-2** 本地撤单后仍占资金，对账和重启都抛错 — `4ded4ed`（已部署 `2f6f6ce`，小额实盘通过） | `backend/engine/src/platform/core.ts` 1048 | 改成 `pending = 仍持有预留`，**不是** `??=` 改 `=`：独立审查发现 `= true` 会在"撤单在途时预留已被释放"时引入新 bug，见 BUGS.md 已修复 P0-2。回归测试 `scripts/regress/P0-2.mjs` | 无 |
 | A2 | ☐ **P0-1** 一次被拒订单后引擎可能起不来 | `backend/engine/src/strategies/btc-reversal.ts` restore / 建阶段 | 恢复校验改用"已用级数"规则 | 无 |
 | A3 | ☐ **P0-3** 策略状态只增不减，约 17 小时后自停 | `btc-reversal.ts` 426、`platform/platform.ts` 四个 Map、`cli/platform.ts` 581-641 | 状态行只输出当前场 + 最近 8 场 + 未结算场；裁剪时绝不能删未结算场（会丢赎回） | 无 |
 | A4 | ☐ 验证 | `backend/engine/scripts/` | 给 A1/A2 加回归测试（复用 `check-order-path.mjs` 的场景）；A3 用 dist 模拟 1000 场确认单行 < 256KB | A1-A3 |
@@ -54,9 +54,9 @@
 
 | # | 条目 | 要点 |
 |---|---|---|
-| A6 | ☑ **P1-8** — `a395db6`（本地已验证，待线上验证） 每次下单把整个账户短暂置 halt、逼出立即对账 | 删掉 348-351 行这个分支，或加 `!this.submissions.has(...)` |
-| A7 | ☑ **P1-7** — `a395db6`（本地已验证，待线上验证） 成交后几秒内对账用落后快照抹掉现金和持仓（实测越过资金上限） | 有非终态成交时跳过这次对账；`accountingCashSuperseded` 只对 CONFIRMED 置位 |
-| A8 | ☑ **P2-20** — `a395db6`（本地已验证，待线上验证） 部分成交浮点累加与场馆份额严格比较，对账必败 | 三处 `!==` 改 `Math.abs(a-b) > EPS` |
+| A6 | ☑ **P1-8** — `a395db6`（已部署 `2f6f6ce`，小额实盘通过） 每次下单把整个账户短暂置 halt、逼出立即对账 | 删掉 348-351 行这个分支，或加 `!this.submissions.has(...)` |
+| A7 | ☑ **P1-7** — `a395db6`（已部署 `2f6f6ce`，小额实盘通过） 成交后几秒内对账用落后快照抹掉现金和持仓（实测越过资金上限） | 有非终态成交时跳过这次对账；`accountingCashSuperseded` 只对 CONFIRMED 置位 |
+| A8 | ☑ **P2-20** — `a395db6`（已部署 `2f6f6ce`，小额实盘通过） 部分成交浮点累加与场馆份额严格比较，对账必败 | 三处 `!==` 改 `Math.abs(a-b) > EPS` |
 | A8b | ☑ **P2-22** ACK 前场馆已撤单却被提成 OPEN（**修 P1-8 时发现**，同批修）— `a395db6` | ACK 分支 venueStatus 已终态时走 confirmCancelled | 随 P1-8 |
 
 A3 顺带大幅改善 **P2-13**（每事件深拷贝导致下单变慢，根因相同），做完 A3 后再看 P2-13 还剩多少。
