@@ -267,7 +267,6 @@
     legacyMarkets: () => request("/api/v1/markets"),
     legacyAccount: () => request("/api/account/status"),
     legacyAccountSnapshot: () => request("/api/v1/account-data"),
-    legacyRuns: () => request("/api/v1/runs?limit=50"),
     legacyEvents: (runId) => request(`/api/v1/events?run_id=${encodeURIComponent(runId)}&limit=50`),
     legacySummary: (runId) => request(`/api/v1/summary?run_id=${encodeURIComponent(runId)}`),
     legacySystemMetrics: () => request("/api/v1/system-metrics"),

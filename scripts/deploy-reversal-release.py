@@ -100,7 +100,7 @@ import grp, hashlib, json, os, sys, tarfile, urllib.request, subprocess
 root=Path('/root/pm-system').resolve()
 release=Path(sys.argv[1]).resolve()
 manifest=json.loads((release/'manifest.json').read_text())
-allowed_prefixes=('backend/engine/','backend/reference/','frontend/console/','scripts/','config/','shared/contracts/','docs/')
+allowed_prefixes=('backend/engine/','frontend/console/','scripts/','config/','shared/contracts/')
 allowed_exact={'README.md','scripts/system-dashboard-server.py','scripts/dashboard_account.py',
                'scripts/deploy-reversal-release.py','config/pm-system-dashboard-dublin.service',
                'config/pm-clob-market-snapshot.service'}
@@ -141,14 +141,13 @@ nginx_specs={
 obsolete=set(manifest.get('removed',[]))
 retired_units_from_manifest={unit_names[name] for name in obsolete if name in unit_names}
 # The release is the only active program tree. Remove files left by older
-# dashboard/reference builds even when those files were never part of a
-# previous release manifest. Runtime state and secrets live outside these
-# prefixes and are intentionally excluded. config/ is not swept: the dashboard
-# unit reads EnvironmentFile=config/dashboard-secret.env, an operator file git
-# never tracks (BUGS P1-11). Config files git deletes still leave through
+# builds even when those files were never part of a previous release manifest.
+# Runtime state and secrets live outside these prefixes and are intentionally
+# excluded. config/ is not swept: the dashboard unit reads
+# EnvironmentFile=config/dashboard-secret.env, an operator file git never
+# tracks (BUGS P1-11). Config files git deletes still leave through
 # manifest['removed'].
-cleanup_prefixes=('backend/engine/src/','backend/engine/dist/','backend/reference/',
-                  'frontend/console/','scripts/','shared/contracts/','docs/')
+cleanup_prefixes=('backend/engine/src/','backend/engine/dist/','frontend/console/','scripts/','shared/contracts/')
 for prefix in cleanup_prefixes:
     base=root/prefix
     if not base.is_dir():
