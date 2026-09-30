@@ -345,7 +345,14 @@ export class TradingCore {
     if (unmapped && (!this.state.risk.reason || this.isScopedReconciliationReason(this.state.risk.reason))) {
       this.state.risk.halted = true;
       this.state.risk.reason = "unknown order requires reconciliation";
-    } else if (this.state.orders.some(candidate => candidate.status === "SUBMITTING")
+    } else if (this.state.orders.some(candidate => candidate.status === "SUBMITTING"
+        // Our own POST in flight is not a restored order. A WS "live" arriving
+        // before the ACK (the norm here) used to reach this branch and halt the
+        // whole account until a recovery happened to succeed. Orders restored
+        // from disk never reach it as SUBMITTING: the constructor (:104-118)
+        // turns them into UNKNOWN or REJECTED, and a mapped UNKNOWN is then
+        // blocked per market by updateRisk rather than halting globally.
+        && !this.submissions.has(candidate.clientOrderId))
       && (!this.state.risk.reason || this.isScopedReconciliationReason(this.state.risk.reason))) {
       this.state.risk.halted = true;
       this.state.risk.reason = "restored orders require reconciliation";
@@ -948,7 +955,17 @@ export class TradingCore {
         return this.notify(order, true);
       }
       if (ack.orderId) order.orderId = ack.orderId;
-      if (ack.status === "accepted" && ack.orderId && ["SUBMITTING", "UNKNOWN"].includes(order.status)) {
+      if (ack.status === "accepted" && ack.orderId
+        && ["canceled", "cancelled", "expired"].includes(order.venueStatus ?? "")
+        && ["SUBMITTING", "UNKNOWN"].includes(order.status)) {
+        // The venue already reported this order terminal (via the User WS)
+        // before the ACK returned. Promoting it to OPEN would leave OPEN with
+        // venueStatus=canceled and the reservation held forever. Settle it as
+        // cancelled and keep the reservation pending until reconciliation
+        // proves no fill raced the cancel.
+        this.confirmCancelled(order.clientOrderId, false, order.venueStatusSource === "user_ws" ? "user_ws" : "account_read", order.venueStatusAt);
+      }
+      else if (ack.status === "accepted" && ack.orderId && ["SUBMITTING", "UNKNOWN"].includes(order.status)) {
         order.status = "OPEN";
       }
       else if (ack.status === "accepted" && ack.orderId) { /* A fill can arrive before the HTTP ACK. */ }
@@ -1312,7 +1329,12 @@ export class TradingCore {
         continue;
       }
       const incoming = account.openOrders.find(o => o.orderId === order.orderId)!;
-      if (incoming.filledShares !== order.filledShares) throw new Error("apply missing fills before reconciliation");
+      // Compare with a tolerance, not `!==`: filledShares is a running float sum
+      // of fills (97.85 + 4.1 = 101.94999999999999) and the venue's size_matched
+      // is a fresh decimal (101.95). A strict compare made every reconcile throw
+      // "apply missing fills" and blocked the market forever. A genuine missing
+      // fill is far larger than EPS, so it is still caught.
+      if (Math.abs(incoming.filledShares - order.filledShares) > EPS) throw new Error("apply missing fills before reconciliation");
     }
     for (const order of next.orders.filter(o => o.reconciliationPending)) {
       if (!order.orderId) throw new Error("cancelled order without identity requires reconciliation");
@@ -1331,13 +1353,19 @@ export class TradingCore {
     // fee arrives late.
     const pricedThrough = account.cashAt ?? account.at;
     for (const fill of next.fills) {
-      if (fill.ts <= pricedThrough + EPS) fill.accountingCashSuperseded = true;
+      // Only a settled fill is known to be inside the venue balance. A MATCHED/
+      // MINED/RETRYING fill may not be reflected yet (BUGS P1-7); marking it
+      // superseded would let the stale balance erase it permanently, since a
+      // later CONFIRMED only updates status. A fill with no status is a legacy
+      // or already-settled record.
+      const settled = fill.status === undefined || fill.status === "CONFIRMED" || fill.status === "FAILED";
+      if (settled && fill.ts <= pricedThrough + EPS) fill.accountingCashSuperseded = true;
     }
     for (const incoming of account.openOrders) {
       const current = incoming.orderId && next.orders.find(o => o.orderId === incoming.orderId || o.clientOrderId === incoming.orderId);
       if (current) {
         if (current.reconciliationPending) {
-          if (incoming.filledShares !== current.filledShares) {
+          if (Math.abs(incoming.filledShares - current.filledShares) > EPS) {
             throw new Error("apply missing fills before reconciliation");
           }
           if (quarantined.has(current.orderId!)) {

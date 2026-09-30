@@ -205,6 +205,26 @@ export interface ConnectOptions {
   referenceFeeds?: Partial<Record<string, (sink: (event: FeedEvent) => void, assetId: AssetId) => { stop: () => void }>>;
 }
 
+/** How long a matched fill may stay non-terminal before we stop waiting for it.
+ * Live MATCHED -> CONFIRMED was 6.0-7.9s across every real trade; 60s is a wide
+ * margin. Past this, the fill is treated as stuck, not settling. */
+export const PROVISIONAL_FILL_MAX_AGE_SEC = 60;
+
+/** A fill the venue has matched but not yet settled on chain, recent enough
+ * that it may still settle. Its effect is in our local cash/positions, but a
+ * venue account read may not reflect it yet. Reconciling against such a read
+ * would erase the fill (BUGS P1-7), so recovery defers while one exists.
+ *
+ * The age bound matters: without it, a fill stuck at MATCHED forever (a crash
+ * mid-trade, a venue RETRYING loop) would make every recovery defer forever,
+ * so an UNKNOWN order would never be reconciled. A fill with no status is a
+ * legacy or already-settled record and counts as terminal. */
+export function hasProvisionalFills(fills: readonly { status?: string; ts?: number }[],
+  nowSec: number = Date.now() / 1000): boolean {
+  return fills.some(fill => fill.status !== undefined && !["CONFIRMED", "FAILED"].includes(fill.status)
+    && typeof fill.ts === "number" && nowSec - fill.ts < PROVISIONAL_FILL_MAX_AGE_SEC);
+}
+
 export async function connectPolymarketPlatform(options: ConnectOptions) {
   if (options.mode !== "live") throw new Error("the platform connector only supports live execution");
   // Every market in one connection must be the same asset: feeds, the user
@@ -774,6 +794,14 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       }
       recoveryFailureMarketId = undefined;
       await platform.idle();
+      // A fill the venue matched but has not settled on chain may be missing
+      // from this account read. Reconciling now would replace our cash and
+      // positions with that stale balance and erase the fill (BUGS P1-7).
+      // Defer this pass with a clean return, not a throw: the catch below turns
+      // an error with no affected market into recoveryFailureGlobal and closes
+      // every market. The 5s cleanup timer retries once the fill is CONFIRMED
+      // or FAILED, the same rule the settlement path uses (cli/platform.ts).
+      if (hasProvisionalFills(platform.portfolio.fills())) return;
       // A new market may have submitted while the account snapshot was in
       // flight. Refresh once after the execution queue is idle so that the
       // reconciliation cut includes that order/fill instead of classifying
@@ -878,7 +906,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           continue;
         }
         const incoming = account.openOrders.find(item => item.orderId === order.orderId);
-        if (incoming && incoming.filledShares !== order.filledShares) reconcileBlocked.add(marketId);
+        // Same 1e-8 tolerance as TradingCore's EPS: local filledShares is a float
+        // running sum, the venue's size_matched a fresh decimal (BUGS P2-20).
+        if (incoming && Math.abs(incoming.filledShares - order.filledShares) > 1e-8) reconcileBlocked.add(marketId);
       }
       recoveryFailureMarkets = reconcileBlocked;
       if (reconcileBlocked.size > 0) {
