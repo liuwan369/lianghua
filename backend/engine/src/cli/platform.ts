@@ -38,6 +38,34 @@ export interface SettlementRecoveryCandidate {
   tokenIds: string[];
 }
 
+/** Fee sources good enough to publish a round result. rate-derived is the
+ * venue's own fee rate applied to the fill; taker fills rarely get a reported
+ * fee, and the ledger already accepts it (BUGS P2-9). */
+const RESULT_FEE_SOURCES = new Set(["reported", "rate-derived"]);
+
+/** The UP/DOWN outcome columns of one round, from the account's own state. */
+export function roundOutcome(round: { upTokenId: string; downTokenId: string },
+  state: Pick<CoreState, "positions" | "orders" | "fills"> | undefined) {
+  const tokens = new Set([round.upTokenId, round.downTokenId]);
+  const positions = (state?.positions ?? []).filter(position => tokens.has(position.tokenId));
+  const costUsd = positions.reduce((total, position) => total + position.costUsd, 0);
+  const reservedUsd = (state?.orders ?? []).filter(order => tokens.has(order.tokenId))
+    .reduce((total, order) => total + order.reservedUsd, 0);
+  const fills = (state?.fills ?? []).filter(fill => tokens.has(fill.tokenId) && fill.status !== "FAILED");
+  const coveredHoldings = [...tokens].every(token => Math.abs(
+    (positions.find(position => position.tokenId === token)?.shares ?? 0)
+    - fills.filter(fill => fill.tokenId === token).reduce((shares, fill) => shares + (fill.direction === "BUY" ? fill.shares : -fill.shares), 0)) < 1e-8);
+  const feesVerified = coveredHoldings
+    && fills.every(fill => RESULT_FEE_SOURCES.has(fill.feeSource ?? "") && fill.status === "CONFIRMED");
+  const upShares = positions.find(position => position.tokenId === round.upTokenId)?.shares ?? 0;
+  const downShares = positions.find(position => position.tokenId === round.downTokenId)?.shares ?? 0;
+  // Core cost basis already includes fill fees. Do not subtract them twice.
+  return { costUsd, reservedUsd, upShares, downShares, feesVerified,
+    netIfUpUsd: feesVerified ? upShares - costUsd : null,
+    netIfDownUsd: feesVerified ? downShares - costUsd : null,
+    resultScope: "account_market", resultReason: feesVerified ? null : "成交或实际费用尚待确认" };
+}
+
 /** Recent rounds a status line always carries. The ledger shows rounds[-8:]
  * (scripts/dashboard/ledger.py _strategy_projection), so keep at least that. */
 export const STATUS_RECENT_ROUNDS = 8;
@@ -695,25 +723,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       .filter(market => market.startsAt <= now && now < market.endsAt)
       .sort((left, right) => right.startsAt - left.startsAt)[0];
     const strategyStatus = reversal?.getStatus();
-    const enrichRound = (round: NonNullable<typeof strategyStatus>["rounds"][number]) => {
-      const tokens = new Set([round.upTokenId, round.downTokenId]);
-      const positions = (state?.positions ?? []).filter(position => tokens.has(position.tokenId));
-      const costUsd = positions.reduce((total, position) => total + position.costUsd, 0);
-      const reservedUsd = (state?.orders ?? []).filter(order => tokens.has(order.tokenId))
-        .reduce((total, order) => total + order.reservedUsd, 0);
-      const fills = (state?.fills ?? []).filter(fill => tokens.has(fill.tokenId) && fill.status !== "FAILED");
-      const coveredHoldings = [...tokens].every(token => Math.abs(
-        (positions.find(position => position.tokenId === token)?.shares ?? 0)
-        - fills.filter(fill => fill.tokenId === token).reduce((shares, fill) => shares + (fill.direction === "BUY" ? fill.shares : -fill.shares), 0)) < 1e-8);
-      const feesVerified = coveredHoldings && fills.every(fill => fill.feeSource === "reported" && fill.status === "CONFIRMED");
-      const upShares = positions.find(position => position.tokenId === round.upTokenId)?.shares ?? 0;
-      const downShares = positions.find(position => position.tokenId === round.downTokenId)?.shares ?? 0;
-      // Core cost basis already includes fill fees. Do not subtract them twice.
-      return { ...round, costUsd, reservedUsd, upShares, downShares, feesVerified,
-        netIfUpUsd: feesVerified ? upShares - costUsd : null,
-        netIfDownUsd: feesVerified ? downShares - costUsd : null,
-        resultScope: "account_market", resultReason: feesVerified ? null : "成交或实际费用尚待确认" };
-    };
+    const enrichRound = (round: NonNullable<typeof strategyStatus>["rounds"][number]) => ({
+      ...round, ...roundOutcome(round, state) });
     // A market still needs work while it has an active or reconciliation-pending
     // order, an unsettled position, or a non-terminal fill. Such markets stay in
     // the status line no matter how old (BUGS P0-3).
