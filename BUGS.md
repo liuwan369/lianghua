@@ -30,23 +30,6 @@
 - **为什么是 P0**：状态文件每个账户一份、跨运行复用（`system-dashboard-server.py` 1582 行），超限之后每次启动的第一条 running 状态行就超限，一启动就停，只能"清空数据"。`maxRounds=0` 的连续模式下一天之内必到；P1-1 又会把 `maxRounds` 悄悄改成 0。
 - **修法**：summary 只输出当前场和最近 K 场（K≥8，账本只用 `rounds[-8:]`），加上仍有活动订单或未结算的场；markets/snapshots/books 只输出未结束和需要结算恢复的场，让每条状态行远小于 256KB。裁剪 `state.rounds` 时，只能删"已结束、无活动订单、无成交或结算已 confirmed"的场，否则会丢赎回。
 
-### P1-7 成交后几秒内的一次对账，用落后的账户快照把刚成交的现金和持仓抹掉
-
-- **位置**：`backend/engine/src/platform/core.ts` 1322 行 `reconcile` 用账户快照整体替换 `cashUsd`/`positions`；1326-1329 行按 `fill.ts <= cashAt` 给成交标 `accountingCashSuperseded`，不看成交状态。上游唯一的防护 `platform/polymarket.ts` 781-791 行只比较订单 `updatedAt` 和快照时间，拦不住"场馆余额还没反映 MATCHED"的情况。
-- **线上实证**（最近一次运行唯一的一笔成交）：`recv 238.402` 成交 5@0.7（MATCHED），本地现金应为 204.54、持仓 5 股；`239.863` 启动账户恢复；`239.963` 状态变回现金 208.04（成交前的值）、持仓为空、可用 10、占用 0；之后同一笔的 MINED、CONFIRMED 都到了，状态不变，一直错到本场结束（超过 258 秒）。结算记录的 `cash_before_usd=204.54` 证明成交后的真实余额。
-- **复现**（真实 dist，只假造网关，资金上限 10）：成交后用落后 1.5 秒的快照对账 → 现金回到 208.04、持仓空、可用 10；随后 CONFIRMED 也补不回来；再发一笔 8.40 美元的探测单被**接受**，加上已持有的 3.5，合计 11.9 美元，**越过了 10 美元的资金上限**。
-- **影响**：这段时间 core 认为账户没有持仓、资金全部空闲，资金上限、单场预算占用、日内亏损盯市全部算错。线上当时 `maxStages=1`，没有多下单；阶梯配置下同一场后面的阶段会按错误的可用资金下单。P1-8 的 halt 会让 5 秒清理定时器在每次成交后立刻跑恢复，所以这是正常下单路径必然经过的窗口。
-- **修法**：`recoverAccount` 在调用 `reconcile` 前，如果还有非终态成交（MATCHED/MATCHED_NOT_BROADCASTED/RETRYING/MINED），就跳过这一次对账，等它 CONFIRMED 或 FAILED 再跑，和结算路径（`cli/platform.ts` 892 行）同一规则。不要用 throw 实现延后（会置 `recoveryFailureGlobal`）。`accountingCashSuperseded` 只对 CONFIRMED 成交置位。
-- **修 P0-2 时补充的暴露面**（`4ded4ed` 之后）：P0-2 修好后，本地撤掉一笔仍持有预留的挂单会置 `reconciliationPending=true`。5 秒清理定时器（`platform/polymarket.ts` 1052-1054 行）只看 `reconciliationPending`、不看 `localCancellationPending`，所以**每次收盘撤掉"曾收到过 live"的挂单，都会多拉起一次账户恢复**。撤单前若恰好有成交抢到（fill race），这次恢复用的落后快照就可能触发本条的抹除。这不是 P0-2 修复本身的错（撤单后等证据确实该对账），而是放大了本条 P1-7 的触发面。**所以 P1-7 应尽快修**；在它修好之前，也可让 1053 行排除 `localCancellationPending` 的订单，改由 `confirmCancelled`/账户读数自然收敛。
-
-### P1-8 每次下单都会把整个账户短暂置成 halt，并逼出一次立即对账
-
-- **位置**：`backend/engine/src/platform/core.ts` 348-351 行 `refreshReconciliationRisk`：只要存在 SUBMITTING 订单，就置 `halted=true`、原因 `restored orders require reconciliation`，不区分这张单是不是本进程正在提交的。入口是 `observeVenueStatus`（624 行）。解除条件 355-356 行在还有活动订单时不清；`updateRisk`（687 行）只在 `blockedMarketIds` 非空时清。`polymarket.ts` 1052 行因为原因里含 `reconciliation`，每 5 秒触发一次 `recoverAccount`。
-- **线上实证**：user WS 的 `live` 先于 HTTP ACK 到达是常态，线上两次下单都是这样（`238.146` 仍是 SUBMITTING 却已收到 live，`238.15` 才变 OPEN）。旧 run 里订单 `…c15:4` 在 SUBMITTING 时收到 live 后，每 5 秒一次恢复，直到撤单。
-- **复现**（真实 core）：SUBMITTING 期间收到 live → `halted=true`；ACK 变 OPEN、成交变 FILLED 之后仍然 halted；另一个市场的新单被拒，错误是 `restored orders require reconciliation`。
-- **影响**：每次下单后整个账户都处于 halt，同一场后面的阶梯单、其他市场的单都会被拒，直到一次恢复成功。它还是 P1-7 那次"成交后立即对账"的触发源。
-- **修法**：删掉 348-351 行这个分支。磁盘恢复出来的 SUBMITTING 已在构造函数（104-117 行）转成 UNKNOWN 或 REJECTED，并由 120 行设同名 halt，所以这个分支在运行期只会误伤本进程在途的订单。保守做法是条件里加 `&& !this.submissions.has(candidate.clientOrderId)`。
-
 ### P1-9 `--max-rounds` 把不能交易的场也算进去，设 1 场一场都跑不了
 
 - **位置**：`backend/engine/src/cli/platform.ts` 451-475 行 `scheduleMarketEnd`：任何一场只要结束就加进 `marketEndsProcessed`，再和 `maxRounds` 比较。779 行对 `selectedMarkets` 全量调度，其中包含 731-733 行从状态文件回灌的已结束旧市场。策略对中途启动的那一场（`now > startsAt`）直接标 `waiting_next_round`、不交易（`btc-reversal.ts` 421-425 行），但它结束时照样计数。
@@ -62,14 +45,6 @@
 - **根因**（复核员补充）：这一场其实早在 run `141802` 里就 confirmed 过（"持仓已由平台自动赎回"），但那次走的是零余额分支，confirmed 没有落盘，就是 P1-5。落盘缺失导致它永远是候选，Gamma 又已经查不到它。
 - **影响**：每次启动把死市场灌回 markets，每 15 秒一次 Gamma 请求和一条结算事件；和 P1-9 叠加，每次启动当场吃掉一个 `--max-rounds` 计数。没有资金风险，shutdown drain 不会被它拖住。
 - **修法**：先修 P1-5（零余额分支也要写 `state.records` 并 `save()`）。`settlement_market_not_found` 时先查这组 token 的链上余额：全零就按 confirmed 落盘；非零才继续重试。不要只加年龄上界，那会丢掉仍有可赎回代币的场。
-
-### P2-20 部分成交的浮点累加和场馆份额严格比较，订单还挂着时每次对账都失败
-
-- **位置**：`backend/engine/src/platform/core.ts` 1171 行 `order.filledShares += fill.shares` 浮点累加；1309、1334 行和 `polymarket.ts` 881 行用 `!==` 严格比较本地与场馆的 `filledShares`。
-- **线上实证**：状态文件里订单 `…c15:4` 的 `filledShares=101.94999999999999`，由两笔 CONFIRMED 成交 97.85 和 4.1 累加而来，场馆给的是 101.95。
-- **复现**（真实 core + 真实快照解析）：两笔成交后用场馆快照 `size_matched="101.95"` 对账，抛 `apply missing fills before reconciliation`；对照组一笔 101.95 成交正常。线上那张单挂着的约 17.7 秒里每 5 秒一次恢复，全部失败，撤单后才停。
-- **影响**：恢复必然失败，该市场留在 `failedRecoveryMarkets` 里被封；和 P1-8 叠加时全局 halt 解不开（同一条链见 P1-7）。
-- **修法**：三处严格比较改为 `Math.abs(a - b) > EPS`（core 已定义 EPS=1e-8）。可另把 1171 行累加结果按 6 位小数取整，但单靠取整不够，已落盘的 101.94999999999999 仍会失败。
 
 ### P2-16 诊断接口一旦报 degraded，前端就冻结在上一次"正常"的快照上
 
@@ -365,6 +340,20 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### 第 1 批：对账链 — 已修复 `a395db6`（本地已验证、两轮独立审查通过；**待部署后小额实盘验证**）
+
+这四条和 P0-2（`4ded4ed`）是同一条因果链，按 FIX-PROCESS 第 5 节必须同一批部署。
+
+- **P1-8 每次下单都把整个账户置成 halt**：`refreshReconciliationRisk` 的 SUBMITTING 分支加 `!this.submissions.has(clientOrderId)`，本进程在途的单不再触发全账户 halt。磁盘恢复出的在途单仍由构造函数转成 UNKNOWN、按市场阻塞。测试 `regress/P1-8.mjs`：bug 场景在原代码上失败；对照场景确认恢复出的在途单仍被阻塞。
+- **P2-22 ACK 前场馆已撤单却被提成 OPEN**（**修 P1-8 时发现**）：ACK 分支若 `venueStatus` 已是 canceled/expired，改走 `confirmCancelled`。原先被 P1-8 的误 halt 恢复循环"意外兜底"，P1-8 修好后失去兜底，所以同批修。测试 `regress/P2-22.mjs`。
+- **P2-20 浮点累加与场馆份额严格比较**：三处 `!==` 改为 `Math.abs(a-b) > EPS`（core 两处、polymarket 一处）。测试 `regress/P2-20.mjs`：97.85+4.1 能对上 101.95；对照确认真实缺 4.1 股仍被拒。
+- **P1-7 落后快照抹掉刚成交的现金和持仓**：两层。(a) `reconcile` 只对已结算（CONFIRMED/FAILED/无状态）的成交置 `accountingCashSuperseded`；(b) `recoverAccount` 在有**新鲜**临时成交时干净 return、跳过本轮对账，交给 5 秒定时器在成交终态后重试。测试 `regress/P1-7.mjs`。
+  - **审查发现并已修的边界**：跳过若没有上限，一笔永远停在 MATCHED 的成交（进程在成交中途崩溃、场馆 RETRYING 循环）会让所有对账永远跳过、UNKNOWN 订单永远不被解决。已加 60 秒上限 `PROVISIONAL_FILL_MAX_AGE_SEC`：线上 8 笔真实成交 MATCHED→CONFIRMED 用时 6.0–7.9 秒，60 秒留足余量。
+  - **审查确认安全**：跳过对账后 `setRecovering(false)` 会放开 recovery 闸，但未对账的 UNKNOWN 订单所在市场仍被 core 的按市场阻塞（`marketReconciliationBlocked`）挡住，两道闸独立，不会在未对账时放开下单。
+- **全部测试**：`regress/` 下 P0-2、P1-8、P2-22、P2-20、P1-7 共 5 个，外加原有 `check-order-path`、`check-l2-headers`、`check-redundant-feed`，typecheck、build 全绿。每个回归测试都在它要防的原代码上失败过（负对照）。
+- **线上验证（待做）**：部署后小额实盘，见下方"第 1 批实盘验证方案"。
+
 
 ### P0-2 本地撤单后仍占着资金，下一次对账和重启都抛错 — 已修复 `4ded4ed`（本地已验证，待部署后线上验证）
 

@@ -55,5 +55,5 @@
 
 - L0/L1/L2/L3/L4 各层已核对，现状见 MARKET-DATA.md、ORDER-FLOW.md、ACCOUNTING.md。
 - 已上线：双连接（`72f5205`）、双连接按边合并修复 P1-2（`614a747`）、L1 连接保活、L2 下单提速。
-- 已修、**未部署**：P0-2（`4ded4ed`），回归测试 `backend/engine/scripts/regress/P0-2.mjs`。等第 1 批（P1-8、P2-20、P1-7）修完一起部署，见上面第四节第 5 条。
+- 已修、**未部署**（第 1 批，对账链）：P0-2（`4ded4ed`）、P1-8、P2-22（修 P1-8 时新发现）、P2-20、P1-7（`a395db6`）。回归测试 `backend/engine/scripts/regress/` 下 5 个，两轮独立审查通过。**这五条同一批部署**，部署后小额实盘验证通过才算完成、才开始第 2 批。
 - 推送改造前后端代码已全部摸清，结论在 PUSH-ARCHITECTURE.md 第 5 节，直接照做。
