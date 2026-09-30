@@ -109,14 +109,16 @@ export function pruneSettledHistory(state: CoreState, settlementRecords: Record<
     if (traded && !confirmed.has(JSON.stringify([market.assetId ?? "btc", market.id, market.roundId]))) continue;
     dead.add(market.id);
   }
-  if (dead.size === 0) return { state, settlementRecords };
   const deadMarkets = (state.markets ?? []).filter(market => dead.has(market.id));
   const deadTokens = new Set(deadMarkets.flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
-  // The settlement record goes with its round and only then: a record deleted
-  // for a round the engine kept would be settled again on the next start.
-  const deadKeys = new Set(deadMarkets.map(market => JSON.stringify([market.assetId ?? "btc", market.id, market.roundId])));
+  // A confirmed record lives exactly as long as its round: deleted for a round
+  // the engine kept, it would be settled again on the next start; kept for a
+  // round the state no longer has, nothing can ever read it.
+  const keptKeys = new Set((state.markets ?? []).filter(market => !dead.has(market.id))
+    .map(market => JSON.stringify([market.assetId ?? "btc", market.id, market.roundId])));
   const keptRecords = Object.fromEntries(Object.entries(settlementRecords).filter(([key, raw]) =>
-    !(deadKeys.has(key) && (raw as { status?: unknown })?.status === "confirmed")));
+    (raw as { status?: unknown })?.status !== "confirmed" || keptKeys.has(key)));
+  if (dead.size === 0) return { state, settlementRecords: keptRecords };
   return { settlementRecords: keptRecords, state: {
     ...state,
     markets: (state.markets ?? []).filter(market => !dead.has(market.id)),

@@ -88,6 +88,10 @@ assert.ok(coreAccepts(soon), "the real core accepts the partly pruned state");
     }
   }
   assert.ok(!Object.values(left).some((r) => r.roundId === "1790687700"), "the pruned legacy round's record is gone");
+  assert.ok(!Object.values(left).some((r) => r.roundId === "1790323200"),
+    "a confirmed record whose round is no longer in the state (09-26) is gone");
+  assert.ok(Object.values(left).every((r) => r.status !== "confirmed" || keptRounds.has(r.roundId)),
+    "every confirmed record left belongs to a kept round");
   assert.ok(Object.values(left).some((r) => r.roundId === "1790788500"), "a kept round keeps its record");
   assert.equal(Object.values(left).filter((r) => r.status === "failed").length, 3, "failed records stay");
 }
