@@ -255,6 +255,16 @@ def _text(value, maximum=200):
     return value[:maximum] if isinstance(value, str) else None
 
 
+def _exposed_pnl(settled_pnl, unsettled_cost, unsettled_rounds):
+    """Known settled PnL minus the cost still committed to unsettled rounds.
+
+    One formula for every range (BUGS P2-4): metrics_summary used to compute
+    None - cost when no round had a known PnL yet, and crashed the endpoint."""
+    if settled_pnl is not None:
+        return settled_pnl - unsettled_cost
+    return -unsettled_cost if unsettled_rounds else None
+
+
 def _trade_revision(prior, event):
     """Merge one economic trade's lifecycle revisions into one projection."""
     if not prior:
@@ -1936,8 +1946,7 @@ class Ledger:
             unsettled_rounds = int(unsettled["rounds"] or 0) if unsettled else 0
             settled_pnl = result.get("settled_pnl")
             result.update(unsettled_cost=unsettled_cost, unsettled_rounds=unsettled_rounds,
-                          exposed_pnl=(settled_pnl - unsettled_cost) if settled_pnl is not None
-                          else (-unsettled_cost if unsettled_rounds else None))
+                          exposed_pnl=_exposed_pnl(settled_pnl, unsettled_cost, unsettled_rounds))
             try:
                 source_bytes = Path(run["path"]).stat().st_size
                 lag = max(0, source_bytes - run["byte_offset"])
@@ -2240,8 +2249,7 @@ class Ledger:
                     # have a pnl discarded the confirmed total whenever one round
                     # was incomplete — the same withholding this field exists to
                     # replace. settled_pnl_pending carries the caveat.
-                    "exposed_pnl": (known_pnl - unsettled_cost)
-                        if known_pnl is not None or unsettled_rounds else None,
+                    "exposed_pnl": _exposed_pnl(known_pnl, unsettled_cost, len(unsettled_rounds)),
                     "pending_settlements": len(pending_markets),
                     "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
                     "completeness": "incomplete" if stale else "caught_up", "lag_bytes": lag,
