@@ -545,7 +545,12 @@ export class BtcReversalStrategy implements StrategyPlugin {
         || !Number.isFinite(round.startsAt) || round.endsAt - round.startsAt !== 300
         || typeof round.roundId !== "string" || !round.roundId.trim()
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
-        || !Array.isArray(round.stages) || round.stages.length > round.config.maxStages
+        || !Array.isArray(round.stages)
+        // Bound the CONSUMED rungs, not the array length. A rejected or
+        // 0-fill-cancelled stage commits nothing and does not advance the
+        // ladder, so a round can hold more stage records than maxStages while
+        // still having consumed <= maxStages rungs (BUGS P0-1).
+        || BtcReversalStrategy.consumedRungs(round) > round.config.maxStages
         || !Number.isSafeInteger(round.confirmationCount) || round.confirmationCount < 0
         || !["waiting_start", "waiting_next_round", "running", "ended"].includes(round.status)
         || typeof round.firstSampleSeen !== "boolean" || typeof round.rebuildingReference !== "boolean"
@@ -555,21 +560,30 @@ export class BtcReversalStrategy implements StrategyPlugin {
       }
       round.pendingAmbiguity ??= false;
       markets.add(round.marketId);
-      let direction: ReversalDirection | undefined;
+      // Validate stages by the same rule the creation path uses. A stage's size
+      // is stageShares[rungs consumed BEFORE it], not stageShares[array index]:
+      // a rejected/0-fill-cancelled stage consumes no rung, so the next stage
+      // reuses the same size and may repeat the same direction (BUGS P0-1).
+      let direction: ReversalDirection | undefined;      // last LIVE (consumed) direction
+      let lastStageDir: ReversalDirection | undefined;    // direction of the last stage record
+      let consumed = 0;
       for (const [index, stage] of round.stages.entries()) {
         const expectedId = `${state.instanceId}:${round.marketId}:${index + 1}`;
         if (stage.stage !== index + 1 || stage.clientOrderId !== expectedId || clients.has(stage.clientOrderId)
           || !validDirection(stage.direction) || stage.direction === direction
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
-          || stage.price !== round.config.maxBuyPrice || stage.shares !== round.config.stageShares[index]
+          || stage.price !== round.config.maxBuyPrice || stage.shares !== round.config.stageShares[consumed]
           || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares)
           || stage.filledShares < 0 || stage.filledShares > stage.shares + EPS
           || (stage.feeReserveUsd !== undefined && (!Number.isFinite(stage.feeReserveUsd) || stage.feeReserveUsd < 0))
           || !["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN", "ABANDONED"].includes(stage.status)
           || !["initial_band_entry", "crossing"].includes(stage.trigger)) throw new Error("invalid persisted reversal stage");
-        clients.add(stage.clientOrderId); direction = stage.direction;
+        clients.add(stage.clientOrderId);
+        lastStageDir = stage.direction;
+        // Only a consumed rung advances the ladder size and the live direction.
+        if (BtcReversalStrategy.consumedRung(stage)) { direction = stage.direction; consumed += 1; }
       }
-      if (direction !== round.lastStageDirection) throw new Error("invalid persisted stage direction");
+      if (lastStageDir !== round.lastStageDirection) throw new Error("invalid persisted stage direction");
     }
     return state;
   }
