@@ -495,17 +495,41 @@ export function runPolymarketFeed(
     sink({ ...base, healthy: anyHealthy, connected: anyConnected, reason: reason as typeof base.reason, tsUnix: nowUnix() });
   };
 
+  // Each socket emits a full paired snapshot (its own UP and its own DOWN),
+  // and the two sockets are not in lockstep. Merge per side, not per frame:
+  // keep the newest UP and newest DOWN seen across both sockets, and forward
+  // whenever either side advances. Rejecting a whole frame because one side
+  // was older would drop a real cross carried on the side that did advance.
+  let bestUp: NonNullable<BookEvent["snapshot"]["YES"]> | undefined;
+  let bestNo: NonNullable<BookEvent["snapshot"]["NO"]> | undefined;
   const book = (event: BookEvent) => {
     const s = event.snapshot;
     const upAt = s.YES?.sourceAt ?? s.upExchangeTsUnix ?? -Infinity;
     const downAt = s.NO?.sourceAt ?? s.downExchangeTsUnix ?? -Infinity;
-    // Never move a side back, and require real progress on at least one side.
-    if (upAt < lastUpAt || downAt < lastDownAt) return;
-    if (upAt === lastUpAt && downAt === lastDownAt) return;
-    lastUpAt = upAt; lastDownAt = downAt;
+    const upAdvanced = s.YES !== undefined && upAt > lastUpAt;
+    const downAdvanced = s.NO !== undefined && downAt > lastDownAt;
+    if (!upAdvanced && !downAdvanced) return;   // no side moved forward
+    if (upAdvanced) { lastUpAt = upAt; bestUp = s.YES; }
+    if (downAdvanced) { lastDownAt = downAt; bestNo = s.NO; }
+    // A cross needs both sides present; hold the first frame until the other
+    // side has been seen at least once (same as a single socket's first pair).
+    if (!bestUp || !bestNo) return;
     const next = ++sequence;
+    // The merged pair can mix the two sockets, so recompute its timing from the
+    // two sides it actually carries, exactly as the single-socket feed does:
+    // sourceAt is the newer side, and expiry and age follow the OLDER side, so a
+    // stale side can never ride on the fresh side's clock.
+    const upSrc = bestUp.sourceAt, noSrc = bestNo.sourceAt;
+    const nowMs = Date.now();
+    const olderSrc = upSrc != null && noSrc != null ? Math.min(upSrc, noSrc) : undefined;
+    const expiresAt = olderSrc != null ? Math.min(deadline, olderSrc + PM_WS_SOURCE_FRESH_MAX_MS / 1000) : s.expiresAt;
     sink({ ...event, snapshot: { ...s, sequence: next,
-      YES: s.YES && { ...s.YES, sequence: next }, NO: s.NO && { ...s.NO, sequence: next } } });
+      sourceAt: upSrc != null && noSrc != null ? Math.max(upSrc, noSrc) : s.sourceAt,
+      expiresAt,
+      marketAgeMs: olderSrc != null ? Math.max(0, nowMs - olderSrc * 1000) : s.marketAgeMs,
+      upExchangeTsUnix: upSrc, downExchangeTsUnix: noSrc,
+      upBid: bestUp.bid, upAsk: bestUp.ask, downBid: bestNo.bid, downAsk: bestNo.ask,
+      YES: { ...bestUp, expiresAt, sequence: next }, NO: { ...bestNo, expiresAt, sequence: next } } });
   };
 
   const feeds: Feed[] = [];

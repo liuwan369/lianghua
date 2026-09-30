@@ -137,6 +137,34 @@ console.log("PASS 3b sockets out of step: numbering continues across sockets");
 }
 console.log("PASS 3c late older copy from a slower socket is dropped");
 
+// --- 3d. BUGS.md P1-2: sides advance on different sockets ---
+// Socket B alone moves DOWN; socket A alone then moves UP across the trigger
+// while A's own DOWN is still old. The UP cross must reach the consumer
+// immediately, paired with B's newer DOWN. A per-frame merge dropped it.
+{
+  const [a, b] = [...sockets];
+  const t = Math.max(clock + 10, Date.now());
+  const one = (asset_id, ask, ts) => ({ event_type: "book", asset_id, market: "0xm", timestamp: String(ts),
+    bids: [{ price: (ask - 0.01).toFixed(2), size: "100" }], asks: [{ price: ask.toFixed(2), size: "100" }] });
+  const start = books.length;
+  b.send(JSON.stringify([one(UP, 0.60, t), one(DOWN, 0.40, t)]));
+  a.send(JSON.stringify([one(UP, 0.60, t), one(DOWN, 0.40, t)]));
+  await wait(60);
+  b.send(JSON.stringify([one(DOWN, 0.31, t + 100)]));        // DOWN advances on B only
+  await wait(60);
+  a.send(JSON.stringify([one(UP, 0.68, t + 200)]));          // UP crosses on A; A's DOWN is still t
+  await wait(80);
+  clock = t + 200; framesSent += 5;
+  const got = books.slice(start);
+  const cross = got.find(x => x.YES.ask === 0.68);
+  assert.ok(cross, `UP cross forwarded (saw ${JSON.stringify(got.map(x => [x.YES.ask, x.NO.ask]))})`);
+  assert.equal(cross.NO.ask, 0.31, "the cross is paired with the newer DOWN from the other socket");
+  assert.equal(cross.YES.sourceAt, (t + 200) / 1000, "UP carries its own exchange time");
+  assert.equal(cross.NO.sourceAt, (t + 100) / 1000, "DOWN carries its own exchange time");
+  assert.equal(cross.expiresAt, Math.min(START + 300, (t + 100) / 1000 + 2), "expiry follows the older side");
+}
+console.log("PASS 3d per-side merge: a cross on one socket is not held back by the other");
+
 // --- 4. the consumer's gate accepts the merged stream in order ---
 let watermark, accepted = 0;
 const identity = { marketId: "0xm", roundId: String(START), endsAt: START + 300, yesAssetId: UP, noAssetId: DOWN };
