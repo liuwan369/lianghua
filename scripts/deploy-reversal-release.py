@@ -75,8 +75,12 @@ for path in (BUILD / "backend/engine/dist").rglob("*"):
         CONTENT[path.relative_to(BUILD).as_posix()] = path.read_bytes()
 baseline = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=ROOT,
                           text=True, capture_output=True, check=True).stdout.splitlines()[-1]
+# Every path ever deleted, renames included: config/ is no longer swept for
+# untracked files (BUGS P1-11), so a snapshot diff would leave a renamed or
+# added-then-deleted config file behind.
 deleted = subprocess.check_output(
-    ["git", "diff", "--diff-filter=D", "--name-only", baseline, REV], cwd=ROOT, text=True
+    ["git", "log", "--no-renames", "--diff-filter=D", "--name-only", "--format=", baseline + ".." + REV],
+    cwd=ROOT, text=True
 ).splitlines()
 REMOVED = sorted(name for source in deleted if (name := target_name(source)) and release_path(name) and name not in CONTENT)
 MANIFEST = {"revision": REV, "release": RELEASE,
@@ -139,9 +143,12 @@ retired_units_from_manifest={unit_names[name] for name in obsolete if name in un
 # The release is the only active program tree. Remove files left by older
 # dashboard/reference builds even when those files were never part of a
 # previous release manifest. Runtime state and secrets live outside these
-# prefixes and are intentionally excluded.
+# prefixes and are intentionally excluded. config/ is not swept: the dashboard
+# unit reads EnvironmentFile=config/dashboard-secret.env, an operator file git
+# never tracks (BUGS P1-11). Config files git deletes still leave through
+# manifest['removed'].
 cleanup_prefixes=('backend/engine/src/','backend/engine/dist/','backend/reference/',
-                  'frontend/console/','scripts/','config/','shared/contracts/','docs/')
+                  'frontend/console/','scripts/','shared/contracts/','docs/')
 for prefix in cleanup_prefixes:
     base=root/prefix
     if not base.is_dir():
