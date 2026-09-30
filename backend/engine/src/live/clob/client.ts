@@ -395,18 +395,47 @@ export class ClobWrapper {
     }
   }
 
-  /** Keep CLOB session alive (required for some wallet types). Returns stop fn. */
-  startHeartbeat(intervalMs = 25_000): () => void {
+  /** Keep CLOB session alive. Returns stop fn.
+   *
+   * Once an account heartbeats, the venue cancels ALL its open orders when 10 s
+   * pass without the next one. 25 s let every resting order die ~14 s after a
+   * heartbeat (BUGS P1-12). Beat every 5 s as the venue recommends, and retry a
+   * failed beat at once: waiting a full period after one blip crosses 10 s.
+   * The SDK request has no timeout, so each beat gets its own: a half-open
+   * socket would otherwise hold the in-flight guard and stop every later beat. */
+  startHeartbeat(intervalMs = 5_000, beatTimeoutMs = 2_000): () => void {
     this.stopHeartbeat();
+    let inFlight = false;
+    const beat = async () => {
+      // A timed-out reply is dropped by withTimeout, so it can never rewind the id.
+      const resp = await withTimeout(this.client.postHeartbeat(this.heartbeatId), beatTimeoutMs, "CLOB heartbeat");
+      // The SDK returns HTTP failures as { error } instead of throwing; the venue
+      // may still hand back the id to continue the chain.
+      const failed = resp && typeof resp === "object" && "error" in resp
+        ? (resp as { error?: unknown }).error : undefined;
+      const nextId = resp?.heartbeat_id
+        ?? (failed && typeof failed === "object" ? (failed as { heartbeat_id?: string }).heartbeat_id : undefined);
+      if (nextId) this.heartbeatId = nextId;
+      if (failed) throw new Error(typeof failed === "string" ? failed : JSON.stringify(failed));
+      if (resp?.error_msg) {
+        console.warn(`CLOB heartbeat: ${resp.error_msg}`);
+      }
+    };
     const tick = async () => {
+      // A slow beat must not overlap the next one and resend a stale id.
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const resp = await this.client.postHeartbeat(this.heartbeatId);
-        if (resp?.heartbeat_id) this.heartbeatId = resp.heartbeat_id;
-        if (resp?.error_msg) {
-          console.warn(`CLOB heartbeat: ${resp.error_msg}`);
-        }
+        await beat();
       } catch (e) {
-        console.warn(`CLOB heartbeat failed: ${e}`);
+        console.warn(`CLOB heartbeat failed, retrying: ${e}`);
+        try {
+          await beat();
+        } catch (retry) {
+          console.warn(`CLOB heartbeat retry failed: ${retry}`);
+        }
+      } finally {
+        inFlight = false;
       }
     };
     void tick();
