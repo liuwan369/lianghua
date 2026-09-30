@@ -572,12 +572,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
         if (stage.stage !== index + 1 || stage.clientOrderId !== expectedId || clients.has(stage.clientOrderId)
           || !validDirection(stage.direction) || stage.direction === direction
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
-          || stage.price !== round.config.maxBuyPrice
-          // Current sizing is by consumed rungs. Rounds written before that fix
-          // were sized by record index (live round 1790687700: a 0-fill cancel,
-          // then the 18 rung), and that history stays in every state file, so
-          // both are valid; any other size is still corrupt.
-          || (stage.shares !== round.config.stageShares[consumed] && stage.shares !== round.config.stageShares[index])
+          || stage.price !== round.config.maxBuyPrice || stage.shares !== round.config.stageShares[consumed]
           || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares)
           || stage.filledShares < 0 || stage.filledShares > stage.shares + EPS
           || (stage.feeReserveUsd !== undefined && (!Number.isFinite(stage.feeReserveUsd) || stage.feeReserveUsd < 0))

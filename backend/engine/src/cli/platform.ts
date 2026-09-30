@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
@@ -73,6 +73,59 @@ export function summaryView<R extends { marketId: string }, M extends { id: stri
 export function settlementPassWants(market: { id: string; endsAt: number }, now: number,
   done: { has(marketId: string): boolean }): boolean {
   return market.endsAt <= now && !done.has(market.id);
+}
+
+/** How long an ended round stays in the state file after it is fully done. A
+ * late venue frame for a trade arrives within seconds; an hour is ample. */
+export const SETTLED_HISTORY_KEEP_SEC = 3_600;
+
+/** Delete rounds that are completely finished from the persisted state (BUGS
+ * P0-3, the state half). Every round, market, order and fill used to stay in
+ * the state file forever: 28 rounds and 100 KB after one day, restored and
+ * re-validated on every start. A round is deleted only when nothing about it
+ * can still matter: ended over an hour ago, no live or unreconciled order, no
+ * unsettled fill, no position, and, if it traded, a confirmed settlement.
+ * History lives in the journals and the ledger, not here. */
+export function pruneSettledHistory(state: CoreState, settlementRecords: Record<string, unknown>, now: number,
+  keepSec = SETTLED_HISTORY_KEEP_SEC): { state: CoreState; settlementRecords: Record<string, unknown> } {
+  const confirmed = new Set(Object.values(settlementRecords).flatMap(raw => {
+    const record = raw as { status?: unknown; assetId?: unknown; marketId?: unknown; roundId?: unknown };
+    return record?.status === "confirmed" ? [JSON.stringify([record.assetId, record.marketId, record.roundId])] : [];
+  }));
+  const strategy = state.strategyStates?.["btc-reversal"] as BtcReversalState | undefined;
+  const liveStatuses = ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"];
+  const dead = new Set<string>();
+  for (const market of state.markets ?? []) {
+    if (market.endsAt > now - keepSec) continue;
+    const tokens = new Set(market.instruments.map(instrument => instrument.tokenId));
+    const round = strategy?.rounds.find(item => item.marketId === market.id);
+    if (round?.stages.some(stage => liveStatuses.includes(stage.status))) continue;
+    if (state.orders.some(order => tokens.has(order.tokenId)
+      && (liveStatuses.includes(order.status) || order.reconciliationPending))) continue;
+    if (state.fills.some(fill => tokens.has(fill.tokenId) && fill.status && !["CONFIRMED", "FAILED"].includes(fill.status))) continue;
+    if (state.positions.some(position => tokens.has(position.tokenId) && position.shares > 0)) continue;
+    const traded = state.fills.some(fill => tokens.has(fill.tokenId) && fill.status !== "FAILED")
+      || round?.stages.some(stage => stage.filledShares > 0) === true;
+    if (traded && !confirmed.has(JSON.stringify([market.assetId ?? "btc", market.id, market.roundId]))) continue;
+    dead.add(market.id);
+  }
+  if (dead.size === 0) return { state, settlementRecords };
+  const deadMarkets = (state.markets ?? []).filter(market => dead.has(market.id));
+  const deadTokens = new Set(deadMarkets.flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
+  // The settlement record goes with its round and only then: a record deleted
+  // for a round the engine kept would be settled again on the next start.
+  const deadKeys = new Set(deadMarkets.map(market => JSON.stringify([market.assetId ?? "btc", market.id, market.roundId])));
+  const keptRecords = Object.fromEntries(Object.entries(settlementRecords).filter(([key, raw]) =>
+    !(deadKeys.has(key) && (raw as { status?: unknown })?.status === "confirmed")));
+  return { settlementRecords: keptRecords, state: {
+    ...state,
+    markets: (state.markets ?? []).filter(market => !dead.has(market.id)),
+    orders: state.orders.filter(order => !deadTokens.has(order.tokenId)),
+    fills: state.fills.filter(fill => !deadTokens.has(fill.tokenId)),
+    strategyStates: strategy ? { ...state.strategyStates,
+      "btc-reversal": { ...strategy, rounds: strategy.rounds.filter(round => !dead.has(round.marketId)) } }
+      : state.strategyStates,
+  } };
 }
 
 /** Does this closed market count toward --max-rounds? Only a round that began at
@@ -751,7 +804,19 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     if (options.stopFile) stopFileTimer = setInterval(checkStopFile, 150);
     phase = "state_open";
     store = new PlatformStore(options.stateFile);
-    const restored = store.load();
+    const loaded = store.load();
+    const settlementStateFile = `${options.stateFile}.settlements.json`;
+    const settlementFile = existsSync(settlementStateFile)
+      ? JSON.parse(readFileSync(settlementStateFile, "utf8")) as { records?: Record<string, unknown> } : undefined;
+    const pruned = loaded && pruneSettledHistory(loaded, settlementFile?.records ?? {}, Date.now() / 1000);
+    const restored = pruned?.state;
+    if (settlementFile && pruned
+      && Object.keys(pruned.settlementRecords).length !== Object.keys(settlementFile.records ?? {}).length) {
+      // Written before the settlement adapter opens the file, the only other writer.
+      writeFileSync(`${settlementStateFile}.tmp`, JSON.stringify({ ...settlementFile, records: pruned.settlementRecords }),
+        { mode: 0o600 });
+      renameSync(`${settlementStateFile}.tmp`, settlementStateFile);
+    }
     if (strategyConfig) {
       reversal = createBtcReversalStrategy(strategyConfig.config, {
         restoredState: restored?.strategyStates?.["btc-reversal"] as BtcReversalState | undefined,
@@ -798,7 +863,6 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const markets = explicitMarkets ?? validateMarkets(await discoverMarket(options.assetId, undefined, false, discoveryAbort.signal), options.assetId);
     assertInitialMarketIdentity(markets[0], options.expectedMarketIdentity);
     if (continuousMarkets && restored?.markets) {
-      const settlementStateFile = `${options.stateFile}.settlements.json`;
       const settlementState = existsSync(settlementStateFile)
         ? JSON.parse(readFileSync(settlementStateFile, "utf8")) as unknown : undefined;
       const settlementCandidates = reversal

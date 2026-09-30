@@ -8,7 +8,7 @@ import { polygon } from "viem/chains";
 import { loadAccountConfig } from "../live/account.js";
 import { checkSettlementCredentials, envWalletOverrides, inspectWalletAddress, resolveWallet } from "../live/clob/wallet.js";
 import { CTF, PUSD } from "../live/contracts.js";
-import type { PlatformAdapters, SettlementRequest, SettlementResult } from "./contracts.js";
+import type { AssetId, PlatformAdapters, SettlementRequest, SettlementResult } from "./contracts.js";
 import { COLLATERAL_ADAPTER, redemptionPlan, type RedemptionTransaction } from "./settlement.js";
 
 const ctfAbi = parseAbi([
@@ -38,9 +38,8 @@ export interface PreparedSettlementTransaction {
 }
 export interface LiveSettlementRecord {
   marketId: string;
-  /** Added after the original market-id-only persistence format. */
-  roundId?: string;
-  assetId?: string;
+  roundId: string;
+  assetId: AssetId;
   tokenIds: string[];
   status: "prepared" | "submitted" | "confirmed" | "failed";
   operation: "approval" | "redeem";
@@ -137,10 +136,8 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
   if (state.schemaVersion !== 1 || state.wallet.toLowerCase() !== backend.wallet.toLowerCase()
     || !state.records || typeof state.records !== "object"
     || Object.values(state.records).some(record => !record
-      || (record.roundId !== undefined
-        && (typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId)))
-      || (record.assetId !== undefined
-        && (typeof record.assetId !== "string" || !assetIdPattern.test(record.assetId))))) {
+      || typeof record.roundId !== "string" || !/^\d+$/.test(record.roundId)
+      || typeof record.assetId !== "string" || !assetIdPattern.test(record.assetId))) {
     throw new Error("settlement state wallet/schema mismatch");
   }
   const save = async () => {
@@ -151,17 +148,10 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     renameSync(tmp, stateFile);
   };
   const recordKey = (request: SettlementRequest): string => JSON.stringify([request.assetId, request.marketId, request.roundId]);
-  const legacyRoundKey = (request: SettlementRequest): string => JSON.stringify([request.marketId, request.roundId]);
-  const identityError = (request: SettlementRequest, record: LiveSettlementRecord,
-    legacy: "none" | "round" | "market" = "none"): string | undefined => {
+  const identityError = (request: SettlementRequest, record: LiveSettlementRecord): string | undefined => {
     if (record.marketId !== request.marketId) return "settlement_market_identity_changed";
-    if (record.roundId !== request.roundId && !(legacy === "market" && record.roundId === undefined)) {
-      return "settlement_round_identity_changed";
-    }
-    if (record.assetId !== request.assetId
-      && !(legacy !== "none" && record.assetId === undefined && request.assetId === "btc")) {
-      return "settlement_asset_identity_changed";
-    }
+    if (record.roundId !== request.roundId) return "settlement_round_identity_changed";
+    if (record.assetId !== request.assetId) return "settlement_asset_identity_changed";
     if (!Array.isArray(record.tokenIds) || record.tokenIds.length !== request.tokenIds.length
       || request.tokenIds.some(id => !record.tokenIds.includes(id))) return "settlement_token_identity_changed";
     return undefined;
@@ -214,30 +204,8 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     const key = recordKey(request);
     let record: LiveSettlementRecord | undefined = state.records[key];
     const conflictingAsset = Object.values(state.records).find(item => item.marketId === request.marketId
-      && item.roundId === request.roundId && item.assetId !== request.assetId
-      && !(item.assetId === undefined && request.assetId === "btc"));
+      && item.roundId === request.roundId && item.assetId !== request.assetId);
     if (conflictingAsset) return result(request, "unsupported", "settlement_asset_identity_changed", conflictingAsset);
-    if (!record) {
-      // Validate the full stored identity before changing either legacy format.
-      // Only an unlabelled BTC record may acquire an asset, and only the oldest
-      // condition-only format may acquire the caller's discovered round.
-      const priorRoundKey = legacyRoundKey(request);
-      const legacyKey = state.records[priorRoundKey] ? priorRoundKey : request.marketId;
-      const legacy = state.records[legacyKey];
-      if (legacy) {
-        const reason = identityError(request, legacy, legacyKey === priorRoundKey ? "round" : "market");
-        if (reason) return result(request, "unsupported", reason, legacy);
-        record = { ...legacy, assetId: request.assetId, roundId: request.roundId };
-        delete state.records[legacyKey];
-        state.records[key] = record;
-        try { await save(); }
-        catch (error) {
-          delete state.records[key];
-          state.records[legacyKey] = legacy;
-          throw error;
-        }
-      }
-    }
     if (record) {
       const reason = identityError(request, record);
       if (reason) return result(request, "unsupported", reason, record);
