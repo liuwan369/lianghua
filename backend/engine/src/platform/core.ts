@@ -1043,9 +1043,15 @@ export class TradingCore {
         }
         order.status = "CANCELLED";
         this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
-        // Keep the reservation until the user stream or an account read proves
-        // that no fill raced the cancel request.
-        order.reconciliationPending ??= true;
+        // Keep the reservation pending exactly when one is still held, so a fill
+        // that raced the cancel is reconciled. This must track the reservation,
+        // not use `??=`: an order whose reservation was cleared to false by a WS
+        // "live" (:614) or a partial fill (:1177) would, under `??=`, stay
+        // CANCELLED-with-a-reservation and be rejected by validateAccount on the
+        // next reconcile and every restart; and an order whose reservation was
+        // already released to 0 (:619) must NOT be forced back to pending, or
+        // validateAccount rejects a pending order that holds no reservation.
+        order.reconciliationPending = order.reservedUsd > EPS || order.reservedShares > EPS;
       }
     } catch (error) {
       if (!active(order)) return copy(order);
