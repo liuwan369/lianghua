@@ -38,7 +38,33 @@ export interface SettlementRecoveryCandidate {
   tokenIds: string[];
 }
 
-/** Identify ended traded rounds that still need the idempotent settlement adapter. */
+/** Recent rounds a status line always carries. The ledger shows rounds[-8:]
+ * (scripts/dashboard/ledger.py _strategy_projection), so keep at least that. */
+export const STATUS_RECENT_ROUNDS = 8;
+
+/** Bound what one platform_status line carries (BUGS P0-3). Every 2 s the engine
+ * wrote ALL rounds and every market it had ever seen; none were pruned, so the
+ * line grew until the ledger (256 KB per read) and then the journal (1 MB
+ * critical write) rejected it and the engine stopped, on every later start too.
+ *
+ * Keep the current round, the most recent rounds, and anything still needing
+ * work (an active order or an unsettled position). This trims the LINE only: the
+ * strategy's own state and settlementRecoveryCandidates still see every round,
+ * so no pending redemption is ever dropped. */
+export function summaryView<R extends { marketId: string }, M extends { id: string; endsAt: number }>(input: {
+  rounds: R[]; currentRound?: R | null; markets: M[]; now: number; needsWork: (marketId: string) => boolean;
+}): { rounds: R[]; markets: M[] } {
+  const recent = new Set(input.rounds.slice(-STATUS_RECENT_ROUNDS).map(round => round.marketId));
+  if (input.currentRound) recent.add(input.currentRound.marketId);
+  const keepRound = (round: R) => recent.has(round.marketId) || input.needsWork(round.marketId);
+  const rounds = input.rounds.filter(keepRound);
+  const keptRoundIds = new Set(rounds.map(round => round.marketId));
+  // A market stays while it is live or upcoming, or while its round is kept.
+  const markets = input.markets.filter(market => market.endsAt > input.now
+    || keptRoundIds.has(market.id) || input.needsWork(market.id));
+  return { rounds, markets };
+}
+
 /** Does this closed market count toward --max-rounds? Only a round that began at
  * or after the run started can have been traded: the strategy admits a round only
  * when it is discovered before it starts (btc-reversal discover: now <= startsAt),
@@ -53,6 +79,7 @@ export function countsTowardRoundLimit(market: Pick<MarketInfo, "startsAt">, run
   return market.startsAt >= runStartedAtSec;
 }
 
+/** Identify ended traded rounds that still need the idempotent settlement adapter. */
 export function settlementRecoveryCandidates(
   strategyState: unknown,
   settlementState: unknown,
@@ -598,7 +625,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const platform = connection?.platform;
     const state = platform?.account.current();
     const now = Date.now() / 1000;
-    const currentMarket = (platform?.market.list() ?? selectedMarkets)
+    const allMarkets = platform?.market.list() ?? selectedMarkets;
+    const currentMarket = allMarkets
       .filter(market => market.startsAt <= now && now < market.endsAt)
       .sort((left, right) => right.startsAt - left.startsAt)[0];
     const strategyStatus = reversal?.getStatus();
@@ -621,8 +649,36 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         netIfDownUsd: feesVerified ? downShares - costUsd : null,
         resultScope: "account_market", resultReason: feesVerified ? null : "成交或实际费用尚待确认" };
     };
+    // A market still needs work while it has an active or reconciliation-pending
+    // order, an unsettled position, or a non-terminal fill. Such markets stay in
+    // the status line no matter how old (BUGS P0-3).
+    const tokenMarket = new Map<string, string>();
+    for (const market of allMarkets) {
+      for (const instrument of market.instruments) tokenMarket.set(instrument.tokenId, market.id);
+    }
+    const workMarkets = new Set<string>();
+    for (const order of state?.orders ?? []) {
+      if (["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status) || order.reconciliationPending) {
+        const id = tokenMarket.get(order.tokenId); if (id) workMarkets.add(id);
+      }
+    }
+    for (const position of state?.positions ?? []) {
+      if (position.shares > 0) { const id = tokenMarket.get(position.tokenId); if (id) workMarkets.add(id); }
+    }
+    for (const fill of state?.fills ?? []) {
+      if (fill.status && !["CONFIRMED", "FAILED"].includes(fill.status)) {
+        const id = tokenMarket.get(fill.tokenId); if (id) workMarkets.add(id);
+      }
+    }
+    for (const id of settlementRecoveryMarketIds) workMarkets.add(id);
+    const view = summaryView({
+      rounds: strategyStatus?.rounds ?? [], currentRound: strategyStatus?.currentRound ?? null,
+      markets: allMarkets, now, needsWork: marketId => workMarkets.has(marketId),
+    });
+    const viewMarketIds = new Set(view.markets.map(market => market.id));
+    const viewTokens = new Set(view.markets.flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
     const strategyRuntime = strategyStatus ? { ...strategyStatus,
-      rounds: strategyStatus.rounds.map(enrichRound),
+      rounds: view.rounds.map(enrichRound),
       currentRound: strategyStatus.currentRound ? enrichRound(strategyStatus.currentRound) : null } : null;
     const runtime = { schemaVersion: 1, engine: "platform", execution: strategy ? "strategy" : "observation",
       strategy_id: strategy?.id ?? null, status, mode: options.mode, started_at: startedAt,
@@ -643,7 +699,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       strategy_runtime: strategyRuntime,
       journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
-      markets: platform?.market.list() ?? selectedMarkets,
+      markets: view.markets,
       current_market: currentMarket ? {
         marketId: currentMarket.id, roundId: currentMarket.roundId, assetId: currentMarket.assetId ?? options.assetId,
         name: currentMarket.name, startsAt: currentMarket.startsAt, endsAt: currentMarket.endsAt,
@@ -652,8 +708,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       current_round_id: currentMarket?.roundId ?? null,
       // This is the accepted paired snapshot projection. It is cloned by the
       // platform API and is not rebuilt from legacy single-token books.
-      snapshots: platform?.market.snapshots() ?? [],
-      books: (platform?.market.books() ?? []).map(book => {
+      snapshots: (platform?.market.snapshots() ?? []).filter(snapshot => viewMarketIds.has(snapshot.marketId ?? "")),
+      books: (platform?.market.books() ?? []).filter(book => viewTokens.has(book.tokenId)).map(book => {
         const receivedAt = book.receivedAt ?? book.ts;
         const ageMs = Number.isFinite(receivedAt) ? Math.max(0, (now - receivedAt) * 1000) : null;
         const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === book.tokenId));
