@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 from collections import OrderedDict
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import math
 import os
@@ -253,6 +253,19 @@ def _explicit_no_redemption(payload):
 
 def _text(value, maximum=200):
     return value[:maximum] if isinstance(value, str) else None
+
+
+RISK_DAY_TZ = timezone(timedelta(hours=8))
+
+
+def _range_start(range_name, now):
+    """Start of range=today / range=month. The day boundary is 00:00 UTC+8, the
+    same one the engine's daily-loss stop uses (core.ts dayOf), so both "today"
+    figures always cover the same day (BUGS P1-3)."""
+    if range_name not in ("today", "month"):
+        return None
+    midnight = datetime.fromtimestamp(now, RISK_DAY_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (midnight if range_name == "today" else midnight.replace(day=1)).timestamp()
 
 
 def _exposed_pnl(settled_pnl, unsettled_cost, unsettled_rounds):
@@ -2023,14 +2036,12 @@ class Ledger:
         return len(identities)
 
     def metrics_summary(self, run_id, *, range="today", asset_id=None, market_id=None, round_id=None):
-        """Slow, read-only statistics scoped to one account and UTC calendar days."""
+        """Slow, read-only statistics scoped to one account and UTC+8 calendar days."""
         if range not in ("run", "today", "month", "all"):
             raise ValueError("invalid metrics range")
         asset_id = _query_asset(asset_id)
         now = time.time()
-        midnight = datetime.fromtimestamp(now, timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        start = midnight.timestamp() if range == "today" \
-            else midnight.replace(day=1).timestamp() if range == "month" else None
+        start = _range_start(range, now)
         if range == "run" and asset_id is None and market_id is None and round_id is None:
             return {**self.summary(run_id), "range": range, "from": None, "to": now, "as_of": now}
         with self._connect() as db:

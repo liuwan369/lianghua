@@ -330,7 +330,7 @@
       : resource?.status === "unavailable"
         ? noRun ? "暂无已登记运行记录，统计暂不可用；账户配置和行情连接状态独立显示。"
           : error ? `统计读取失败：${error}` : "统计接口待接入。"
-        : "主值为当前运行；今日与当月均按 UTC 统计。");
+        : "主值为当前运行；今日与当月按北京时间（UTC+8）零点起算，与日内止损同一天，只计已结算盈亏。");
     if (!data) {
       // Returning early left the previous run's PnL and win counts in the DOM,
       // so after 清空数据 the console kept showing figures for deleted runs.
