@@ -54,6 +54,8 @@ export interface LiveSettlementRecord {
   cashAfter?: string;
   lastSubmittedAt?: number;
   reason?: string;
+  /** Set when the payout is proven 0 without any transaction. */
+  payoutProof?: "zero_payout";
 }
 export interface LiveSettlementState {
   schemaVersion: 1;
@@ -83,7 +85,9 @@ export interface LiveSettlementBackend {
    * own transaction then burns nothing and credits nothing, which is a payout we
    * already received, not a payout that went missing.
    */
-  externalPayout?(record: LiveSettlementRecord, upToBlock: bigint): Promise<bigint | undefined>;
+  /** pUSD the venue's auto-redeem paid this wallet for the record's tokens, and
+   * the transaction that paid it, so the payout is verifiable (BUGS P1-4). */
+  externalPayout?(record: LiveSettlementRecord, upToBlock: bigint): Promise<{ creditedPusd: bigint; transactionHash: Hex } | undefined>;
   /** True only when the chain clock proves this signed deposit batch can no longer execute. */
   expired?(record: LiveSettlementRecord): Promise<boolean>;
 }
@@ -156,17 +160,38 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       || request.tokenIds.some(id => !record.tokenIds.includes(id))) return "settlement_token_identity_changed";
     return undefined;
   };
+  /** Records confirmed before payouts carried their evidence (BUGS P1-4) have
+   * neither a tx hash nor a zero-payout proof, so they could never be verified.
+   * Look once around the block they were written at. */
+  const addMissingEvidence = async (record: LiveSettlementRecord) => {
+    if (record.operation !== "redeem" || hashPattern.test(record.transactionHash ?? "") || record.payoutProof) return;
+    const around = BigInt(record.fromBlock);
+    const window = { ...record, fromBlock: (around > REDEMPTION_LOOKBACK_BLOCKS ? around - REDEMPTION_LOOKBACK_BLOCKS : 0n).toString() };
+    const external = await backend.externalPayout?.(window, around + REDEMPTION_LOOKBACK_BLOCKS);
+    if (external) {
+      record.transactionHash = external.transactionHash;
+      record.creditedPusd = external.creditedPusd.toString();
+      record.expectedPayout = external.creditedPusd.toString();
+    } else if (record.creditedPusd === "0" && record.expectedPayout === "0"
+      && record.balancesBefore.some(amount => amount !== "0")) {
+      // Tokens were held and nothing was ever paid for them: a proven loss.
+      record.payoutProof = "zero_payout";
+    } else return;
+    await save();
+  };
   const result = (request: SettlementRequest, status: SettlementResult["state"], reason: string, record?: LiveSettlementRecord): SettlementResult => {
     const usd = (raw: string | undefined): number | undefined => {
       if (raw === undefined || !/^\d+$/.test(raw)) return undefined;
       const units = Number(raw);
       return Number.isSafeInteger(units) ? units / 1_000_000 : undefined;
     };
+    const zeroPayout = record?.payoutProof === "zero_payout" && record.creditedPusd === "0" && record.expectedPayout === "0";
     const verified = status === "confirmed" && record?.status === "confirmed" && record.operation === "redeem"
-      && hashPattern.test(record.transactionHash ?? "") && usd(record.creditedPusd) !== undefined;
+      && (hashPattern.test(record.transactionHash ?? "") || zeroPayout) && usd(record.creditedPusd) !== undefined;
     return { marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, state: status, reason,
       transactionId: record?.transactionHash ?? record?.relayerId,
       payoutVerified: verified,
+      ...(verified && zeroPayout ? { payoutProof: "zero_payout" as const } : {}),
       ...(verified ? { creditedUsd: usd(record!.creditedPusd), expectedPayoutUsd: usd(record!.expectedPayout),
         cashBeforeUsd: usd(record!.cashBefore), cashAfterUsd: usd(record!.cashAfter) } : {}) };
   };
@@ -210,7 +235,10 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       const reason = identityError(request, record);
       if (reason) return result(request, "unsupported", reason, record);
     }
-    if (record?.status === "confirmed") return result(request, "confirmed", "pUSD到账已由链上回执确认", record);
+    if (record?.status === "confirmed") {
+      await addMissingEvidence(record).catch(() => undefined);
+      return result(request, "confirmed", "pUSD到账已由链上回执确认", record);
+    }
     if (record?.status === "failed") return result(request, "unsupported", record.reason ?? "settlement_failed", record);
     if (record) {
       let receipt: SettlementReceipt | undefined;
@@ -256,7 +284,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
           // The positions are gone but our transaction paid nothing: another
           // redeemer (the venue's auto-redeem relayer) burned them first. The
           // payout still reached this wallet, so credit it from THEIR receipt.
-          credited = await backend.externalPayout?.(record, receipt.block) ?? credited;
+          credited = (await backend.externalPayout?.(record, receipt.block))?.creditedPusd ?? credited;
         }
         if (after.balances.some(amount => amount !== 0n) || credited < expected) {
           record.status = "failed";
@@ -318,7 +346,8 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       // "never held" (nothing to redeem, expectedPayout 0).
       const confirmed: LiveSettlementRecord = external === undefined
         ? { ...scan, creditedPusd: "0", expectedPayout: "0", cashAfter: before.cash.toString() }
-        : { ...scan, creditedPusd: external.toString(), expectedPayout: external.toString(), cashAfter: before.cash.toString() };
+        : { ...scan, creditedPusd: external.creditedPusd.toString(), expectedPayout: external.creditedPusd.toString(),
+          cashAfter: before.cash.toString(), transactionHash: external.transactionHash };
       state.records[key] = confirmed;
       try { await save(); } catch (error) { delete state.records[key]; throw error; }
       if (external === undefined) return result(request, "confirmed", "链上无该场持仓，无需赎回；未记录赎回收益", confirmed);
@@ -331,16 +360,25 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     const expectedPayout = before.balances.reduce((sum, amount, i) => sum + amount * market.numerators[i]! / market.denominator, 0n);
     if (expectedPayout === 0n) {
       // Only losing tokens are held: redeeming pays nothing and would burn gas or
-      // relayer quota, and block real redeems behind it (BUGS P1-13 review).
-      const lost: LiveSettlementRecord = {
+      // relayer quota, and block real redeems behind it (BUGS P1-13 review). The
+      // ladder buys both sides, so the winning side may already have been
+      // auto-redeemed by the venue: look for that payout before calling it 0.
+      const lookback = before.block > REDEMPTION_LOOKBACK_BLOCKS ? before.block - REDEMPTION_LOOKBACK_BLOCKS : 0n;
+      const held: LiveSettlementRecord = {
         marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
         tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" },
-        fromBlock: before.block.toString(), balancesBefore: before.balances.map(String),
+        fromBlock: lookback.toString(), balancesBefore: before.balances.map(String),
         cashBefore: before.cash.toString(), expectedPayout: "0", creditedPusd: "0", cashAfter: before.cash.toString(),
       };
-      state.records[key] = lost;
+      const external = await backend.externalPayout?.(held, before.block);
+      const settled: LiveSettlementRecord = external
+        ? { ...held, creditedPusd: external.creditedPusd.toString(), expectedPayout: external.creditedPusd.toString(),
+          transactionHash: external.transactionHash }
+        : { ...held, payoutProof: "zero_payout" };
+      state.records[key] = settled;
       try { await save(); } catch (error) { delete state.records[key]; throw error; }
-      return result(request, "confirmed", "本场持仓全部落败，赎回收益为 0，无需链上交易", lost);
+      return result(request, "confirmed", external ? "持仓已由平台自动赎回，pUSD到账已由链上回执确认"
+        : "本场持仓全部落败，赎回收益为 0，无需链上交易", settled);
     }
     const otherPending = Object.values(state.records).find(item => (item.assetId !== request.assetId
       || item.marketId !== request.marketId || item.roundId !== request.roundId)
@@ -565,9 +603,12 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       }
       if (!hashes.size) return undefined;
       // Only a settled receipt proves cash arrived; sum every such redemption.
-      const receipts = await Promise.all([...hashes].map(hash => receiptFor(hash)));
-      return receipts.reduce((sum, item) => item?.status === "success"
-        && item.creditedPusd > 0n ? sum + item.creditedPusd : sum, 0n) || undefined;
+      const receipts = (await Promise.all([...hashes].map(hash => receiptFor(hash))))
+        .filter(item => item?.status === "success" && item.creditedPusd > 0n);
+      if (!receipts.length) return undefined;
+      // The first paying transaction identifies the payout; the amount is the sum.
+      return { creditedPusd: receipts.reduce((sum, item) => sum + item!.creditedPusd, 0n),
+        transactionHash: receipts[0]!.transactionHash };
     },
     async expired(record) {
       if (record.prepared.kind !== "deposit" || !record.prepared.deadline) return false;

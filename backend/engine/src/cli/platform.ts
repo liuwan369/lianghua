@@ -707,7 +707,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         created_at: Date.now() / 1000, market_slug: market?.name ?? null,
         state: event.result.state, reason: event.result.reason ?? null,
         transaction_id: event.result.transactionId ?? null,
-        payout_verified: event.result.payoutVerified === true,
+        payout_verified: event.result.payoutVerified === true, payout_proof: event.result.payoutProof ?? null,
         credited_usd: event.result.creditedUsd ?? null, expected_payout_usd: event.result.expectedPayoutUsd ?? null,
         cash_before_usd: event.result.cashBeforeUsd ?? null, cash_after_usd: event.result.cashAfterUsd ?? null },
       `settlement:${JSON.stringify([event.result.marketId, event.result.roundId ?? market?.roundId ?? null,

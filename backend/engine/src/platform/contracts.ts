@@ -355,6 +355,9 @@ export interface SettlementResult {
   reason?: string;
   /** False for no-holdings completion and pending or failed transactions. */
   payoutVerified?: boolean;
+  /** "zero_payout": only losing tokens were held, the payout vector proves 0 and
+   * no transaction exists. Every other verified payout carries a tx hash. */
+  payoutProof?: "zero_payout";
   creditedUsd?: number;
   expectedPayoutUsd?: number;
   /** Balance observations can include unrelated wallet activity; not round PnL. */

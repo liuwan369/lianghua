@@ -508,10 +508,15 @@ def _projection(record):
         amounts = {field: _number(record.get(field)) for field in
                    ("credited_usd", "expected_payout_usd", "cash_before_usd", "cash_after_usd")}
         credit, expected = amounts["credited_usd"], amounts["expected_payout_usd"]
+        # A losing round has no transaction: the payout vector proves it pays 0
+        # (engine payoutProof "zero_payout", BUGS P1-4). Every other verified
+        # payout needs its transaction hash.
+        zero_payout = record.get("payout_proof") == "zero_payout" and credit == 0 and expected == 0
         verified = (record.get("payout_verified") is True and result["state"] == "confirmed"
-                    and bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", result["transaction_id"] or ""))
+                    and (bool(re.fullmatch(r"0x[0-9a-fA-F]{64}", result["transaction_id"] or "")) or zero_payout)
                     and credit is not None and expected is not None and credit >= expected >= 0)
         result["payout_verified"] = verified
+        result["payout_proof"] = "zero_payout" if verified and zero_payout else None
         result.update({field: amount if verified and amount is not None and amount >= 0 else None
                        for field, amount in amounts.items()})
         result["settlement_required"] = record.get("settlement_required") if isinstance(record.get("settlement_required"), bool) else None
@@ -1491,6 +1496,36 @@ class Ledger:
         return next(iter(matches.values())) if len(matches) == 1 else None
 
     @staticmethod
+    def _settle_in_trading_run(db, run_id, row):
+        """Copy a verified settlement into the account's run that holds the fills
+        for the same asset and round, and settle it there. True if one was found."""
+        if not row["round_id"]:
+            return False
+        targets = db.execute("""SELECT m.run_id, m.market FROM markets m JOIN runs r ON r.run_id=m.run_id
+            WHERE m.run_id!=? AND m.asset_id=? AND m.round_id=? AND m.fills>0
+              AND lower(COALESCE(r.account_id,''))=lower(COALESCE((SELECT account_id FROM runs WHERE run_id=?),''))""",
+                             (run_id, row["asset_id"], row["round_id"], run_id)).fetchall()
+        # One payout can only be booked once. A round traded by two runs (a
+        # restart mid-round) has no single owner: leave it pending, visibly.
+        if len(targets) != 1:
+            return False
+        target = targets[0]
+        existing = db.execute("SELECT verified,payload FROM settlement_details WHERE run_id=? AND market=?",
+                              (target["run_id"], target["market"])).fetchone()
+        if not (existing and existing["verified"]):
+            payload = json.loads(row["payload"])
+            if payload.get("coverage") is None and existing:
+                payload["coverage"] = json.loads(existing["payload"]).get("coverage")
+            db.execute("""INSERT INTO settlement_details
+                (run_id,market,market_id,asset_id,round_id,source_at,verified,pnl,payload) VALUES(?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(run_id,market) DO UPDATE SET market_id=excluded.market_id,asset_id=excluded.asset_id,
+                round_id=excluded.round_id,source_at=excluded.source_at,verified=excluded.verified,payload=excluded.payload""",
+                       (target["run_id"], target["market"], row["market_id"], row["asset_id"], row["round_id"],
+                        row["source_at"], row["verified"], None, json.dumps(payload, allow_nan=False)))
+            Ledger._refresh_settlement(db, target["run_id"], target["market"], row["asset_id"])
+        return True
+
+    @staticmethod
     def _refresh_settlement(db, run_id, market, asset_id=None):
         if not asset_id:
             return
@@ -1500,9 +1535,14 @@ class Ledger:
         payload = json.loads(row["payload"])
         market_row = db.execute("SELECT fills FROM markets WHERE run_id=? AND asset_id=? AND market=?",
                                 (run_id, asset_id, market)).fetchone()
+        # The venue usually settles a round after the run that traded it has
+        # stopped, so the confirmation lands in the NEXT run, which has no fills
+        # for it. Book it where the fills are (BUGS P1-4); here it is a no-trade.
+        handed_over = (row["verified"] and (market_row is None or not market_row["fills"])
+                       and Ledger._settle_in_trading_run(db, run_id, row))
         no_redemption = not row["verified"] and _explicit_no_redemption(payload)
-        no_trade = (not row["verified"] and market_row is not None and market_row["fills"] == 0
-                    and (no_redemption or _explicit_zero_coverage(payload.get("coverage"))))
+        no_trade = handed_over or (not row["verified"] and market_row is not None and market_row["fills"] == 0
+                                   and (no_redemption or _explicit_zero_coverage(payload.get("coverage"))))
         pnl = None
         reason = "payout_unverified"
         accounting_state = "pending"
@@ -1547,7 +1587,13 @@ class Ledger:
                     sign = 1 if item["direction"] == "BUY" else -1
                     net_shares[item["token_id"]] += sign * item["shares"]
                     net_cost += sign * item["amount"] + item["fee"]
-                if all(abs(net_shares[token] - shares) < 1e-6 for token, shares in coverage.items()):
+                # Coverage is what the account still held at settlement. A
+                # redemption (ours or the venue's) can only lower it, so held
+                # <= bought proves no buy is missing; held == bought was wrong
+                # for every already-redeemed winner (BUGS P1-4). A payout above
+                # 1 USD per bought share would mean a missing fill.
+                if (all(shares <= net_shares[token] + 1e-6 for token, shares in coverage.items())
+                        and payload["credited_usd"] <= sum(max(0.0, value) for value in net_shares.values()) + 1e-6):
                     pnl = _number(payload["credited_usd"] - net_cost)
                     reason = None if pnl is not None else "invalid_pnl"
         payload.update(pnl=pnl, accounting_state=accounting_state, pnl_error=reason,

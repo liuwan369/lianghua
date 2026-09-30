@@ -15,7 +15,8 @@ const WALLET = "0x" + "a1".repeat(20);
 const UP = "111", DOWN = "222";
 const req = { assetId: "btc", marketId: "0x" + "cd".repeat(32), roundId: "1790773800", tokenIds: [UP, DOWN] };
 
-function backend({ marketFound = () => true, external = 5_000_000n } = {}) {
+function backend({ marketFound = () => true,
+  external = { creditedPusd: 5_000_000n, transactionHash: "0x" + "ef".repeat(32) } } = {}) {
   const calls = { market: 0 };
   return { calls, b: {
     wallet: WALLET,
