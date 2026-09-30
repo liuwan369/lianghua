@@ -272,9 +272,11 @@ def _trade_revision(prior, event):
                 and new_time >= old_time)
     # The runtime treats CONFIRMED as terminal. A later journal record from a
     # restart must not regress it to FAILED; FAILED is only a valid transition
-    # while the fill is still non-terminal.
+    # while the fill is still non-terminal. Every revision of one trade carries
+    # the venue's unchanging match_time, so a FAILED at the SAME time is the
+    # real failure, not an old record (BUGS P1-6).
     newer_failure = (new_status == "FAILED" and old_status not in ("CONFIRMED", "FAILED")
-                     and new_time > old_time)
+                     and new_time >= old_time)
     if old_time > 0 and new_time > 0 and new_time < old_time:
         return None
     if new_status == old_status:
