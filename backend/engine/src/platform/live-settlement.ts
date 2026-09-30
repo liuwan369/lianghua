@@ -287,7 +287,29 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
           ? "pUSD到账已由链上回执确认" : "持仓已由平台自动赎回，pUSD到账已由链上回执确认", record);
       }
     }
-    const market = await backend.market(request);
+    let market: MarketResolution;
+    try { market = await backend.market(request); }
+    catch (error) {
+      if (!(error instanceof UnsupportedSettlement) || error.message !== "settlement_market_not_found") throw error;
+      // The venue no longer lists this round, so its payout vector cannot be
+      // read. Check what is still held instead: if the wallet holds none of the
+      // round's tokens there is nothing left to redeem, so record it settled and
+      // stop requeueing it every 15 s (BUGS P2-19). If any token is still held,
+      // keep failing so the funds are never silently dropped. request.tokenIds
+      // are already validated as this round's pair by the platform wrapper.
+      const held = await backend.balances(request.tokenIds);
+      if (held.balances.some(amount => amount !== 0n)) throw error;
+      const settled: LiveSettlementRecord = {
+        marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
+        tokenIds: request.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" },
+        fromBlock: held.block.toString(), balancesBefore: held.balances.map(String),
+        cashBefore: held.cash.toString(), expectedPayout: "0", creditedPusd: "0", cashAfter: held.cash.toString(),
+        reason: "settlement_market_not_found_zero_balance",
+      };
+      state.records[key] = settled;
+      try { await save(); } catch (saveError) { delete state.records[key]; throw saveError; }
+      return result(request, "confirmed", "场次已下架，链上已无该场持仓，无需赎回", settled);
+    }
     if (market.negRisk) return result(request, "unsupported", "neg_risk_redemption_not_supported_by_this_sender");
     if (market.denominator === 0n) return result(request, "pending", "等待官方结算结果");
     const before = await backend.balances(market.tokenIds);
@@ -303,10 +325,19 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
         balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(), expectedPayout: "0",
       };
       const external = await backend.externalPayout?.(scan, before.block);
-      if (external === undefined) return result(request, "confirmed", "链上无该场持仓，无需赎回；未记录赎回收益");
-      return result(request, "confirmed", "持仓已由平台自动赎回，pUSD到账已由链上回执确认", {
-        ...scan, creditedPusd: external.toString(), expectedPayout: external.toString(), cashAfter: before.cash.toString(),
-      });
+      // Persist the terminal result, as the redeem path does at :282-285. Without
+      // a record the next poll re-queries backend.market(); once the venue stops
+      // listing an old round that throws settlement_market_not_found forever, so
+      // the round is never recorded as settled and keeps requeueing (BUGS P1-5,
+      // the root cause of P2-19). Record both outcomes: a relayer payout, and
+      // "never held" (nothing to redeem, expectedPayout 0).
+      const confirmed: LiveSettlementRecord = external === undefined
+        ? { ...scan, creditedPusd: "0", expectedPayout: "0", cashAfter: before.cash.toString() }
+        : { ...scan, creditedPusd: external.toString(), expectedPayout: external.toString(), cashAfter: before.cash.toString() };
+      state.records[key] = confirmed;
+      try { await save(); } catch (error) { delete state.records[key]; throw error; }
+      if (external === undefined) return result(request, "confirmed", "链上无该场持仓，无需赎回；未记录赎回收益", confirmed);
+      return result(request, "confirmed", "持仓已由平台自动赎回，pUSD到账已由链上回执确认", confirmed);
     }
     if (market.numerators.length !== 2 || market.numerators.some(value => value < 0n)
       || market.numerators[0]! + market.numerators[1]! !== market.denominator) {
