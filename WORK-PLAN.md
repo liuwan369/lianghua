@@ -42,7 +42,7 @@
 
 | # | 条目 | 文件 | 要点 | 依赖 |
 |---|---|---|---|---|
-| A1 | ☐ **P0-2** 本地撤单后仍占资金，对账和重启都抛错 | `backend/engine/src/platform/core.ts` 1048 | `??=` 改 `=`，一行。**最容易触发**：收盘撤已 live 挂单就走这条 | 无 |
+| A1 | ☑ **P0-2** 本地撤单后仍占资金，对账和重启都抛错 — `4ded4ed`（本地已验证，待线上验证） | `backend/engine/src/platform/core.ts` 1048 | 改成 `pending = 仍持有预留`，**不是** `??=` 改 `=`：独立审查发现 `= true` 会在"撤单在途时预留已被释放"时引入新 bug，见 BUGS.md 已修复 P0-2。回归测试 `scripts/regress/P0-2.mjs` | 无 |
 | A2 | ☐ **P0-1** 一次被拒订单后引擎可能起不来 | `backend/engine/src/strategies/btc-reversal.ts` restore / 建阶段 | 恢复校验改用"已用级数"规则 | 无 |
 | A3 | ☐ **P0-3** 策略状态只增不减，约 17 小时后自停 | `btc-reversal.ts` 426、`platform/platform.ts` 四个 Map、`cli/platform.ts` 581-641 | 状态行只输出当前场 + 最近 8 场 + 未结算场；裁剪时绝不能删未结算场（会丢赎回） | 无 |
 | A4 | ☐ 验证 | `backend/engine/scripts/` | 给 A1/A2 加回归测试（复用 `check-order-path.mjs` 的场景）；A3 用 dist 模拟 1000 场确认单行 < 256KB | A1-A3 |

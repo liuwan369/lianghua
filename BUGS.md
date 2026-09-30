@@ -20,17 +20,6 @@
 - **线上**：9 个 journal 里被拒订单为 0，还没触发过。零成交撤单不会触发（已测）。
 - **修法**：恢复校验改用和创建阶段相同的"已用级数"规则；另加回归测试。
 
-### P0-2 本地撤单后仍占着资金，下一次对账和重启都抛错
-
-- **位置**：`backend/engine/src/platform/core.ts` 1048 行 `order.reconciliationPending ??= true`。
-- **原因**：`??=` 只在值是 `undefined` 时才赋值。订单只要先收到过 user WS 的 `live` 状态（614 行置 `false`），或先有部分成交（1177 行附近），`reconciliationPending` 就已经是 `false`，本地撤单时这一行不会改它。结果订单状态是 `CANCELLED`、`reconciliationPending=false`，却还占着资金（`reservedUsd > 0`）。`validateAccount`（185 行）规定"非待定订单不能有预留"，于是抛 `invalid account order`。
-- **复现**（改自项目自带的 `scripts/check-order-path.mjs`，真实 TradingPlatform/Core/Store/Strategy，只假造网关）：
-  - ACK → user WS 推 `live` → 本地撤单：`CANCELLED reconciliationPending=false reservedUsd=3.55`；`reconcile()` 抛 `invalid account order`，**重启也抛同样的错**。
-  - ACK → 部分成交 2 股 → 本地撤单：`CANCELLED reconciliationPending=false reservedUsd=2.13`；对账和重启同样抛错。
-  - 对照：ACK 后直接撤单（中间没有 live）正常，`reconciliationPending=true`。
-- **为什么是 P0**：user WS 推 `live` 是常态，线上两笔撤单的历史里都有它（`venue_status=live, source=user_ws`）。策略收盘撤掉未成交挂单（`btc-reversal.ts` 251-268 行）走的就是这条本地撤单路径。线上那两笔恰好是交易所先撤的（`cancellation_source=user_ws`），走了另一条路才没出事。只要有一次由我们自己在收盘时撤掉一笔已经 `live` 的挂单，账户对账就一直失败；状态文件每个账户一份，之后每次启动都在恢复阶段抛错，引擎起不来。
-- **修法**：1048 行改为 `order.reconciliationPending = true`（本地撤单一律待定，直到 WS 或账户读数证明没有成交抢在撤单前）。加回归测试覆盖上面两个场景。
-
 ### P0-3 策略状态只增不减，连续运行约 17 小时后引擎自停，之后每次启动即停
 
 - **位置**：`backend/engine/src/strategies/btc-reversal.ts` 426 行 `discover` 只 push，全仓没有裁剪 `state.rounds`；`platform/platform.ts` 的 markets/books/snapshots 四个 Map 也只 set 不 delete。`cli/platform.ts` 581-641 行每 2 秒把它们全部写进一条 `platform_status`；`platform/journal.ts` 60 行关键写单行超过 1MB 就失败；657-658 行失败即 `requestStop("journal_failed")`。
@@ -48,6 +37,7 @@
 - **复现**（真实 dist，只假造网关，资金上限 10）：成交后用落后 1.5 秒的快照对账 → 现金回到 208.04、持仓空、可用 10；随后 CONFIRMED 也补不回来；再发一笔 8.40 美元的探测单被**接受**，加上已持有的 3.5，合计 11.9 美元，**越过了 10 美元的资金上限**。
 - **影响**：这段时间 core 认为账户没有持仓、资金全部空闲，资金上限、单场预算占用、日内亏损盯市全部算错。线上当时 `maxStages=1`，没有多下单；阶梯配置下同一场后面的阶段会按错误的可用资金下单。P1-8 的 halt 会让 5 秒清理定时器在每次成交后立刻跑恢复，所以这是正常下单路径必然经过的窗口。
 - **修法**：`recoverAccount` 在调用 `reconcile` 前，如果还有非终态成交（MATCHED/MATCHED_NOT_BROADCASTED/RETRYING/MINED），就跳过这一次对账，等它 CONFIRMED 或 FAILED 再跑，和结算路径（`cli/platform.ts` 892 行）同一规则。不要用 throw 实现延后（会置 `recoveryFailureGlobal`）。`accountingCashSuperseded` 只对 CONFIRMED 成交置位。
+- **修 P0-2 时补充的暴露面**（`4ded4ed` 之后）：P0-2 修好后，本地撤掉一笔仍持有预留的挂单会置 `reconciliationPending=true`。5 秒清理定时器（`platform/polymarket.ts` 1052-1054 行）只看 `reconciliationPending`、不看 `localCancellationPending`，所以**每次收盘撤掉"曾收到过 live"的挂单，都会多拉起一次账户恢复**。撤单前若恰好有成交抢到（fill race），这次恢复用的落后快照就可能触发本条的抹除。这不是 P0-2 修复本身的错（撤单后等证据确实该对账），而是放大了本条 P1-7 的触发面。**所以 P1-7 应尽快修**；在它修好之前，也可让 1053 行排除 `localCancellationPending` 的订单，改由 `confirmCancelled`/账户读数自然收敛。
 
 ### P1-8 每次下单都会把整个账户短暂置成 halt，并逼出一次立即对账
 
@@ -348,6 +338,14 @@
 
 - **位置**：`backend/engine/src/live/feeds/user.ts` 153-157 行按 `match_time` 计算 `authenticated_trade_report`，每个状态修订都算一次，MINED/CONFIRMED 比 MATCHED 晚几秒，延迟统计因此偏高。只影响延迟监控，不影响交易。
 
+### P2-21 自动交易页启动按钮会误报"服务器进程状态未知"
+
+- **位置**：`frontend/console/auto-trade-block.js` 1243-1246 行 `refreshRuntime`：`if (!context.assetId || !context.marketId || !context.roundId) { scheduleRuntimeRefresh(); return ... }`。运行状态的轮询**要求先有完整的市场身份**才会发请求。启动闸（1007-1008 行）用 `globalRuntime || selectedRuntime || { processRunning }`，这两个都没设时 `processRunning` 为 undefined，`runtimeStartBlockReason`（`view-model.js` 162 行）返回"服务器进程状态未知，暂不允许启动"。
+- **现象**（用户截图 14:43:16）：服务器实际正常（`/api/runtime/status` 200、`status=stopped`、`processRunning=false`），页面却显示"暂不能启动：服务器进程状态未知""数据连接：后端未连接 · 等待快照""所选市场状态待接入"。**进程状态是全局事实，不依赖选了哪个市场**，却被市场身份卡住了。
+- **触发**：任何时候市场目录暂时没有"当前场"——页面刚打开、换场窗口（见 **P2-5**，每场结束前约 105 秒当前场被判不完整）——运行状态轮询就停在原地，启动闸误报。另有一条：一次网络抖动走到 `retainOnError`（`api-adapter.js` 30 行把 `processRunningFresh` 置 false），也会让启动闸短暂报"未知"，下一次成功轮询才恢复（本地用真实 view-model 复现）。
+- **影响**：操作员以为服务器出问题、启动不了；其实服务器好好的，只是页面没去问。不影响交易本身。
+- **修法**：运行状态（进程是否在跑）的全局轮询**不依赖市场身份**，页面一加载就轮询；只有按场次作用域的那部分（本场状态、暂停/停止）才要求身份匹配。启动闸只看全局进程状态。
+
 ### P3-1 提示类事件显示成红色
 
 - **位置**：`scripts/system-dashboard-server.py` 的 `_event_dto`（2358 行）把所有 `kind=error` 的事件都标成 `severity="error"`，前端 `vm.eventSeverity` 又以后端给的 severity 为准，按代码细分的规则因此失效。
@@ -367,6 +365,20 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### P0-2 本地撤单后仍占着资金，下一次对账和重启都抛错 — 已修复 `4ded4ed`（本地已验证，待部署后线上验证）
+
+- **原问题**：`core.ts` 撤单成功分支 `order.reconciliationPending ??= true`。订单先收到 WS `live`（614 行置 false）或先有部分成交（1177 行附近置 false）后，这一行不会改它，结果 `CANCELLED + reconciliationPending=false + reservedUsd>0`，`validateAccount`（185 行）拒绝，对账和每次重启都抛 `invalid account order`，引擎起不来。收盘撤已 live 的挂单就走这条，WS live 先于 ACK 是常态。
+- **修法**：`order.reconciliationPending = order.reservedUsd > EPS || order.reservedShares > EPS`——pending 严格跟随"是否还持有预留"，正好就是 `validateAccount` 的不变量。
+- **为什么不是 BUGS 原修法的 `= true`**：独立审查发现另一条路径。撤单 HTTP 在途时，User WS 先推 `orderCancelled`（`confirmCancelled` 置 CANCELLED、保留预留），再来一条非撤单状态，`core.ts:619` 对已终态订单把预留清成 0。此时强制 `pending=true` 会得到 `CANCELLED + pending=true + reserved=0`，同样被 `validateAccount` 拒、重启挂。所以原修法本身会引入新 bug，已改为按预留判断。
+- **测试**：`backend/engine/scripts/regress/P0-2.mjs`，真实 TradingPlatform/Core/Store/Strategy，只假造网关，四个场景，每个都在它要防的版本上失败过：
+  - A：WS live → 本地撤单。原 `??=` 失败，修复后通过。
+  - B：部分成交 → 本地撤单。原 `??=` 失败，修复后通过。
+  - 对照：直接撤单，改前改后都通过（没误伤正常路径）。
+  - C：撤单在途时预留被释放到 0。`= true` 失败，修复后通过（防住审查员发现的回归）。
+  - 原有三个检查脚本 `check-order-path`、`check-l2-headers`、`check-redundant-feed` 全部仍通过；typecheck、build 干净。
+- **线上验证（待做）**：需部署后按 FIX-PROCESS 第 5 节 d 档小额实盘——挂一笔远离盘口的 5 股单，等 WS 报 live，本地撤单，确认状态文件里 `reconciliationPending=true`、下一次对账后 `reservedUsd=0`、重启正常。部署会在你补完剩余 bug 后，和同批修复一起做。
+- **连带影响**：本修复让收盘撤单会多拉一次账户恢复，放大了 P1-7 的触发面，已记在 P1-7 条目里，P1-7 需尽快修。
 
 ### P1-2 双 socket 合并会丢掉真实的价格变化，触发信号被延后 — 已修复 `614a747`
 
