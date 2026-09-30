@@ -352,7 +352,20 @@
   - **审查发现并已修的边界**：跳过若没有上限，一笔永远停在 MATCHED 的成交（进程在成交中途崩溃、场馆 RETRYING 循环）会让所有对账永远跳过、UNKNOWN 订单永远不被解决。已加 60 秒上限 `PROVISIONAL_FILL_MAX_AGE_SEC`：线上 8 笔真实成交 MATCHED→CONFIRMED 用时 6.0–7.9 秒，60 秒留足余量。
   - **审查确认安全**：跳过对账后 `setRecovering(false)` 会放开 recovery 闸，但未对账的 UNKNOWN 订单所在市场仍被 core 的按市场阻塞（`marketReconciliationBlocked`）挡住，两道闸独立，不会在未对账时放开下单。
 - **全部测试**：`regress/` 下 P0-2、P1-8、P2-22、P2-20、P1-7 共 5 个，外加原有 `check-order-path`、`check-l2-headers`、`check-redundant-feed`，typecheck、build 全绿。每个回归测试都在它要防的原代码上失败过（负对照）。
-- **线上验证（待做）**：部署后小额实盘，见下方"第 1 批实盘验证方案"。
+- **线上验证（待做）**：部署后小额实盘，方案如下。
+
+#### 第 1 批实盘验证方案（需用户确认后执行）
+
+- **用的配置**：线上现有生效版本 22，不改：`stageShares=[5]`、`maxStages=1`、`roundBudgetUsd=5`、`totalBudgetUsd=10`、`dailyLossUsd=10`、`maxRounds=3`。每场最多买 5 股 × 0.70 = **3.5 美元**，总占用上限 **10 美元**，日内亏损到 10 美元自动停。
+- **最坏损失**：约 10 美元（3 场都买在输的一边、全部归零）。账户当前 209.54 pUSD、无挂单。
+- **要看到的四件事**（都从服务器 journal 和状态文件里取证据）：
+  1. **P1-8**：下单时 WS `live` 先于 ACK 到达（线上常态），账户**不再**进入 `halted=true, reason=restored orders require reconciliation`。
+  2. **P1-7**：成交后几秒内若发生账户恢复，持仓和现金**不被抹掉**；成交 CONFIRMED 后下一次对账正常收敛，持仓数与场馆一致。
+  3. **P0-2**：场次结束时策略撤掉未成交的挂单（若有），之后对账和重启**都不抛** `invalid account order`；撤单后预留在下一次对账释放。
+  4. **P2-20**：若出现多笔部分成交，对账**不再**因 `apply missing fills` 失败。
+- **P2-22**：场馆在 ACK 前推撤单的情况线上从未出现过，实盘里多半遇不到；靠回归测试保证。
+- **注意 P1-9 仍未修**（第 2 批）：`maxRounds=3` 实际只会交易约 1-2 场（中途启动那场和回灌旧场会吃掉计数）。这不影响第 1 批的验证，只是交易场数比 3 少，也让最坏损失低于 10 美元。
+- **通过标准**：引擎正常停在 `round_limit_reached`，journal 里没有 `invalid account order`、`apply missing fills` 的失败循环、全账户误 halt，停机后状态文件能正常恢复。任何一条不满足就重新部署上一个版本 `614a747`。
 
 
 ### P0-2 本地撤单后仍占着资金，下一次对账和重启都抛错 — 已修复 `4ded4ed`（本地已验证，待部署后线上验证）
