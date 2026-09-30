@@ -65,6 +65,16 @@ export function summaryView<R extends { marketId: string }, M extends { id: stri
   return { rounds, markets };
 }
 
+/** Should this settlement pass look at the market at all? Not before it ends,
+ * and never again once this process saw it terminal or confirmed: a confirmed
+ * market re-settled every 15 s answered from its record, but each answer ran a
+ * full account recovery whose account_recovery_started reset the strategy's
+ * quote baselines, 160 times in one live run (BUGS P2-23). */
+export function settlementPassWants(market: { id: string; endsAt: number }, now: number,
+  done: { has(marketId: string): boolean }): boolean {
+  return market.endsAt <= now && !done.has(market.id);
+}
+
 /** Does this closed market count toward --max-rounds? Only a round that began at
  * or after the run started can have been traded: the strategy admits a round only
  * when it is discovered before it starts (btc-reversal discover: now <= startsAt),
@@ -947,6 +957,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
               && round.stages.some(stage => Number(stage.filledShares) > 0
                 || ["PARTIAL", "FILLED"].includes(String(stage.status))))
             .map(round => round.marketId));
+          const settledOrTerminal = { has: (marketId: string) =>
+            terminalSettlements.has(marketId) || confirmedSettlements.has(marketId) };
           const runSettlementPass = async (draining = false) => {
             const state = connection!.platform.account.current(), now = Date.now() / 1000;
             const runMarketIds = currentRunMarketIds();
@@ -958,7 +970,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
               .sort((left, right) => Number(right.mine) - Number(left.mine)
                 || right.market.endsAt - left.market.endsAt);
             for (const { market } of queue) {
-              if (market.endsAt > now || terminalSettlements.has(market.id)) continue;
+              if (!settlementPassWants(market, now, settledOrTerminal)) continue;
               // Historical recovery remains available during normal runtime,
               // but shutdown only waits for markets traded by this run.
               if (draining && !runMarketIds.has(market.id)) continue;
