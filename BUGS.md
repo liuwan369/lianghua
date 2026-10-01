@@ -40,13 +40,6 @@
 - **影响**：末段窗口内启动全部失败，报的是通用错误（P2-7）。fail-closed，不下单不亏钱，但每场末段确定性挡住进场。
 - **修法**：启动不要用 `nextRound` 行作为初始身份——`_start_trading` 里若选中行 `current!=true`/`nextRound=true` 则拒绝或改用当前直播场；或启动时不传 `--expected-market-id`，让引擎发现当前场后再由连续发现推进。修 P2-5（末段不提前切场）后这条也会消失。
 
-### P2-11 `/api/runtime/status` 在每次启动的头 0–3 秒崩溃，连接直接断开
-
-- **位置**：`scripts/system-dashboard-server.py` 1286 行 `runtime_row_fresh = (runtime.get("stale") ...)`，相邻 1280/1281/1289 行都有 `isinstance(runtime, dict)` 保护，唯独这里没有。
-- **线上实证**：`dashboard-service.log` 里有 5 条一模一样的 `AttributeError: 'NoneType' object has no attribute 'get'`，时间都在 run 创建后 0–1 秒（12:51:04、12:59:47、13:11:44、14:18:02、14:18:05）。
-- **影响**：`AttributeError` 不在 `do_GET` 的 except 列表里，服务器连 500 都不返回，直接断连。受影响的有 `/api/runtime/status`、`/api/bootstrap`、`/api/diagnostics/health`、`/api/v1/status`、`/api/strategy/config`、`/api/runtime/market-pool`。恰好是操作员点完启动、确认有没有启动成功的那几秒，前端只看到网络错误。不影响下单。
-- **修法**：1286 行加 `isinstance(runtime, dict) and`。
-
 ### P2-12 已预热场次的配置没有冻结，与"下一场才生效"的承诺不符
 
 - **位置**：`backend/engine/src/strategies/btc-reversal.ts` 271-272 行：场次从 `waiting_start` 转为 `running` 时执行 `round.config = clone(this.state.config)`，把建场时（423 行）冻结的配置换成此刻的实时配置。
@@ -73,19 +66,6 @@
 - **位置**：`btc-reversal.ts` 235-243 行，`account_recovery_started` 不带 marketId，`resetQuoteReference(undefined)` 失效全部在跑场次。场次刚转 running、首帧还没到时发生，就要连吞两帧才开始识别跨价。
 - **复现**（dist）：对照组第二帧跨价直接下单；实验组第二帧只建基线，这次跨价丢失。线上在 1790704500 场次边界确实出现过这个前置条件。
 - **修法**：对 `firstSampleSeen=false` 的场次不置 `rebuildingReference`。
-
-### P1-1 界面保存策略时，`maxRounds` 被悄悄清零
-
-- **位置**：`frontend/console/shared/api-adapter.js` 的 `saveStrategy`（462-476 行）按固定白名单重建 config，白名单里漏了 `maxRounds`。
-- **原因**：表单有传（`strategy-block.js` 281 行），在 adapter 这一层被丢掉。后端 `scripts/dashboard/strategy_config.py` 42-44 行发现缺字段，按默认值 0（不限场次）补上。
-- **线上实证**：生效版本 22 的 `maxRounds=3`，服务器上那份草稿的 `maxRounds=0`。在界面上保存再激活后，"跑 3 场就停"会变成"一直跑"。
-- **修法**：白名单加 `maxRounds: values.maxRounds ?? 0`。
-
-### P2-2 盘口接口每秒才读一次采集器文件
-
-- **位置**：`scripts/system-dashboard-server.py` 的 `_live_status_fetch`（1160 行：缓存不到 1 秒就直接返回）和 `refresh_live_background`（1144 行：`stop.wait(1)`）。
-- **实测**：采集器每 250ms 写一次；接口里的数据每约 1000ms 才变一次，最多落后 27 帧；报价年龄中位数 0.94 秒、最大 1.43 秒，过期阈值是 2 秒。前端 500ms 轮询一次，但每两次里有一次拿到同一份旧数据。
-- **修法**：按文件 mtime 判断是否需要重读，去掉 1 秒缓存。
 
 ### P2-3 每次换场（每 5 分钟）整个面板清空重画
 
@@ -140,20 +120,6 @@
 - **原因**：`order_count` 数的是账本里所有订单记录（含被拒、被撤、状态推进的多条），`fills` 数的是去重后的成交；两个数放在同一张卡上但来源和口径不同。
 - **影响**：只是显示困惑，不影响交易。当月 8 单里只有部分真正成交，用户看不出来。
 - **修法**：卡片标注清楚口径，或统一成"下单数/成交数"两个明确不同的字段。
-
-### P2-14 每次成交后，账户余额空白约 3.2 秒
-
-- **位置**：`scripts/dashboard/account_data.py` 231-238 行 `invalidate()` 把 `self._identity = None`；随后 `_account()`（46-58 行）发现身份变了，当成"换了账户"，把缓存换成 `_empty(wallet, "account_changed")` 并 `_stop_process()` 杀掉账户读取子进程。触发点是新成交：`scripts/system-dashboard-server.py` `_note_fill_watermark`（约 297-316 行）。
-- **复现**（服务器上，用控制面真实模块驱动 `AccountData`）：预热后 `available=True`；调用一次 `invalidate()`，快照立刻变成 `available=False`、`error_code=account_changed`，**3.2 秒后才恢复**。
-- **影响**：每笔成交后，总览"可用余额"和自动交易"账户余额"显示"不可用"约 3 秒。现在是轮询，碰上才看得到；改成推送后，每次成交都会主动把"余额不可用"推给所有浏览器。不影响下单（引擎用自己的账户读取）。
-- **修法**：成交后只需要"立刻刷新一次"，不是换账户。`invalidate()` 只清节流计时（`_attempt`），不清 `_identity`、不清缓存、不杀子进程；旧值保留到新值到来。
-
-### P2-15 账本快照和心跳分两次写，读的人会误判"数据过期"
-
-- **位置**：`scripts/dashboard/projection_worker.py` 77 行先原子写 `snapshot.json`，91 行再写 `heartbeat.json`；`scripts/dashboard/read_model.py` 104-114 行读快照后读心跳，两者 `snapshot_version` 对不上时 `checked_at = 0`。
-- **原因**：两次写之间有空档。读的人如果落在中间，新快照配旧心跳，版本对不上，`checked_at=0`，`age_seconds ≈ 1.7e9`，`stale=True`。
-- **影响**：这个"过期"会传到运行状态（`system-dashboard-server.py` 2088-2089）、订单与持仓的元数据（2344-2346）、健康检查（2604-2605）和命令状态（1283-1285）。交易时账本每秒改写约 4 次，轮询每 1-2 秒读一次，撞上概率低；改成推送后每 100ms 检查一次，会反复撞上，界面"正常→过期→正常"闪烁。
-- **修法**：心跳版本对不上时，沿用上一次确认过的时间，不归零；或把快照和心跳合成一次原子写入。
 
 ### P3-7 控制面重启时引擎一起被杀，这次运行永远停在"执行中"
 
@@ -227,6 +193,8 @@
 - **影响**：操作员以为服务器出问题、启动不了；其实服务器好好的，只是页面没去问。不影响交易本身。
 - **修法**：运行状态（进程是否在跑）的全局轮询**不依赖市场身份**，页面一加载就轮询；只有按场次作用域的那部分（本场状态、暂停/停止）才要求身份匹配。启动闸只看全局进程状态。
 
+- **第 4 批复核（2026-10-01）**：在 vm 里加载真实的 `auto-trade-block.js`、市场目录为空时，旧代码同样能拿到全局进程状态（"运行流已连接 · 全局进程已停止"），而且启动按钮此时先报的是"所选市场身份待后端提供"，复现不出上面写的路径。**修法未动代码**，留到界面重构 G1b（启动按钮绑定真实运行状态）时，用真实浏览器连线上控制台重新复现再改。
+
 ### P2-24 交易统计卡的大字只算最近一次运行，样本两场就显示"胜率 100%"
 
 - **位置**：`frontend/console/overview-block.js` 345-365 行，四张卡（订单数、盈/亏、胜率、已结算净盈亏）的主值取 `period="current"`，即最近一次运行；"今日""当月"放在下面的小字里。
@@ -253,6 +221,17 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### 第 4 批：控制面与前端 — 已部署 `a252afa`（2026-10-01）
+
+不影响下单，推送改造的两个前置条件（P2-14、P2-15）一起修掉了。每条都有回归测试，在旧代码上失败过，一起做过独立审查。
+
+- **P2-11 启动头 0-3 秒 `/api/runtime/status` 断连** — `0a2256f`。补上缺的 `isinstance` 保护。测试 `scripts/regress/P2-11.py` 用真实 `trading_status()`。线上证据要等下一次启动后看日志里没有 AttributeError。
+- **P1-1 界面保存策略把 `maxRounds` 清零** — `750ee62`。保存白名单加上 `maxRounds`，前端白名单现在和后端 `default_config()` 的 14 个字段完全一致。测试 `frontend/console/regress/P1-1.mjs`（vm 里加载真实前端模块，检查发出去的请求体）。
+- **P2-2 盘口接口每秒才读一次采集器文件** — `a252afa`。本地采集器按文件 mtime 判断是否重读，后台每 250ms 检查一次。**线上实测**：每 250ms 轮询 40 次，拿到 40 个不同的帧（以前每两次有一次是旧数据）；报价年龄中位数 **0.32 秒**、最大 0.46 秒（以前中位 0.94、最大 1.43）。控制面 CPU 不变。测试 `scripts/regress/P2-2.py`。
+- **P2-14 成交后余额空白 3.2 秒**（推送前置）— `722f471`。`invalidate()` 只清节流，不再当成换账户；真正换账户仍由身份哈希识别。测试 `scripts/regress/P2-14.py`。线上证据要等下一笔成交。
+- **P2-15 快照和心跳之间读到会误判过期**（推送前置）— `6d9d447`。心跳版本对不上时，用新快照自己的写入时间，不再归零。测试 `scripts/regress/P2-15.py`。
+- **P2-21 没修**，见上面未修复条目里的复核说明。
 
 ### 第 3 批：账本口径 — 已修复，待部署验证（2026-10-01）
 
