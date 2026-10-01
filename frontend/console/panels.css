@@ -1,0 +1,352 @@
+/* Shared panels: 交易统计 + 服务器状态 (auto-trade) and 运行日志 (settings), moved from the deleted overview page. */
+.header-state small,
+.log-state small {
+  color: #7993aa;
+}
+.state-dot {
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 0 3px #4ecb991c;
+}
+.metrics-panel,
+.log-panel {
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid #263e59;
+  border-radius: 8px;
+  background: #0f1e31;
+  box-shadow: 0 12px 30px #020a142e;
+}
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+.metric-group {
+  min-width: 0;
+  padding: 16px 16px 14px;
+  border: 1px solid #29445f;
+  border-radius: 7px;
+  background: #13263d;
+}
+.metric-group:first-child {
+  padding-left: 16px;
+}
+.metric-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-height: 43px;
+}
+.metric-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 25px;
+  height: 25px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.blue-mark {
+  background: #173e61;
+  color: #82c3f0;
+}
+.amber-mark {
+  background: #45331f;
+  color: #e7b36d;
+}
+.green-mark {
+  background: #173d35;
+  color: #71d7af;
+}
+.violet-mark {
+  background: #312c54;
+  color: #b5acef;
+}
+.metric-heading h3 {
+  margin: 1px 0 4px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.metric-heading p {
+  margin: 0;
+  color: #8098ae;
+  font-size: 10px;
+}
+.metric-primary {
+  display: block;
+  margin: 20px 0 15px;
+  color: #f4f8fb;
+  font-size: 29px;
+  font-weight: 650;
+  letter-spacing: .01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Qualifier under a headline number: win-rate sample size, fee share. A bare
+   percentage over one round reads as a track record without this. */
+.metric-note {
+  display: block;
+  margin: -9px 0 13px;
+  color: #8fa8bd;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.metric-primary em {
+  color: #a9bfd2;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 500;
+}
+.metric-rows {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding-top: 13px;
+  border-top: 1px solid #29445d;
+}
+.metric-rows div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.metric-rows dt {
+  color: #7891a8;
+  font-size: 11px;
+}
+.metric-rows dd {
+  margin: 0;
+  color: #dce7ef;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.metrics-footnote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 15px;
+  padding: 11px 12px 0;
+  border-top: 1px solid #20384f;
+  color: #7d96ab;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.metrics-footnote > span:last-child {
+  min-width: 0;
+}
+.metrics-footnote small {
+  display: block;
+  margin-top: 3px;
+  color: #93aabd;
+  font-size: 10px;
+}
+.info-dot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  border: 1px solid #447ca6;
+  border-radius: 50%;
+  color: #83bee3;
+  font-size: 10px;
+}
+.server-panel {
+  margin-top: 13px;
+  padding: 19px 20px 17px;
+  border: 1px solid #263e59;
+  border-radius: 8px;
+  background:
+    linear-gradient(
+      145deg,
+      #142844,
+      #0e1c2e);
+  box-shadow: 0 8px 22px #02081466;
+}
+.server-panel .panel-heading {
+  margin-bottom: 12px;
+}
+.server-panel h2 {
+  font-size: 17px;
+}
+.server-expired {
+  color: #8ba4bd;
+}
+.server-metrics,
+.server-services {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+}
+.server-metrics {
+  padding: 0 2px 14px;
+}
+.server-metrics span,
+.server-services span {
+  display: block;
+  color: #86a1ba;
+  font-size: 11px;
+}
+.server-metrics strong {
+  display: block;
+  margin-top: 8px;
+  color: #f0f6fb;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Resource trend built from observed polls; empty until two samples exist. */
+.metric-spark {
+  display: block;
+  width: 100%;
+  height: 24px;
+  margin-top: 6px;
+  overflow: visible;
+}
+.metric-spark polyline {
+  fill: none;
+  stroke: #56b0e0;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.metric-spark[data-spark="memory"] polyline {
+  stroke: #7f9ff0;
+}
+.server-metrics em {
+  color: #d2e0ec;
+  font-style: normal;
+  font-weight: 500;
+}
+.server-services {
+  padding: 14px 2px 0;
+  border-top: 1px solid #34516e;
+}
+.server-services strong {
+  display: block;
+  margin-top: 7px;
+  color: #e8f1f7;
+  font-size: 13px;
+}
+.server-services small {
+  display: block;
+  margin-top: 5px;
+  color: #8da8c0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.server-services .service-good {
+  color: #69d6a9;
+}
+.log-panel {
+  margin-top: 13px;
+}
+.log-state {
+  color: #91a9bc;
+  font-size: 11px;
+}
+.log-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 3px 12px;
+  border: 1px solid #20384f;
+  border-radius: 6px;
+  background: #091625;
+  list-style: none;
+}
+.log-entry {
+  display: grid;
+  grid-template-columns: 94px 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-height: 61px;
+  padding: 9px 4px;
+  border-top: 1px solid #1a3045;
+}
+.log-entry:first-child {
+  border-top: 0;
+}
+.log-entry time {
+  color: #708aa3;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  font-size: 10px;
+}
+.log-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.good-icon {
+  background: #12392f;
+  color: #6ed6ac;
+}
+.info-icon {
+  background: #20334f;
+  color: #8fc6ed;
+}
+.neutral-icon {
+  background: #263442;
+  color: #a8bbc9;
+}
+.log-entry strong {
+  display: block;
+  color: #e4edf3;
+  font-size: 12px;
+  font-weight: 600;
+}
+.log-entry p {
+  margin: 3px 0 0;
+  color: #7891a7;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.log-status {
+  padding: 4px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.good-text {
+  background: #12392f;
+  color: #70d8ae;
+}
+.info-text {
+  background: #20334e;
+  color: #91c9ee;
+}
+.muted-text {
+  background: #263441;
+  color: #a4b7c5;
+}
+.log-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 12px;
+  border-top: 1px solid #20384f;
+  color: #7189a0;
+  font-size: 10px;
+}
+.log-footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tiny-dot {
+  width: 6px;
+  height: 6px;
+}

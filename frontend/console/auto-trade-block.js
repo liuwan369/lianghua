@@ -143,16 +143,18 @@
           <div class="orders-panel position-orders" aria-labelledby="orders-title">
             <div class="panel-heading">
               <div><h3 id="orders-title">本场订单</h3></div>
-              <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div><div class="round-history-panel" data-round-history hidden></div>
+              <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span></div>
             </div>
             <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
               </div>
         </article>
       </section>
 
-      <section class="activity-panel trade-panel" aria-labelledby="activity-title">
-        <div class="panel-heading"><div><p class="eyebrow">\u6700\u8FD1\u4E8B\u4EF6</p><h2 id="activity-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><span class="panel-meta" data-activity-state>\u5F53\u524D\u8FD0\u884C\u4E8B\u4EF6</span></div>
-        <ol class="activity-list" data-activity-list aria-live="polite"><li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE\u8FD0\u884C\u4E8B\u4EF6</strong><small>\u5B9E\u65F6\u4E8B\u4EF6\u5C06\u6309\u5F53\u524D\u5E02\u573A\u548C\u8F6E\u6B21\u8FFD\u52A0</small></div><b class="activity-tag info-tag">\u5F85\u63A5\u5165</b></li></ol>
+      <section id="stats-panel-root" class="stats-panel-root" aria-label="交易统计与服务器状态"></section>
+
+      <section class="history-panel trade-panel" aria-labelledby="history-title">
+        <div class="panel-heading"><div><p class="eyebrow">历史订单</p><h2 id="history-title">按场次</h2></div><span class="panel-meta">每场一行 · 最近 10 场</span></div>
+        <div class="round-history-panel" data-round-history>读取中…</div>
       </section>
     </main>
   </div>
@@ -436,12 +438,6 @@
     var asset = assetById(selectedAssetId);
     return asset ? { assetId: asset.id, marketId: asset.marketId, roundId: asset.roundId } : { assetId: null, marketId: null, roundId: null };
   };
-  var eventContext = function() {
-    var context = currentContext();
-    var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
-    var runId = runtime.runId ?? runtime.run_id;
-    return runId ? { assetId: context.assetId, runId: String(runId) } : context;
-  };
   var ledgerContext = function() {
     var context = currentContext();
     var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
@@ -486,7 +482,6 @@
     text("[data-orders-state]", "上一场 · 等待本场数据");
     text("[data-strategy-status]", "所选市场状态读取中");
     text("[data-live-status]", "所选市场状态读取中");
-    text("[data-activity-state]", "正在读取新场次事件");
   };
   // Panels that show one round's data; each is shown as current again by the
   // first successful render for the new round.
@@ -815,93 +810,6 @@
     if (pnl != null) details.push(`净盈亏 ${pnl.toFixed(2)} USDC`);
     set(label, details.join(" · ") || "服务器已返回本场结算状态。");
     return true;
-  };
-  var renderEvents = function(raw) {
-    var resource = raw || {};
-    var payload = resource?.data && typeof resource.data === "object" ? resource.data : resource;
-    var context = currentContext();
-    var runId = payload?.runId ?? payload?.run_id ?? resource?.runId ?? resource?.run_id;
-    var events = Array.isArray(resource?.items) ? resource.items : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.events) ? payload.events : [];
-    var scoped = events.filter(function(event) {
-      var marketId = event.marketId ?? event.market_id;
-      var roundId = event.roundId ?? event.round_id;
-      var assetId = event.assetId ?? event.asset_id;
-      if (runId != null) return assetId == null || String(assetId) === String(context.assetId);
-      // Global events (recovery, cash-flow, feed health) carry no market/round
-      // identity. Previously the market+round match dropped exactly those — the
-      // errors an operator most needs to see. Keep an event unless it clearly
-      // belongs to a different market or asset.
-      if (assetId != null && context.assetId != null && String(assetId) !== String(context.assetId)) return false;
-      if (marketId != null && roundId != null && context.marketId != null && context.roundId != null) {
-        return String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId);
-      }
-      return true;
-    });
-    var list = document.querySelector("[data-activity-list]");
-    var stale = resource.stale === true || ["stale", "unavailable", "error", "degraded"].includes(resource.status) || payload?.stale === true || payload?.available === false;
-    if (!list) return;
-    if (stale || resource.error || payload?.error) {
-      text("[data-activity-state]", resource.status === "unavailable" ? "暂无可用运行事件" : "事件连接中断 · 以下为最近成功事件");
-      list.classList.add("is-stale");
-      return;
-    }
-    list.classList.remove("is-stale");
-    text("[data-activity-state]", "事件已更新");
-    if (!scoped.length) {
-      list.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>当前场次暂无运行事件</strong><small>运行事件接口已连接，等待本场数据</small></div><b class="activity-tag info-tag">暂无</b></li>';
-      return;
-    }
-    // Same treatment as the overview log: collapse consecutive repeats so a retry
-    // loop is one counted line, and classify severity from the code's meaning
-    // rather than the channel (the engine sends kind:"error" for notices too).
-    html(list, vm.collapseEvents(scoped, 20).map(function(group) {
-      var event = group.item;
-      var repeats = group.count;
-      var kind = String(event.kind || event.event || "unknown").toLowerCase();
-      var state = String(event.status || event.state || "").toLowerCase();
-      var severity = vm.eventSeverity(event);
-      var tag = severity === "error" || severity === "critical" ? "异常" : severity === "warning" || severity === "warn" ? "警告" : "信息";
-      var icon = severity === "error" || severity === "critical" ? "!" : severity === "warning" || severity === "warn" ? "!" : "i";
-      var code = String(event.code || "").toLowerCase();
-      var kindLabel = eventLabels[kind] || eventText(kind, "服务器事件：未分类状态");
-      // The backend degrades an empty message to the literal kind (e.g. "error"),
-      // which would shadow the precise code-based label. Treat message === kind as
-      // absent, and let a translated code win first.
-      var codeLabel = code && code !== kind ? eventText(code, "") : "";
-      var rawMessage = event.message && String(event.message).toLowerCase() !== kind ? event.message : null;
-      var message = codeLabel || eventText(rawMessage || event.reason || event.detail || kind, kindLabel);
-      var rawDetail = event.detail && event.detail !== event.message ? event.detail : event.reason && event.reason !== event.message ? event.reason : null;
-      var detailParts = [];
-      if (repeats > 1) {
-        var firstTime = window.PolyPreview.format.time(
-          group.oldest && (group.oldest.time || group.oldest.createdAt || group.oldest.created_at), "");
-        detailParts.push(firstTime ? "重复 " + repeats + " 次 · 最早 " + firstTime : "重复 " + repeats + " 次");
-      }
-      if (rawDetail) detailParts.push(eventText(rawDetail, ""));
-      if (code && code !== kind) detailParts.push("错误码 " + code);
-      var phase = String(event.phase || event.failure_phase || "").trim();
-      if (phase && phase !== "event") detailParts.push("阶段 " + phase);
-      var orderRef = event.orderId || event.order_id || event.clientOrderId || event.client_order_id;
-      if (orderRef) detailParts.push("订单号 " + String(orderRef).replace(/(0x[a-fA-F0-9]{6})[a-fA-F0-9]+/, "$1…"));
-      var detail = detailParts.filter(Boolean).join(" · ") || kindLabel;
-      var tagClass = severity === "error" || severity === "critical" ? "error-tag" : severity === "warning" || severity === "warn" ? "warning-tag" : "info-tag";
-      return `<li><time>${window.PolyPreview.format.time(event.time || event.createdAt || event.created_at)}</time><span class="activity-icon ${severity === "error" || severity === "critical" ? "error-icon" : severity === "warning" || severity === "warn" ? "warn-icon" : "info-icon"}">${icon}</span><div><strong title="${window.PolyPreview.format.escape(message)}">${window.PolyPreview.format.escape(message)}</strong><small title="${window.PolyPreview.format.escape(detail)}">${window.PolyPreview.format.escape(detail)}</small></div><b class="activity-tag ${tagClass}">${tag}</b></li>`;
-    }).join(""));
-  };
-  var eventsRefreshTimer = null;
-  var eventsRefreshInFlight = null;
-  var scheduleEventsRefresh = function(delay = 5000) {
-    if (document.hidden) return;
-    if (eventsRefreshTimer) window.clearTimeout(eventsRefreshTimer);
-    eventsRefreshTimer = window.setTimeout(function() { eventsRefreshTimer = null; void refreshEvents(); }, Math.max(0, delay));
-  };
-  var refreshEvents = function() {
-    if (eventsRefreshInFlight) return eventsRefreshInFlight;
-    var version = contextVersion;
-    eventsRefreshInFlight = Promise.resolve().then(function() { return adapter.loadEvents(null, eventContext()); }).then(function(value) {
-      if (version === contextVersion) renderEvents(value);
-    }).finally(function() { eventsRefreshInFlight = null; scheduleEventsRefresh(version === contextVersion ? 5000 : 0); });
-    return eventsRefreshInFlight;
   };
   var stopStreams = function() { streams.splice(0).forEach(function(stream) { stream.close(); }); };
   var startStreams = function() {
@@ -1364,8 +1272,6 @@
       accountRefreshTimer = null;
       if (metricsRefreshTimer) window.clearTimeout(metricsRefreshTimer);
       metricsRefreshTimer = null;
-      if (eventsRefreshTimer) window.clearTimeout(eventsRefreshTimer);
-      eventsRefreshTimer = null;
       // These two were previously left running while the tab was hidden.
       if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
       snapshotExpiryTimer = null;
@@ -1382,7 +1288,6 @@
       scheduleAccountStatusRefresh(0);
       scheduleAccountRefresh(0);
       scheduleMetricsRefresh(0);
-      scheduleEventsRefresh(0);
       startStreams();
     }
   });
@@ -1488,10 +1393,7 @@
   // Per-round history is served by /api/rounds, aggregated from durable fills,
   // so this panel keeps working after the run stops. Only the buttons without a
   // backing endpoint stay disabled.
-  var roundHistoryButton = document.querySelector("[data-orders-state]")
-    ?.closest(".orders-meta")?.querySelector(".quiet-button");
-  document.querySelectorAll(".quiet-button").forEach(function(button) {
-    if (button === roundHistoryButton) return;
+  document.querySelectorAll(".latency-heading-meta .quiet-button").forEach(function(button) {
     button.disabled = true;
     button.title = "此详情功能尚未接入";
     button.textContent += " · 未提供";
@@ -1509,7 +1411,7 @@
   // The endpoint pages by roundId cursor, so append instead of replacing and
   // keep the scroll position: the operator is reading the rows already shown.
   var loadRoundHistory = function(panel, beforeRoundId) {
-    var query = { limit: 50 };
+    var query = { limit: beforeRoundId ? 50 : 10 };
     if (beforeRoundId) query.beforeRoundId = beforeRoundId;
     return window.PolyPreview.api.rounds(query).then(function(data) {
       var rounds = Array.isArray(data && data.rounds) ? data.rounds : [];
@@ -1532,7 +1434,7 @@
         panel.innerHTML = `<table class="round-history"><thead><tr><th>场次</th><th>投入</th><th>份额</th>`
           + `<th>均价</th><th>手续费</th><th>结算</th><th>到账</th><th>盈亏</th></tr></thead>`
           + `<tbody>${body}</tbody></table>`
-          + `<button type="button" class="quiet-button round-history-more" hidden>加载更早场次</button>`;
+          + `<button type="button" class="quiet-button round-history-more" hidden>查看全部</button>`;
       } else {
         panel.querySelector("tbody")?.insertAdjacentHTML("beforeend", body);
       }
@@ -1540,7 +1442,7 @@
       if (!more) return;
       if (!next) { more.setAttribute("hidden", ""); return; }
       more.removeAttribute("hidden");
-      more.textContent = "加载更早场次";
+      more.textContent = beforeRoundId ? "加载更早场次" : "查看全部";
       more.onclick = function() {
         more.disabled = true;
         more.textContent = "读取中…";
@@ -1554,25 +1456,18 @@
       throw error;
     });
   };
-  if (roundHistoryButton) {
-    var historyPanel = document.querySelector("[data-round-history]");
-    roundHistoryButton.title = "按场次汇总投入、份额、均价、手续费与结算结果";
-    roundHistoryButton.addEventListener("click", function(event) {
-      event.preventDefault();
-      if (!historyPanel) return;
-      var open = historyPanel.hasAttribute("hidden");
-      if (!open) { historyPanel.setAttribute("hidden", ""); roundHistoryButton.textContent = "查看全部"; return; }
-      historyPanel.removeAttribute("hidden");
-      roundHistoryButton.textContent = "收起";
-      historyPanel.textContent = "读取中…";
-      loadRoundHistory(historyPanel, null);
-    });
-  }
-  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadAccount(), adapter.loadRuntime(), adapter.loadEvents(null, eventContext()), adapter.loadMetrics()]).then(function(results) {
+  var historyPanel = document.querySelector("[data-round-history]");
+  var refreshRoundHistory = function() {
+    // Only the first page refreshes itself; once the operator expanded the
+    // history, keep the rows they are reading.
+    if (!historyPanel || historyPanel.querySelectorAll("tbody tr").length > 10) return;
+    void loadRoundHistory(historyPanel, null).catch(function() { return null; });
+  };
+  refreshRoundHistory();
+  window.setInterval(function() { if (!document.hidden) refreshRoundHistory(); }, 30000);
+  Promise.allSettled([adapter.loadMarkets(), adapter.loadMarketPool(), adapter.loadStrategy(), adapter.loadAccountStatus(), adapter.loadAccount(), adapter.loadRuntime(), adapter.loadMetrics()]).then(function(results) {
     var runtimeResult = results[5];
-    var eventsResult = results[6];
     if (runtimeResult.status === "fulfilled") renderRuntime(runtimeResult.value, true);
-    if (eventsResult.status === "fulfilled") renderEvents(eventsResult.value);
     streamLifecycleReady = true;
     // Server push: re-render a block the moment its data changes. The loaders
     // then read the pushed body instead of the network (shared/stream.js);
@@ -1588,9 +1483,8 @@
       push.onUpdate("/api/settlements", function() { scheduleRoundRefresh(0); });
       push.onUpdate("/api/account/snapshot", function() { scheduleAccountRefresh(0); });
       push.onUpdate("/api/metrics/summary", function() { scheduleMetricsRefresh(0); });
-      push.onUpdate("/api/events", function() { scheduleEventsRefresh(0); });
     }
-    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(10000); scheduleMetricsRefresh(5000); scheduleEventsRefresh(5000); startStreams();
+    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(10000); scheduleMetricsRefresh(5000); startStreams();
   }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
 })();
 

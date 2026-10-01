@@ -170,7 +170,6 @@
   // of this list plus the markup builder and the click binding, and marked the
   // active entry by comparing Chinese labels.
   const NAV_ITEMS = [
-    { key: "overview", icon: "◈", label: "总览", target: "overview.html" },
     { key: "market", icon: "◇", label: "市场", target: "market.html" },
     { key: "auto-trade", icon: "↗", label: "自动交易", target: "auto-trade.html" },
     { key: "strategy", icon: "◒", label: "策略", target: "strategy.html" },

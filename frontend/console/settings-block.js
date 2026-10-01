@@ -32,6 +32,7 @@
       <div class="settings-tabs" role="tablist" aria-label="设置分区">
         <button type="button" class="settings-tab active" data-settings-tab="diagnostics" role="tab" aria-selected="true"><span class="tab-icon">◌</span><span><b>系统诊断</b><small>连接状态与版本信息</small></span></button>
         <button type="button" class="settings-tab" data-settings-tab="account" role="tab" aria-selected="false"><span class="tab-icon">▣</span><span><b>账户状态</b><small>服务器读取状态</small></span></button>
+        <button type="button" class="settings-tab" data-settings-tab="log" role="tab" aria-selected="false"><span class="tab-icon">≡</span><span><b>运行日志</b><small>当前运行的事件流</small></span></button>
       </div>
 
       <section class="settings-pane active" data-settings-pane="diagnostics" role="tabpanel">
@@ -47,7 +48,7 @@
           </div>
         </section>
 
-        <div class="diagnostic-note"><span class="note-icon">i</span><span>服务器资源与服务进程在总览查看，交易速度在自动交易查看；这里仅保留连接与版本诊断。</span><span class="note-time" data-note-time>后端未连接</span></div>
+        <div class="diagnostic-note"><span class="note-icon">i</span><span>服务器资源、服务进程和交易速度都在自动交易页查看；这里仅保留连接与版本诊断。</span><span class="note-time" data-note-time>后端未连接</span></div>
       </section>
 
       <section class="settings-pane" data-settings-pane="account" role="tabpanel" hidden>
@@ -63,6 +64,10 @@
           <label class="field"><span>Builder Passphrase</span><input type="password" data-account-field="builder_passphrase" autocomplete="new-password" spellcheck="false"></label>
           <div class="form-actions"><button type="button" class="action-button" data-account-check-saved>检查已保存账户</button><button type="button" class="action-button" data-account-check>检查输入账户</button><button type="button" class="action-button primary-action" data-account-save>检查并保存</button></div><p class="form-message" data-account-message role="status" aria-live="polite">检查已保存账户不会提交输入框草稿。检查不会保存，保存不会启动交易。钱包不变时空白密钥保留服务器配置；更换钱包不会继承旧密钥。</p>
         </div><aside class="account-side"><section class="side-card"><div class="panel-heading"><div><p class="eyebrow">只读信息</p><h3>账户管理边界</h3></div><span class="panel-meta">后端管理</span></div><p class="side-copy">保存位置：服务器受控账户配置（由服务器 PM_ACCOUNT_PROFILE 指定）。未保存账户时，服务器可读取部署环境配置。此处只显示配置状态。</p><p class="side-copy" data-account-last-check>最近账户检查：未提供</p><p class="side-copy" data-account-report>账户检查结果尚未提供。</p></section><section class="side-card control-session-card"><div class="panel-heading"><div><p class="eyebrow">控制会话</p><h3>连接控制会话</h3></div><span class="panel-meta">受保护访问</span></div><label class="field"><span>交易控制密码</span><input type="password" data-control-token autocomplete="new-password" spellcheck="false" maxlength="1024"><small>由服务器验证并保存控制密码，浏览器只使用服务器设置的 HttpOnly 会话 Cookie。</small></label><button type="button" class="action-button" data-control-connect>连接控制会话</button><p class="form-message" data-control-message role="status" aria-live="polite">连接成功后清空密码输入；不会启动交易或改变服务器实盘解锁配置。</p></section><section class="security-card"><span class="security-icon">◈</span><div><strong>账户安全</strong><p>密码只留在当前输入框，检查或保存成功后清除；失败保留草稿供重试。离开页面时清空密码字段。</p></div></section></aside></div>
+      </section>
+
+      <section class="settings-pane" data-settings-pane="log" role="tabpanel" hidden>
+        <div id="event-log-root"></div>
       </section>
 
     </main>
