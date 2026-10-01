@@ -73,9 +73,9 @@ A3 顺带大幅改善 **P2-13**（每事件深拷贝导致下单变慢，根因�
 | B1 | ☐ **P1-1** 界面保存策略时 `maxRounds` 被清零 | `frontend/console/shared/api-adapter.js` 462-476 | 白名单加一行。和 A3 叠加时会把"跑 N 场"变成"一直跑"，所以排在前面 | 无 |
 | B2 | ☐ **P2-12** 预热场次的配置没冻结（开盘前 10 秒发布的配置会在本场生效） | `btc-reversal.ts` 271-272 | 删掉重新克隆的两行。影响真钱下单份数，按 P1 对待 | A2（同文件） |
 | B3 | ☑ **P1-5** 场馆自动赎回在"无持仓"路径识别了却没保存 — `f6370fd`（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/src/platform/live-settlement.ts` | 识别后写入 records 并 `save()` | 无 |
-| B4 | ☐ **P1-4** 赢的场次盈亏永远算不出来（胜率一直 0%） | `scripts/dashboard/ledger.py` 1437-1466、1512-1528 | coverage 改用成交累计的净份额，不用结算那一刻已归零的持仓 | B3（同一条链：结算→账本） |
-| B5 | ☐ **P1-6** MATCHED 后 FAILED 的成交被当成真实成交 | `ledger.py` 276 `_trade_revision` | `>` 改 `>=`，或"非终态收到 FAILED 一律接受" | B4（同文件） |
-| B6 | ☐ **P1-3** 今日盈亏两套日界（UTC vs UTC+8） | `ledger.py` 2020-2022、`core.ts` 9 | 统一成 UTC+8；总览标签注明口径 | B4、B5（同文件） |
+| B4 | ☑ **P1-4** 赢的场次盈亏永远算不出来（胜率一直 0%） — `5b7752f`（第 3 批，已部署 `7e35e9d`） | `scripts/dashboard/ledger.py` 1437-1466、1512-1528 | coverage 改用成交累计的净份额，不用结算那一刻已归零的持仓 | B3（同一条链：结算→账本） |
+| B5 | ☑ **P1-6** MATCHED 后 FAILED 的成交被当成真实成交 — `e0f8d32`（第 3 批，已部署 `7e35e9d`） | `ledger.py` 276 `_trade_revision` | `>` 改 `>=`，或"非终态收到 FAILED 一律接受" | B4（同文件） |
+| B6 | ☑ **P1-3** 今日盈亏两套日界（UTC vs UTC+8） — `3d5b97d`（第 3 批，已部署 `7e35e9d`） | `ledger.py` 2020-2022、`core.ts` 9 | 统一成 UTC+8；总览标签注明口径 | B4、B5（同文件） |
 | B7 | ☑ **P1-9** `--max-rounds` 把不能交易的场也算进去，设 1 场一场都跑不了 — `2a2308c`（第 2 批已部署 `4dd1745`，小额实盘通过） | `backend/engine/src/cli/platform.ts` 451-475 | 另加"本次运行能交易的场"计数 | 无 |
 | B8 | ☑ **P2-19** 查不到的旧场被永久回灌、每 15 秒重试、每次启动吃掉一个场次计数 — `f6370fd`（第 2 批已部署 `4dd1745`，小额实盘通过） | `cli/platform.ts`、`live-settlement.ts` | **先修 B3（P1-5）**；not_found 时查链上余额，全零按 confirmed 落盘 | B3、B7 |
 | B9 | ☐ **P1-10** 在场次末尾启动必然失败 | `scripts/system-dashboard-server.py`、`cli/platform.ts` | 启动时按真正在进行的场绑定身份 | B7（同一处启动逻辑） |
@@ -90,9 +90,9 @@ A3 顺带大幅改善 **P2-13**（每事件深拷贝导致下单变慢，根因�
 
 | # | 条目 | 要点 |
 |---|---|---|
-| C1 | ☐ **P2-4** 统计接口在"已结算未知 + 有未结算"时崩溃 | `None - float`，改条件 |
-| C2 | ☐ **P2-1** 阶梯用满时"当前阶段"显示 `--` | round_view 白名单加 `consumedStages` |
-| C3 | ☐ **P2-9** 手续费验收：账本认 rate-derived、引擎只认 reported | 统一标准（建议都接受 rate-derived），同时改 `cli/platform.ts` 589-592 |
+| C1 | ☑ **P2-4** 统计接口在"已结算未知 + 有未结算"时崩溃 — `378c883`（第 3 批，已部署 `7e35e9d`） | `None - float`，改条件 |
+| C2 | ☑ **P2-1** 阶梯用满时"当前阶段"显示 `--` — `92a4cc1`（第 3 批，已部署 `7e35e9d`） | round_view 白名单加 `consumedStages` |
+| C3 | ☑ **P2-9** 手续费验收：账本认 rate-derived、引擎只认 reported — `e3cf3af`（第 3 批，已部署 `7e35e9d`） | 统一标准（建议都接受 rate-derived），同时改 `cli/platform.ts` 589-592 |
 | C4 | ☐ **P2-10** 订单数与成交数口径不一致 | 字段分清"下单数/成交数" |
 
 ### C-2 控制面 `scripts/system-dashboard-server.py`
