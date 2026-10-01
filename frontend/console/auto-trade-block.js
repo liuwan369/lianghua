@@ -537,7 +537,17 @@
     var asset = assetById(currentContext().assetId);
     var end = asset && Number(asset.endAt != null ? asset.endAt : asset.end);
     if (!Number.isFinite(end)) { text("[data-countdown]", "等待场次信息"); return; }
-    var remaining = Math.round(end - Date.now() / 1000);
+    var nowSec = Date.now() / 1000;
+    var start = Number(asset.startAt != null ? asset.startAt : asset.start);
+    // In a round's last ~60 s the venue stops quoting (the book sits at
+    // 0.99/0.01) and the catalog already serves the next round (BUGS P2-5).
+    // Say so instead of silently showing a round that has not opened.
+    if (Number.isFinite(start) && start > nowSec) {
+      var toOpen = Math.ceil(start - nowSec);
+      text("[data-countdown]", `本场已定局，交易所已停止报价 · 已切到下一场，${Math.floor(toOpen / 60)}:${String(toOpen % 60).padStart(2, "0")} 后开盘`);
+      return;
+    }
+    var remaining = Math.round(end - nowSec);
     if (remaining < 0) { text("[data-countdown]", "本场已结束 · 等待切换"); return; }
     var minutes = Math.floor(remaining / 60);
     var seconds = remaining % 60;
