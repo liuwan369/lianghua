@@ -29,7 +29,8 @@ server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 from dashboard.push import fingerprint  # noqa: E402
 
-MARKETS = "/api/markets?asset=crypto&duration=5m"
+# One market's snapshot is the collector-speed path; the full catalog pushes once a second.
+MARKETS = "/api/markets/0xm/snapshot"
 RUNTIME = "/api/runtime/status"
 
 
@@ -40,7 +41,8 @@ class Source:
 
     def markets(self, query=None):
         return {"schemaVersion": 1, "source": "test", "asOf": time.time(), "stale": False, "error": None,
-                "items": [{"marketId": "0xm", "frame": self.frame}], "markets": []}
+                "items": [{"marketId": "0xm", "roundId": "1", "frame": self.frame, "orderBook": {}, "source": "test",
+                           "sourceAt": 1_790_000_000 + self.frame, "stale": False, "error": None}], "markets": []}
 
     def runtime(self, status):
         time.sleep(self.runtime_delay)
@@ -135,7 +137,7 @@ class Push(unittest.TestCase):
         self.source.frame += 1
         changed = response.reader.read(1, 2)
         self.assertEqual(changed[0]["path"], MARKETS)
-        self.assertEqual(changed[0]["body"]["items"][0]["frame"], self.source.frame)
+        self.assertEqual(changed[0]["body"]["frame"], self.source.frame)
         self.assertLess(time.monotonic() - started, 0.5, "a change arrives within one collector frame or so")
         response.close()
         conn.close()

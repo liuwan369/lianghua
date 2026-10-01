@@ -10,7 +10,10 @@
   const PUSHABLE = ["/api/markets", "/api/runtime/status", "/api/rounds", "/api/fills", "/api/settlements",
     "/api/events", "/api/account/snapshot", "/api/metrics/summary", "/api/account/status",
     "/api/runtime/market-pool", "/api/strategy/config", "/api/diagnostics/health"];
-  const WANT_TTL_MS = 30000;       // a path the page stopped requesting drops out after this
+  // A path the page stopped requesting drops out after this. Longer than the
+  // slowest poll (account status every 30 s): at 30 s that path left and
+  // rejoined the set, and every change reopened the stream.
+  const WANT_TTL_MS = 120000;
   const RESUBSCRIBE_DELAY_MS = 300; // batch the paths a page notes while it starts up
   const pushable = (path) => {
     const route = String(path).split("?", 1)[0];
@@ -30,13 +33,16 @@
     const key = paths.join("\n");
     if (key === subscribedKey && source) return;
     if (source) source.close();
-    source = null; open = false; bodies.clear(); subscribedKey = key;
+    // Keep the bodies of paths still wanted: the new stream re-sends them first,
+    // and until then the page keeps answering from push instead of polling.
+    for (const path of [...bodies.keys()]) if (!paths.includes(path)) bodies.delete(path);
+    source = null; subscribedKey = key;
     if (!paths.length || typeof window.EventSource !== "function") return;
     const base = window.PolyPreview?.config?.apiBase || "";
     source = new window.EventSource(`${base}/api/stream?${paths.map((path) => `p=${encodeURIComponent(path)}`).join("&")}`);
     source.onopen = () => { open = true; };
     // EventSource reconnects by itself; until then request() polls the network.
-    source.onerror = () => { open = false; bodies.clear(); };
+    source.onerror = () => { open = false; };
     source.onmessage = (event) => {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }

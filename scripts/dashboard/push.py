@@ -42,6 +42,11 @@ KEEPALIVE_SEC = 5.0
 
 def cadence(path: str) -> float | None:
     route = path.split("?", 1)[0]
+    # The catalog lists every coin (40 KB) and pages poll it every ~10 s; only
+    # one market's snapshot needs collector speed. Pushing the catalog 4x a
+    # second was ~160 KB/s for one page.
+    if route == "/api/markets":
+        return 1.0
     for prefix, seconds in CADENCE:
         if route == prefix or route.startswith(prefix + "/"):
             return seconds

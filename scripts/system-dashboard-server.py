@@ -68,6 +68,7 @@ _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 _live_cache_mtime: int | None = None
 _live_wanted_at = 0.0
+_ACCOUNT_HISTORY_SECTIONS = frozenset({"trades", "activity", "closed_positions", "order_history", "fees", "rewards", "reconciliation"})
 _account_report: dict | None = None
 _account_report_identity: str | None = None
 _account_check_error: str | None = None
@@ -2589,6 +2590,11 @@ def make_handler(root: Path):
                 return
             if path == "/api/account/snapshot":
                 snapshot = account_data().snapshot()
+                # The console reads balance, occupancy, positions and open
+                # orders. Trade history, on-chain activity, closed positions and
+                # fee history were 400 KB of the 440 KB body, pushed every
+                # refresh to a browser that never read them.
+                snapshot = {key: value for key, value in snapshot.items() if key not in _ACCOUNT_HISTORY_SECTIONS}
                 self._send_json(json.dumps({"source": "account-reader",
                     "asOf": _epoch(snapshot.get("checked_at")),
                     "error": snapshot.get("error_code"), **snapshot},
