@@ -202,7 +202,7 @@
       // never switched off on its own.
       action.disabled = coin.enabled || poolSaving || !poolWritable(pool) || Boolean(pool.pendingDesiredIds) || marketStale || cannotDisableLast || !coin.canEnable || !completeIdentity;
       action.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "完整市场和轮次身份待后端提供" : "";
-      action.textContent = poolSaving ? "提交中…" : canInitialize ? "首次启用此币种" : marketStale ? "等待行情确认" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable && completeIdentity ? `确认启用 ${coin.symbol}` : "等待市场身份";
+      action.textContent = poolSaving ? "提交中…" : canInitialize ? "首次启用此币种" : marketStale ? "等待行情确认" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : coin.enabled ? "已启用" : coin.canEnable && completeIdentity ? `确认启用 ${coin.symbol}` : "等待市场身份";
       if (pool.stale === true && !canInitializePool(pool)) action.textContent = "等待运行池确认";
       action.classList.toggle("selected", coin.enabled);
     }
