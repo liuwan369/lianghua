@@ -84,6 +84,9 @@ export const BTC_REVERSAL_DEFAULTS: Readonly<BtcReversalConfig> = Object.freeze(
   maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 const EPS = 1e-8;
+/** A round keeps its config from this many seconds before it starts (the
+ * console's "current and pre-warmed rounds keep their config"). */
+const CONFIG_FREEZE_SEC = 10;
 const clone = <T>(value: T): T => structuredClone(value);
 const positive = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
 const validDirection = (value: unknown): value is ReversalDirection => value === "UP" || value === "DOWN";
@@ -128,6 +131,8 @@ export class BtcReversalStrategy implements StrategyPlugin {
   private readonly roundsByMarket = new Map<string, ReversalRound>();
   private readonly stagesByClient = new Map<string, { round: ReversalRound; stage: ReversalStage }>();
   private readonly workingRounds = new Map<string, ReversalRound>();
+  /** Strategy clock of the latest event; updateConfig has no context of its own. */
+  private lastNow = 0;
   private readonly createdStages = new Map<string, ReversalStage>();
 
   constructor(config: Partial<BtcReversalConfig> = {}, private readonly options: BtcReversalOptions = {}) {
@@ -172,6 +177,14 @@ export class BtcReversalStrategy implements StrategyPlugin {
       maxStages: input.maxStages ?? (input.stageShares ? input.stageShares.length : this.state.config.maxStages) });
     if (next.instanceId !== this.state.instanceId) throw new Error("cannot change the running strategy instance");
     this.state.config = next;
+    // "Takes effect next round": a round that has not started still follows the
+    // live config until its warm window (CONFIG_FREEZE_SEC before start), then
+    // keeps it. The next round usually exists for minutes before it starts, so
+    // freezing at creation applied a change one round late; re-cloning at start
+    // let a change in the last 10 s alter the round's size (BUGS P2-12).
+    for (const round of this.workingRounds.values()) {
+      if (round.status === "waiting_start" && round.startsAt - this.lastNow > CONFIG_FREEZE_SEC) round.config = clone(next);
+    }
     this.save();
   }
   setPaused(paused: boolean): void {
@@ -194,6 +207,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
     if (!Number.isFinite(context.now)) return [];
     this.latestNow = context.now;
     if (event.kind === "reference" && event.assetId !== this.state.config.assetId) return [];
+    this.lastNow = context.now;
     let changed = this.discover(context);
     // A durable stage intent can outlive the five-minute market if the
     // process dies after persisting the strategy state but before the order
@@ -269,9 +283,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       }
       if (context.now < round.startsAt || round.status === "waiting_next_round") continue;
       if (round.status === "waiting_start") {
-        // The config was frozen when the round was created (prewarm, ~10 s
-        // before start). Re-cloning here let a config published in that window
-        // change this round's order size (BUGS P2-12).
+        // The config is frozen by updateConfig's warm-window rule (BUGS P2-12).
         round.status = "running"; changed = true;
       }
       const marketBlocked = context.account.risk.blockedMarketIds?.includes(round.marketId) === true;

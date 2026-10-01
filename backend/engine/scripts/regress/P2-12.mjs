@@ -37,6 +37,17 @@ const submitted = (actions) => actions.find((a) => a.kind === "submit")?.order;
   assert.ok(order, "the crossing submits");
   assert.equal(order.shares, 5, "a pre-warmed round keeps the config it was created with");
 }
+// --- P2-12 review: the next round usually exists for minutes before it starts;
+// a config published a minute before its start must still apply to it ---
+{
+  const s = createStrategy({ stageShares: [5, 18, 54, 130], maxStages: 4 });
+  let t = START - 240; s.onEvent({ kind: "timer", ts: t }, ctx(t));        // created 4 min early
+  t = START - 60; s.onEvent({ kind: "timer", ts: t }, ctx(t));
+  s.updateConfig({ stageShares: [9, 9, 9, 9] });                           // published a minute before start
+  t = START + 1; s.onEvent({ kind: "book", snapshot: snap(t, 0.60, 0.40) }, ctx(t));
+  t += 0.5; assert.equal(submitted(s.onEvent({ kind: "book", snapshot: snap(t, 0.68, 0.32) }, ctx(t))).shares, 9,
+    "outside the warm window the next round follows the newly published config");
+}
 // --- P2-12 control: a config published before the round exists applies to it ---
 {
   const s = createStrategy({ stageShares: [5, 18, 54, 130], maxStages: 4 });
