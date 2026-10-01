@@ -2400,16 +2400,24 @@ class Ledger:
         """Per-round trade history: cost, shares, fees, average price and outcome.
 
         Aggregated from the confirmed fills rather than the runtime snapshot, so a
-        stopped run still reports what it traded.
+        stopped run still reports what it traded. Covers every live run of the
+        run's account: the console's history is "the last N rounds", and one
+        run usually trades only two or three (UI U5).
         """
         limit = max(1, min(int(limit), 200))
         asset_id = _query_asset(asset_id)
         with self._connect() as db:
-            self._run(db, run_id)
+            selected = self._run(db, run_id)
             if not self._has_table(db, "trade_details"):
                 return {"run_id": run_id, "rounds": [], "next_before_round_id": None,
                         "error": "trade projection unavailable"}
-            clause, args = "", [run_id]
+            run_ids = [row[0] for row in db.execute(
+                "SELECT run_id FROM runs WHERE mode='live' AND lower(account_id)=lower(?)",
+                (selected["account_id"],))] if selected["account_id"] else [run_id]
+            if run_id not in run_ids:
+                run_ids.append(run_id)
+            marks = ",".join("?" for _ in run_ids)
+            clause, args = "", list(run_ids)
             if asset_id is not None:
                 clause += " AND t.asset_id=?"
                 args.append(asset_id)
@@ -2432,19 +2440,24 @@ class Ledger:
                         SUM(COALESCE(json_extract(t.payload,'$.fee_estimate'),0)) AS fee_estimates,
                         SUM(json_extract(t.payload,'$.fee') IS NULL) AS missing_fees,
                         MAX(COALESCE(json_extract(t.payload,'$.time'),0)) AS last_time
-                    FROM trade_details t
-                    WHERE t.run_id=?
-                      AND COALESCE(json_extract(t.payload,'$.trade_status'),'') != 'FAILED'
+                    FROM (SELECT * FROM trade_details WHERE run_id IN (""" + marks + """)
+                          -- a fill re-journaled by a later run counts once
+                          GROUP BY json_extract(payload,'$.trade_id'), json_extract(payload,'$.order_id')) t
+                    WHERE COALESCE(json_extract(t.payload,'$.trade_status'),'') != 'FAILED'
                       AND json_extract(t.payload,'$.round_id') IS NOT NULL""" + clause
                 + """ GROUP BY t.asset_id, json_extract(t.payload,'$.round_id')
                      ORDER BY json_extract(t.payload,'$.round_id') DESC LIMIT ?""", args))
             rounds = []
             for row in rows[:limit]:
-                outcome = db.execute("SELECT status,pnl FROM market_details WHERE run_id=? AND asset_id=? AND round_id=?",
-                                     (run_id, row["asset_id"], row["round_id"])).fetchone()
-                settlement = db.execute("SELECT payload,verified FROM settlement_details WHERE run_id=? AND asset_id=? "
-                                        "AND json_extract(payload,'$.round_id')=?",
-                                        (run_id, row["asset_id"], row["round_id"])).fetchone()
+                # The settled outcome lives in the run that traded the round
+                # (P1-4); prefer a row that has a PnL, then a verified one.
+                outcome = db.execute(f"SELECT status,pnl FROM market_details WHERE run_id IN ({marks}) AND asset_id=? "
+                                     "AND round_id=? ORDER BY pnl IS NULL LIMIT 1",
+                                     (*run_ids, row["asset_id"], row["round_id"])).fetchone()
+                settlement = db.execute(f"SELECT payload,verified FROM settlement_details WHERE run_id IN ({marks}) "
+                                        "AND asset_id=? AND json_extract(payload,'$.round_id')=? "
+                                        "ORDER BY verified DESC, pnl IS NULL LIMIT 1",
+                                        (*run_ids, row["asset_id"], row["round_id"])).fetchone()
                 payload = json.loads(settlement["payload"]) if settlement else {}
                 shares, notional = row["shares"] or 0, row["notional"] or 0
                 fees = row["fees"] or 0
