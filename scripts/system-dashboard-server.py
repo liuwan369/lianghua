@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from collections import deque, OrderedDict
 import hmac
 import hashlib
+import io
 import json
 import math
 import os
@@ -38,6 +39,7 @@ from dashboard.read_model import ReadModel
 from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after_ms,
                                        validate_snapshot)
 from dashboard.account_data import AccountData
+from dashboard.push import PushHub
 from dashboard.system_metrics import SystemMetrics
 
 
@@ -2548,6 +2550,9 @@ def make_handler(root: Path):
                     "runtime": runtime,
                 }, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
+            if path == "/api/stream":
+                self._stream(query.get("p", []))
+                return
             if path == "/api/markets":
                 self._send_json(json.dumps(_modern_markets(query), ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
@@ -2953,6 +2958,44 @@ def make_handler(root: Path):
             except (OSError, sqlite3.Error, RuntimeError):
                 self._send_json('{"error":"数据暂不可用，请稍后重试"}'.encode(), 503)
 
+        def _stream(self, paths: list[str]) -> None:
+            """GET /api/stream?p=<rest path>&p=...: server-sent events. Every
+            message is {"path", "version", "body"} where body is exactly what a
+            GET of that path returns. A new connection first gets the current
+            value of each path, then only changes. Heartbeat every 15 s."""
+            client = self.push_hub.subscribe(paths)
+            if client is None:
+                self._send_json(b'{"error":"stream_capacity","stale":true}', 503)
+                return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Accel-Buffering", "no")
+                self.end_headers()
+                self.wfile.write(b"retry: 2000\n\n")
+                self.wfile.flush()
+                last_write = time.monotonic()
+                while not client.closed:
+                    ready = client.take(5.0)
+                    if ready:
+                        out = bytearray()
+                        for path, (version, body) in ready.items():
+                            out += (b'data: {"path":' + json.dumps(path).encode("utf-8")
+                                    + b',"version":' + str(version).encode() + b',"body":' + body + b"}\n\n")
+                        self.wfile.write(bytes(out))
+                        self.wfile.flush()
+                        last_write = time.monotonic()
+                    elif time.monotonic() - last_write >= 15:
+                        self.wfile.write(b": ping\n\n")
+                        self.wfile.flush()
+                        last_write = time.monotonic()
+            except (OSError, ValueError):
+                pass  # the browser went away; EventSource reconnects by itself
+            finally:
+                self.push_hub.unsubscribe(client)
+                self.close_connection = True
+
         def _send_json(self, body: bytes, status: int = 200, response_headers: dict[str, str] | None = None) -> None:
             path = self.path.split("?", 1)[0]
             modern = path.startswith("/api/") and not path.startswith(("/api/v1/", "/api/trading/")) and path not in {
@@ -3185,6 +3228,35 @@ def make_handler(root: Path):
         def log_message(self, *_: object) -> None:
             return
 
+    class _Capture(Handler):
+        """Run the real GET handler for one path and keep the response in memory,
+        so a pushed block is byte-for-byte what polling that path returns."""
+        def __init__(self, path: str):  # noqa: D107 - no socket, no BaseHTTPRequestHandler setup
+            self.path, self.command, self.headers = path, "GET", {}
+            self.request_version, self.client_address = "HTTP/1.1", ("push", 0)
+            self.wfile, self.status = io.BytesIO(), 200
+
+        def send_response(self, code, message=None):
+            self.status = code
+
+        def send_header(self, keyword, value):
+            pass
+
+        def end_headers(self):
+            pass
+
+        def send_error(self, code, message=None, explain=None):
+            self.status = code
+
+        def log_message(self, format, *args):
+            pass
+
+    def render(path: str) -> tuple[int, bytes]:
+        capture = _Capture(path)
+        capture.do_GET()
+        return capture.status, capture.wfile.getvalue()
+
+    Handler.push_hub = PushHub(render)
     return Handler
 
 
@@ -3206,6 +3278,8 @@ def main() -> int:
     threading.Thread(target=refresh_system_metrics, args=(stop,), daemon=True).start()
     threading.Thread(target=account_check_background, args=(stop,),
                      name="account-check-background", daemon=True).start()
+    threading.Thread(target=server.RequestHandlerClass.push_hub.run, args=(stop,),
+                     name="console-push", daemon=True).start()
     try:
         server.serve_forever()
     finally:
