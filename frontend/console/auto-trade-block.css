@@ -2406,3 +2406,22 @@ button {
     grid-row: 2;
   }
 }
+
+/* Round change (BUGS P2-3): the last round stays visible, dimmed, until this
+   round's own data renders; it is cleared after 3 s if nothing arrives. */
+.is-previous-round [data-quote], .is-previous-round .depth-columns, .is-previous-round .holding-grid,
+.is-previous-round .result-grid, .is-previous-round .stage-section, .is-previous-round .position-hero strong,
+.is-previous-round .orders-table-wrap {
+  opacity: 0.45;
+  transition: opacity 120ms ease;
+}
+
+/* U6: this round's orders sit inside "本场持仓与结果". */
+.position-orders {
+  margin-top: 13px;
+}
+.position-orders h3 {
+  margin: 0;
+  color: #d9e8f1;
+  font-size: 13px;
+}

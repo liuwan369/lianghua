@@ -89,7 +89,7 @@
 
       <section class="trade-summary-grid" aria-label="\u5F53\u524D\u7B56\u7565\u6458\u8981">
         <article class="summary-card"><div class="summary-icon blue-icon">\u25F7</div><div><span>\u5F53\u524D\u573A\u6B21</span><strong data-round>待接入 · 当前场次</strong><small data-countdown>\u5F85\u63A5\u5165</small></div></article>
-        <article class="summary-card"><div class="summary-icon violet-icon">\u21AF</div><div><span>\u5F53\u524D\u9636\u6BB5</span><strong data-stage>\u5F85\u63A5\u5165</strong><small>\u786E\u8BA4\u53CD\u8F6C <b data-confirmations>--</b> / -- \u6B21</small></div></article>
+        <article class="summary-card"><div class="summary-icon violet-icon">\u21AF</div><div><span>\u5F53\u524D\u9636\u6BB5</span><strong data-stage>\u8BFB\u53D6\u4E2D</strong><small>\u786E\u8BA4\u53CD\u8F6C <b data-confirmations>--</b> / -- \u6B21</small></div></article>
         <article class="summary-card"><div class="summary-icon amber-icon">\u2192</div><div><span>\u4E0B\u4E00\u7B14</span><strong data-next>\u7B49\u5F85\u4FE1\u53F7</strong><small data-strategy-revision>\u53C2\u6570\u7248\u672C\u5F85\u63A5\u5165</small></div></article>
            <article class="summary-card"><div class="summary-icon green-icon">\u2713</div><div><span>\u7B56\u7565\u72B6\u6001</span><strong data-strategy-status>策略配置待接入</strong><small>\u66F4\u65B0\u65F6\u95F4 <b data-status-age>--</b></small></div></article>
       </section>
@@ -140,15 +140,14 @@
           </div>
           <p class="result-note"><span class="info-dot">i</span>\u9884\u8BA1\u7ED3\u679C\u6309\u5DF2\u6210\u4EA4\u4EFD\u989D\u548C\u5B9E\u9645\u6210\u672C\u8BA1\u7B97\uFF0C\u6700\u7EC8\u4EE5\u5B98\u65B9\u7ED3\u679C\u548C\u5230\u8D26\u4E3A\u51C6\u3002</p>
           <p class="result-note settlement-note"><span class="info-dot">!</span><span>结算状态：<b data-settlement-state>等待本场结算记录</b><small data-settlement-detail>成交、结算和到账状态由服务器账本确认。</small></span></p>
+          <div class="orders-panel position-orders" aria-labelledby="orders-title">
+            <div class="panel-heading">
+              <div><h3 id="orders-title">本场订单</h3></div>
+              <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div><div class="round-history-panel" data-round-history hidden></div>
+            </div>
+            <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
+              </div>
         </article>
-      </section>
-
-      <section class="orders-panel trade-panel" aria-labelledby="orders-title">
-        <div class="panel-heading">
-          <div><p class="eyebrow">\u8BA2\u5355\u72B6\u6001</p><h2 id="orders-title">\u5F53\u524D\u8FD0\u884C\u8BA2\u5355</h2></div>
-          <div class="orders-meta"><span class="panel-meta" data-orders-state>等待当前场次数据</span><span class="orders-count"><b data-order-count>--</b> \u4E2A\u8BA2\u5355</span><span class="panel-meta" data-fill-summary>成交回报 --</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8</button></div><div class="round-history-panel" data-round-history hidden></div>
-        </div>
-        <div class="orders-table-wrap"><table class="orders-table"><thead><tr><th>\u65F6\u95F4</th><th>\u65B9\u5411</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>已成交份额</th><th>\u72B6\u6001</th></tr></thead><tbody><tr><td colspan="6">\u5F53\u524D\u573A\u6B21\u8BA2\u5355\u7B49\u5F85\u540E\u7AEF\u8FD4\u56DE</td></tr></tbody></table></div>
       </section>
 
       <section class="activity-panel trade-panel" aria-labelledby="activity-title">
@@ -278,9 +277,17 @@
   var globalProcessRunning = null;
   var globalRuntime = store.getState().runtime || null;
   var commandPending = false;
-  var commandCooldownUntil = 0;
-  var commandCooldownAction = null;
-  var commandCooldownContextKey = null;
+  // The buttons follow the server's real process state (UI-REDESIGN U10-U12).
+  // An accepted start/stop is remembered only until the server confirms it,
+  // replacing the old 5 s cooldown that re-enabled 启动 before the run showed up.
+  var startRequestedAt = 0;
+  var stopRequestedAt = 0;
+  var START_CONFIRM_MS = 30000;
+  var STOP_SLOW_MS = 15000;
+  var runtimePaused = function() {
+    var scoped = selectedRuntime && !selectedRuntime.stale ? (selectedRuntime.state || selectedRuntime.status) : null;
+    return scoped === "paused" || (globalRuntime?.runtimeState || globalRuntime?.status) === "paused";
+  };
   var currentMarketContextKey = null;
   var activeStreamContextKey = null;
   var activeStreamConfigKey = null;
@@ -316,6 +323,7 @@
     var context = currentContext();
     if (expectedContextKey != null && identityKey(context) !== expectedContextKey) return false;
     if (!vm.matchesIdentity(source, context)) { markSnapshotStale("盘口身份与所选资产不匹配 · 保留最近快照"); return false; }
+    markRoundCurrent(".orderbook-panel");
     var book = source.book || source.orderBook || source.orderbook || model.orderBook || {};
     var bookSide = function(side) {
       var upper = side.toUpperCase();
@@ -465,35 +473,64 @@
     snapshotExpiryTimer = null;
     snapshotWatermarks.clear();
     markSnapshotStale("所选市场已切换 · 等待对应场次快照");
-    ["yes-bid", "yes-ask", "no-bid", "no-ask"].forEach(function(key) { text(`[data-quote="${key}"]`, "--"); });
-    document.querySelectorAll("[data-depth], [data-depth-asks]").forEach(function(node) { node.innerHTML = ""; });
-    text("[data-book-age]", "--");
-    text("[data-strategy-status]", "所选市场状态待接入");
-    text("[data-status-age]", "--");
-    text("[data-position-state]", "读取中");
-    text("[data-settlement-state]", "等待本场结算记录");
-    text("[data-settlement-detail]", "成交、结算和到账状态由服务器账本确认。");
-    text("[data-orders-state]", "读取中");
-    text("[data-fill-summary]", "成交回报 --");
+    // Keep the last round on screen, dimmed and labelled, until this round's own
+    // data renders. Blanking every field made the whole page flash on each
+    // round change (BUGS P2-3); with push the new data arrives within ~0.3 s.
+    PREVIOUS_ROUND_PANELS.forEach(function(selector) {
+      var panel = document.querySelector(selector);
+      if (panel) panel.classList.add("is-previous-round");
+    });
+    if (previousRoundTimer) window.clearTimeout(previousRoundTimer);
+    previousRoundTimer = window.setTimeout(clearPreviousRound, PREVIOUS_ROUND_MAX_MS);
+    text("[data-position-state]", "上一场 · 等待本场数据");
+    text("[data-orders-state]", "上一场 · 等待本场数据");
+    text("[data-strategy-status]", "所选市场状态读取中");
+    text("[data-live-status]", "所选市场状态读取中");
     text("[data-activity-state]", "正在读取新场次事件");
-    text("[data-live-status]", "所选市场状态待接入");
-    text("[data-invested]", "--");
-    text('[data-holding="up"]', "--");
-    text('[data-holding="down"]', "--");
-    text('[data-average="up"]', "--");
-    text('[data-average="down"]', "--");
-    text("[data-average-total]", "--");
-    text("[data-stage]", "待接入");
-    text("[data-confirmations]", "--");
-    text("[data-stage-progress]", "--");
-    text("[data-order-count]", "--");
-    ["[data-bought]", "[data-occupied]", '[data-outcome="up"]', '[data-outcome="down"]'].forEach(function(selector) { text(selector, "--"); });
-    var body = document.querySelector(".orders-table tbody");
-    if (body) body.innerHTML = '<tr><td colspan="6">正在读取新场次持仓和订单</td></tr>';
-    var timeline = document.querySelector("[data-stage-timeline]");
-    if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>新场次数据读取中</strong><small>等待后端返回本场持仓和策略阶段</small></div><time>--</time></li>';
-    var activityList = document.querySelector("[data-activity-list]");
-    if (activityList) activityList.innerHTML = '<li><time>--</time><span class="activity-icon info-icon">i</span><div><strong>新场次事件读取中</strong><small>等待后端返回本场运行事件</small></div><b class="activity-tag info-tag">读取中</b></li>';
+  };
+  // Panels that show one round's data; each is shown as current again by the
+  // first successful render for the new round.
+  var PREVIOUS_ROUND_PANELS = [".orderbook-panel", ".position-panel", ".orders-panel"];
+  var PREVIOUS_ROUND_MAX_MS = 3000;
+  var previousRoundTimer = null;
+  var markRoundCurrent = function(selector) {
+    var panel = document.querySelector(selector);
+    if (panel) panel.classList.remove("is-previous-round");
+  };
+  var isPreviousRound = function(selector) {
+    return Boolean(document.querySelector(selector)?.classList.contains("is-previous-round"));
+  };
+  // The new round's data did not render in time (or the read failed): never
+  // leave the last round's numbers under this round's name. Clear what is still
+  // marked as previous to the honest "no data" state.
+  var clearPreviousRound = function() {
+    previousRoundTimer = null;
+    if (isPreviousRound(".orderbook-panel")) {
+      ["yes-bid", "yes-ask", "no-bid", "no-ask"].forEach(function(key) { text(`[data-quote="${key}"]`, "--"); });
+      document.querySelectorAll("[data-depth], [data-depth-asks]").forEach(function(node) { node.innerHTML = ""; });
+      text("[data-book-age]", "--");
+      markRoundCurrent(".orderbook-panel");
+    }
+    if (isPreviousRound(".position-panel")) {
+      ["[data-invested]", '[data-holding="up"]', '[data-holding="down"]', '[data-average="up"]', '[data-average="down"]',
+        "[data-average-total]", "[data-confirmations]", "[data-stage-progress]", "[data-bought]", "[data-occupied]",
+        '[data-outcome="up"]', '[data-outcome="down"]'].forEach(function(selector) { text(selector, "--"); });
+      text("[data-stage]", "本场暂无持仓数据");
+      text("[data-position-state]", "本场暂无持仓数据");
+      text("[data-settlement-state]", "等待本场结算记录");
+      text("[data-settlement-detail]", "成交、结算和到账状态由服务器账本确认。");
+      var timeline = document.querySelector("[data-stage-timeline]");
+      if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>本场暂无策略阶段</strong><small>本场下单后这里显示阶段进度</small></div><time>--</time></li>';
+      markRoundCurrent(".position-panel");
+    }
+    if (isPreviousRound(".orders-panel")) {
+      text("[data-order-count]", "--");
+      text("[data-fill-summary]", "成交回报 --");
+      text("[data-orders-state]", "本场暂无订单数据");
+      var body = document.querySelector(".orders-table tbody");
+      if (body) body.innerHTML = '<tr><td colspan="6">本场暂无订单</td></tr>';
+      markRoundCurrent(".orders-panel");
+    }
   };
   var itemMatchesContext = function(item, asset) {
     return vm.matchesIdentity(item, { assetId: asset?.id, marketId: asset?.marketId, roundId: asset?.roundId });
@@ -552,6 +589,7 @@
       text("[data-position-state]", `${positionReason} · 保留本场最近成功数据`);
       return false;
     }
+    markRoundCurrent(".position-panel");
     var number = function(...keys) { for (var key of keys) { var value = numeric(position[key]); if (value != null) return value; } return null; };
     var occupied = number("occupiedUsd", "occupied_usd");
     // The ledger never emitted boughtUsd, so 已买入 was permanently "--". Spent
@@ -710,6 +748,7 @@
       return `<tr><td>${window.PolyPreview.format.time(order.updatedAt || order.createdAt || order.time)}</td><td>${window.PolyPreview.format.escape(sideText)}</td><td>${Number.isFinite(price) ? price.toFixed(3) : "--"}</td><td>${Number.isFinite(size) ? size.toFixed(2) : "--"}</td><td>${Number.isFinite(filled) ? filled.toFixed(2) : "--"}</td><td>${window.PolyPreview.format.escape(status)}</td></tr>`;
     }).join("") : '<tr><td colspan="6">当前场次暂无订单</td></tr>');
     text("[data-orders-state]", `已更新 · ${window.PolyPreview.format.time(raw.asOf)}`);
+    markRoundCurrent(".orders-panel");
     return true;
   };
   var renderFills = function(raw, asset) {
@@ -999,18 +1038,14 @@
   var updateControls = function() {
     var context = currentContext();
     var asset = assetById(context.assetId);
-    var runtimeState = selectedRuntime?.state || selectedRuntime?.status;
     var processRunning = selectedRuntime?.processRunning;
-    // The process state is global. A scoped snapshot can be unavailable when
-    // the server has moved to another round, so use the global fact for start
-    // gating while keeping pause/stop scoped to the matching market identity.
+    // The process state is global, and start, pause and stop all act on the
+    // whole process, so every button follows the global fact; a scoped snapshot
+    // goes unavailable whenever the server moves to another round.
     var effectiveProcessRunning = typeof globalProcessRunning === "boolean" ? globalProcessRunning : processRunning;
     var startRuntime = globalRuntime || selectedRuntime || { processRunning: effectiveProcessRunning };
-    var runtimeIdentityMatches = Boolean(selectedRuntime && vm.matchesIdentity(selectedRuntime, context));
     var runtimeActive = effectiveProcessRunning === true;
-    var running = processRunning === true;
     var startReason = "";
-    var freshPaused = runtimeIdentityMatches && !selectedRuntime.stale && processRunning === true && (runtimeState === "paused");
     var catalog = store.getState().marketCatalog;
     var state = store.getState();
     // The first render happens before the independent REST snapshots return.
@@ -1020,16 +1055,29 @@
       || (state.strategy.status === "unavailable" && state.strategy.error === "策略配置尚未接入")
       || (state.accountStatus.status === "unavailable" && state.accountStatus.error === "账户配置状态尚未接入")
       || (state.runtime.status === "unavailable" && state.runtime.error === "后端尚未接入");
+    var now = Date.now();
+    var globalState = globalRuntime?.runtimeState || globalRuntime?.status;
+    if (runtimeActive) startRequestedAt = 0;
+    if (effectiveProcessRunning === false) stopRequestedAt = 0;
+    var starting = !runtimeActive && startRequestedAt > 0 && now - startRequestedAt < START_CONFIRM_MS;
+    var stopping = runtimeActive && (stopRequestedAt > 0 || globalState === "stopping");
+    var paused = runtimePaused();
     document.querySelectorAll("[data-action]").forEach(function(button) {
       var action = button.dataset.action;
       var strategy = store.getState().strategy;
-      var cooldownActive = commandCooldownUntil > Date.now();
-      var sameActionCooldown = cooldownActive && commandCooldownAction === action;
-      var stopAfterAcceptedStart = cooldownActive && commandCooldownAction === "start" && action === "stop" && commandCooldownContextKey === identityKey(context);
-      var reason = commandPending || sameActionCooldown ? "控制指令已接收，等待服务器最终状态" : action !== "stop" && (!context.marketId || !context.roundId) ? "所选市场身份待后端提供" : "";
-      if (!reason && action === "start" && initialRead) reason = "正在读取服务器状态…";
-      if (!reason && action === "stop" && (!runtimeIdentityMatches || !running) && !stopAfterAcceptedStart) reason = !runtimeIdentityMatches ? "当前市场没有匹配的服务器运行身份" : "没有服务器确认的可停止运行";
-      if (!reason && action === "pause" && (processRunning !== true || selectedRuntime?.stale || !runtimeIdentityMatches)) reason = selectedRuntime?.stale ? "运行状态已过期，暂不允许暂停或恢复" : !runtimeIdentityMatches ? "当前市场没有匹配的服务器运行身份" : "服务器未确认进程正在运行";
+      var reason = commandPending ? "控制指令已提交，等待服务器回执" : "";
+      if (!reason && action === "start") {
+        if (stopping) reason = "交易进程正在停止，等待服务器确认";
+        else if (runtimeActive) reason = "交易进程运行中，停止后才能再次启动";
+        else if (starting) reason = "已提交启动，等待服务器确认进程运行";
+        else if (!context.marketId || !context.roundId) reason = "所选市场身份待后端提供";
+        else if (initialRead) reason = "正在读取服务器状态…";
+      }
+      // Pause and stop act on the whole process, so they need only a running
+      // process, not a fresh per-round snapshot (they used to grey out on every
+      // round change).
+      if (!reason && action === "pause" && (!runtimeActive || stopping)) reason = stopping ? "交易进程正在停止" : "没有运行中的交易进程";
+      if (!reason && action === "stop" && (!runtimeActive || stopping)) reason = stopping ? "停止请求已提交，等待进程退出" : "没有运行中的交易进程";
       // Shared start ladder: same order and wording as the overview page so the
       // two cannot disagree. This page's freshness fact is its dedicated snapshot
       // poll rather than the catalog row.
@@ -1050,21 +1098,30 @@
           snapshotFresh: lastSnapshotValid === true
         });
       }
-      if (!reason && action === "start" && runtimeActive) reason = runtimeState === "stopping" ? "所选市场正在停止，等待服务器确认" : "所选市场正在运行";
       if (action === "start") startReason = reason;
-      if (action === "pause") button.textContent = freshPaused ? "恢复新增" : "暂停新增";
-      if (action === "start") button.textContent = commandPending ? "启动请求中…" : reason ? "启动条件未满足" : "启动自动交易";
-      if (action === "stop" && commandPending) button.textContent = "停止请求中…";
-      button.dataset.controlState = commandPending ? "pending" : reason ? "blocked" : "ready";
-      button.classList.toggle("is-pending", commandPending || sameActionCooldown);
+      if (action === "start") {
+        button.textContent = commandPending ? "启动请求中…" : stopping ? "停止中…" : runtimeActive ? "运行中"
+          : starting ? "启动中…" : reason ? "启动条件未满足" : "启动自动交易";
+      }
+      if (action === "pause") button.textContent = paused ? "恢复新增" : "暂停新增";
+      if (action === "stop") button.textContent = stopping ? "停止中…" : commandPending ? "停止请求中…" : "请求停止";
+      var busy = commandPending || starting || stopping;
+      button.dataset.controlState = runtimeActive && action === "start" && !stopping ? "running" : busy ? "pending" : reason ? "blocked" : "ready";
+      button.classList.toggle("is-pending", busy);
       button.disabled = Boolean(reason);
-      button.title = reason || (commandPending ? "控制请求已提交，等待服务器确认" : "");
+      button.title = action === "pause" && !reason ? "只停止开新阶段，已挂的单照常成交或撤销"
+        : action === "stop" && stopping && stopRequestedAt && now - stopRequestedAt > STOP_SLOW_MS
+          ? "停止耗时较长：服务器仍在撤单和收尾，确认后按钮会恢复" : reason;
       button.setAttribute("aria-label", button.textContent);
     });
     var feedback = document.querySelector("[data-control-feedback]");
     if (feedback) {
-      feedback.classList.toggle("is-blocked", Boolean(startReason));
-      feedback.textContent = commandPending ? "正在提交控制请求，等待服务器确认…" : startReason ? `暂不能启动：${startReason}` : "启动条件已满足，可以启动交易。";
+      feedback.classList.toggle("is-blocked", Boolean(startReason) && !runtimeActive && !starting);
+      feedback.textContent = commandPending ? "正在提交控制请求，等待服务器确认…"
+        : stopping ? (stopRequestedAt && now - stopRequestedAt > STOP_SLOW_MS ? "停止耗时较长，服务器仍在撤单和收尾…" : "正在停止，等待服务器确认进程退出…")
+        : runtimeActive ? (paused ? "交易进程运行中 · 已暂停新增（已挂单照常）" : "交易进程运行中")
+        : starting ? "已提交启动，等待服务器确认进程运行…"
+        : startReason ? `暂不能启动：${startReason}` : "启动条件已满足，可以启动交易。";
     }
   };
   var renderStrategyRevision = function(resource) {
@@ -1127,8 +1184,11 @@
       globalRuntime = { ...(runtime || {}), processRunning: globalProcessRunning, processRunningFresh: runtime?.processRunningFresh === true && typeof runtime?.processRunning === "boolean" };
       var globalProcessState = globalProcessRunning === true ? "进程运行中" : globalProcessRunning === false ? "进程已停止" : "进程状态未知";
       if (!selectedRuntime) {
-        text("[data-strategy-status]", "所选市场状态待接入");
-        text("[data-live-status]", "所选市场状态待接入");
+        // A stopped engine has no per-round status at all; say so instead of a
+        // "待接入" placeholder that reads like an unfinished feature (BUGS P2-6).
+        var noRoundStatus = globalProcessRunning === false ? "引擎未运行" : "所选市场状态读取中";
+        text("[data-strategy-status]", noRoundStatus);
+        text("[data-live-status]", noRoundStatus);
         text("[data-connection-status]", `运行流已连接 · 全局${globalProcessState}`);
         updateControls();
       }
@@ -1364,14 +1424,7 @@
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const contextForAction = currentContext();
-      const runtimeStateForAction = selectedRuntime?.state || selectedRuntime?.status;
-      const canResume = button.dataset.action === "pause"
-        && !selectedRuntime?.stale
-        && selectedRuntime?.processRunning === true
-        && vm.matchesIdentity(selectedRuntime, contextForAction)
-        && runtimeStateForAction === "paused";
-      const action = canResume ? "resume" : button.dataset.action;
+      const action = button.dataset.action === "pause" && runtimePaused() ? "resume" : button.dataset.action;
       if (commandPending || button.disabled) return;
       var context = currentContext();
       var version = contextVersion;
@@ -1405,21 +1458,14 @@
       }
       finally {
         commandPending = false;
-        if (acceptedResult) {
-          commandCooldownUntil = Date.now() + 5000;
-          commandCooldownAction = action;
-          commandCooldownContextKey = identityKey(context);
-        }
+        if (acceptedResult && action === "start") startRequestedAt = Date.now();
+        if (acceptedResult && action === "stop") stopRequestedAt = Date.now();
         updateControls();
         scheduleRuntimeRefresh(500);
-        if (commandCooldownUntil > Date.now()) window.setTimeout(function() {
-          if (commandCooldownUntil <= Date.now()) {
-            commandCooldownUntil = 0;
-            commandCooldownAction = null;
-            commandCooldownContextKey = null;
-          }
-          updateControls();
-        }, commandCooldownUntil - Date.now() + 10);
+        // Re-check when an unconfirmed start expires or a stop turns slow.
+        if (acceptedResult && (action === "start" || action === "stop")) {
+          window.setTimeout(updateControls, (action === "start" ? START_CONFIRM_MS : STOP_SLOW_MS) + 50);
+        }
       }
     });
   });
