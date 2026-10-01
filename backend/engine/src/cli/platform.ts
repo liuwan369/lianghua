@@ -874,8 +874,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
           return [];
         }
         const actions = onEvent(event, context);
-        const active = reversal!.exportState().rounds.find(round => round.startsAt <= context.now && context.now < round.endsAt);
-        const limits = resolveReversalLimits(operatorLimits, active?.config ?? strategyConfig!.config);
+        const limits = resolveReversalLimits(operatorLimits, reversal!.activeRoundConfig(context.now) ?? strategyConfig!.config);
         if (connection && (options.limits.dailyLossUsd !== limits.dailyLossUsd || options.limits.capitalUsd !== limits.capitalUsd
           || options.limits.maxOrderUsd !== limits.maxOrderUsd)) {
           connection.platform.core.updateLimits(limits);

@@ -155,6 +155,12 @@ export class BtcReversalStrategy implements StrategyPlugin {
   }
 
   exportState(): BtcReversalState { return clone(this.state); }
+  /** The running round's config, read without cloning the whole state: the
+   * engine asks on every event, and a full clone per event grew with every
+   * stored round (BUGS P2-13). Callers must not mutate it. */
+  activeRoundConfig(now: number): Readonly<BtcReversalConfig> | undefined {
+    return this.state.rounds.find(round => round.startsAt <= now && now < round.endsAt)?.config;
+  }
   snapshot(): BtcReversalState { return this.exportState(); }
   getStatus() {
     const state = this.exportState();
