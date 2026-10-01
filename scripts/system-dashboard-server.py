@@ -67,6 +67,7 @@ _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 _live_cache_mtime: int | None = None
+_live_wanted_at = 0.0
 _account_report: dict | None = None
 _account_report_identity: str | None = None
 _account_check_error: str | None = None
@@ -1064,6 +1065,8 @@ def live_status() -> dict:
 
 def cached_live_status() -> dict:
     """HTTP/feed clients only read the last background collector snapshot."""
+    global _live_wanted_at
+    _live_wanted_at = time.monotonic()
     with _live_lock:
         value = validate_snapshot(_live_cache)
         age = time.monotonic() - _live_cache_at if _live_cache_at else None
@@ -1154,10 +1157,13 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
 
 
 def refresh_live_background(stop: threading.Event) -> None:
-    # Match the collector's 250 ms write cadence; an unchanged file costs one stat.
+    # Match the collector's 250 ms write cadence while someone is reading the
+    # markets (a page or a push stream); otherwise once a second. Parsing the
+    # snapshot four times a second cost ~12% of a core with nobody watching.
     while not stop.is_set():
         live_status()
-        stop.wait(0.25 if _live_config()["collector_is_local"] else 1)
+        watched = time.monotonic() - _live_wanted_at < 5
+        stop.wait(0.25 if watched and _live_config()["collector_is_local"] else 1)
 
 
 def supervise_projection(stop: threading.Event) -> None:
