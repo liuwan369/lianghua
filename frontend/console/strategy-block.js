@@ -121,7 +121,13 @@
     || "btc"
   ).toLowerCase();
   const assetLabel = () => vm.assetSymbol(selectedAsset(), "BTC");
-  const hasBtcPublished = () => vm.strategyTargets(published(), selectedAsset());
+  // Editing needs a published config, not one that already targets the
+  // selected coin: requiring a match made switching coins impossible from any
+  // page (BUGS P2-18). Saving submits the selected coin; the server's
+  // _validate_running_asset rejects a switch while a run is active.
+  const hasPublished = () => Array.isArray(published()?.stageShares) && published().stageShares.length > 0;
+  const publishedAsset = () => String(vm.strategyAssetId(published() || {}) || "").toLowerCase();
+  const switchingAsset = () => hasPublished() && publishedAsset() !== selectedAsset();
   const draft = () => resource?.draft || null;
   const validDraft = () => {
     const value = draft();
@@ -131,7 +137,7 @@
   };
   const setMessage = (message) => text("[data-save-state]", message);
   const controls = () => {
-    const available = hasBtcPublished();
+    const available = hasPublished();
     root.querySelectorAll("[data-field], [data-stage], [data-stage-count], [data-max-stages], [data-runtime-field]")
       .forEach((input) => { input.disabled = busy || !available; });
     root.querySelector("[data-save]").disabled = busy || !available;
@@ -188,7 +194,7 @@
     resource = next;
     text("[data-strategy-revision]", resource.revision == null ? "--" : `版本 ${resource.revision}`);
     text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布版本 ${resource.revision}`);
-    text(".strategy-state-chip", resource.status === "ready" ? hasBtcPublished() ? `${assetLabel()} 服务器配置已读取` : `配置目标未确认为 ${assetLabel()}` : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
+    text(".strategy-state-chip", resource.status === "ready" ? hasPublished() ? (switchingAsset() ? `已发布 ${vm.assetSymbol(publishedAsset(), "--")} · 将切换为 ${assetLabel()}` : `${assetLabel()} 服务器配置已读取`) : "尚无已发布配置" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
     // Static template copy said "BTC" regardless of the selected asset, so the
     // page claimed BTC while configuring eth/sol.
     text("[data-asset-chip]", `${assetLabel()} · 5 分钟`);
@@ -199,7 +205,7 @@
       ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于版本 ${savedDraft.expectedRevision} · 未激活`
       : savedDraft && !vm.strategyTargets(savedDraft.config, selectedAsset()) ? `服务器草稿目标不是 ${assetLabel()}，已禁止激活；请先在服务器更正草稿。`
       : savedDraft ? "原草稿基线已过期或已发布，请重新保存后激活。" : "尚无可激活草稿；保存不会自动发布或启动。");
-    if (!dirty && !busy && resource.status === "ready" && hasBtcPublished()) {
+    if (!dirty && !busy && resource.status === "ready" && hasPublished()) {
       const config = validDraft() ? savedDraft.config : published();
       const key = validDraft() ? `draft:${savedDraft.draftId}` : `revision:${resource.revision}`;
       if (config && Array.isArray(config.stageShares) && key !== formKey) {
@@ -215,9 +221,10 @@
       setMessage(dirty ? "策略接口已恢复，未保存的输入仍保留。" : "策略接口已恢复，已读取服务器配置。");
     }
     if (!busy && resource.status === "unavailable") setMessage("策略配置不可用，等待接口恢复。");
-    if (!busy && resource.status === "ready" && !hasBtcPublished()) setMessage(`服务器策略没有明确的 ${assetLabel()} 目标，编辑、保存和激活已停用。`);
+    if (!busy && resource.status === "ready" && !hasPublished()) setMessage("服务器还没有已发布的策略配置，编辑、保存和激活已停用。");
+    else if (!busy && !dirty && switchingAsset()) setMessage(`当前已发布策略的币种是 ${vm.assetSymbol(publishedAsset(), "--")}。保存并激活后，策略币种将改为 ${assetLabel()}；交易运行中不能切换。`);
     else if (!busy && savedDraft && !vm.strategyTargets(savedDraft.config, selectedAsset())) setMessage(`服务器草稿目标不是 ${assetLabel()}，激活已停用；请先在服务器更正草稿。`);
-    if (!dirty && !busy && !hasBtcPublished() && !validDraft()) {
+    if (!dirty && !busy && !hasPublished() && !validDraft()) {
       field("trigger").value = "";
       field("confirm").value = "";
       field("maxPrice").value = "";
