@@ -570,6 +570,18 @@ def _automatic_stop_result(exit_code: int | None, console_path: Path | None) -> 
         reason,
         "交易进程异常退出，请核对运行记录。" if failed else "交易进程已停止，请核对订单与持仓状态。",
     )
+    if failed:
+        # Show the engine's own (already secret-filtered) cause next to the
+        # generic text, so a failed start says why (BUGS P2-7).
+        for line in reversed(_tail_lines(console_path)):
+            try:
+                event = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if (isinstance(event, dict) and event.get("kind") == "platform_error"
+                    and event.get("code") == "platform_run_failed" and isinstance(event.get("message"), str)):
+                message = f"{message}（{event.get('phase') or '未知阶段'}：{event['message'][:300]}）"
+                break
     remote_confirmed = _remote_orders_empty_from_fresh_snapshot()
     return {"confirmed": remote_confirmed, "process_stopped": True, "automatic": True,
             "remote_orders_state": "confirmed" if remote_confirmed else "unconfirmed",

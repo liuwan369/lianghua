@@ -103,6 +103,18 @@ export function settlementPassWants(market: { id: string; endsAt: number }, now:
   return market.endsAt <= now && !done.has(market.id);
 }
 
+/** An error message safe for the journal and the console: bounded, and never a
+ * secret. Anything mentioning a credential, or carrying a 64-hex string that
+ * could be a private key, is replaced. Undefined when there is no message. */
+export function safeErrorMessage(message: string | undefined): string | undefined {
+  const value = String(message ?? "").slice(0, 500);
+  if (!value) return undefined;
+  if (/secret|token|passphrase|password|private[ _-]?key|api[ _-]?key|mnemonic|diagnostic stdout/i.test(value)) {
+    return "sensitive provider error";
+  }
+  return value.replace(/(0x)?[0-9a-fA-F]{64}/g, "<redacted-64hex>");
+}
+
 /** How long an ended round stays in the state file after it is fully done. A
  * late venue frame for a trade arrives within seconds; an hour is ample. */
 export const SETTLED_HISTORY_KEEP_SEC = 3_600;
@@ -627,12 +639,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     console.error(JSON.stringify({ kind: "platform_error", ...details }));
     journal?.write("platform_error", details);
   };
-  const safeEventMessage = (message: string | undefined): string => {
-    const value = String(message ?? "").slice(0, 500);
-    if (!value) return "platform event failed";
-    return /secret|token|passphrase|password|private[ _-]?key|api[ _-]?key|diagnostic stdout/i.test(value)
-      ? "sensitive provider error" : value;
-  };
+  const safeEventMessage = (message: string | undefined): string => safeErrorMessage(message) ?? "platform event failed";
   const marketIdentity = (tokenId: string) => {
     const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === tokenId));
     return journalMarketIdentity(market, tokenId);
@@ -1154,7 +1161,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const expectedStopAbort = signalReason && error instanceof Error && error.name === "AbortError";
     if (!expectedStopAbort) {
       primaryFailure = error;
-      reportError(phase, "platform_run_failed");
+      // Keep the cause: four failed starts on 09-29 left only a phase name, and
+      // RPC overload, geo check, clock skew and Gamma timeouts all looked alike (BUGS P2-7).
+      reportError(phase, "platform_run_failed", { message: safeErrorMessage(error instanceof Error ? error.message : String(error)) });
     }
   } finally {
     discoveryAbort.abort();
@@ -1258,7 +1267,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   catch (error) {
     console.error(JSON.stringify({ kind: "platform_error", code: "cli_failed",
       message: error instanceof CliInputError || error instanceof CommanderError
-        ? error.message : "platform could not complete; inspect the phase and local configuration" }));
+        ? error.message : safeErrorMessage(error instanceof Error ? error.message : String(error))
+          ?? "platform could not complete; inspect the phase and local configuration" }));
     process.exitCode = 1;
   }
 }
