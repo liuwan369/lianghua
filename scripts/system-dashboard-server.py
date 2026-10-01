@@ -2759,6 +2759,13 @@ def make_handler(root: Path):
                         return
                     value = (_modern_settlements(event_run_id, query) if path == "/api/settlements"
                              else _modern_events(event_run_id, query, kinds={"fill"} if path == "/api/fills" else None))
+                    if path == "/api/settlements":
+                        # Same PnL as the history table: the venue's (official_pnl).
+                        results = _official_results()
+                        for item in value.get("items") or []:
+                            official = None if results is None else results.get((item.get("assetId"), str(item.get("roundId"))))
+                            item["pnl"] = official["pnl"] if official else None
+                            item["pnlSource"] = "polymarket-data-api" if official else None
                     # A new fill changes the wallet balance. Drop the account
                     # cache so the next /api/account/snapshot reflects it instead
                     # of waiting out the refresh interval.

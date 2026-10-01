@@ -787,9 +787,12 @@
       set("结算记录待确认", window.PolyPreview.format.readableError(resource?.error || payload?.error, "账本连接中断，保留最近结算状态"));
       return false;
     }
-    var scoped = items.filter(function(item) { return vm.matchesIdentity(item, context); });
-    if (!scoped.length) { set("本场暂无结算记录", "场次尚未结束，或账本尚未收到本场结算回执。"); return true; }
+    var scoped = items.filter(function(item) { return String(item.assetId || item.asset_id || "") === String(context.assetId || "") && (item.roundId || item.round_id); })
+      .sort(function(a, b) { return Number(b.roundId || b.round_id) - Number(a.roundId || a.round_id); });
+    if (!scoped.length) { set("暂无结算记录", "本次运行还没有已结束的场次；场次结束后结算回执才会到达。"); return true; }
     var item = scoped[0];
+    var settledRound = Number(item.roundId || item.round_id);
+    var roundLabel = Number.isFinite(settledRound) ? `最近结算：${window.PolyPreview.format.time(settledRound)}–${window.PolyPreview.format.time(settledRound + 300)} 场 · ` : "";
     var settlement = vm.settlementStatus(item);
     var noTrade = settlement.noTrade;
     var accounting = settlement.accounting;
@@ -801,7 +804,7 @@
     if (pnlError) details.push(window.PolyPreview.format.readableError(pnlError, "盈亏暂不可核对"));
     var pnl = numeric(item.pnl);
     if (pnl != null) details.push(`净盈亏 ${pnl.toFixed(2)} USDC`);
-    set(label, details.join(" · ") || "服务器已返回本场结算状态。");
+    set(roundLabel + label, details.join(" · ") || "服务器已返回结算状态。");
     return true;
   };
   var loadCurrentMarket = async function() {
@@ -868,7 +871,9 @@
       !readLedger ? null : Promise.resolve().then(function() { return adapter.loadFills(null, ledgerContext()); }).then(function(value) {
         if (version === contextVersion) renderFills(value, asset);
       }, function() { if (version === contextVersion) text("[data-fill-summary]", "成交回报读取失败"); }),
-      !readLedger ? null : Promise.resolve().then(function() { return adapter.loadSettlements(null, ledgerContext()); }).then(function(value) {
+      // A round's settlement exists only after it ends, when this page has
+      // already moved on; ask by coin and show the latest one (BUGS P3-12).
+      !readLedger ? null : Promise.resolve().then(function() { var scope = ledgerContext(); return adapter.loadSettlements(null, { assetId: scope.assetId, runId: scope.runId }); }).then(function(value) {
         if (version === contextVersion) renderSettlements(value);
       }, function() { if (version === contextVersion) { text("[data-settlement-state]", "结算读取失败"); text("[data-settlement-detail]", "未确认结算状态，不显示成功结果。"); } })
     ].filter(Boolean)).finally(function() {

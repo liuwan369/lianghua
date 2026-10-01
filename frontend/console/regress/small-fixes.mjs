@@ -58,6 +58,15 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     if (url.includes("/position")) return { schemaVersion: 1, asOf: now(), stale: false, source: "fills",
       roundId: String(roundStart()), marketId: "0xm", assetId: "btc", yesShares: 5, noShares: 0, totalShares: 5 };
     if (url.includes("/api/runtime/status")) return { schemaVersion: 1, asOf: now(), stale: false, status: "stopped", processRunning: false, processRunningFresh: true, markets: [] };
+    // P3-12: the only settlement belongs to the previous round, as it always
+    // does: a round settles after it ends. The server filters by roundId.
+    if (url.includes("/api/settlements")) {
+      const prev = String(roundStart() - 300);
+      const wantsRound = /[?&]roundId=/.test(url);
+      return { schemaVersion: 1, asOf: now(), stale: false, available: true, status: "ready",
+        items: wantsRound && !url.includes(`roundId=${prev}`) ? [] : [{ kind: "settlement", assetId: "btc", marketId: "0xprev",
+          roundId: prev, state: "confirmed", payoutVerified: true, pnl: 1.62, accountingState: "confirmed" }] };
+    }
     return { schemaVersion: 1, asOf: now(), stale: false, items: [] };
   };
   const { written } = page([...shared, "auto-trade-block.js"], "auto-trade-block-root", reply);
@@ -65,6 +74,8 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   for (let i = 0; i < 30; i += 1) { await wait(100); seen.add(written.get("[data-auto-account-available]")); }
   seen.delete(undefined);
   assert.ok(![...seen].some((value) => value.startsWith("213.64")), `P3-11: the header never shows the account check's gross balance; saw ${[...seen]}`);
+  const settlement = written.get("[data-settlement-state]") || "";
+  assert.ok(settlement.includes("最近结算"), `P3-12: the latest settlement is shown with its round; got "${settlement}"`);
   const state = written.get("[data-position-state]") || "";
   assert.ok(!state.includes("本场已结束"), `P3-13: mid-round fills fallback must not say the round ended; got "${state}"`);
 }
