@@ -619,9 +619,13 @@
     // The ledger currently returns a weighted total average as a scalar. Only
     // assign it to one side when the other side is explicitly empty.
     if (historical) {
-      text("[data-position-state]", totalShares != null
-        ? `本场已结束 · 按成交记录显示 ${totalShares.toFixed(2)} 份额`
-        : "本场已结束 · 按成交记录显示");
+      // source=fills only means the live snapshot was unavailable (engine stopped
+      // or a stale frame), not that the round is over (BUGS P3-13).
+      var roundAsset = assetById(selectedAssetId);
+      var roundEnd = roundAsset && Number(roundAsset.endAt != null ? roundAsset.endAt : roundAsset.end);
+      var ended = Number.isFinite(roundEnd) && Date.now() / 1000 >= roundEnd;
+      var prefix = ended ? "本场已结束 · 按成交记录显示" : "实时持仓暂不可用 · 按成交记录显示";
+      text("[data-position-state]", totalShares != null ? `${prefix} ${totalShares.toFixed(2)} 份额` : prefix);
     }
     if (totalAverage != null) {
       if (yesAverage == null && noAverage == null && yesShares != null && noShares != null) {
@@ -1213,7 +1217,9 @@
   renderMarketPool();
   renderStrategyRevision(store.getState().strategy);
   store.subscribe("strategy", renderStrategyRevision);
-  store.subscribe("accountStatus", function(value) { accountStatus = value; renderAccount(value); updateControls(); });
+  // The header balance comes from the account snapshot only. Rendering the
+  // account check's gross balance here made it flip between two values (BUGS P3-11).
+  store.subscribe("accountStatus", function(value) { accountStatus = value; updateControls(); });
   store.subscribe("account", renderAccount);
   store.subscribe("metrics", renderMetrics);
   store.subscribe("marketPool", function(value) {

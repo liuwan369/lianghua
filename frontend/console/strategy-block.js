@@ -183,6 +183,7 @@
     updatePreview();
     controls();
   };
+  let connectionLost = false;
   const receive = (next) => {
     resource = next;
     text("[data-strategy-revision]", resource.revision == null ? "--" : `版本 ${resource.revision}`);
@@ -206,7 +207,13 @@
         setMessage(validDraft() ? "已读取服务器草稿，尚未激活。" : "已读取服务器已发布配置。");
       }
     }
-    if (!busy && resource.status === "stale") setMessage("策略接口断开，保留上次配置和未保存输入。");
+    if (!busy && resource.status === "stale") { setMessage("策略接口断开，保留上次配置和未保存输入。"); connectionLost = true; }
+    // Recovered with the same revision: hydrate() is skipped, so clear the
+    // disconnect notice here or it stays forever (BUGS P3-16).
+    else if (!busy && connectionLost && resource.status === "ready") {
+      connectionLost = false;
+      setMessage(dirty ? "策略接口已恢复，未保存的输入仍保留。" : "策略接口已恢复，已读取服务器配置。");
+    }
     if (!busy && resource.status === "unavailable") setMessage("策略配置不可用，等待接口恢复。");
     if (!busy && resource.status === "ready" && !hasBtcPublished()) setMessage(`服务器策略没有明确的 ${assetLabel()} 目标，编辑、保存和激活已停用。`);
     else if (!busy && savedDraft && !vm.strategyTargets(savedDraft.config, selectedAsset())) setMessage(`服务器草稿目标不是 ${assetLabel()}，激活已停用；请先在服务器更正草稿。`);
