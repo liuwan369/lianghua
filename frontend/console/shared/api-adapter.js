@@ -221,7 +221,10 @@
         rememberRun(model.runId);
         const connectionStatus = resourceStatus(raw);
         const current = store.getState().runtime;
-        if (connectionStatus !== "ready" && hasSnapshot("runtime", current)) {
+        // A stopped engine's last runtime snapshot is always stale, but
+        // processRunning=false is a fresh server fact. Keeping the previous
+        // "running" snapshot in that case froze pages on 运行中 (BUGS P3-17).
+        if (connectionStatus !== "ready" && hasSnapshot("runtime", current) && model.processRunning !== false) {
           return store.setSlice("runtime", { ...current, status: connectionStatus, stale: true, connectionStatus, processRunning: model.processRunning, processRunningFresh: model.processRunning !== null && raw?.lastErrorAt == null, error: raw?.error || "运行状态已过期，保留最近成功数据" });
         }
         return store.setSlice("runtime", { ...model, processRunningFresh: model.processRunning !== null && raw?.lastErrorAt == null, runtimeState: model.status, connectionStatus, stale: connectionStatus !== "ready" });
