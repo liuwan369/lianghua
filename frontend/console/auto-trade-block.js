@@ -503,14 +503,7 @@
   // The new round's data did not render in time (or the read failed): never
   // leave the last round's numbers under this round's name. Clear what is still
   // marked as previous to the honest "no data" state.
-  var clearPreviousRound = function() {
-    previousRoundTimer = null;
-    if (isPreviousRound(".orderbook-panel")) {
-      ["yes-bid", "yes-ask", "no-bid", "no-ask"].forEach(function(key) { text(`[data-quote="${key}"]`, "--"); });
-      document.querySelectorAll("[data-depth], [data-depth-asks]").forEach(function(node) { node.innerHTML = ""; });
-      text("[data-book-age]", "--");
-      markRoundCurrent(".orderbook-panel");
-    }
+  var clearPreviousPosition = function() {
     if (isPreviousRound(".position-panel")) {
       ["[data-invested]", '[data-holding="up"]', '[data-holding="down"]', '[data-average="up"]', '[data-average="down"]',
         "[data-average-total]", "[data-confirmations]", "[data-stage-progress]", "[data-bought]", "[data-occupied]",
@@ -523,6 +516,16 @@
       if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>本场暂无策略阶段</strong><small>本场下单后这里显示阶段进度</small></div><time>--</time></li>';
       markRoundCurrent(".position-panel");
     }
+  };
+  var clearPreviousRound = function() {
+    previousRoundTimer = null;
+    if (isPreviousRound(".orderbook-panel")) {
+      ["yes-bid", "yes-ask", "no-bid", "no-ask"].forEach(function(key) { text(`[data-quote="${key}"]`, "--"); });
+      document.querySelectorAll("[data-depth], [data-depth-asks]").forEach(function(node) { node.innerHTML = ""; });
+      text("[data-book-age]", "--");
+      markRoundCurrent(".orderbook-panel");
+    }
+    clearPreviousPosition();
     if (isPreviousRound(".orders-panel")) {
       text("[data-order-count]", "--");
       text("[data-fill-summary]", "成交回报 --");
@@ -586,7 +589,10 @@
       || ((raw?.stale || raw?.error || raw?.available === false || position.stale
         || position.available === false || position.error) && !historical)) {
       var positionReason = window.PolyPreview.format.readableError(raw?.error || position?.error, "持仓数据尚未确认");
-      text("[data-position-state]", `${positionReason} · 保留本场最近成功数据`);
+      // The server answered for this round and has nothing: show that now
+      // rather than keep the last round dimmed for the full 3 s.
+      if (isPreviousRound(".position-panel")) clearPreviousPosition();
+      else text("[data-position-state]", `${positionReason} · 保留本场最近成功数据`);
       return false;
     }
     markRoundCurrent(".position-panel");
