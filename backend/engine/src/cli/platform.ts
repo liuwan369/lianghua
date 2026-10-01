@@ -441,6 +441,23 @@ export function assertInitialMarketIdentity(
   }
 }
 
+/** Check the start request against the market the engine discovered. In the
+ * current round's last minutes the console offers only the NEXT round (the
+ * current one's book goes one-sided, BUGS P2-5), so a start there always
+ * failed (BUGS P1-10). The next round is accepted when the venue confirms its
+ * identity; the engine parks the running round and trades from that one. */
+export async function checkInitialMarket(
+  current: Pick<MarketInfo, "id" | "roundId" | "endsAt"> | undefined,
+  expected: { marketId: string; roundId: string } | undefined,
+  discoverAt?: (at: number) => Promise<Pick<MarketInfo, "id" | "roundId"> | undefined>,
+): Promise<void> {
+  if (expected && current && discoverAt && expected.roundId === String(Number(current.roundId) + MARKET_WINDOW_SEC)) {
+    assertInitialMarketIdentity(await discoverAt(current.endsAt), expected);
+    return;
+  }
+  assertInitialMarketIdentity(current, expected);
+}
+
 /** Validate file input before any market, wallet or gateway connection. */
 export function validateMarkets(input: unknown, selectedAsset: AssetId = "btc"): MarketInfo[] {
   if (!Array.isArray(input) || input.length === 0) throw new CliInputError("market list must be a nonempty MarketInfo[]");
@@ -881,7 +898,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     }
     phase = "market_discovery";
     const markets = explicitMarkets ?? validateMarkets(await discoverMarket(options.assetId, undefined, false, discoveryAbort.signal), options.assetId);
-    assertInitialMarketIdentity(markets[0], options.expectedMarketIdentity);
+    await checkInitialMarket(markets[0], options.expectedMarketIdentity, explicitMarkets ? undefined : async at =>
+      validateMarkets(await discoverMarket(options.assetId, at, false, discoveryAbort.signal), options.assetId)[0]);
     if (continuousMarkets && restored?.markets) {
       const settlementState = existsSync(settlementStateFile)
         ? JSON.parse(readFileSync(settlementStateFile, "utf8")) as unknown : undefined;
