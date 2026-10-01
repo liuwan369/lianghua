@@ -88,28 +88,11 @@
 - **复现**（真实模块）：边界后 5 秒两场都 stale、缓存里有上一场 → 返回上一场 `current=True`、`endAt-now=-5s`；清空缓存 → 正确返回新一场。采集器断线时会一直错到恢复。
 - **修法**：`failed()` 里按当前时间重算 `current`、`nextRound`。
 
-### P3-11 自动交易页头部余额在两个值之间来回跳
-
-- **位置**：`frontend/console/auto-trade-block.js` 1334 行订阅 `accountStatus` 时调用 `renderAccount`，把头部写成账户检查时的毛余额（不带过期标记），而 10 秒一次的账户快照写的是净余额。
-- **复现**（真实 shared 模块 + 真实 DTO）：有 3.5 挂买单时，头部在 206.04 与 209.54 之间来回切。
-- **修法**：1334 行只更新 `accountStatus` 和控件，不再调用 `renderAccount`。
-
 ### P3-12 自动交易页"结算状态"永远显示"本场暂无结算记录"
 
 - **位置**：`frontend/console/auto-trade-block.js` 745-773 行只按当前场过滤，请求（990 行）也限定当前场；服务端 `settlements_page` 按 `round_id` 过滤。结算只在场次结束后才产生（`cli/platform.ts` 882 行），那时目录已切到下一场。
 - **实证**（账本副本）：6 条结算记录全部在所属场次结束后 100 秒到 3.3 小时才生成，在所属场还是当前场时一条都不存在。
 - **修法**：请求只带 assetId、取最新一条，渲染时标注它属于哪一场。`roundSettlementDue` 保留给 fills。
-
-### P3-13 持仓面板在场次进行中显示"本场已结束"
-
-- **位置**：`frontend/console/auto-trade-block.js` 539-547、603-607 行：`source="fills"` 的响应一律写"本场已结束 · 按成交记录显示"。`ed4ea25` 之后请求只查当前场，所以这个响应一定属于还没结束的那一场。
-- **复现**（账本副本 + 真实 `Ledger.position`）：本场内停机，或运行中快照过期 10 秒，都返回 `source=fills`，界面显示"本场已结束"，旁边倒计时却是"剩余 3:20"。
-- **修法**：按场次 `endAt` 是否已过决定前缀；未结束时显示 `position.error` 的可读原因。
-
-### P3-16 策略页重读失败再成功后，提示一直停在"策略接口断开"
-
-- **位置**：`frontend/console/strategy-block.js` 202-213 行 `receive` 只在 `formKey` 变化时更新提示；版本不变时没有分支清掉断开提示。
-- **复现**（无头 Edge）：200 → 503 → 200 后，状态标签是"BTC 服务器配置已读取"，保存提示仍是"策略接口断开"。
 
 ### P3-17 设置页和总览的运行状态在运行中途停止后冻结
 
@@ -119,15 +102,6 @@
 ### P3-18 成交上报延迟指标被 MINED/CONFIRMED 修订拉高
 
 - **位置**：`backend/engine/src/live/feeds/user.ts` 153-157 行按 `match_time` 计算 `authenticated_trade_report`，每个状态修订都算一次，MINED/CONFIRMED 比 MATCHED 晚几秒，延迟统计因此偏高。只影响延迟监控，不影响交易。
-
-### P3-1 提示类事件显示成红色
-
-- **位置**：`scripts/system-dashboard-server.py` 的 `_event_dto`（2358 行）把所有 `kind=error` 的事件都标成 `severity="error"`，前端 `vm.eventSeverity` 又以后端给的 severity 为准，按代码细分的规则因此失效。
-- **实例**：`account_recovery_started` 只是提示，显示成红色。
-
-### P3-2 `/api/events` 返回 26 条就有 90KB
-
-- **位置**：`_event_dto` 用 `{**event, ...}` 把原始事件整份展开，每条约 2KB。
 
 ### P3-3 前端反复请求已结束场次的快照
 
@@ -139,6 +113,14 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### 界面小问题（2026-10-01）
+
+- **P3-1 提示类事件显示成红色** — `a3f76f1`。服务端不再给 kind=error 的事件定级，由前端按错误码判断：账户核对开始=提示、行情异常=警告、终态失败=错误。
+- **P3-2 `/api/events` 26 条 90KB** — `a3f76f1`。事件和结算列表原来各发两份，现在只发 `items`，28 条 100KB → 50KB。
+- **P3-11 头部余额来回跳** — 头部只用账户快照的净余额。
+- **P3-13 场次进行中显示"本场已结束"** — 按场次结束时间判断；没结束时显示"实时持仓暂不可用 · 按成交记录显示"。
+- **P3-16 策略接口恢复后提示仍是"断开"** — 恢复时换成"已恢复"。测试 `frontend/console/regress/small-fixes.mjs`。
 
 ### 推送改造 + 界面重构（阶段 D、G）— 已部署 `2eb51d6`，浏览器实测通过（2026-10-01）
 
