@@ -7,7 +7,11 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=/root/pm-system/backend/engine
-ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol,xrp,doge,hype,bnb --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000
+# --record-dir: every book event, gzip'd per asset per Beijing day, kept 10 days
+# for replay/backtests (user decision 2026-10-01). This is not the trading
+# engine's feed, so recording cannot slow an order. ProtectSystem=full leaves
+# /root writable, so the directory needs no ReadWritePaths entry.
+ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol,xrp,doge,hype,bnb --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000 --record-dir /root/pm-system/data/market-history --record-days 10
 Restart=always
 RestartSec=1
 Environment=NODE_ENV=production
