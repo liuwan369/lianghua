@@ -269,7 +269,10 @@ export class BtcReversalStrategy implements StrategyPlugin {
       }
       if (context.now < round.startsAt || round.status === "waiting_next_round") continue;
       if (round.status === "waiting_start") {
-        round.config = clone(this.state.config); round.status = "running"; changed = true;
+        // The config was frozen when the round was created (prewarm, ~10 s
+        // before start). Re-cloning here let a config published in that window
+        // change this round's order size (BUGS P2-12).
+        round.status = "running"; changed = true;
       }
       const marketBlocked = context.account.risk.blockedMarketIds?.includes(round.marketId) === true;
       if (this.state.paused || context.account.risk.halted || marketBlocked) {
