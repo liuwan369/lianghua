@@ -2374,7 +2374,10 @@ def _event_dto(event: dict) -> dict:
     market_id = (event.get("marketId") or event.get("market_id") or
                  (market if isinstance(market, str) and market.startswith("0x") else None))
     round_id = event.get("roundId") or event.get("round_id")
-    severity = "error" if kind == "error" else "warning" if kind == "unresolved" else "info"
+    # kind=error is a channel, not a severity: account_recovery_started is a
+    # notice and market_feed_unhealthy a warning. Leave those to the console's
+    # code-based rule (view-model eventSeverity) instead of painting them red (BUGS P3-1).
+    severity = None if kind == "error" else "warning" if kind == "unresolved" else "info"
     asset_id = event.get("assetId") or event.get("asset_id")
     trade_id = event.get("tradeId") or event.get("trade_id")
     order_id = event.get("orderId") or event.get("order_id")
@@ -2425,7 +2428,7 @@ def _order_dto(order: dict) -> dict:
 def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
     if not run_id:
         return {"schemaVersion": 1, "status": "unavailable", "available": False,
-                "items": None, "events": None, "cursor": None, "runId": None,
+                "items": None, "cursor": None, "runId": None,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
@@ -2438,13 +2441,13 @@ def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
                                       round_id=(query.get("roundId") or [None])[0])
     except KeyError:
         return {"schemaVersion": 1, "status": "unavailable", "available": False,
-                "items": None, "events": None, "cursor": None, "runId": run_id,
+                "items": None, "cursor": None, "runId": run_id,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "ledger_projection_unavailable"}
     items = [_event_dto(event) for event in result["events"]]
     metadata = _ledger_metadata(run_id)
     return {"schemaVersion": 1, "status": "stale" if metadata["stale"] else "ready",
-            "available": True, "items": items, "events": items,
+            "available": True, "items": items,
             "cursor": result.get("next_before_id"), "runId": run_id,
             **metadata}
 
@@ -2452,7 +2455,7 @@ def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
 def _modern_settlements(run_id: str | None, query: dict) -> dict:
     if not run_id:
         return {"schemaVersion": 1, "status": "unavailable", "available": False,
-                "items": None, "settlements": None, "cursor": None, "runId": None,
+                "items": None, "cursor": None, "runId": None,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "当前没有运行记录"}
     cursor = query.get("cursor", [None])[0]
@@ -2465,7 +2468,7 @@ def _modern_settlements(run_id: str | None, query: dict) -> dict:
                                                 round_id=(query.get("roundId") or [None])[0])
     except KeyError:
         return {"schemaVersion": 1, "status": "unavailable", "available": False,
-                "items": None, "settlements": None, "cursor": None, "runId": run_id,
+                "items": None, "cursor": None, "runId": run_id,
                 "source": "ledger", "asOf": None, "stale": True,
                 "error": "ledger_projection_unavailable"}
     available = result.get("available", True)
@@ -2473,7 +2476,7 @@ def _modern_settlements(run_id: str | None, query: dict) -> dict:
     metadata = _ledger_metadata(run_id)
     stale = bool(result.get("available") is False) or metadata["stale"]
     return {"schemaVersion": 1, "status": "unavailable" if not available else "stale" if stale else "ready",
-            "items": items, "settlements": items,
+            "items": items,
             "cursor": result.get("next_before_id"), "runId": run_id, "available": available,
             **metadata,
             "error": result.get("error") or metadata["error"],
