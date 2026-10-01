@@ -1283,7 +1283,8 @@ def trading_status(include_stats: bool = True) -> dict:
             projection_ready = (isinstance(projection, dict)
                                 and projection.get("state") == "ready"
                                 and projection.get("stale") is False)
-            runtime_row_fresh = (runtime.get("stale") is not True
+            # No runtime row exists for the first 0-3 s of a run (BUGS P2-11).
+            runtime_row_fresh = (isinstance(runtime, dict) and runtime.get("stale") is not True
                                   and source_at is not None and source_at <= time.time() + 1
                                   and expires_at is not None and expires_at > time.time())
             confirmed = (isinstance(runtime, dict) and runtime.get("status") == "running"
