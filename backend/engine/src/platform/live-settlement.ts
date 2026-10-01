@@ -28,6 +28,9 @@ const depositWalletFactory = "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07" as Add
 const assetIdPattern = /^[a-z0-9_-]{1,32}$/;
 /** ~1h of Polygon blocks: a 5m round resolves long before this, and RPC log windows are capped. */
 const REDEMPTION_LOOKBACK_BLOCKS = 1800n;
+/** Log query size and retries for the payout lookup (see externalPayout). */
+const LOG_CHUNK_BLOCKS = 500n;
+const LOG_ATTEMPTS = 4;
 
 export interface PreparedSettlementTransaction {
   kind: "eoa" | "deposit";
@@ -585,10 +588,27 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       // the tokenIds leaving the wallet rather than on a burn destination.
       const fromBlock = BigInt(record.fromBlock);
       const held = new Set(record.tokenIds);
-      const [single, batch] = await Promise.all([
-        client.getLogs({ address: CTF, event: singleBurn, args: { from: wallet }, fromBlock, toBlock: upToBlock }),
-        client.getLogs({ address: CTF, event: batchBurn, args: { from: wallet }, fromBlock, toBlock: upToBlock }),
-      ]);
+      // The public RPC answers "upstream overloaded" for wide or older log
+      // ranges, and two parallel queries trip it more often. Ask in small
+      // sequential chunks and retry each, so a lookup hours later still works.
+      const chunked = async <T>(query: (from: bigint, to: bigint) => Promise<T[]>): Promise<T[]> => {
+        const found: T[] = [];
+        for (let start = fromBlock; start <= upToBlock; start += LOG_CHUNK_BLOCKS) {
+          const end = start + LOG_CHUNK_BLOCKS - 1n < upToBlock ? start + LOG_CHUNK_BLOCKS - 1n : upToBlock;
+          for (let attempt = 1; ; attempt += 1) {
+            try { found.push(...await query(start, end)); break; }
+            catch (error) {
+              if (attempt >= LOG_ATTEMPTS) throw error;
+              await new Promise(resolveWait => setTimeout(resolveWait, 500 * attempt));
+            }
+          }
+        }
+        return found;
+      };
+      const single = await chunked((from, to) =>
+        client.getLogs({ address: CTF, event: singleBurn, args: { from: wallet }, fromBlock: from, toBlock: to }));
+      const batch = await chunked((from, to) =>
+        client.getLogs({ address: CTF, event: batchBurn, args: { from: wallet }, fromBlock: from, toBlock: to }));
       const moved = (hash?: Hex, ids?: readonly bigint[], values?: readonly bigint[]): Hex | undefined =>
         hash && hash !== record.transactionHash
           && ids?.some((id, i) => held.has(String(id)) && (values?.[i] ?? 0n) > 0n) ? hash : undefined;
