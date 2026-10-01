@@ -32,21 +32,6 @@
 - **影响**：ETH/SOL 等后端支持的币种无法通过界面交易；市场页"到策略页把币种改为 X"的提示做不到。不是死循环：把运行池切回 btc 仍能启动。不会错单。
 - **修法**：把"可编辑"与"币种一致"解耦：有已发布配置就允许按它填表编辑，币种不一致时改为警告"保存并激活后，策略币种将从 BTC 改为 ETH"；运行中换币种由后端激活时的 `_validate_running_asset` 把关。
 
-### P1-10 在场次末段启动必然失败
-
-- **位置**：`scripts/system-dashboard-server.py` 2016-2038 行 `_modern_markets` 的 `fresh_future` 替换、1484-1496 行 `_start_trading` 把选中行映射成 expected 身份、1613 行 `--expected-market-id`；`backend/engine/src/cli/platform.ts` 709-710、293 行 `assertInitialMarketIdentity`。
-- **原因**：场次末段当前场盘口提前变旧（见 P2-5），`/api/markets` 对该资产只返回下一场那一行（`current=false, nextRound=true`）。操作员这时点启动，控制面把下一场 marketId 当成启动选择器、映射成下一场 expected 身份；但引擎 `discoverMarket(now)` 只发现当前场，身份不匹配，run 在 `market_discovery` 阶段直接失败。
-- **线上实证**：两条 3 行的失败 run 就是 `market_discovery` 阶段 `platform_run_failed`，创建时刻分别在本场第 287、264 秒（都落在末段窗口）。用真实 DTO + dist 复现：`markets-btc.json` 在 now=1790726958 只有下一场一行，`assertInitialMarketIdentity` 抛 `initial discovered market does not match requested marketId and roundId`。
-- **影响**：末段窗口内启动全部失败，报的是通用错误（P2-7）。fail-closed，不下单不亏钱，但每场末段确定性挡住进场。
-- **修法**：启动不要用 `nextRound` 行作为初始身份——`_start_trading` 里若选中行 `current!=true`/`nextRound=true` 则拒绝或改用当前直播场；或启动时不传 `--expected-market-id`，让引擎发现当前场后再由连续发现推进。修 P2-5（末段不提前切场）后这条也会消失。
-
-### P2-12 已预热场次的配置没有冻结，与"下一场才生效"的承诺不符
-
-- **位置**：`backend/engine/src/strategies/btc-reversal.ts` 271-272 行：场次从 `waiting_start` 转为 `running` 时执行 `round.config = clone(this.state.config)`，把建场时（423 行）冻结的配置换成此刻的实时配置。
-- **复现**（dist）：开盘前 8 秒建场，配置 `[5,18,54,130]` rev1；接着发布 `[9,9,9,9]` rev2；开盘后本场按 rev2 下单，真实 submit 的 shares=9。
-- **影响**：每场开盘前约 10 秒的窗口内发布的新配置，会在本场直接生效。前端却明确承诺"当前及已预热场次保持原配置"（`strategy-block.js` 320 行、契约 `DATA-MODEL.md` 47 行）。
-- **修法**：删掉 271-272 行的重新克隆，只保留 `round.status = "running"`。
-
 ### P2-13 每个事件都全量深拷贝策略状态，下单延迟随累计场数线性变差
 
 - **位置**：`cli/platform.ts` 685-686 行包装器在每个事件上执行 `reversal.exportState().rounds.find(...)`；触发帧内还有 `save() → core.setStrategyState → snapshot()` 两次全量 `structuredClone`，全部发生在 `platform.ts` 334 行 dispatch 下单之前。
@@ -60,12 +45,6 @@
 - **复现**（真实 dist + 本地 WS 服务器）：窗口内推送的 `order:CANCELLATION` 和 MATCHED 成交都没有到达下游，且没有任何日志。
 - **影响**：成交通常会被后续 MINED/CONFIRMED 帧或重连补偿补回；撤单通常由后续开放订单快照补回。实际效果是识别延迟、资金预留多挂一会儿，不会记错单。
 - **修法**：`activeWs = ws` 之后立刻挂上消息监听，先缓存帧，等认证通过后再回放。
-
-### P3-6 账户级恢复事件会清掉所有在跑场次的行情基线
-
-- **位置**：`btc-reversal.ts` 235-243 行，`account_recovery_started` 不带 marketId，`resetQuoteReference(undefined)` 失效全部在跑场次。场次刚转 running、首帧还没到时发生，就要连吞两帧才开始识别跨价。
-- **复现**（dist）：对照组第二帧跨价直接下单；实验组第二帧只建基线，这次跨价丢失。线上在 1790704500 场次边界确实出现过这个前置条件。
-- **修法**：对 `firstSampleSeen=false` 的场次不置 `rebuildingReference`。
 
 ### P2-3 每次换场（每 5 分钟）整个面板清空重画
 
@@ -90,12 +69,6 @@
   - 同一窗口里，前端还在请求当前场的 `/api/markets/{id}/snapshot`，服务器返回 404（实测 408 次采样中 404 占 408 次），就是 nginx 日志里那 346 次 404 的来源（P3-3）。
 - **对交易的影响**：这个窗口里一边已经是 0.99，本来就不会穿越 0.67，所以不会漏单。但引擎会在这段时间持续报 `market_feed_unhealthy`，并且因为 `invalidateReference`，行情恢复后至少丢掉一次跨价机会。
 - **修法**：单边盘口（一边只有卖一、另一边只有买一，且价格在 0.01/0.99 附近）按"已确定"处理：照常发布，标成终局状态，不触发 watchdog 重连；`/api/markets` 在这个状态下不要切到下一场。
-
-### P2-7 引擎启动失败时，真实错误被丢掉
-
-- **位置**：`backend/engine/src/cli/platform.ts` 989 行 `reportError(phase, "platform_run_failed")` 只记阶段名，不记异常内容；1091-1093 行顶层 catch 对非参数错误一律输出 `"platform could not complete; inspect the phase and local configuration"`。
-- **线上实证**：9-29 这一天有 4 次启动失败（run `125946`、`164720`、`164923`、`165134`），日志里只有 `phase=market_discovery` 或 `phase=platform_connect`，没有任何错误原因。当时是 RPC 过载、地域检查、时钟偏差还是 Gamma 超时，已经无从查起。前端只显示"交易进程运行失败"。
-- **修法**：`reportError` 带上 `error.message`（截断并过滤掉私钥或十六进制长串），顶层 catch 同样输出真实 message。
 
 ### P2-8 同一个界面词，不同页面用不同算法
 
@@ -221,6 +194,14 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### 第 5 批：引擎里影响下单和进场的 — 已部署 `592a89a`，待小额实盘（2026-10-01）
+
+- **P2-12 预热场次的配置没冻结** — `14ade12`，审查后改为 `4dd3e6d`。下一场通常整场之前就已创建，所以"创建时冻结"会让配置晚一场生效（审查发现）。现在：没开始的场一直跟随最新配置，开盘前 10 秒起冻结，和界面"当前及已预热场次保持原配置"一致。测试 `regress/P2-12.mjs`：开盘前 8 秒发布不影响本场（旧代码下 9 股、新代码 5 股），开盘前 1 分钟发布对下一场生效。
+- **P3-6 账户恢复清掉还没收到首帧的场的基线** — `513e4e1`。首帧本身就是新基线，清掉重建标记；首帧之后的恢复仍要求重建。测试同上文件。
+- **P2-7 启动失败丢掉真实错误** — `4f3ee99`、`592a89a`。引擎记下错误原文（截断 500 字、含凭证字样的整条替换、64 位十六进制遮掉），控制面在"交易进程异常退出"后面附上阶段和原因。审查补了一条：单独的 token 字样不再误伤"no UP/DOWN token mapping"这类真实原因。测试 `regress/P2-7.mjs`、`scripts/regress/P2-7.py`（用 09-30 真实的 state_open 失败）。
+- **P1-10 场次末段启动必然失败** — `afa4ff7`。末段控制台只给出下一场；引擎现在向交易所确认下一场身份后接受它，照常停放正在进行的这一场，从下一场开始交易。其他不匹配仍然拒绝。测试 `regress/P1-10.mjs`。
+- **部署前用线上状态文件按真实启动路径（先清理再恢复）跑过**：恢复成功，下次启动会删掉全部 28 场已办结的旧场，结算记录 28 → 3（保留 3 条失败记录）。
 
 ### 第 4 批：控制面与前端 — 已部署 `a252afa`（2026-10-01）
 
