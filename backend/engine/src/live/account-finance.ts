@@ -151,7 +151,11 @@ export function balanceOccupancy(collateral: Section, orders: Section, positions
       if (size === null || size < 0 || (size > 0 && (avgPrice === null || avgPrice < 0 || avgPrice > 1))) {
         positionsValid = false; continue;
       }
-      // Redeemable holdings are still occupied until the cash receipt is reconciled.
+      // A redeemable winner is still occupied until its cash arrives. A resolved
+      // loser (redeemable, worth 0) never pays anything back: it is not
+      // occupied capital, and counting it added $66.89 of dead history (BUGS P3-4).
+      const deadLoser = position.redeemable === true && number(position.currentValue) === 0;
+      if (deadLoser) continue;
       openPositionNotional += size > 0 ? size * avgPrice! : 0;
       if (size > 0) positionCount++;
     }

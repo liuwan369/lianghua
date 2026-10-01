@@ -153,7 +153,10 @@ export function parseUserMessage(
     const timestamp = num(e.match_time_nano ?? e.matchtime ?? e.match_time ?? e.timestamp);
     const exchangeUnix = timestamp == null ? undefined : timestamp > 1e15 ? timestamp / 1e9
       : timestamp > 1e12 ? timestamp / 1000 : timestamp;
-    const reportLatencyMs = receivedAtUnix != null && exchangeUnix != null
+    // Only a trade's first report measures report latency: MINED/CONFIRMED
+    // revisions arrive seconds later against the same match_time (BUGS P3-18).
+    const firstReport = !(tradeId && seenTrades.has(tradeId));
+    const reportLatencyMs = firstReport && receivedAtUnix != null && exchangeUnix != null
       ? (receivedAtUnix - exchangeUnix) * 1000 : undefined;
 
     const takerId = typeof e.taker_order_id === "string" ? e.taker_order_id : undefined;
