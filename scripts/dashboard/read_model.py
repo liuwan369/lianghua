@@ -110,7 +110,12 @@ class ReadModel:
                     if type(checked_at) not in (int, float) or not math.isfinite(checked_at):
                         raise ValueError("invalid heartbeat time")
                 except (OSError, ValueError, KeyError):
-                    checked_at = 0
+                    # The worker writes the snapshot, then the heartbeat. A read
+                    # between the two pairs a new snapshot with the old
+                    # heartbeat; that snapshot's own write time is still a
+                    # valid liveness proof. Zeroing it reported a 1.7e9 s age
+                    # and flapped the console to "stale" (BUGS P2-15).
+                    checked_at = value.get("as_of", 0)
             age = max(0, time.time() - checked_at) if value else None
             damaged = bool(value.get("ingestion", {}).get("error") or
                            value.get("summary", {}).get("invalid_records"))
