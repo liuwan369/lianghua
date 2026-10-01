@@ -291,8 +291,6 @@
     return scoped === "paused" || (globalRuntime?.runtimeState || globalRuntime?.status) === "paused";
   };
   var currentMarketContextKey = null;
-  var activeStreamContextKey = null;
-  var activeStreamConfigKey = null;
   var lastSnapshotValid = false;
   var lastFillCount = null;
   var roundLedgerTick = 0;
@@ -313,6 +311,8 @@
     text("[data-book-live-state]", "已过期 · 保留快照");
   };
   var renderSnapshot = function(raw, fromStream, expectedContextKey) {
+    // Served from the push stream when it is connected (shared/stream.js).
+    fromStream = fromStream || window.PolyPreviewStream?.connected === true;
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
     if (!raw) return;
     var source = raw.market && typeof raw.market === "object" ? { ...raw, ...raw.market } : raw;
@@ -430,7 +430,6 @@
     text("[data-book-age]", window.PolyPreview.format.time(sourceAt));
     return valid;
   };
-  var streams = [];
   // The panel always shows the CURRENT round. Past rounds live in the round
   // history ("查看全部"), not here — mixing them in made the panel flip between the
   // live round and the last traded one on each refresh.
@@ -443,26 +442,6 @@
     var runtime = selectedRuntime || window.PolyPreviewStore.getState().runtime || {};
     var runId = runtime.runId ?? runtime.run_id;
     return runId ? { ...context, runId: String(runId) } : context;
-  };
-  var payloadOf = function(frame) { return frame?.data && typeof frame.data === "object" ? frame.data : frame?.payload && typeof frame.payload === "object" ? frame.payload : frame || {}; };
-  var frameMatches = function(frame, requireRound) {
-    var context = currentContext();
-    var payload = payloadOf(frame);
-    var snapshot = payload.snapshot && typeof payload.snapshot === "object" ? payload.snapshot : {};
-    var marketId = snapshot.marketId ?? snapshot.market_id ?? payload.marketId ?? payload.market_id ?? frame?.marketId ?? frame?.market_id;
-    var roundId = snapshot.roundId ?? snapshot.round_id ?? payload.roundId ?? payload.round_id ?? frame?.roundId ?? frame?.round_id;
-    var assetId = snapshot.assetId ?? snapshot.asset_id ?? payload.assetId ?? payload.asset_id ?? frame?.assetId ?? frame?.asset_id;
-    if (!requireRound && !marketId && !roundId && !assetId) return true;
-    if (!context.assetId || !context.marketId || !context.roundId || !marketId || !roundId || !assetId) return false;
-    return String(assetId) === String(context.assetId) && String(marketId) === String(context.marketId) && String(roundId) === String(context.roundId);
-  };
-  var streamUrl = function(name) {
-    var configured = window.PolyPreview.config.streams?.[name];
-    return typeof configured === "string" ? configured : configured?.url || null;
-  };
-  var streamConfigKey = function() { return ["markets", "runtime", "orders"].map(function(name) { return `${name}:${streamUrl(name) || ""}`; }).join("|"); };
-  var markStreamPending = function() {
-    if (!lastSnapshotValid) text("[data-book-live-state]", "等待后端行情快照");
   };
   var resetRoundPanels = function() {
     if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
@@ -810,71 +789,6 @@
     if (pnl != null) details.push(`净盈亏 ${pnl.toFixed(2)} USDC`);
     set(label, details.join(" · ") || "服务器已返回本场结算状态。");
     return true;
-  };
-  var stopStreams = function() { streams.splice(0).forEach(function(stream) { stream.close(); }); };
-  var startStreams = function() {
-    if (!window.PolyPreviewStreams?.createStream) return;
-    syncMarketContext();
-    var context = currentContext();
-    var contextKey = identityKey(context);
-    var configKey = streamConfigKey();
-    if (activeStreamContextKey === contextKey && activeStreamConfigKey === configKey) {
-      if (!streamUrl("markets")) markStreamPending();
-      return;
-    }
-    activeStreamContextKey = contextKey;
-    activeStreamConfigKey = configKey;
-    stopStreams();
-    var lifecycleKey = `${contextKey}|${configKey}`;
-    var lifecycleVersion = contextVersion;
-    var currentLifecycle = function() { return lifecycleVersion === contextVersion && `${activeStreamContextKey}|${activeStreamConfigKey}` === lifecycleKey; };
-    if (!context.assetId || !context.marketId || !context.roundId) return;
-    var hasMarketStream = Boolean(streamUrl("markets"));
-    if (!hasMarketStream) markStreamPending();
-    var make = function(name, requireRound, onMessage, onState) {
-      var url = streamUrl(name); if (!url) return;
-      var stream = window.PolyPreviewStreams.createStream(name, { url, requireSequence: requireRound, acceptFrame: function(frame) { return frameMatches(frame, requireRound); }, onState, onMessage, onError: function(error) { if (currentLifecycle()) markSnapshotStale(error.message || "实时流不可用 · 保留最近快照"); } });
-      stream.connect();
-      stream.subscribe({ assetId: context.assetId, marketIds: [context.marketId], marketId: context.marketId, roundId: context.roundId });
-      streams.push(stream);
-    };
-    make("markets", true, function(frame) {
-      if (!currentLifecycle()) return;
-      var payload = payloadOf(frame); var sourceSnapshot = payload.snapshot && typeof payload.snapshot === "object" ? payload.snapshot : payload;
-      var snapshot = {
-        ...sourceSnapshot,
-        sequence: sourceSnapshot.sequence ?? payload.sequence ?? frame.sequence,
-        sourceAt: sourceSnapshot.sourceAt ?? sourceSnapshot.source_at ?? payload.sourceAt ?? payload.source_at ?? frame.sourceAt ?? frame.source_at,
-        expiresAt: sourceSnapshot.expiresAt ?? sourceSnapshot.expires_at ?? payload.expiresAt ?? payload.expires_at ?? frame.expiresAt ?? frame.expires_at,
-        stale: sourceSnapshot.stale ?? payload.stale ?? frame.stale,
-        assetId: sourceSnapshot.assetId ?? sourceSnapshot.asset_id ?? payload.assetId ?? payload.asset_id ?? frame.assetId ?? frame.asset_id,
-        marketId: sourceSnapshot.marketId ?? sourceSnapshot.market_id ?? payload.marketId ?? payload.market_id ?? frame.marketId ?? frame.market_id,
-        roundId: sourceSnapshot.roundId ?? sourceSnapshot.round_id ?? payload.roundId ?? payload.round_id ?? frame.roundId ?? frame.round_id
-      };
-      var hasQuote = ["yesBid", "yesAsk", "noBid", "noAsk", "yes_bid", "yes_ask", "no_bid", "no_ask"].some(function(key) { return snapshot[key] != null; });
-      if (snapshot.book || snapshot.orderBook || snapshot.orderbook || hasQuote) renderSnapshot(snapshot, true, contextKey);
-    }, function(state) {
-      if (!currentLifecycle()) return;
-      if (state !== "connected") {
-       text("[data-book-source]", `实时行情${state === "error" ? "异常" : "中断"} · 保留最近快照`);
-        text("[data-book-live-state]", "连接中断 · 保留快照");
-      }
-    });
-     make("orders", true, function(frame) { if (!currentLifecycle()) return; scheduleRoundRefresh(0); }, function() {});
-     make("runtime", false, function(frame) {
-       if (!currentLifecycle()) return;
-       var payload = payloadOf(frame);
-       var hasIdentity = Boolean(payload.assetId || payload.asset_id || frame?.assetId || frame?.asset_id);
-       var runtimeFrame = vm.runtime(payload);
-       if (hasIdentity) renderRuntime(runtimeFrame);
-       else if (runtimeFrame.processRunning !== null) renderRuntime(runtimeFrame, true);
-       else text("[data-connection-status]", "实时状态流已连接 · 等待所选市场状态");
-       scheduleRuntimeRefresh(0);
-     }, function(state) {
-      if (!currentLifecycle()) return;
-      if (state === "connected") return;
-      text("[data-connection-status]", "实时状态流中断 · 后端接口独立刷新");
-    });
   };
   var loadCurrentMarket = async function() {
     syncMarketContext();
@@ -1277,7 +1191,6 @@
       snapshotExpiryTimer = null;
       if (clockTimer) window.clearInterval(clockTimer);
       clockTimer = null;
-      stopStreams();
     } else {
       if (!clockTimer) clockTimer = window.setInterval(tickClock, 1000);
       tickClock();
@@ -1288,7 +1201,6 @@
       scheduleAccountStatusRefresh(0);
       scheduleAccountRefresh(0);
       scheduleMetricsRefresh(0);
-      startStreams();
     }
   });
   // Entering bfcache does not fire visibilitychange in every browser; clear the
@@ -1296,7 +1208,6 @@
   window.addEventListener("pagehide", function() {
     if (clockTimer) window.clearInterval(clockTimer);
     clockTimer = null;
-    stopStreams();
   });
   var streamLifecycleReady = false;
   renderMarketPool();
@@ -1330,7 +1241,7 @@
     syncMarketContext();
     updateControls();
     if (streamLifecycleReady && previousContext !== currentMarketContextKey) {
-      scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); startStreams();
+      scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0);
     }
   });
   document.querySelectorAll("[data-action]").forEach((button) => {
@@ -1484,7 +1395,7 @@
       push.onUpdate("/api/account/snapshot", function() { scheduleAccountRefresh(0); });
       push.onUpdate("/api/metrics/summary", function() { scheduleMetricsRefresh(0); });
     }
-    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(10000); scheduleMetricsRefresh(5000); startStreams();
+    scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(10000); scheduleMetricsRefresh(5000);
   }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
 })();
 

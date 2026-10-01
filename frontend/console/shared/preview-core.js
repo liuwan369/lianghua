@@ -246,10 +246,8 @@
     marketPool: (options) => request("/api/runtime/market-pool", options),
     runtimeStatus: (context = {}) => request(`/api/runtime/status${scopedQuery(context)}`),
     runtimeCommand: (payload) => request("/api/runtime/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
-    legacyRuntimeCommand: (payload) => request("/api/trading/control", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyConfig: () => request("/api/strategy/config"),
     strategyDraft: (payload) => request("/api/strategy/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
-    legacyStrategySave: (payload) => request("/api/strategy-config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyActivate: (payload) => request("/api/strategy/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     presets: (options) => request("/api/strategy/presets", options),
     position: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/position${scopedQuery({ ...context, roundId })}`),
@@ -267,19 +265,11 @@
     settlements: (context = {}) => request(`/api/settlements${scopedQuery(context)}`),
     rounds: (context = {}) => request(`/api/rounds${scopedQuery(context)}`),
     ledgerReset: () => request("/api/ledger/reset", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: "RESET" }), timeout: 30000 }),
-    legacyStatus: () => request("/api/v1/status"),
-    legacyMarkets: () => request("/api/v1/markets"),
-    legacyAccount: () => request("/api/account/status"),
-    legacyAccountSnapshot: () => request("/api/v1/account-data"),
-    legacyEvents: (runId) => request(`/api/v1/events?run_id=${encodeURIComponent(runId)}&limit=50`),
-    legacySummary: (runId) => request(`/api/v1/summary?run_id=${encodeURIComponent(runId)}`),
-    legacySystemMetrics: () => request("/api/v1/system-metrics"),
-    legacyStrategyConfig: () => request("/api/strategy-config")
+      body: JSON.stringify({ confirm: "RESET" }), timeout: 30000 })
   };
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
   // Backend is the default. Preserve an explicitly supplied mode for hosts
   // that use it as metadata, while keeping local/demo data disabled.
-  const config = { apiBase: "", apiFlavor: "contract", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, streams: {}, mode: "backend", ...runtimeConfig, demo: false };
+  const config = { apiBase: "", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, mode: "backend", ...runtimeConfig, demo: false };
   window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, NAV_ITEMS, navMarkup, bindNav, navigate, setSelectedAssetUrl, on, emit });
 })();

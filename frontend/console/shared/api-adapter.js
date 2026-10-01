@@ -37,13 +37,6 @@
     try { return await operation(); }
     catch (error) { return retainOnError(slice, error); }
   };
-  const modernOrLegacy = async (modern, legacy) => {
-    if (core.config.apiFlavor === "legacy") return legacy ? legacy() : modern();
-    try { return await modern(); } catch (error) {
-      if (error?.status === 404 && legacy) return legacy();
-      throw error;
-    }
-  };
   const uuid = (value) => {
     if (typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) return value;
     if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -93,14 +86,14 @@
   const adapter = {
     async loadMarkets() {
       return readSlice("marketCatalog", async () => {
-        const raw = await modernOrLegacy(() => core.api.markets(), () => core.api.legacyMarkets());
+        const raw = await core.api.markets();
         store.setMarketCatalog(raw);
         return store.getState().marketCatalog;
       });
     },
     async loadMarketPool() {
       return readSlice("marketPool", async () => {
-        const raw = await modernOrLegacy(() => core.api.marketPool(), null);
+        const raw = await core.api.marketPool();
         const poolPayload = raw?.data && typeof raw.data === "object" ? raw.data : raw;
         const next = vm.pool(poolPayload, store.getState().marketCatalog.items);
         const status = resourceStatus(poolPayload);
@@ -223,7 +216,7 @@
       }
       if (runtimeRequest) return runtimeRequest;
       runtimeRequest = readSlice("runtime", async () => {
-        const raw = await modernOrLegacy(() => core.api.runtimeStatus(), () => core.api.legacyStatus());
+        const raw = await core.api.runtimeStatus();
         const model = vm.runtime(raw);
         rememberRun(model.runId);
         const connectionStatus = resourceStatus(raw);
@@ -238,7 +231,7 @@
     },
     async loadStrategy() {
       return readSlice("strategy", async () => {
-        const raw = await modernOrLegacy(() => core.api.strategyConfig(), () => core.api.legacyStrategyConfig());
+        const raw = await core.api.strategyConfig();
         const payload = raw?.data && typeof raw.data === "object" ? raw.data : raw || {};
         const status = resourceStatus(raw);
         const current = store.getState().strategy;
@@ -257,7 +250,7 @@
     },
     async loadAccount() {
       return readSlice("account", async () => {
-      const raw = await modernOrLegacy(() => core.api.accountSnapshot(), () => core.api.legacyAccountSnapshot());
+      const raw = await core.api.accountSnapshot();
       const data = raw || {};
       const status = resourceStatus(data);
       const current = store.getState().account;
@@ -287,7 +280,7 @@
     },
     async loadDiagnostics() {
       return readSlice("diagnostics", async () => {
-        const raw = await modernOrLegacy(() => core.api.diagnostics(), () => core.api.legacySystemMetrics());
+        const raw = await core.api.diagnostics();
         const status = resourceStatus(raw);
         const current = store.getState().diagnostics;
         // A degraded report IS the news (trading process failed, collector stale):
@@ -305,15 +298,10 @@
       return readSlice("metrics", async () => {
         const effectiveRunId = runId || store.getState().runtime.runId || rememberedRun();
         const metricContext = effectiveRunId ? { runId: effectiveRunId } : {};
-        const legacySummary = async () => {
-          const activeRunId = effectiveRunId || (await adapter.loadRuntime()).runId;
-          if (!activeRunId) throw new Error("当前运行标识尚未提供");
-          return core.api.legacySummary(activeRunId);
-        };
         const wanted = Array.isArray(ranges) && ranges.length ? ranges : ["today", "month", "run"];
         const plan = [["today", "today"], ["month", "month"], ["run", "current"]].filter(([range]) => wanted.includes(range));
         const results = await Promise.allSettled(
-          plan.map(([range]) => modernOrLegacy(() => core.api.metrics(range, metricContext), legacySummary))
+          plan.map(([range]) => core.api.metrics(range, metricContext))
         );
         const data = { ...(store.getState().metrics.data || {}), periodStatus: { ...(store.getState().metrics.data?.periodStatus || {}) } };
         plan.forEach(([, period], index) => {
@@ -362,11 +350,7 @@
         const eventContext = { ...context, ...(runId && !context.runId ? { runId } : {}) };
         let raw;
         try {
-          raw = await modernOrLegacy(() => core.api.events("", eventContext), async () => {
-            const activeRunId = runId || store.getState().runtime.runId || (await adapter.loadRuntime()).runId;
-            if (!activeRunId) throw new Error("当前运行标识尚未提供");
-            return core.api.legacyEvents(activeRunId);
-          });
+          raw = await core.api.events("", eventContext);
         } catch (error) {
           // A superseded failure is no longer a failure for the visible view.
           // Let the newer request decide whether the slice is stale.
@@ -433,16 +417,7 @@
       }
       if (command.action === "start" && !(command.revision > 0)) throw new Error("请先在策略页面保存草稿并激活发布，再启动交易");
       command.requestId = uuid(command.requestId);
-      const legacyPayload = {
-        action: command.action,
-        strategy_id: command.strategyId || core.config.strategyId,
-        request_id: command.requestId,
-        ...(command.assetId ? { asset_id: command.assetId } : {}),
-        ...(command.marketIds ? { market_ids: command.marketIds } : {}),
-        ...(Number.isInteger(command.revision) ? { revision: command.revision } : {}),
-        ...(command.mode ? { mode: command.mode } : {})
-      };
-      const raw = await modernOrLegacy(() => core.api.runtimeCommand(command), () => core.api.legacyRuntimeCommand(legacyPayload));
+      const raw = await core.api.runtimeCommand(command);
       return commandResult(raw);
     },
     async saveStrategy(payload) {
@@ -485,15 +460,6 @@
         assetId: String(assetId).trim(),
         config
       };
-      if (core.config.apiFlavor === "legacy") {
-        const raw = await core.api.legacyStrategySave({ expectedRevision: modernPayload.expectedRevision, config });
-        const result = raw?.data && typeof raw.data === "object" ? { ...raw, ...raw.data } : raw || {};
-        const revision = result.savedRevision ?? result.revision;
-        if (!(result.ok === true || result.accepted === true || Number.isInteger(revision)) || !Number.isInteger(Number(revision)) || !result.config) throw new Error(result.error || "旧策略接口未确认保存成功，输入尚未发布");
-        const published = { ...result, strategyId, savedRevision: Number(revision), revision: Number(revision), config: result.config };
-        store.setSlice("strategy", { status: "ready", stale: false, data: published, draft: null, revision: Number(revision), error: null });
-        return { accepted: true, published: true, revision: Number(revision), config: result.config, strategyId };
-      }
       const raw = await core.api.strategyDraft(modernPayload);
       const result = raw?.data && typeof raw.data === "object" ? { ...raw, ...raw.data } : raw;
       if (result.accepted !== true || !result.draftId || !result.config || !Number.isInteger(result.expectedRevision)) throw new Error("服务器未返回有效策略草稿回执，尚未发布");

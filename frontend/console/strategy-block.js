@@ -110,7 +110,6 @@
   let baselineRevision = null;
   let formConfig = null;
   let formKey = null;
-  const legacyMode = core.config.apiFlavor === "legacy";
   const published = () => resource?.data?.config || null;
   // The asset comes from the URL / shared config / the server's own published
   // config — never a hardcoded coin. The gate still requires the published
@@ -138,7 +137,7 @@
     root.querySelector("[data-save]").disabled = busy || !available;
     root.querySelector("[data-reset]").disabled = busy || !available;
     root.querySelector("[data-reload]").disabled = busy;
-    root.querySelector("[data-activate]").disabled = legacyMode || busy || dirty || !validDraft() || resource.status !== "ready";
+    root.querySelector("[data-activate]").disabled = busy || dirty || !validDraft() || resource.status !== "ready";
   };
   const updatePreview = () => {
     const trigger = field("trigger").value.trim() === "" ? null : Number(field("trigger").value);
@@ -321,7 +320,6 @@
     } catch (error) { setMessage(core.format.readableError(error.message, "激活失败，草稿已保留。")); }
     finally { busy = false; controls(); }
   });
-  if (legacyMode) root.querySelector("[data-activate]").hidden = true;
   updatePreview();
   store.subscribe("strategy", receive);
   // This page reads no catalog data and always submits an explicit config.assetId,
