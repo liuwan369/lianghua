@@ -469,6 +469,8 @@
         totalBudgetUsd: values.totalBudgetUsd ?? null,
         dailyLossUsd: values.dailyLossUsd ?? null,
         durationMinutes: values.durationMinutes ?? 0,
+        // Dropping it made the backend default to 0 = run forever (BUGS P1-1).
+        maxRounds: values.maxRounds ?? 0,
         mode: values.mode || "live",
         maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
         maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
