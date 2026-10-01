@@ -11,87 +11,6 @@
 
 ## 未修复
 
-### P2-18 没有任何页面能改策略币种
-
-- **位置**：`frontend/console/strategy-block.js` 118-142 行：能编辑的前提是 `strategyTargets(已发布配置, selectedAsset())`，而 `readForm`（276 行）提交的币种就是 `selectedAsset()`。所以只要能保存，提交的币种一定等于已发布币种；页面上也没有币种选择控件。
-- **复现**（无头 Edge + 真实 DTO）：`strategy.html?assetId=eth` 所有输入和按钮禁用、表单清空；不带 assetId 时回落到 btc、只能保存 btc。后端 `save_draft`/`activate_draft` 实测可以把 btc 换成 eth，锁死只在前端。
-- **影响**：ETH/SOL 等后端支持的币种无法通过界面交易；市场页"到策略页把币种改为 X"的提示做不到。不是死循环：把运行池切回 btc 仍能启动。不会错单。
-- **修法**：把"可编辑"与"币种一致"解耦：有已发布配置就允许按它填表编辑，币种不一致时改为警告"保存并激活后，策略币种将从 BTC 改为 ETH"；运行中换币种由后端激活时的 `_validate_running_asset` 把关。
-
-### P2-13 每个事件都全量深拷贝策略状态，下单延迟随累计场数线性变差
-
-- **位置**：`cli/platform.ts` 685-686 行包装器在每个事件上执行 `reversal.exportState().rounds.find(...)`；触发帧内还有 `save() → core.setStrategyState → snapshot()` 两次全量 `structuredClone`，全部发生在 `platform.ts` 334 行 dispatch 下单之前。
-- **实测**（dist 端到端，行情到 POST 前）：15 场约 2.3ms，100 场约 11.8ms，1000 场约 92ms。结算轮询（`cli/platform.ts` 887 行）还在每个市场的循环里各调一次 `getStatus()`。
-- **影响**：当前 15 场可以忽略；不清空数据长期运行，会逐步拖慢下单。根因与 P0-3 相同，修 P0-3 后大部分会消失。
-- **修法**：包装器改为轻量查询当前场配置；结算轮询每轮只取一次快照。
-
-### P3-5 user WS 连接窗口内推来的成交和撤单帧会被丢掉
-
-- **位置**：`backend/engine/src/live/feeds/user.ts` 551 行发订阅，553-613 行先 await 认证校验和重连补偿，624-625 行才挂 `ws.on("message")`。
-- **复现**（真实 dist + 本地 WS 服务器）：窗口内推送的 `order:CANCELLATION` 和 MATCHED 成交都没有到达下游，且没有任何日志。
-- **影响**：成交通常会被后续 MINED/CONFIRMED 帧或重连补偿补回；撤单通常由后续开放订单快照补回。实际效果是识别延迟、资金预留多挂一会儿，不会记错单。
-- **修法**：`activeWs = ws` 之后立刻挂上消息监听，先缓存帧，等认证通过后再回放。
-
-### P2-8 同一个界面词，不同页面用不同算法
-
-- **位置**：`frontend/console/shared/view-model.js` 225-250 行用一长串 `??` 回退链取数；各页 block 取同名字段。
-- **现象**：
-  - **可用**：总览/自动交易取"余额 − 未成交买单名义"（不扣手续费、不套预算，`account-finance.ts:171`）；真正管下单的是引擎 `availableUsd`（扣费 + 套 `totalBudgetUsd`），前端只在前者取不到时才回退。实测当前前者 209.54、引擎 10（预算封顶）。
-  - **总资产**：只显示 pUSD 抵押余额；引擎含持仓盯市的 `equityUsd` 没有任何地方显示。
-  - **均价**：实盘持仓路径 = 含手续费成本 ÷ 股数（`ledger.py:1859`）；成交回退路径和轮次表 = 名义 ÷ 股数，不含费（`ledger.py:2394`）。
-  - **投入/占用**：实盘路径 = 持仓成本；回退路径 = 名义 + 手续费（+估算）。
-- **修法**：每个界面词固定一个数据来源，去掉回退链；"可用"应显示引擎真正的 `availableUsd`。
-
-### P3-4 账户快照的持仓占用含已归零的输家仓位
-
-- **位置**：`backend/engine/src/live/account-finance.ts` 155 行 `position_cost_usd = Σ size × avgPrice`，包含 `redeemable` 仓位。
-- **实测**：账户读取器报了 20 个 `redeemable=true`、`currentValue=0` 的历史输家仓位，成本合计 $66.89，都算进了 `occupancy.position_cost_usd`。
-- **影响小**：引擎读取时已正确丢掉它们（`platform/polymarket.ts:156`，引擎状态文件 `positions=[]`）；这个数不进下单闸、不进风控、前端也没显示。只是看原始快照会以为占用了 66 刀。
-- **修法**：和引擎一样过滤 `redeemable && currentValue == 0`。
-
-### P2-10 "订单数"与"成交数"口径不一致，看着像丢了订单
-
-- **位置**：统计面板"订单数"取账本 `order_count`，"成交"取运行时 `fills`；月度 `order_count=8`、`fill_count=8`，但截图"订单数 当月 8 / 今日 0"，而"唯一成交 1"。
-- **原因**：`order_count` 数的是账本里所有订单记录（含被拒、被撤、状态推进的多条），`fills` 数的是去重后的成交；两个数放在同一张卡上但来源和口径不同。
-- **影响**：只是显示困惑，不影响交易。当月 8 单里只有部分真正成交，用户看不出来。
-- **修法**：卡片标注清楚口径，或统一成"下单数/成交数"两个明确不同的字段。
-
-### P3-7 控制面重启时引擎一起被杀，这次运行永远停在"执行中"
-
-- **位置**：`scripts/system-dashboard-server.py` 501-518 行 `_restore_trading_state_locked`、1192-1215 行 `trading_status`；systemd 单元没设 `KillMode`，默认 `control-group` 会连引擎子进程一起杀。
-- **现象**（真实模块复现）：重启后发现 pid 已死，只把 `_trading_pid` 置 None，`stop_result` 仍是 None。之后 `commandStatus` 一直是 `executing`，健康检查一直 `degraded`，界面显示"状态过期"而不是"已停止"，看不到"被重启杀掉"和"远端挂单未确认"。界面停止按钮要求 running=true，也点不到。部署脚本会先检查 running=False，所以正常发布不触发。
-- **修法**：恢复时如果 pid 已不匹配、日志还在、`stop_result` 为 None，就执行 `_automatic_stop_result` 并持久化。要让引擎在控制面重启后跑完收尾，需要另改单元的 `KillMode`/`TimeoutStopSec`，是部署取舍。
-
-### P3-8 停止时持锁等待 8 秒，期间几乎所有读接口卡住
-
-- **位置**：`scripts/system-dashboard-server.py` 1679-1765 行 `stop_trading` 在 `with _trading_lock` 内 `process.wait(timeout=8)`（1730 行），已恢复 pid 的轮询在 1712-1714 行。
-- **影响**：停止期间 `/api/runtime/status` 等需要这把锁的接口最多卡 8 秒，前端 8 秒超时正好触发，显示请求失败。
-
-### P3-9 停止超过 8 秒后真正退出时，退出原因（包括 failed）丢失
-
-- **位置**：`scripts/system-dashboard-server.py` 1195 行 `if not _trading_stop_result` 配合 1750-1760 行：超时时已写入一个"待确认"的 stop_result，进程稍后真正退出时 `_automatic_stop_result` 被跳过。
-
-### P3-10 换场后 `/api/markets` 可能把已结束的上一场当成当前场返回
-
-- **位置**：`scripts/system-dashboard-server.py` 1966-1968 行 `failed()` 沿用缓存时的 `current`/`nextRound`，不按当前时间重算；2013-2020 行优先选 `current is True`。
-- **复现**（真实模块）：边界后 5 秒两场都 stale、缓存里有上一场 → 返回上一场 `current=True`、`endAt-now=-5s`；清空缓存 → 正确返回新一场。采集器断线时会一直错到恢复。
-- **修法**：`failed()` 里按当前时间重算 `current`、`nextRound`。
-
-### P3-12 自动交易页"结算状态"永远显示"本场暂无结算记录"
-
-- **位置**：`frontend/console/auto-trade-block.js` 745-773 行只按当前场过滤，请求（990 行）也限定当前场；服务端 `settlements_page` 按 `round_id` 过滤。结算只在场次结束后才产生（`cli/platform.ts` 882 行），那时目录已切到下一场。
-- **实证**（账本副本）：6 条结算记录全部在所属场次结束后 100 秒到 3.3 小时才生成，在所属场还是当前场时一条都不存在。
-- **修法**：请求只带 assetId、取最新一条，渲染时标注它属于哪一场。`roundSettlementDue` 保留给 fills。
-
-### P3-17 设置页和总览的运行状态在运行中途停止后冻结
-
-- **位置**：`frontend/console/shared/api-adapter.js` 231-232 行 `loadRuntime` 全局分支；消费方 `overview-block.js` 563-570 行。
-- **现象**：会话中途引擎停止后，全局 runtime slice 停在停止前的 running 快照上。
-
-### P3-18 成交上报延迟指标被 MINED/CONFIRMED 修订拉高
-
-- **位置**：`backend/engine/src/live/feeds/user.ts` 153-157 行按 `match_time` 计算 `authenticated_trade_report`，每个状态修订都算一次，MINED/CONFIRMED 比 MATCHED 晚几秒，延迟统计因此偏高。只影响延迟监控，不影响交易。
-
 ### P3-3 前端反复请求已结束场次的快照
 
 - **现象**：nginx 日志里有 346 次 404，几乎都是 `/api/markets/{已结束场次}/snapshot`，其中一个 marketId 被请求了 118 次。
@@ -102,6 +21,20 @@
 ## 已修复
 
 （修好一条就挪到这里，写上提交号）
+
+### 剩余 P2/P3 一批（2026-10-02）
+
+每条都先写测试、在旧代码上确认失败；涉及下单、停止、成交回报的几条另做了独立审查。
+
+- **P3-10 换场后把刚结束的上一场当成当前场** — `ea1a60c`。缓存行的 current/nextRound 按当前时间重算。
+- **P3-12 结算状态永远"本场暂无结算记录"** — `8da02b3`。结算总在场次结束后才到，改成按币取最近一条并标明是哪一场；盈亏用官方数。
+- **P2-18 没有页面能改策略币种** — `4f9dd17`。有已发布配置就能编辑；币种不同时提示"保存并激活后将改为 X，交易运行中不能切换"（后端照旧拦运行中切换）。
+- **P2-8 同一个词不同算法 / P2-10 订单数与成交数口径** — `ac4b906`。"均价"统一为成交名义 ÷ 份数（标"成交均价"），"投入"含手续费；头部余额运行中加显"本次可下单"（引擎按预算真正能下的数）；"订单数"改"下单数，含被拒、撤单"。实盘持仓路径的均价要等下次运行验证。
+- **P3-4 占用含已归零的输家仓位 / P3-18 成交上报延迟被状态修订拉高** — `48b1c5e`。
+- **P3-7/P3-8/P3-9 停止流程** — `0a0f265`。停止不再持锁等 8 秒；停止超时后进程真正退出（包括失败）会记下真实原因；控制面重启后记下"交易进程一起停止了"。审查两轮：堵住了"停止等待期间启动的新进程被抹掉、在后台不受控运行"的口子，停止未完成前拒绝启动；正常跑完的场次保留自己的原因。
+- **P3-5 user WS 连接窗口内的成交/撤单帧被丢** — `c8f19cc`。连上就开始缓存，认证和补偿完成后回放。审查补了一条：这个窗口里连接断了，原来会在死连接上标"就绪"并永远等下去，现在会重连。
+- **P2-13 每个事件深拷贝策略状态** — `39ef0b6`。实测每个事件 15 场 0.094 → 0.0004 毫秒，1000 场 5.8 → 0.011 毫秒。
+- **P3-17 引擎中途停止后页面冻结在"运行中"** — 停止后的 `processRunning=false` 是新事实，不再保留旧快照。
 
 ### 已结算盈亏改用官方数据 + 行情全量记录 + 五档深度修复（2026-10-01）
 
