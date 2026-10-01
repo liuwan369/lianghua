@@ -57,7 +57,7 @@
 
           <section class="market-readiness"><div class="readiness-heading"><span>运行条件</span><small>以服务端确认为准</small></div><ul><li data-readiness="support"><i>·</i><span>运行时支持</span><b>待确认</b></li><li data-readiness="identity"><i>·</i><span>五分钟 YES / NO 场次</span><b>待确认</b></li><li data-readiness="quote"><i>·</i><span>当前报价</span><b>待确认</b></li></ul></section>
 
-          <section class="trade-link-card"><div class="trade-link-heading"><span class="link-icon">↗</span><div><p class="eyebrow">自动交易关联</p><h3>自动交易关联</h3></div><span class="link-state" data-link-state>运行中</span></div><p data-link-copy>该币种已在自动交易运行池中，当前场次正在执行。</p><button class="enable-coin-button" type="button" data-detail-enable>停用并移出运行池</button><small data-link-note>停用只影响后续场次，不撤销当前场次订单。</small></section>
+          <section class="trade-link-card"><div class="trade-link-heading"><span class="link-icon">↗</span><div><p class="eyebrow">自动交易关联</p><h3>自动交易关联</h3></div><span class="link-state" data-link-state>运行中</span></div><p data-link-copy>该币种已在自动交易运行池中，当前场次正在执行。</p><button class="enable-coin-button" type="button" data-detail-enable>确认启用</button><small data-link-note>停用只影响后续场次，不撤销当前场次订单。</small></section>
         </aside>
       </section>
       <div class="market-selection-note"><span class="note-icon">i</span><span data-selection-note>等待服务器返回市场目录后，才能选择资产或修改运行池。</span><span class="note-time" data-market-refresh-note>最后刷新 · --</span></div>
@@ -65,6 +65,9 @@
   </div>`;
 
   let selectedId = store.getState().marketCatalog.selectedId || null;
+  // A write's outcome stays in the selection note until the operator acts again;
+  // the 1 s poll used to overwrite it within ~45 ms (BUGS P2-17).
+  let heldNote = null;
   let search = "";
   let poolSaving = false;
   const text = (selector, value) => { const node = document.querySelector(selector); if (node && node.textContent !== String(value)) node.textContent = value; };
@@ -90,7 +93,7 @@
     <button class="coin-select" type="button" data-select-coin="${escape(coin.id)}"><span class="coin-logo ${escape(coin.tone)}">${escape(coin.icon)}</span><span class="coin-main"><strong>${escape(coin.symbol)}<small>${escape(coin.label || coin.name)}</small></strong><span class="coin-market-meta"><b>5 分钟</b><span>结束 ${escape(coin.closeText || coin.close)}</span></span></span></button>
     <div class="coin-quotes"><span><small>YES</small><b>${Number.isFinite(coin.yes) ? coin.yes.toFixed(3) : "--"}</b></span><span><small>NO</small><b>${Number.isFinite(coin.no) ? coin.no.toFixed(3) : "--"}</b></span></div>
     <div class="coin-volume"><strong>${money(coin.volume)}</strong><small>交易量</small></div>
-    <button class="coin-enable${coin.enabled ? " enabled" : ""}" type="button" data-enable-coin="${escape(coin.id)}" aria-pressed="${String(Boolean(coin.enabled))}"><i></i><span>${coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用"}</span></button>
+    <span class="coin-enable${coin.enabled ? " enabled" : ""}" data-coin-state><i></i><span>${coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用"}</span></span>
   </article>`;
 
   const renderCounts = () => {
@@ -131,29 +134,17 @@
       [coin.yes, coin.no].forEach((value, index) => { const rendered = Number.isFinite(value) ? value.toFixed(3) : "--"; if (quotes[index].textContent !== rendered) quotes[index].textContent = rendered; });
       set(".coin-volume strong", money(coin.volume));
       set(".coin-market-meta span", `结束 ${coin.closeText || coin.close}`);
-      const button = row.querySelector("[data-enable-coin]");
-      const state = store.getState();
-      const pool = state.marketPool;
-      const catalog = state.marketCatalog;
-      const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
-      const marketStale = catalog.stale === true || coin.stale === true;
-      const canInitialize = canInitializeAsset(pool, coin, catalog);
-      const waiting = poolSaving || Boolean(pool.pendingDesiredIds) || !poolWritable(pool) || marketStale;
-      const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
-      button.disabled = waiting || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
-      button.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "完整市场和轮次身份待后端提供" : waiting ? "等待服务器确认运行池" : !coin.canEnable && !coin.enabled ? "服务器未声明该币种可运行" : "";
-      button.classList.toggle("enabled", coin.enabled);
-      button.setAttribute("aria-pressed", String(Boolean(coin.enabled)));
-      set("[data-enable-coin] span", canInitialize && !coin.enabled ? "首次启用" : waiting ? "等待确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
+      const badge = row.querySelector("[data-coin-state]");
+      badge.classList.toggle("enabled", coin.enabled);
+      set("[data-coin-state] span", coin.enabled ? "已启用" : coin.canEnable ? "未启用" : "暂不可用");
     });
     if (!filtered.length) list.innerHTML = '<div class="market-empty"><span>⌕</span><strong>没有匹配的加密货币</strong><small>换一个币种名称或代码再试。</small></div>';
     text("[data-pool-caption]", query ? `匹配 ${filtered.length} 个币种` : `${coins.length} 个支持币种`);
   };
   document.querySelector("[data-coin-list]")?.addEventListener("click", (event) => {
     const selection = event.target.closest("[data-select-coin]");
-    if (selection) { store.setSelectedMarket(selection.dataset.selectCoin); return; }
-    const enable = event.target.closest("[data-enable-coin]");
-    if (enable && !enable.disabled) void toggleEnabled(enable.dataset.enableCoin);
+    // Selecting only highlights the coin; 确认启用 below is what writes the pool.
+    if (selection) { heldNote = null; store.setSelectedMarket(selection.dataset.selectCoin); }
   });
 
   const renderDetail = () => {
@@ -207,13 +198,15 @@
     if (action) {
       const completeIdentity = Boolean(coin.marketId && coin.roundId && coin.cycle === "5m");
       const cannotDisableLast = coin.enabled && pool.desiredIds.length <= 1;
-      action.disabled = poolSaving || !poolWritable(pool) || Boolean(pool.pendingDesiredIds) || marketStale || cannotDisableLast || !coin.enabled && (!coin.canEnable || !completeIdentity);
+      // One coin at a time: an enabled coin is replaced by confirming another,
+      // never switched off on its own.
+      action.disabled = coin.enabled || poolSaving || !poolWritable(pool) || Boolean(pool.pendingDesiredIds) || marketStale || cannotDisableLast || !coin.canEnable || !completeIdentity;
       action.title = marketStale ? "行情目录或行情已过期，恢复连接后再修改" : canInitialize ? "首次创建运行池；仍需服务器控制会话授权" : pool.stale === true ? "运行池快照已过期，恢复连接后再修改" : pool.status !== "ready" ? "运行池状态不可用，恢复连接后再修改" : cannotDisableLast ? "单实例运行池至少保留一个币种；请先启用其他币种再停用" : !completeIdentity && !coin.enabled ? "完整市场和轮次身份待后端提供" : "";
-      action.textContent = poolSaving ? "提交中…" : canInitialize ? "首次启用此币种" : marketStale ? "等待行情确认" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "停用（下一场生效）" : coin.canEnable && completeIdentity ? "启用此币种（替换待运行配置）" : "等待市场身份";
+      action.textContent = poolSaving ? "提交中…" : canInitialize ? "首次启用此币种" : marketStale ? "等待行情确认" : pool.status !== "ready" ? "等待运行池连接" : pool.pendingDesiredIds ? "等待服务器确认" : cannotDisableLast ? "至少保留一个" : coin.enabled ? "已启用" : coin.canEnable && completeIdentity ? `确认启用 ${coin.symbol}` : "等待市场身份";
       if (pool.stale === true && !canInitializePool(pool)) action.textContent = "等待运行池确认";
       action.classList.toggle("selected", coin.enabled);
     }
-    text("[data-selection-note]", canInitialize ? "运行池尚未创建；可为一个服务端支持且具备完整场次身份的币种初始化。写入仍需服务器控制会话。" : !poolReady ? "运行池状态尚未确认；当前只显示市场目录和报价。" : marketStale ? "行情目录或行情已过期；恢复连接后再修改运行池。" : !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
+    if (!heldNote) text("[data-selection-note]", canInitialize ? "运行池尚未创建；可为一个服务端支持且具备完整场次身份的币种初始化。写入仍需服务器控制会话。" : !poolReady ? "运行池状态尚未确认；当前只显示市场目录和报价。" : marketStale ? "行情目录或行情已过期；恢复连接后再修改运行池。" : !coin.canEnable && !coin.enabled ? `${coin.symbol} 已在市场目录中，但服务器尚未确认可加入运行池。` : coin.enabled ? `${coin.symbol} 已加入自动交易运行池；${coin.running ? "当前场次正在运行。" : "等待服务器确认下一场状态。"}` : `当前选择 ${coin.symbol}；启用后会加入自动交易下一场运行池。`);
   };
   const renderCatalogStatus = (resource) => {
     const status = resource?.status;
@@ -252,6 +245,7 @@
     }
     const desiredIds = coin.enabled ? state.marketPool.desiredIds.filter((value) => value !== id) : [id];
     let resultMessage = null;
+    let written = false;
     poolSaving = true;
     renderList(); renderDetail();
     text("[data-selection-note]", `${coin.symbol} 运行池更新中…`);
@@ -262,6 +256,7 @@
       const pool = store.getState().marketPool;
       text("[data-market-refresh-note]", pool.pendingDesiredIds ? "已提交 · 等待服务器确认运行池" : `运行池已确认 · ${window.PolyPreview.format.clock()}`);
       if (pool.pendingDesiredIds) resultMessage = "服务器已接收变更请求，生效状态仍以确认后的运行池为准。";
+      written = !pool.pendingDesiredIds;
     } catch (error) {
       // The switch must not keep showing the coin as enabled after a rejected
       // write: renderList() below re-derives it from the server's pool, and this
@@ -271,12 +266,12 @@
     } finally {
       poolSaving = false;
       renderList(); renderDetail();
-      if (resultMessage) text("[data-selection-note]", resultMessage);
-      // Enabling a coin only rewrites the run pool. The activated strategy keeps
-      // its own assetId, and the engine trades that one — so a pool of eth with a
-      // btc strategy silently keeps trading btc and the start gate blocks. Say so
-      // here instead of letting the operator discover it on the overview page.
-      void reportStrategyAssetMismatch(desiredIds);
+      if (resultMessage) { heldNote = resultMessage; text("[data-selection-note]", resultMessage); }
+      // Enabling a coin only rewrites the run pool; the activated strategy keeps
+      // its own assetId and the engine trades that one. Warn only after a write
+      // the server confirmed, with the pool it confirmed (BUGS P2-17: the warning
+      // used to run after a rejected write and hide the real reason).
+      if (written) void reportStrategyAssetMismatch(store.getState().marketPool.desiredIds);
     }
   }
 
@@ -288,8 +283,9 @@
       const data = raw?.data && typeof raw.data === "object" ? raw.data : raw;
       const target = data?.config?.assetId ?? data?.assetId;
       if (!target || desiredIds.includes(String(target))) return;
-      note.textContent = `运行池已设为 ${desiredIds.join("、").toUpperCase()}，但当前激活策略的币种仍是 ${String(target).toUpperCase()}。`
+      heldNote = `运行池已设为 ${desiredIds.join("、").toUpperCase()}，但当前激活策略的币种仍是 ${String(target).toUpperCase()}。`
         + `交易按激活策略执行，请到策略页把币种改为 ${desiredIds[0].toUpperCase()} 并重新激活，否则启动会被拦住或仍按 ${String(target).toUpperCase()} 交易。`;
+      note.textContent = heldNote;
     } catch {
       /* The pool change already reported its own outcome; do not overwrite it. */
     }
