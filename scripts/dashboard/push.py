@@ -25,19 +25,19 @@ VOLATILE_KEYS = frozenset({"asOf", "as_of", "age_seconds", "ageSeconds", "cache_
 CADENCE = (
     ("/api/markets", 0.1),
     ("/api/runtime/status", 0.25),
-    ("/api/rounds", 0.25),
-    ("/api/fills", 0.25),
-    ("/api/settlements", 0.5),
-    ("/api/events", 0.5),
-    ("/api/account/snapshot", 0.5),
-    ("/api/metrics/summary", 1.0),
+    ("/api/rounds", 0.5),
+    ("/api/fills", 0.5),
+    ("/api/settlements", 1.0),
+    ("/api/events", 1.0),
+    ("/api/account/snapshot", 1.0),
+    ("/api/metrics/summary", 2.0),
     ("/api/account/status", 2.0),
     ("/api/runtime/market-pool", 2.0),
     ("/api/strategy/config", 2.0),
     ("/api/diagnostics/health", 2.0),
 )
 MAX_PATHS_PER_CLIENT = 24
-KEEPALIVE_SEC = 2.0
+KEEPALIVE_SEC = 5.0
 
 
 def cadence(path: str) -> float | None:
@@ -85,9 +85,14 @@ class Client:
 
 
 class PushHub:
-    def __init__(self, render, *, max_clients: int = 50, workers: int = 6, tick: float = 0.05):
-        """render(path) -> (status, body_bytes) using the real GET handler."""
+    def __init__(self, render, *, token=None, max_clients: int = 50, workers: int = 6, tick: float = 0.05):
+        """render(path) -> (status, body_bytes) using the real GET handler.
+        token(path) -> a cheap value that changes whenever the path's source
+        data may have changed (e.g. the ledger file's mtime), or None when
+        unknown. An unchanged token skips the render until the keepalive."""
         self.render = render
+        self.token = token or (lambda path: None)
+        self.rendered_token: dict[str, object] = {}
         self.max_clients = max_clients
         self.tick = tick
         self.lock = threading.Lock()
@@ -128,10 +133,20 @@ class PushHub:
                 if path not in wanted:
                     self.next_due.pop(path, None)
                     self.latest.pop(path, None)
+                    self.rendered_token.pop(path, None)
 
     def _render(self, path: str) -> None:
         try:
+            # Read the token before rendering: the body is then at least as new.
+            token = self.token(path)
+            now = time.monotonic()
+            with self.lock:
+                prior = self.latest.get(path)
+                fresh = prior is not None and now - prior[3] < KEEPALIVE_SEC
+                if token is not None and fresh and self.rendered_token.get(path) == token:
+                    return  # the source did not change; skip the render entirely
             status, body = self.render(path)
+            self.rendered_token[path] = token
             if status != 200:
                 return  # keep the last good body; the browser's REST fallback reports the error
             mark = fingerprint(json.loads(body))

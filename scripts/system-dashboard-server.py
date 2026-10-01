@@ -3256,7 +3256,24 @@ def make_handler(root: Path):
         capture.do_GET()
         return capture.status, capture.wfile.getvalue()
 
-    Handler.push_hub = PushHub(render)
+    ledger_dir = TRADING_ROOT / "results" / "dashboard"
+
+    def token(path: str):
+        # Ledger-backed blocks change only when the projection writes the
+        # ledger; one stat per path instead of a full render (76 ms for a run
+        # summary) every cadence tick.
+        route = path.split("?", 1)[0]
+        if route.startswith(("/api/rounds", "/api/fills", "/api/settlements", "/api/events", "/api/metrics/")):
+            try:
+                return tuple((ledger_dir / name).stat().st_mtime_ns if (ledger_dir / name).exists() else 0
+                             for name in ("ledger.sqlite3", "ledger.sqlite3-wal"))
+            except OSError:
+                return None
+        if route == "/api/account/snapshot":
+            return account_data()._checked
+        return None
+
+    Handler.push_hub = PushHub(render, token=token)
     return Handler
 
 

@@ -178,5 +178,22 @@ class Push(unittest.TestCase):
         self.assertEqual(self.hub.valid_paths(["/api/stream", "/etc/passwd", "/api/runtime/commands", MARKETS]), [MARKETS])
 
 
+class Tokens(unittest.TestCase):
+    def test_unchanged_source_is_not_rendered_again(self):
+        from dashboard.push import PushHub
+        calls, token = [], {"value": 1}
+        def render(path):
+            calls.append(path)
+            return 200, json.dumps({"n": len(calls) if token["value"] == 2 else 0}).encode()
+        hub = PushHub(render, token=lambda path: token["value"])
+        hub.subscribe(["/api/fills"])
+        for _ in range(3):
+            hub._render("/api/fills")
+        self.assertEqual(len(calls), 1, "an unchanged ledger is not re-rendered")
+        token["value"] = 2
+        hub._render("/api/fills")
+        self.assertEqual(len(calls), 2, "a changed ledger is rendered at once")
+
+
 if __name__ == "__main__":
     unittest.main()
