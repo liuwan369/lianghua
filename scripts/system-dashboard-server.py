@@ -3263,12 +3263,19 @@ def make_handler(root: Path):
         # ledger; one stat per path instead of a full render (76 ms for a run
         # summary) every cadence tick.
         route = path.split("?", 1)[0]
+        try:
+            ledger = tuple((ledger_dir / name).stat().st_mtime_ns if (ledger_dir / name).exists() else 0
+                           for name in ("ledger.sqlite3", "ledger.sqlite3-wal", "snapshot.json"))
+        except OSError:
+            return None
         if route.startswith(("/api/rounds", "/api/fills", "/api/settlements", "/api/events", "/api/metrics/")):
-            try:
-                return tuple((ledger_dir / name).stat().st_mtime_ns if (ledger_dir / name).exists() else 0
-                             for name in ("ledger.sqlite3", "ledger.sqlite3-wal"))
-            except OSError:
-                return None
+            return ledger
+        if route.startswith("/api/markets"):
+            # The collector file (every 250 ms) plus the running engine's
+            # projected quotes, which reach the markets view via the projection.
+            with _live_lock:
+                collector = _live_cache_mtime
+            return None if collector is None else (collector, ledger)
         if route == "/api/account/snapshot":
             return account_data()._checked
         return None
