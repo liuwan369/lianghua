@@ -74,27 +74,12 @@
 - **复现**（dist）：对照组第二帧跨价直接下单；实验组第二帧只建基线，这次跨价丢失。线上在 1790704500 场次边界确实出现过这个前置条件。
 - **修法**：对 `firstSampleSeen=false` 的场次不置 `rebuildingReference`。
 
-### P1-6 成交先 MATCHED 后 FAILED 时，账本把它当成真实成交（幽灵成交）
-
-- **位置**：`scripts/dashboard/ledger.py` 的 `_trade_revision`（276 行）：`newer_failure = (new_status == "FAILED" and old_status not in ("CONFIRMED","FAILED") and new_time > old_time)`，要求 FAILED 的时间**严格晚于**前一条。
-- **原因**：引擎给同一笔成交的每一次状态修订都写 `engine_ts = fill.ts`（`cli/platform.ts` 539 行），而 `fill.tsUnix` 取自场馆的 `match_time`（`user.ts` 153-168 行），同一笔成交的 match_time 不变。所以 MATCHED 和后来的 FAILED 带的是**同一个 engine_ts**，`new_time > old_time` 不成立，`newer_failure=False`，FAILED 修订被丢弃（`_trade_revision` 返回 None）。
-- **复现**（真实 `_trade_revision`）：MATCHED 与 FAILED 同 `engine_ts` → 返回 None，成交停留在 MATCHED（幽灵成交）；把 FAILED 的 engine_ts 改到晚 5 秒 → 正常应用为 FAILED。
-- **影响**：一笔场馆撮合后又在链上结算失败的成交，会被永久当成真实成交，计入 `fill_notional`、`fees`、以及结算 coverage，污染 PnL。线上 9 个 journal 里没有 FAILED 成交，所以还没发生；但这是 taker 成交结算失败时的真实场馆状态。
-- **修法**：`newer_failure` 用 `new_time >= old_time`（和 recovery 分支一致）；或者不靠时间，直接规定"非终态成交收到 FAILED 一律接受"。
-
 ### P1-1 界面保存策略时，`maxRounds` 被悄悄清零
 
 - **位置**：`frontend/console/shared/api-adapter.js` 的 `saveStrategy`（462-476 行）按固定白名单重建 config，白名单里漏了 `maxRounds`。
 - **原因**：表单有传（`strategy-block.js` 281 行），在 adapter 这一层被丢掉。后端 `scripts/dashboard/strategy_config.py` 42-44 行发现缺字段，按默认值 0（不限场次）补上。
 - **线上实证**：生效版本 22 的 `maxRounds=3`，服务器上那份草稿的 `maxRounds=0`。在界面上保存再激活后，"跑 3 场就停"会变成"一直跑"。
 - **修法**：白名单加 `maxRounds: values.maxRounds ?? 0`。
-
-### P2-1 阶梯用满时，"当前阶段"显示 `--`
-
-- **位置**：`scripts/dashboard/ledger.py` 的 `_strategy_projection.round_view`（约 311-334 行）。
-- **原因**：引擎有输出 `consumedStages`（`btc-reversal.ts` 160 行），但投影白名单没带上它。线上 SQLite 里存下来的每一场都没有这个字段。前端只能退回用 `nextStage - 1` 推算，满级时 `nextStage = null`，结果显示 `--`。
-- **实例**：场次 1790704200，已用 1 级、`nextStage=None`。
-- **修法**：round_view 的数字字段列表加 `"consumedStages"`。
 
 ### P2-2 盘口接口每秒才读一次采集器文件
 
@@ -126,25 +111,11 @@
 - **对交易的影响**：这个窗口里一边已经是 0.99，本来就不会穿越 0.67，所以不会漏单。但引擎会在这段时间持续报 `market_feed_unhealthy`，并且因为 `invalidateReference`，行情恢复后至少丢掉一次跨价机会。
 - **修法**：单边盘口（一边只有卖一、另一边只有买一，且价格在 0.01/0.99 附近）按"已确定"处理：照常发布，标成终局状态，不触发 watchdog 重连；`/api/markets` 在这个状态下不要切到下一场。
 
-### P2-4 统计接口在"已结算盈亏未知、又有未结算场次"时崩溃
-
-- **位置**：`scripts/dashboard/ledger.py` 的 `metrics_summary`（2241 行）：`"exposed_pnl": (known_pnl - unsettled_cost) if known_pnl is not None or unsettled_rounds else None`。条件写的是 `or`，`known_pnl` 为 None 时只要 `unsettled_rounds` 非空，就执行 `None - float`，抛 TypeError，接口返回 400 `invalid_query`。
-- **复现**（用线上账本副本）：`metrics_summary(run, range="run", asset_id="btc")` 抛 `TypeError: unsupported operand type(s) for -: 'NoneType' and 'float'`。线上 `GET /api/metrics/summary?range=run&assetId=btc&runId=...` 当前就返回 400。任何区间只要满足这两个条件都会触发。
-- **连带的口径不一致**：`range=run` 不带过滤条件时走另一条代码路径 `summary()`（2023-2024 行），同一个运行返回 `pnl=0.0`；带上 `assetId` 就崩溃。同一个运行因为参数不同给出两种结果。
-- **修法**：`known_pnl` 为 None 时 `exposed_pnl` 取 `-unsettled_cost` 或 None（按契约语义二选一），不要做 None 运算；`range=run` 的两条路径合成一条。
-
 ### P2-7 引擎启动失败时，真实错误被丢掉
 
 - **位置**：`backend/engine/src/cli/platform.ts` 989 行 `reportError(phase, "platform_run_failed")` 只记阶段名，不记异常内容；1091-1093 行顶层 catch 对非参数错误一律输出 `"platform could not complete; inspect the phase and local configuration"`。
 - **线上实证**：9-29 这一天有 4 次启动失败（run `125946`、`164720`、`164923`、`165134`），日志里只有 `phase=market_discovery` 或 `phase=platform_connect`，没有任何错误原因。当时是 RPC 过载、地域检查、时钟偏差还是 Gamma 超时，已经无从查起。前端只显示"交易进程运行失败"。
 - **修法**：`reportError` 带上 `error.message`（截断并过滤掉私钥或十六进制长串），顶层 catch 同样输出真实 message。
-
-### P1-3 "今日盈亏"两套日界，跨午夜必然对不上
-
-- **位置**：引擎日界 `backend/engine/src/platform/core.ts` 9 行 `dayOf`（UTC+8）；账本日界 `scripts/dashboard/ledger.py` 的 `metrics_summary` 2020-2022 行（UTC 零点、UTC 月初）。
-- **现象**：策略页"当前当日盈亏"读引擎 `dailyPnlUsd`（UTC+8 日、盯市、含未结算）；总览"今日"读账本已结算盈亏（UTC 日、只算已结算）。两个"今日"指的是不同时间段、不同口径。停机闸按 UTC+8，总览显示按 UTC，北京时间 0–8 点之间两者一定不一致，看着像账错。
-- **不是数字算错**：现金五源（链上、CLOB、账户读取器、引擎状态文件、接口）实测分毫不差，见 [ACCOUNTING.md](ACCOUNTING.md)。
-- **修法**：统一一套日界，建议都用 UTC+8（停机闸已是 UTC+8）；总览标签注明口径（已结算 vs 盯市）。
 
 ### P2-8 同一个界面词，不同页面用不同算法
 
@@ -156,27 +127,12 @@
   - **投入/占用**：实盘路径 = 持仓成本；回退路径 = 名义 + 手续费（+估算）。
 - **修法**：每个界面词固定一个数据来源，去掉回退链；"可用"应显示引擎真正的 `availableUsd`。
 
-### P2-9 手续费验收标准：账本和引擎不一致
-
-- **位置**：账本 `scripts/dashboard/ledger.py` 459-469、1514 行把 `rate-derived` 当可信算进已结算盈亏；引擎结果列 `backend/engine/src/cli/platform.ts` 589-592 行 `netIfUp/netIfDown` 只认 `reported`。
-- **现象**：taker 成交基本拿不到场馆 `fee_usd`，落成 `rate-derived`。同一轮，账本能算出盈亏，引擎 UP/DOWN 结果列却是空。
-- **修法**：统一一个标准。`rate-derived` 是按场馆费率算的，可信度够，建议两边都接受。
-
 ### P3-4 账户快照的持仓占用含已归零的输家仓位
 
 - **位置**：`backend/engine/src/live/account-finance.ts` 155 行 `position_cost_usd = Σ size × avgPrice`，包含 `redeemable` 仓位。
 - **实测**：账户读取器报了 20 个 `redeemable=true`、`currentValue=0` 的历史输家仓位，成本合计 $66.89，都算进了 `occupancy.position_cost_usd`。
 - **影响小**：引擎读取时已正确丢掉它们（`platform/polymarket.ts:156`，引擎状态文件 `positions=[]`）；这个数不进下单闸、不进风控、前端也没显示。只是看原始快照会以为占用了 66 刀。
 - **修法**：和引擎一样过滤 `redeemable && currentValue == 0`。
-
-### P1-4 赢的场次盈亏永远算不出来（胜率永远偏低、已结算盈亏漏计赢利）
-
-- **位置**：`scripts/dashboard/ledger.py` 的 `_coverage_from_runtime`（1437-1466）取的是结算那一刻运行时里该场的持仓份额；`_refresh_settlement`（1512-1528）要求"净份额等于 coverage"才算 PnL。
-- **原因**：赢的场次在结算前，场馆常常已经自动赎回，引擎持仓已归零。实测场次 1790704200：买了 5 股 DOWN 并赢了，链上到账 5 USDC、`payout_verified=true`，但结算时运行时里 `upShares/downShares` 都是 0，`coverage={token: 0.0}`。于是"净买入 5 股 ≠ coverage 0 股"，PnL 判定失败，`pnl_error=cost_basis_unverified`，`pnl=None`。
-- **实测影响**：这一场明明赢了（credited 5，成本 3.5，净赚约 1.5），却记成"待核对"。月度统计因此显示 `settled_wins=0 / settled_losses=2 / settled_pnl_pending=1`，**胜率 0%、已结算盈亏 -12.10 全是输的场**，赢的那场被吞掉。截图里"胜率 --%"和"已结算净盈亏"只算到输场，就是这个原因。
-- **不是钱错**：现金五源一致（[ACCOUNTING.md](ACCOUNTING.md)），真实月度变化 -8.04（217.59→209.54，含未结算持仓），赢利确实到账了，只是账本的 PnL 口径把它判成"无法核对"。
-- **修法**：coverage 不能只信结算那一刻的持仓（那时可能已被赎回归零）。应取该场**成交后、赎回前**的持仓峰值，或直接用成交累计的净份额（`trade_details` 已有 CONFIRMED、reported 的成交）来核对 credited。
-- **根因更正（复核补充）**：这一场持仓归零，**主要不是**场馆自动赎回，而是 P1-7——成交后 1.5 秒一次落后的账户对账把持仓抹成空。真实 journal：成交在 `1790704238.402`，`239.863` 触发 `account_recovery_started`，下一条状态起 `positions=[]`、现金一直是成交前的 208.04，之后 126 条 `platform_status` 全部 `positions_count=0`。用真实 journal 重放账本：该场 credited=5.0、真实 pnl=+1.5，但 coverage 来自被抹空的持仓（0 股），与成交净份额 5 股对不上，于是 `pnl=None`。所以先修 P1-7，这条的大部分会随之消失；coverage 改用成交净份额是第二道保险。
 
 ### P2-10 "订单数"与"成交数"口径不一致，看着像丢了订单
 
@@ -291,6 +247,16 @@
 
 （修好一条就挪到这里，写上提交号）
 
+### 第 3 批：账本口径 — 已修复，待部署验证（2026-10-01）
+
+- **P1-4 赢的场盈亏算不出来** — `5b7752f`。比 BUGS 原条目更大，三个原因：①场馆自动赎回的到账找到了却没存交易哈希，引擎报"未核实"；②输的场（赔付向量证明为 0、没有交易）永远不算核实；③场馆在交易运行停机后才结算，确认落在下一个运行里，那里没有成交，被记成"无成交"。修法：引擎保存场馆的到账交易、零赔付带 `payout_proof=zero_payout`、旧记录补一次证据；账本接受零赔付证明，持仓核对改成"持有 ≤ 买入"，并把结算交给持有成交的那个运行。审查补了两条：阶梯会买两边，判零之前先查赢的那边有没有被场馆赎回；同一场被两个运行交易时不重复记账。测试 `regress/P1-4.mjs`、`scripts/regress/P1-4.py`（重放第 2 批两次实盘的真实 journal）：4 赢 1 输、合计 +2.52194，与钱包变化分毫不差；旧代码 0 赢且崩溃。
+- **P1-6 MATCHED 后 FAILED 的幽灵成交** — `e0f8d32`。同一 match_time 的 FAILED 修订现在生效。测试 `scripts/regress/P1-6.py`。
+- **P2-4 统计接口 None 减数崩溃** — `378c883`。两条路径共用 `_exposed_pnl()`；用线上 run 重放，崩溃消失，两条路径都给 -7.05。测试 `scripts/regress/P2-4.py`。
+- **P2-1 满级时阶段显示 --** — `92a4cc1`。投影带上 `consumedStages`。测试 `scripts/regress/P2-1.py`。
+- **P1-3 两套日界** — `3d5b97d`。账本今日/当月改成北京时间零点，和日内止损同一天；总览文案同步。测试 `scripts/regress/P1-3.py`。
+- **P2-9 手续费标准不一致** — `e3cf3af`。引擎 UP/DOWN 结果列也接受 rate-derived。测试 `regress/P2-9.mjs`。
+- **历史数据**：新代码只影响之后的数据。控制面重启时会用新规则重算已存的结算行（例如 1790704200 从"待核对"变成约 +1.5）。第 2 批及更早的自动赎回和输的场，journal 里没有证据字段，要补回需要一次回填，见下。
+
 ### 第 2 批：启动与状态 — 已部署 `4dd1745`，两次小额实盘通过（2026-09-30）
 
 每条都有回归测试 `backend/engine/scripts/regress/<编号>`（P1-11 在 `scripts/regress/P1-11.py`），旧代码上失败、新代码上通过，每条都做过独立审查。
@@ -304,7 +270,7 @@
 - **P1-12 心跳 25 秒** — `ca120c1`。线上 dist 确认 5 秒，两次运行心跳失败日志都是 0 条。**没走到的路径**：5 笔单都在 0.3 秒内成交，没有挂单超过 10 秒，所以"挂单不再被场馆撤"这次没有线上证据，由 `regress/P1-12.mjs` 保证。
 - **P1-13 收盘后结算查不到市场**（run 1 发现）— `95f14af`。run 2 里 1790785800（输的场，run 1 一直卡在 not_found）记为"持仓全部落败，赎回收益为 0，无需链上交易"，没发交易。
 - **P2-23 已确认的场每 15 秒重结算**（run 1 发现）— `3cdf3d6`。`account_recovery_started`：run 1 23 分钟 160 次，run 2 19 分钟 5 次；旧场不再重复 confirmed。
-- **两次实盘**：run `20260930-162501-1fb3a0266703`（`1167868`）、run `20260930-170531-cb02c3f1c1d8`（`4dd1745`）。一共 5 笔成交，每笔 5 股，价格 0.67-0.69；账户 211.12 → 208.64（-2.48）。两次都没有全账户 halt，没有 `invalid account order`，也没有 `apply missing fills`。
+- **两次实盘**：run `20260930-162501-1fb3a0266703`（`1167868`）、run `20260930-170531-cb02c3f1c1d8`（`4dd1745`）。一共 5 笔成交，每笔 5 股，价格 0.67-0.69；账户 211.116499 → 213.638439（**+2.52**，4 赢 1 输；之前写的 208.64 是赎回到账前读到的旧余额，已更正）。两次都没有全账户 halt，没有 `invalid account order`，也没有 `apply missing fills`。
 - **结算等待上限**：实测后保持 5 分钟不变，理由见 `1586428`。run 2 里本场两轮都在运行期内由场馆自动赎回确认。
 
 ### 第 1 批：对账链 — 已修复 `a395db6`，已部署 `2f6f6ce`，小额实盘通过（2026-09-30）
