@@ -154,6 +154,11 @@
     // The settled figure is now published even when some rounds are unresolved,
     // so say so rather than letting a partial sum read as the final one.
     const pendingCount = finite(pendingPnl);
+    {
+      // Reset when nothing is pending; the note used to stick forever (BUGS P3-15).
+      const heading = document.querySelector('[data-metric="pnl-today"]')?.closest(".metric-group")?.querySelector("h3 + p, p");
+      if (heading && !pendingCount) heading.textContent = "已确认结算，已扣手续费";
+    }
     if (pendingCount) {
       const heading = document.querySelector('[data-metric="pnl-today"]')?.closest(".metric-group")?.querySelector("h3 + p, p");
       if (heading) heading.textContent = `已确认结算，已扣手续费 · ${pendingCount} 场待核对`;

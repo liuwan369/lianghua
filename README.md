@@ -17,7 +17,7 @@ cd C:\Users\Administrator\Desktop\polymarket\frontend\console
 python -m http.server 5175
 ```
 
-打开 `http://127.0.0.1:5175/overview.html`。
+打开 `http://127.0.0.1:5175/`（跳到自动交易页）。
 
 ## 架构
 

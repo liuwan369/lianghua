@@ -2,19 +2,13 @@
 
 系统按服务器运行池中的资产提供 BTC 五分钟反转策略所需的账本和 API 投影。`btc` 仍是默认资产和旧接口别名；资产是否可交易由交易运行时能力和配置决定，市场目录可发现不等于策略已启用。以下列出已提供的接口及尚未接通的能力。
 
-`/api/bootstrap` 会返回 `capabilityDetails`，但当前控制台前端并不读取它：`capabilityDetails` 在 `frontend/console/` 中没有任何消费方，`PolyPreview.api.bootstrap()` 已定义但无调用方。前端的能力判断目前分散在各页面（例如运行池按 `canEnable`、实时流按 `PolyPreview.config.streams`）。要把能力门控统一到 bootstrap，需要先补前端实现，不能假定它已生效。
+`/api/bootstrap` 会返回 `capabilityDetails`，但控制台前端不读取它：推送由 `shared/stream.js` 直接连 `/api/stream`，其余能力判断在各页面。
 
 ## 现有服务可复用接口
 
 生产前端已经有这些只读接口，可以先作为 adapter 的第一版数据源：
 
-- `GET /api/v1/status`：运行状态、策略版本、当前运行摘要。
-- `GET /api/v1/markets`：优先使用交易运行时市场快照，采集器为回退来源。
 - `GET /api/account/status`：账户配置状态，不应回显秘密。
-- `GET /api/v1/runs?limit=50`、`GET /api/v1/events?run_id=...`：运行和事件记录。
-- `GET /api/v1/summary?run_id=...`：当前运行汇总。
-- `GET /api/v1/system-metrics`：CPU、内存、磁盘、负载和服务进程。
-- `GET /api/strategy-config`、`PUT /api/strategy-config`：策略读取和保存。
 
 旧接口保留既有字段和时间格式。运行池由服务器配置的规范化资产 ID 列表决定，默认列表可只有 `btc`；不能因为目录发现了其他资产就宣称它们可交易。交易控制响应表示请求处理状态，最终运行状态由 `/api/runtime/status` 和事件查询确认，不能只根据 `accepted` 判断执行完成。
 
@@ -50,7 +44,7 @@
 | 结算记录 | GET | `/api/settlements?runId=...&assetId=btc&marketId=...&roundId=...&cursor=...&limit=50` | 每场最新结算状态和最终盈亏，按复合身份过滤 |
 | 清空运行数据 | POST | `/api/ledger/reset` | 需控制会话 + `{"confirm":"RESET"}`；交易进程运行中返回 409。删除运行日志与投影，**保留链上结算状态文件**（`prepared`/`submitted` 是未完成赎回，删除等于放弃链上资金）、策略配置与运行池 |
 
-`/api/bootstrap` 保留兼容字段 `capabilityDetails.streams=false`，并提供 `streams.available=false`、`streams.transport=null` 和空的逐主题 endpoint。没有真实 WebSocket/SSE 服务时不得填入 URL 或宣称可用；`streams.fallbackTransport="rest"` 与 `capabilityDetails.restRefresh=true` 表示可由控制台读取下列 REST 接口。该标志说明查询接口存在，不承诺服务器推送或替前端执行轮询。
+`/api/bootstrap` 的 `capabilityDetails.streams=true`、`streams = {available: true, transport: "sse", endpoint: "/api/stream", fallbackTransport: "rest"}`；推送断开时前端退回各 REST 接口轮询。
 
 运行状态来自异步账本投影的最近 `platform_status` 快照；订单由 `order` 生命周期投影到订单详情，同一 client order 更新同一条记录；`/api/fills` 返回成交 journal 修订记录，汇总按经济成交身份去重；结算投影每场保留最新状态，只有验证到账的结算才进入最终盈亏和胜率。运行状态 DTO 另提供 `processRunning`，只表示控制面 `trading_status()` 直接观察到的本地交易子进程事实（`true`、`false` 或未知 `null`），不从异步账本 projection、行情新鲜度或交易所动作推导；因此 projection 追赶或过期时，前端仍能独立判断进程是否运行。日志仍在追赶或运行快照过期时，状态必须 `stale=true`。run 已选中但异步投影尚未登记时，运行、订单、成交、结算或统计查询返回 HTTP 200、`status="unavailable"`、`available=false`、`stale=true` 和空时间/业务值，稍后由 REST 重查；不能将该窗口改成 404 或零值。
 
@@ -62,7 +56,7 @@
 - `fee_source="rate-derived"`：费率取自该市场自身的费用元数据，份额与价格均为精确值，按上述官方公式算出。这是**确定性计算结果，不是估算**，计入 `fees` 与 `pnl`。交易所不会对 taker 成交回报费用，等 `reported` 等不到，若把它当估算会让 `pnl` 永久为 `null`。
 - `fee_source="estimate"`：连费率都未知时的兜底猜测，仍然只进 `estimated_fees`，并继续阻断 `pnl`（`pnl_error="cost_basis_unverified"`）。
 
-后到的 `reported` 费用仍可覆盖同一笔成交的 `rate-derived` 值。现代统计默认 `range=today`，按 UTC 当日零点至快照时间内的事件过滤；`range=month` 按 UTC 当月一日零点起算；`range=run` 表示当前运行，旧 `/api/v1/summary?run_id=...` 保留单运行默认行为。`today/month/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
+后到的 `reported` 费用仍可覆盖同一笔成交的 `rate-derived` 值。现代统计默认 `range=today`，按北京时间（UTC+8）当日零点至快照时间内的事件过滤；`range=month` 按北京时间当月一日零点起算；`range=run` 表示当前运行。`today/month/all` 汇总同一 `account_id` 下已投影的实盘运行，账户标识未知时仅统计当前运行，避免混入其他账户。`all` 不代表交易所账户完整历史。
 
 无当前 run 或统计投影尚未建立时，`/api/metrics/summary` 使用 HTTP 200 和 `status="unavailable"`、`available=false`、`stale=true`、`completeness="unavailable"`（投影等待时为 `waiting`）；金额、计数、胜率及 `asOf` 为 `null`。投影查询成功后返回 `available=true`；若尚未追上 journal，仍可带最后投影值并同时标记 stale。账户保存回执 `{ok:true,report:{saved:true,...}}` 仅表示配置已保存；其中 `account_check_ready`、`live_start_ready` 和 `settlement_credentials_ready` 独立表达检查/启动资格，保存成功不代表账户已检查通过。
 
@@ -84,21 +78,14 @@
 
 **新鲜度判定归服务器所有。** 浏览器不得用本地时钟判断报价是否过期：服务器和客户端之间的任何时钟偏移都会让有效快照被永久判成过期，从而彻底堵死启动。前端只信服务器的 `stale` 布尔，加上身份（`marketId`/`roundId`）、`sequence` 和双边报价是否齐全；因此服务器必须在过期、断线或来源不健康时如实置 `stale=true`，这是前端唯一的过期信号。真正的执行前闸门在服务器端 `backend/engine/src/platform/snapshot-gate.ts`，它在任何下单前重新校验序号、来源时间和有效期。前端若需本地倒计时，只能使用服务器测量出的寿命差值（`expiresAt - sourceAt`），不能把服务器的 `expiresAt` 直接与浏览器时钟比较。
 
-旧 `/api/v1/markets` 保留原始 `round_id` slug 字段供旧调用方读取；该兼容字段不代表现代 `roundId` 身份，也不会参与账本归属或结算统计。
 
 运行时 journal 至少应发送 `order`、`fill`、`platform_settlement`、`platform_status`、`platform_stopped` 和错误事件。`platform_status.runtime.markets[]` 及策略 `currentRound/rounds[]` 必须带 `marketId` 和 `roundId`；`order`/`fill` 应带 `market_id/round_id`，账本会在状态映射晚到时回填。启动、暂停、恢复、停止命令的 HTTP 回执只表示 `accepted` 或 `executing`，最终状态必须由运行时状态事件确认。
 
 事件 `items` 必须含 `id/time/kind/marketId/roundId/severity/message`，保留原始 `event/market/side` 等字段供旧调用方使用；标识与时间未知时为 `null`。分页响应含下一页 `cursor`，无后续记录时为 `null`。运行时市场快照优先于采集器缓存，过期报价不能被标为新鲜。
 
-## WebSocket / SSE
+## 推送（SSE）
 
-以下为预留能力，当前 `capabilityDetails.streams=false`，尚未提供，不能以这些流确认控制命令完成：
-
-- `/api/stream/markets`：报价、五档 depth、场次切换；按 marketId 订阅。当前仍未接通，不能宣称可用。
-- `/api/stream/runtime`：启动/暂停/停止状态、策略阶段、错误、服务事件。
-- `/api/stream/orders`：订单状态、成交、撤单、结算。
-
-高频行情不能和账户、系统资源、历史统计共用一个轮询。每个消息必须带 sequence 和来源时间。
+`GET /api/stream?p=<GET 路径>&p=...`（URL 编码），一条 `EventSource` 连接订阅多个路径。每条消息 `data: {"path", "version", "body"}`，`body` 与直接 GET 该路径的响应完全相同（服务器用同一个处理函数生成）。新连接先收到每个路径的当前值；之后内容变了才推，不变的每 5 秒补一次。可订阅：`/api/markets`、`/api/runtime/status`、`/api/rounds`、`/api/fills`、`/api/settlements`、`/api/events`、`/api/account/snapshot`、`/api/metrics/summary`、`/api/account/status`、`/api/runtime/market-pool`、`/api/strategy/config`、`/api/diagnostics/health`（含子路径）。每 15 秒一行 `: ping` 心跳；超过 50 条连接返回 503，前端退回轮询。推送不用于确认控制命令完成，命令结果以 `/api/runtime/status` 为准。
 
 ## 控制命令
 
@@ -120,7 +107,7 @@
 
 资金投影分开返回可用余额、已预留资金、持仓成本、估算手续费和已确认手续费；撤单请求或进程停止都不表示交易所已经释放资金。结算 `confirmed` 只有在 `payout_verified`、交易回执和到账金额同时核实时才可进入已确认盈亏；未决订单、未确认结算和费用缺失保持 `null`，不计入最终胜率。
 
-策略激活使用 `expectedRevision` 检查版本，并以 `draftId` 指定已保存草稿，成功后原子发布新版本。`activationScope=future_uncreated_round` 表示仅影响引擎尚未创建的未来场次：当前及已预热场次配置已冻结。任意非空 `effectiveRoundId` 暂不支持，返回 501，不伪造指定场次已排期。旧 `PUT /api/strategy-config` 保留保存即发布行为，不能当作现代“只保存草稿”的等价回退。
+策略激活使用 `expectedRevision` 检查版本，并以 `draftId` 指定已保存草稿，成功后原子发布新版本。`activationScope=future_uncreated_round`：新配置用于所有尚未开始、且离开盘超过 10 秒的场次；开盘前 10 秒起及当前场次的配置已冻结（BUGS P2-12）。任意非空 `effectiveRoundId` 暂不支持，返回 501，不伪造指定场次已排期。
 
 ## 前端调用方式
 

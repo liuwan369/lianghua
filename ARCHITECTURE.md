@@ -224,7 +224,7 @@ Linux 发 SIGTERM。引擎依次：暂停 → 撤掉所有挂单 → 对账 → 
 | `/api/rounds`、`/api/rounds/{id}/orders`、`/position` | 每轮历史 |
 | `/api/fills`、`/api/settlements`、`/api/events`、`/api/metrics/summary` | 账本查询 |
 | `/api/diagnostics/health` | 各服务健康 |
-| `/api/v1/status` | 旧接口，部署脚本在用 |
+| `/api/stream?p=<GET 路径>&p=...` | 服务器推送（SSE）：订阅的每个 GET 路径，内容一变就推它的完整响应体（和直接 GET 完全一样）；新连接先收全量，15 秒心跳，最多 50 条连接 |
 
 | POST | 用途 |
 |---|---|
@@ -241,15 +241,16 @@ Linux 发 SIGTERM。引擎依次：暂停 → 撤掉所有挂单 → 对账 → 
 
 ## 9. 前端（`frontend/console`）
 
-纯静态页面，由控制面托管。每页加载 `shared/`（`preview-core` 负责请求，`api-adapter` 负责接口适配，`view-model` 负责数据整形，`preview-store` 管状态），再加载本页的 block JS。全部靠轮询；`ws-client.js` 存在，但默认不开 WS。
+纯静态页面，由控制面托管。每页加载 `shared/`（`preview-core` 负责请求，`stream` 负责推送，`api-adapter` 负责接口适配，`view-model` 负责数据整形，`preview-store` 管状态），再加载本页的 block JS。
+
+**推送优先、轮询兜底**：页面发出的每个 GET 自动登记到 `shared/stream.js`，它用一条 `EventSource` 连 `/api/stream` 订阅这些路径；推送连着时，`request()` 直接用推来的最新响应体，不走网络，各块收到推送就立刻重画。推送断了，原来的定时轮询照常走网络。页面加载后服务器 0 个轮询请求（浏览器实测）。
 
 | 页面 | 看什么 | 主要轮询 |
 |---|---|---|
-| `overview` | 总览、启停、清空数据 | 行情 + 状态 3s，其余 15s |
-| `auto-trade` | 当前轮盘口、持仓、订单、成交 | 盘口 500ms，持仓/订单 1s，状态 2s |
-| `market` | 市场目录、选币 | 1s |
+| `auto-trade`（主页，`index.html` 跳这里） | 启停、当前轮盘口、本场持仓与订单、历史订单（按场次，前 10）、交易统计（大字=今日）、服务器状态、清空数据 | 推送；兜底盘口 500ms，持仓/订单 1s，状态 2s |
+| `market` | 市场目录；单选预选，点「确认启用」才写运行池 | 推送；兜底 1s |
 | `strategy` | 策略参数表单 | 进页面读一次 |
-| `settings` | 账户检查、控制密码 | 点击时 |
+| `settings` | 连接诊断、账户检查、控制密码、运行日志 | 推送；兜底按需 |
 
 ---
 
