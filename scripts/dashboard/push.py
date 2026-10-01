@@ -17,7 +17,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 # Fields that change on every render without the data changing.
 VOLATILE_KEYS = frozenset({"asOf", "as_of", "age_seconds", "ageSeconds", "cache_age_seconds", "cacheAgeSeconds",
-                           "checked_at", "checkedAt", "refreshing", "ageMs", "quoteAgeMs", "lag_bytes"})
+                           "checked_at", "checkedAt", "refreshing", "ageMs", "quoteAgeMs", "lag_bytes",
+                           "to"})  # metrics: the range end is "now"
 
 # Pushable paths and how often each is re-rendered, seconds. The collector
 # writes every 250 ms and the ledger about 4 times a second.
