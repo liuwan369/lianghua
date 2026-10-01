@@ -802,6 +802,15 @@ function runSingleSocketFeed(
                   else downFastClearedAtMs = 0;
                 }
               }
+              // The venue's final best bid/ask for this frame proves every level
+              // beyond it is gone; a trade that empties a level does not always
+              // send a size-0 price_change, and the replica's depth went crossed
+              // (live: bids 0.74 over asks 0.34). Trim once per side after the
+              // whole frame, never with an intermediate entry's best (review).
+              const touchedUp = fastChanges.some(change => change.side === "up");
+              const touchedDown = fastChanges.some(change => change.side === "down");
+              if (touchedUp && fastUp && fastUp.exchangeMs >= applied.upMs && up.trimTo(fastUp.bid, fastUp.ask)) upDepth = up.levels(5);
+              if (touchedDown && fastDown && fastDown.exchangeMs >= applied.downMs && dn.trimTo(fastDown.bid, fastDown.ask)) downDepth = dn.levels(5);
               // A valid book/fast frame proves the subscription is active,
               // even when the venue reports an empty boundary book. It does
               // not make the quote executable or bypass the 2s source gate.

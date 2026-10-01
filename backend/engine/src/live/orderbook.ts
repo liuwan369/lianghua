@@ -43,6 +43,28 @@ export class OrderBook {
     }
   }
 
+  /** Drop levels the venue's own best bid/ask proves gone: a bid above the best
+   * bid or an ask below the best ask. A trade that empties a level does not
+   * always come with a size-0 price_change, so without this the replica kept
+   * them and its depth went crossed (bids 0.74 over asks 0.34, live). Returns
+   * whether anything was removed. */
+  trimTo(bestBid: number | undefined, bestAsk: number | undefined): boolean {
+    let removed = false;
+    if (bestBid != null) {
+      const limit = key(bestBid);
+      for (const price of this.bids.keys()) if (price > limit) { this.bids.delete(price); removed = true; }
+    }
+    if (bestAsk != null) {
+      const limit = key(bestAsk);
+      for (const price of this.asks.keys()) if (price < limit) { this.asks.delete(price); removed = true; }
+    }
+    if (removed) {
+      this.bestBidPrice = this.findBest(this.bids, true);
+      this.bestAskPrice = this.findBest(this.asks, false);
+    }
+    return removed;
+  }
+
   bestBid(): [number, number] | undefined {
     const best = this.bestBidPrice;
     return best == null ? undefined : [best, this.bids.get(best)!];
