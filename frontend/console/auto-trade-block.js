@@ -1522,6 +1522,22 @@
     if (runtimeResult.status === "fulfilled") renderRuntime(runtimeResult.value, true);
     if (eventsResult.status === "fulfilled") renderEvents(eventsResult.value);
     streamLifecycleReady = true;
+    // Server push: re-render a block the moment its data changes. The loaders
+    // then read the pushed body instead of the network (shared/stream.js);
+    // the timers below stay as the fallback when the stream is down.
+    var push = window.PolyPreviewStream;
+    if (push) {
+      push.onUpdate("/api/markets", function(path) {
+        if (path.split("?", 1)[0] === "/api/markets") scheduleMarketContextRefresh(0); else scheduleSnapshotRefresh(0);
+      });
+      push.onUpdate("/api/runtime/status", function() { scheduleRuntimeRefresh(0); });
+      push.onUpdate("/api/rounds", function() { scheduleRoundRefresh(0); });
+      push.onUpdate("/api/fills", function() { scheduleRoundRefresh(0); });
+      push.onUpdate("/api/settlements", function() { scheduleRoundRefresh(0); });
+      push.onUpdate("/api/account/snapshot", function() { scheduleAccountRefresh(0); });
+      push.onUpdate("/api/metrics/summary", function() { scheduleMetricsRefresh(0); });
+      push.onUpdate("/api/events", function() { scheduleEventsRefresh(0); });
+    }
     scheduleMarketContextRefresh(); scheduleSnapshotRefresh(0); scheduleRoundRefresh(0); scheduleRuntimeRefresh(0); scheduleAccountStatusRefresh(30000); scheduleAccountRefresh(10000); scheduleMetricsRefresh(5000); scheduleEventsRefresh(5000); startStreams();
   }).catch(function(error) { text("[data-live-status]", error.message || "运行数据不可用"); });
 })();

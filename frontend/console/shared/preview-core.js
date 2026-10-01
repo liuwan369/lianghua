@@ -37,6 +37,12 @@
     remove(key) { try { window.localStorage.removeItem(key); } catch {} }
   };
   const request = async (path, options = {}) => {
+    // A pushed body is what this GET would return right now (shared/stream.js).
+    if ((options.method || "GET").toUpperCase() === "GET" && window.PolyPreviewStream) {
+      window.PolyPreviewStream.note(path);
+      const pushed = window.PolyPreviewStream.cached(path);
+      if (pushed) return pushed;
+    }
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), options.timeout || 8000);
     try {

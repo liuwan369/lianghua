@@ -37,6 +37,7 @@ CADENCE = (
     ("/api/diagnostics/health", 2.0),
 )
 MAX_PATHS_PER_CLIENT = 24
+KEEPALIVE_SEC = 2.0
 
 
 def cadence(path: str) -> float | None:
@@ -91,7 +92,7 @@ class PushHub:
         self.tick = tick
         self.lock = threading.Lock()
         self.clients: set[Client] = set()
-        self.latest: dict[str, tuple[int, str, bytes]] = {}   # path -> (version, fingerprint, body)
+        self.latest: dict[str, tuple[int, str, bytes, float]] = {}   # path -> (version, fingerprint, body, sent_at)
         self.next_due: dict[str, float] = {}
         self.in_flight: set[str] = set()
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="push-render")
@@ -114,7 +115,7 @@ class PushHub:
             for path in client.paths:
                 self.next_due.setdefault(path, 0.0)
                 if path in self.latest:   # a new browser starts from the full current value
-                    version, _, body = self.latest[path]
+                    version, _, body, _ = self.latest[path]
                     client.offer(path, version, body)
         return client
 
@@ -134,12 +135,15 @@ class PushHub:
             if status != 200:
                 return  # keep the last good body; the browser's REST fallback reports the error
             mark = fingerprint(json.loads(body))
+            now = time.monotonic()
             with self.lock:
                 prior = self.latest.get(path)
-                if prior and prior[1] == mark:
+                # Unchanged content is still re-sent every KEEPALIVE seconds so
+                # the browser's copy carries an honest, recent asOf.
+                if prior and prior[1] == mark and now - prior[3] < KEEPALIVE_SEC:
                     return
                 version = (prior[0] + 1) if prior else 1
-                self.latest[path] = (version, mark, body)
+                self.latest[path] = (version, mark, body, now)
                 targets = [client for client in self.clients if path in client.paths]
             for client in targets:
                 client.offer(path, version, body)
