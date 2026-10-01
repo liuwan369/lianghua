@@ -10,6 +10,8 @@ const DEFAULT_PENDING_EVENT_TTL_MS = 10_000;
 const MIN_PENDING_EVENT_TTL_MS = 5_000;
 
 export interface UserFeedOptions {
+  /** Test-only override of the venue's user channel endpoint. */
+  url?: string;
   creds: ApiKeyCreds;
   conditionId: string;
   upToken: string;
@@ -544,13 +546,29 @@ export function runUserFeed(
   const loop = async () => {
     while (alive && nowUnix() < deadline) {
       try {
-        const ws = await connectWs(USER_WS);
+        const ws = await connectWs(opts.url ?? USER_WS);
         if (!alive || nowUnix() >= deadline) {
           ws.terminate();
           break;
         }
         activeWs = ws;
         authenticated = false;
+        // Frames can arrive while authentication and reconnect compensation
+        // are still awaited below; the real listener was attached only after
+        // them, so a fill or cancellation pushed in that window was silently
+        // lost (BUGS P3-5). Hold them and replay once the listener is up.
+        const early: unknown[] = [];
+        const holdEarly = (data: unknown) => {
+          if (early.length < 10_000) early.push(data);
+          else { discontinuity = true; gapStartUnix ??= Date.now() / 1000; }   // overflow is a gap, not silence
+        };
+        ws.on("message", holdEarly);
+        // The socket can also close during that wait. Without a listener the
+        // loop later waited forever on a dead socket marked ready (review).
+        let closedEarly = false;
+        const markClosed = () => { closedEarly = true; };
+        ws.once("close", markClosed);
+        ws.once("error", markClosed);
         ws.send(authPayload(opts.creds, opts.conditionId));
         lastTransportAtMs = Date.now();
         if (opts.verifyAuthenticated) {
@@ -618,6 +636,11 @@ export function runUserFeed(
           if (!discontinuity && authenticated) setReady(true);
           connectedOnce = true;
         }
+        // Compensation may have marked the feed ready after the socket died.
+        if (closedEarly || ws.readyState !== WebSocket.OPEN) {
+          setReady(false);
+          throw new Error("user websocket closed during authentication or reconnect compensation");
+        }
         console.info("user feed connected + subscription sent");
 
         const ping = setInterval(() => {
@@ -625,7 +648,8 @@ export function runUserFeed(
         }, 10_000);
 
         await new Promise<void>((resolve) => {
-          ws.on("message", (data) => {
+          if (closedEarly || ws.readyState !== WebSocket.OPEN) { resolve(); return; }
+          const onMessage = (data: unknown) => {
             const t = String(data);
             lastTransportAtMs = Date.now();
             if (t === "PONG" || t === "pong") return;
@@ -667,7 +691,12 @@ export function runUserFeed(
               catch { console.warn("user continuity marker write failed"); }
               ws.terminate();
             }
-          });
+          };
+          ws.off("message", holdEarly);
+          ws.off("close", markClosed);
+          ws.off("error", markClosed);
+          ws.on("message", onMessage);
+          for (const data of early.splice(0)) onMessage(data);
           ws.on("close", () => { gapStartUnix ??= lastTransportAtMs / 1000; resolve(); });
           ws.on("error", () => resolve());
         });
