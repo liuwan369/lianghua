@@ -1986,7 +1986,14 @@ def _modern_markets(query: dict | None = None) -> dict:
     items = [item for item in mapped(collector) if item["assetId"] not in runtime_assets] + runtime_items
     key = lambda item: (item.get("assetId"), item.get("marketId"), item.get("roundId"))
     def failed(item, error):
+        # A cached row keeps its identity but not its clock: recompute whether
+        # it is the live or the next round now, or a round that ended seconds
+        # ago is served as current (BUGS P3-10).
+        start, end, now = item.get("startAt"), item.get("endAt"), time.time()
+        timed = isinstance(start, (int, float)) and isinstance(end, (int, float))
         return {**item, "stale": True, "strategyEligible": False, "error": error,
+                "current": timed and start <= now < end if timed else item.get("current"),
+                "nextRound": timed and now < start if timed else item.get("nextRound"),
                 "orderBook": {**item.get("orderBook", {}), "stale": True}}
 
     with _modern_cache_lock:
