@@ -316,7 +316,10 @@ export class BtcReversalStrategy implements StrategyPlugin {
       if (first) {
         // The first complete pair is only a baseline. Without a prior
         // below-trigger observation there is no real crossing to trade.
-        round.reference = pair;
+        // The first sample is already a fresh baseline. A recovery that landed
+        // before it (account_recovery_started has no marketId) must not make
+        // the second sample a baseline too, or that crossing is lost (BUGS P3-6).
+        round.reference = pair; round.rebuildingReference = false; round.referenceFloor = undefined;
         round.reason = "已建立行情基线，等待跨价";
         if (confirming) round.lastConfirmedDirection = confirming;
         changed = true;
