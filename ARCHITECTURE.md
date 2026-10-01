@@ -235,6 +235,10 @@ Linux 发 SIGTERM。引擎依次：暂停 → 撤掉所有挂单 → 对账 → 
 | `/api/account/check`、`/api/account/save` | 账户检查与保存 |
 | `/api/trading/auth/session` | 登录控制会话 |
 
+**已结算盈亏的来源**：交易所 Data API（`closed-positions` 已兑换的赢场 `realizedPnl`；`positions` 里已结算未兑换的仓位 `cashPnl + realizedPnl`，输场都在这）。由账户读取器拉取，`scripts/dashboard/official_pnl.py` 按 slug `<币>-updown-5m-<roundId>` 对到场次。账本只算正在进行的那一场和"已交易、交易所还没报结果"的投入成本。
+
+**行情记录**：采集器把每个盘口事件写进 `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz`（时间、场次、序号、交易所时间、买一卖一、五档），保留 10 天，`zcat` 可读（正在写的当天文件末尾会提示 unexpected end of file，属正常）。
+
 **没有**延迟查询接口。延迟数据在 journal 的 order 事件和 `ledger.sqlite3` 的 `latency_samples` 表里。
 
 ---
