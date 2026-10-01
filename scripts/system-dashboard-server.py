@@ -507,6 +507,18 @@ def _restore_trading_state_locked() -> None:
     _trading_engine = "platform" if state.get("engine") == "platform" else None
     candidate_pid = state.get("pid") if isinstance(state.get("pid"), int) else None
     _trading_pid = candidate_pid if _process_matches(candidate_pid, _trading_log) else None
+    if candidate_pid and _trading_pid is None and (not _trading_stop_result or _trading_stop_result.get("process_stopped") is False):
+        # The engine died with the control plane (systemd stops the whole
+        # unit). Without a stop result the run stayed "executing" forever and
+        # nothing said why (BUGS P3-7). Record what happened instead.
+        outcome = _automatic_stop_result(_trading_exit_code, _trading_console_log)
+        # Relabel only a run that left no terminal status: a normal finish or a
+        # reported failure keeps the engine's own reason (review).
+        if not _console_terminal_status(_trading_console_log):
+            outcome = {**outcome, "reason": "control_plane_restarted",
+                       "message": "控制面重启时交易进程一起停止了；远端挂单以账户快照为准，请核对。"}
+        _trading_stop_result = outcome
+        _persist_trading_state()
     # A stopped run may be deliberately removed during a data reset. Do not
     # resurrect its missing journal as a live dashboard selection on restart.
     if _trading_pid is None and (_trading_log is None or not _trading_log.is_file()):
@@ -547,7 +559,22 @@ _AUTOMATIC_STOP_MESSAGES = {
     "SIGINT": "交易进程收到中断信号后停止。",
     "SIGTERM": "交易进程收到终止信号后停止。",
     "SIGBREAK": "交易进程收到中断信号后停止。",
+    "round_limit_reached": "交易进程已按设定场数运行完毕，自动停止。",
+    "timer_event_failed": "交易进程因定时任务异常停止。",
+    "status_failed": "交易进程因状态上报异常停止。",
+    "control_plane_restarted": "控制面重启时交易进程一起停止了；远端挂单以账户快照为准，请核对。",
 }
+
+
+def _console_terminal_status(console_path: Path | None) -> str | None:
+    for line in reversed(_tail_lines(console_path)):
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(event, dict) and event.get("kind") == "platform_status" and event.get("status") in {"stopped", "failed"}:
+            return event["status"]
+    return None
 
 
 def _automatic_stop_result(exit_code: int | None, console_path: Path | None) -> dict:
@@ -1224,12 +1251,21 @@ def trading_status(include_stats: bool = True) -> dict:
         if process is not None:
             _trading_exit_code = process.poll()
             if _trading_exit_code is not None:
-                if not _trading_stop_result:
+                # A stop that timed out left a "still stopping" result; the
+                # process exiting later is the real outcome (BUGS P3-9).
+                if not _trading_stop_result or _trading_stop_result.get("process_stopped") is False:
                     _trading_stop_result = _automatic_stop_result(_trading_exit_code, _trading_console_log)
                 _trading_process = None
                 _trading_pid = None
                 _persist_trading_state()
         running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
+        if (not running and process is None and isinstance(_trading_stop_result, dict)
+                and _trading_stop_result.get("process_stopped") is False):
+            # A restored pid that exited after a slow stop: same as above.
+            _trading_stop_result = {**_automatic_stop_result(None, _trading_console_log),
+                                    "requested_pid": _trading_stop_result.get("requested_pid")}
+            _trading_pid = None
+            _persist_trading_state()
         # The account reader is intentionally asynchronous.  A stop request
         # can finish before its next cache refresh, so reconcile the persisted
         # stop result on later status reads as soon as a fresh, complete empty
@@ -1582,6 +1618,10 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
             raise RuntimeError("已有交易进程运行中")
         if _trading_process is not None and _trading_process.poll() is None:
             raise RuntimeError("已有交易进程运行中")
+        # A stop still waiting for its child must finish first: a start here
+        # could be overwritten by that stop and run unseen (review).
+        if isinstance(_trading_stop_result, dict) and _trading_stop_result.get("process_stopped") is False:
+            raise RuntimeError("上一次停止仍在进行，请等它完成后再启动")
         if mode == "live":
             account_status = account_config_status()
             if (os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1"
@@ -1731,9 +1771,6 @@ def stop_trading() -> dict:
                 else:
                     os.kill(restored_pid, signal.SIGTERM)
                 stop_requested = True
-                deadline = time.monotonic() + (8 if _trading_mode == "live" else 20)
-                while time.monotonic() < deadline and _process_matches(restored_pid, _trading_log):
-                    time.sleep(0.2)
             except (ProcessLookupError, OSError, subprocess.SubprocessError):
                 pass
         if process is not None and process.poll() is None:
@@ -1748,13 +1785,29 @@ def stop_trading() -> dict:
                 stop_requested = True
             except (ProcessLookupError, OSError):
                 pass
+        if stop_requested:
+            # Recorded before waiting, so a repeated stop request does not signal
+            # a child that is already draining (see the guard above).
+            _trading_stop_result = {"confirmed": False, "process_stopped": False, "remote_orders_state": "unconfirmed",
+                                    "requested_pid": candidate_pid,
+                                    "message": "已请求停止，正在等待撤单及成交对账完成。"}
+            _persist_trading_state()
+        mode, log, run_id = _trading_mode, _trading_log, _trading_run_id
+    # Wait without _trading_lock: holding it for up to 8 s blocked every status
+    # read and the console's requests timed out mid-stop (BUGS P3-8).
+    timeout = 8 if mode == "live" else 20
+    if process is None and restored_pid:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and _process_matches(restored_pid, log):
+            time.sleep(0.2)
+    elif process is not None and process.poll() is None:
             try:
-                process.wait(timeout=8 if _trading_mode == "live" else 20)
+                process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 # Live shutdown drains in-flight POSTs, cancels, and reconciles
                 # fills. Keep it alive and report pending instead of killing
                 # the very process responsible for resolving remote exposure.
-                if _trading_mode != "live":
+                if mode != "live":
                     try:
                         process.kill()
                     except (ProcessLookupError, OSError):
@@ -1763,8 +1816,23 @@ def stop_trading() -> dict:
                         process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
                         pass
+    with _trading_lock:
+        # Only the stop's own run may be updated. While it waited, another poll
+        # may have closed it and a new run started; touching state then would
+        # hide a live engine (review).
+        if _trading_run_id != run_id or (process is not None and _trading_process not in (process, None)):
+            return trading_status(include_stats=False)
         _trading_exit_code = process.poll() if process else None
-        stopped = not _process_matches(restored_pid or (process.pid if process else None), _trading_log)
+        stopped = (process.poll() is not None) if process is not None else not _process_matches(restored_pid, _trading_log)
+        if stopped and stop_requested and _trading_console_log:
+            # Report the engine's own outcome, including a failure (BUGS P3-9).
+            outcome = _automatic_stop_result(_trading_exit_code, _trading_console_log)
+            if outcome.get("reason") not in (None, "process_exited"):
+                _trading_stop_result = {**outcome, "requested_pid": candidate_pid}
+                _trading_process = None
+                _trading_pid = None
+                _persist_trading_state()
+                return trading_status(include_stats=False)
         # A stopped process does not prove remote live orders were cancelled.
         # Only a fresh, complete account snapshot with an empty open-order
         # section can confirm the remote side of the stop.
