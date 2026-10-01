@@ -229,12 +229,15 @@ class AccountData:
                 self._stop_process()
 
     def invalidate(self):
-        """Drop the cached identity and clear the throttle so the next refresh
-        actually runs. Without resetting `_attempt`, an invalidate issued inside
-        the interval was swallowed by the throttle in `refresh`."""
+        """Refresh now: clear the throttle so the next refresh actually runs.
+
+        The last good snapshot stays until the new one arrives. Dropping the
+        identity here made every fill look like an account change: the cache
+        became account_changed and the reader process was killed, so balances
+        showed "unavailable" for ~3 s after each fill (BUGS P2-14). A real
+        account change is still caught by the identity hash in _account()."""
         with self._lock:
-            self._identity = None
-            self._attempt = 0.
+            self._attempt = float("-inf")
         self._account()
 
     def close(self):
