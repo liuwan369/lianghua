@@ -34,7 +34,7 @@ CADENCE = (
     ("/api/account/status", 2.0),
     ("/api/runtime/market-pool", 2.0),
     ("/api/strategy/config", 2.0),
-    ("/api/diagnostics/health", 2.0),
+    ("/api/diagnostics/health", 5.0),   # embeds the whole catalog again
 )
 MAX_PATHS_PER_CLIENT = 24
 KEEPALIVE_SEC = 5.0
@@ -44,9 +44,9 @@ def cadence(path: str) -> float | None:
     route = path.split("?", 1)[0]
     # The catalog lists every coin (40 KB) and pages poll it every ~10 s; only
     # one market's snapshot needs collector speed. Pushing the catalog 4x a
-    # second was ~160 KB/s for one page.
+    # second was ~160 KB/s for one page; every 2 s is ~20 KB/s.
     if route == "/api/markets":
-        return 1.0
+        return 2.0
     for prefix, seconds in CADENCE:
         if route == prefix or route.startswith(prefix + "/"):
             return seconds
