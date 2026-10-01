@@ -2396,6 +2396,41 @@ class Ledger:
             return {"run_id": run_id, "settlements": items,
                     "next_before_id": items[-1]["id"] if len(rows) > limit else None}
 
+    def traded_rounds(self, run_id, *, range="run", asset_id=None, now=None):
+        """{(asset, roundId): committed cost} of rounds the engine traded.
+
+        range=run: this run only; today/month/all: every live run of the
+        account, rounds starting at or after the range start. Settled results
+        come from the venue (official_pnl); this says which rounds are ours and
+        what each one has at stake until the venue reports it."""
+        asset_id = _query_asset(asset_id)
+        start = _range_start(range, time.time() if now is None else now)
+        with self._connect() as db:
+            selected = self._run(db, run_id)
+            if not self._has_table(db, "trade_details"):
+                return {}
+            run_ids = [run_id]
+            if range != "run" and selected["account_id"]:
+                run_ids = [row[0] for row in db.execute(
+                    "SELECT run_id FROM runs WHERE mode='live' AND lower(account_id)=lower(?)", (selected["account_id"],))]
+            marks = ",".join("?" for _ in run_ids)
+            args, clause = list(run_ids), ""
+            if asset_id is not None:
+                clause += " AND asset_id=?"
+                args.append(asset_id)
+            rows = db.execute(f"""SELECT asset_id, round_id, SUM(cost) AS cost FROM (
+                    SELECT asset_id, json_extract(payload,'$.round_id') AS round_id,
+                        COALESCE(json_extract(payload,'$.amount'),0)
+                            + COALESCE(json_extract(payload,'$.fee'), json_extract(payload,'$.fee_estimate'),0) AS cost
+                    FROM trade_details WHERE run_id IN ({marks})
+                      AND COALESCE(json_extract(payload,'$.trade_status'),'') != 'FAILED'
+                      AND json_extract(payload,'$.round_id') IS NOT NULL{clause}
+                    -- a fill re-journaled by a later run counts once
+                    GROUP BY json_extract(payload,'$.trade_id'), json_extract(payload,'$.order_id'))
+                GROUP BY asset_id, round_id""", args)
+            return {(row["asset_id"], str(row["round_id"])): float(row["cost"] or 0) for row in rows
+                    if start is None or int(row["round_id"]) >= start}
+
     def rounds_page(self, run_id, *, before_round_id=None, limit=50, asset_id=None, round_id=None):
         """Per-round trade history: cost, shares, fees, average price and outcome.
 

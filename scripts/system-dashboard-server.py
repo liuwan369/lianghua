@@ -34,12 +34,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dashboard_account as account_store
 from dashboard.config import ConfigConflictError
 from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID, SUPPORTED_ASSET_IDS
-from dashboard.ledger import Ledger
+from dashboard.ledger import Ledger, _range_start
 from dashboard.read_model import ReadModel
 from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after_ms,
                                        validate_snapshot)
 from dashboard.account_data import AccountData
 from dashboard.push import PushHub
+from dashboard import official_pnl
 from dashboard.system_metrics import SystemMetrics
 
 
@@ -68,6 +69,7 @@ _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
 _live_cache_mtime: int | None = None
 _live_wanted_at = 0.0
+_official_cache: tuple = (None, None)   # (account checked marker, round results)
 _ACCOUNT_HISTORY_SECTIONS = frozenset({"trades", "activity", "closed_positions", "order_history", "fees", "rewards", "reconciliation"})
 _account_report: dict | None = None
 _account_report_identity: str | None = None
@@ -2259,6 +2261,53 @@ def _api_run_id() -> str | None:
         return run_id
 
 
+def _official_results() -> dict | None:
+    """Settled round results from the venue's Data API, via the account
+    reader's last snapshot (no extra request). Recomputed only when that
+    snapshot changes."""
+    global _official_cache
+    reader = account_data()
+    marker = reader._checked
+    if marker and _official_cache[0] == marker:
+        return _official_cache[1]
+    results = official_pnl.round_results(reader.snapshot())
+    _official_cache = (marker, results)
+    return results
+
+
+def _apply_official(stats: dict, run_id: str, range_name: str, asset_id, market_id=None, round_filter=None) -> dict:
+    """Replace the ledger's settled figures with the venue's own (user decision
+    2026-10-01). Rounds the engine traded that the venue has not settled yet
+    stay as committed cost. Unchanged when the venue data is unavailable."""
+    results = _official_results()
+    if results is None:
+        return {**stats, "pnl_source": "ledger", "pnl_source_error": "official_data_unavailable"}
+    traded = _api_ledger().traded_rounds(run_id, range=range_name, asset_id=asset_id)
+    start = _range_start_for(range_name)
+    if range_name == "run":
+        keys = [key for key in traded if key in results]
+    else:
+        keys = [key for key in results if (asset_id is None or key[0] == asset_id)
+                and (start is None or int(key[1]) >= start)]
+    if round_filter is not None:
+        keys = [key for key in keys if key[1] == str(round_filter)]
+    now = time.time()
+    pending = {key: cost for key, cost in traded.items()
+               if key not in results and int(key[1]) + 300 <= now and (round_filter is None or key[1] == str(round_filter))}
+    summary = official_pnl.summarize(results, keys)
+    unsettled_cost = round(sum(pending.values()), 6)
+    settled = summary["settled_pnl"]
+    return {**stats, **summary, "settled_pnl_pending": len(pending),
+            "unsettled_cost": unsettled_cost, "unsettled_rounds": len(pending),
+            "exposed_pnl": None if settled is None and not pending else round((settled or 0) - unsettled_cost, 6),
+            "pnl_source": "polymarket-data-api",
+            "pnl_semantics": "venue_realized_pnl_net_of_fees"}
+
+
+def _range_start_for(range_name: str):
+    return _range_start(range_name, time.time())
+
+
 def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
 
@@ -2678,6 +2727,7 @@ def make_handler(root: Path):
                         run_id, requested_range, "ledger_projection_unavailable", completeness="waiting"),
                         ensure_ascii=False, allow_nan=False).encode("utf-8"))
                     return
+                stats = _apply_official(stats, run_id, requested_range, asset_id, market_id, round_id_filter)
                 metadata = _ledger_metadata(run_id)
                 stale = metadata["stale"] or stats.get("completeness") != "caught_up"
                 value = {"schemaVersion": 1, "status": "stale" if stale else "ready",
@@ -2724,6 +2774,16 @@ def make_handler(root: Path):
                         limit=int((query.get("limit") or [50])[0]),
                         asset_id=(query.get("assetId") or [None])[0],
                         round_id=(query.get("roundId") or [None])[0])
+                    # A finished round's result is the venue's (official_pnl);
+                    # the ledger lists what the engine traded and its cost.
+                    results = _official_results()
+                    for item in data.get("rounds") or []:
+                        official = None if results is None else results.get((item.get("assetId"), str(item.get("roundId"))))
+                        item["pnl"] = official["pnl"] if official else None
+                        item["pnlSource"] = "polymarket-data-api" if official else None
+                        if official:
+                            item["status"] = "已结算"
+                            item["settled"] = True
                     metadata = _ledger_metadata(run_id)
                     value = {"schemaVersion": 1, "available": True, "source": "ledger", **data,
                              "asOf": metadata.get("asOf"), "stale": metadata["stale"],
