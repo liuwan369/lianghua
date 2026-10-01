@@ -64,6 +64,7 @@ _live_lock = threading.RLock()
 _live_fetch_lock = threading.Lock()
 _live_cache: dict = {"collector_online": False, "error": "尚未检查"}
 _live_cache_at = 0.0
+_live_cache_mtime: int | None = None
 _account_report: dict | None = None
 _account_report_identity: str | None = None
 _account_check_error: str | None = None
@@ -1139,9 +1140,10 @@ def _running_engine_market_status(status: dict | None = None) -> dict | None:
 
 
 def refresh_live_background(stop: threading.Event) -> None:
+    # Match the collector's 250 ms write cadence; an unchanged file costs one stat.
     while not stop.is_set():
         live_status()
-        stop.wait(1)
+        stop.wait(0.25 if _live_config()["collector_is_local"] else 1)
 
 
 def supervise_projection(stop: threading.Event) -> None:
@@ -1154,10 +1156,21 @@ def supervise_projection(stop: threading.Event) -> None:
 
 def _live_status_fetch() -> dict:
     """Read a public collector snapshot without rewriting its source clock."""
-    global _live_cache, _live_cache_at
+    global _live_cache, _live_cache_at, _live_cache_mtime
     config = _live_config()
+    # The collector rewrites its file every 250 ms. A local read is gated on
+    # the file's mtime, not a 1 s cache that left quotes up to 27 frames
+    # behind (BUGS P2-2). Only the remote SSH read keeps the 1 s floor.
+    mtime = None
+    if config["collector_is_local"]:
+        try:
+            mtime = config["snapshot_path"].stat().st_mtime_ns
+        except OSError:
+            mtime = None
     with _live_lock:
-        if time.monotonic() - _live_cache_at < 1:
+        if (mtime is not None and mtime == _live_cache_mtime) or (
+                not config["collector_is_local"] and time.monotonic() - _live_cache_at < 1):
+            _live_cache_at = time.monotonic()
             return {**validate_snapshot(_live_cache), "node_label": config["node_label"]}
     try:
         if config["collector_is_local"]:
@@ -1180,6 +1193,7 @@ def _live_status_fetch() -> dict:
                  "error": f"无法读取{config['node_label']}行情投影，请检查采集服务、快照和连接。"}
     with _live_lock:
         _live_cache, _live_cache_at = value, time.monotonic()
+        _live_cache_mtime = mtime if value.get("error_code") is None else None
         return dict(value)
 
 
