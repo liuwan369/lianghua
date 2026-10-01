@@ -129,8 +129,8 @@
           </div>
           <div class="position-hero"><div><span>\u672C\u573A\u51C0\u6295\u5165</span><strong data-invested>-- <em>USDC</em></strong><small class="position-fee" data-position-fee>\u624B\u7EED\u8D39 --</small></div><span class="position-badge" data-position-state>\u5F85\u63A5\u5165</span></div>
           <div class="holding-grid">
-            <div class="holding-item up-holding"><span>YES \u4EFD\u989D</span><strong data-holding="up">--</strong><small>\u5747\u4EF7 <b data-average="up">--</b></small></div>
-            <div class="holding-item down-holding"><span>NO \u4EFD\u989D</span><strong data-holding="down">--</strong><small>\u5747\u4EF7 <b data-average="down">--</b></small></div>
+            <div class="holding-item up-holding"><span>YES \u4EFD\u989D</span><strong data-holding="up">--</strong><small>成交均价 <b data-average="up">--</b></small></div>
+            <div class="holding-item down-holding"><span>NO \u4EFD\u989D</span><strong data-holding="down">--</strong><small>成交均价 <b data-average="down">--</b></small></div>
           </div>
           <div class="result-grid"><div><span>\u5DF2\u4E70\u5165 / \u8BA2\u5355\u5360\u7528</span><strong><b data-bought>--</b> / <b data-occupied>--</b> USDC</strong></div><div><span>YES \u80DC / NO \u80DC\u9884\u8BA1\u7ED3\u679C</span><strong class="result-values"><b data-outcome="up">--</b><em>/</em><b data-outcome="down">--</b> USDC</strong></div><div title="\u6309\u672C\u573A\u51C0\u6295\u5165\u9664\u4EE5\u603B\u4EFD\u989D\u8BA1\u7B97\uFF0C\u542B\u624B\u7EED\u8D39\uFF0C\u56E0\u6B64\u53EF\u80FD\u7565\u9AD8\u4E8E\u9650\u4EF7"><span>\u5168\u90E8\u6301\u4ED3\u5747\u4EF7\uFF08\u542B\u8D39\uFF09</span><strong><b data-average-total>--</b></strong></div></div>
           <div class="stage-section">
@@ -978,7 +978,13 @@
   var renderAccount = function(resource) {
     var balance = vm.accountBalance(resource, store.getState().runtime);
     var value = balance.availableUsd;
-    text("[data-auto-account-available]", value == null ? "-- USDC" : `${value.toFixed(2)} USDC${balance.stale ? " · 过期" : ""}`);
+    // The wallet figure is not what caps an order: the engine's budget is
+    // (BUGS P2-8, live: wallet 210, engine 10). Show both while it runs.
+    var runtime = store.getState().runtime || {};
+    var engineAvailable = runtime.processRunning === true ? numeric(runtime.funds?.availableUsd) : null;
+    text("[data-auto-account-available]", value == null ? "-- USDC" : `${value.toFixed(2)} USDC${balance.stale ? " · 过期" : ""}${engineAvailable != null ? ` · 本次可下单 ${engineAvailable.toFixed(2)}` : ""}`);
+    var node = document.querySelector("[data-auto-account-available]");
+    if (node) node.title = "钱包余额，已扣未成交买单；运行中另显示引擎按预算还能下单的金额";
   };
   var renderMetrics = function(resource) {
     var data = resource?.data || {};
@@ -1364,7 +1370,7 @@
           return;
         }
         panel.innerHTML = `<table class="round-history"><thead><tr><th>场次</th><th>投入</th><th>份额</th>`
-          + `<th>均价</th><th>手续费</th><th>结算</th><th>到账</th><th>盈亏</th></tr></thead>`
+          + `<th>成交均价</th><th>手续费</th><th>结算</th><th>到账</th><th>盈亏</th></tr></thead>`
           + `<tbody>${body}</tbody></table>`
           + `<button type="button" class="quiet-button round-history-more" hidden>查看全部</button>`;
       } else {

@@ -1792,6 +1792,15 @@ class Ledger:
                     "fees": traded["fees"], "estimatedFees": traded["estimatedFees"],
                     "settlementState": traded["settlementState"], "creditedUsd": traded["creditedUsd"],
                     "pnl": traded["pnl"], "updatedAt": traded["lastTime"]}
+        def _fill_average():
+            if round_id is None or str(round_id).startswith("0x"):
+                return None
+            try:
+                page = self.rounds_page(run_id, round_id=str(round_id), asset_id=asset_id, limit=1)
+            except (KeyError, OSError, ValueError, sqlite3.Error):
+                return None
+            traded = next(iter(page.get("rounds") or []), None)
+            return traded["averagePrice"] if traded else None
         unavailable = {"available": False, "stale": True, "runId": run_id, "assetId": asset_id,
                        "roundId": round_id,
                        "marketId": None, "stage": None, "confirmations": None, "yesShares": None,
@@ -1927,7 +1936,10 @@ class Ledger:
             "nextShares": selected.get("nextShares"),
             "yesShares": yes_shares,
             "noShares": no_shares,
-            "averagePrice": occupied / total_shares if total_shares and total_shares > 0 and occupied is not None else None,
+            # One meaning everywhere (BUGS P2-8): fill notional / shares, fees
+            # excluded, as in the round table and the fills fallback. Cost with
+            # fees is occupiedUsd.
+            "averagePrice": _fill_average(),
             "occupiedUsd": occupied,
             "outcomePnl": {"yes": selected.get("netIfUpUsd"), "no": selected.get("netIfDownUsd")},
             "updatedAt": at,
