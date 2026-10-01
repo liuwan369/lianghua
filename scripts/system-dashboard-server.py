@@ -920,11 +920,6 @@ def _account_request_error(headers) -> tuple[int, str] | None:
     return _control_request_error(headers, "live")
 
 
-def private_key_configured() -> bool:
-    """Backward-compatible live gate for the current Owner-signer adapter."""
-    return bool(account_config_status()["execution_credentials_ready"])
-
-
 def _control_token() -> str:
     # A saved account profile is the durable source for the operator control
     # password.  The environment value remains the bootstrap fallback for a
@@ -1421,17 +1416,6 @@ def strategy_config_status() -> dict:
         active = int(active)
     return {**saved, "assetId": saved["config"].get("assetId", "btc"), "activeRevision": active,
             "nextRoundRevision": saved["savedRevision"] if status.get("running") and active != saved["savedRevision"] else None}
-
-
-def save_strategy_config(payload: dict) -> dict:
-    if set(payload) - {"strategyId", "expectedRevision", "config"} or not {"expectedRevision", "config"} <= set(payload):
-        raise ValueError("请提交策略参数和当前版本")
-    if payload.get("strategyId", STRATEGY_ID) != STRATEGY_ID:
-        raise ValueError("策略不存在")
-    with _config_control_lock:
-        _validate_running_asset(payload["config"])
-        strategy_config_store().save(payload["config"], payload["expectedRevision"])
-        return strategy_config_status()
 
 
 def _validate_running_asset(config: dict) -> None:
@@ -2544,10 +2528,9 @@ def make_handler(root: Path):
                     "capabilities": ["markets", "runtime", "orders", "positions", "metrics", "events"],
                     "capabilityDetails": {"fills": True, "settlements": True, "strategyDrafts": True,
                         "strategyActivate": True, "activateAtRound": False, "cancelOrder": False,
-                        "flatten": False, "editMarketPool": True, "presets": False, "streams": False,
+                        "flatten": False, "editMarketPool": True, "presets": False, "streams": True,
                         "restRefresh": True},
-                    "streams": {"available": False, "transport": None,
-                        "endpoints": {"markets": None, "runtime": None, "orders": None},
+                    "streams": {"available": True, "transport": "sse", "endpoint": "/api/stream",
                         "fallbackTransport": "rest",
                         "restEndpoints": {"markets": "/api/markets", "runtime": "/api/runtime/status",
                             "orders": "/api/rounds/{roundId}/orders", "fills": "/api/fills",
@@ -2810,19 +2793,7 @@ def make_handler(root: Path):
                                  "roundId": round_id}
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
-            if path == "/api/strategy-config":
-                try:
-                    self._send_json(json.dumps(strategy_config_status(), ensure_ascii=False).encode("utf-8"))
-                except (ValueError, RuntimeError, OSError) as exc:
-                    self._send_json(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8"), 503)
-                return
-            if path.startswith("/api/v1/"):
-                self._get_v1(path)
-                return
-            # There is one user-facing trading page. Keep the former advanced
-            # dashboard URL as a compatibility redirect so stale bookmarks do
-            # not open a second, disconnected control surface.
-            if path in {"/", "/system-dashboard.html", "/system-dashboard-advanced.html", "/demo-trading-console.html"}:
+            if path == "/":
                 self.send_response(302)
                 self.send_header("Location", "/console/")
                 self.send_header("Cache-Control", "no-store")
@@ -2876,94 +2847,6 @@ def make_handler(root: Path):
             self.end_headers()
             self.wfile.write(body)
 
-        def _get_v1(self, path: str) -> None:
-            try:
-                if path == "/api/v1/status":
-                    status = trading_status()
-                    value = {"schemaVersion": 1, "asOf": time.time(),
-                             **{k: status[k] for k in ("running", "mode", "run_id", "config_revision",
-                                   "account_id", "params", "stop_result", "live_unlocked",
-                                   "execution_target", "engine", "execution", "strategy_id")},
-                             "projection": status["stats"].get("projection"),
-                             "stats": status["stats"]}
-                elif path == "/api/v1/markets":
-                    # During a platform run, expose the same paired WS frame
-                    # that drove the strategy. The collector remains the
-                    # fallback when the engine has no complete fresh pair.
-                    market_status = _running_engine_market_status()
-                    if isinstance(market_status, dict) and isinstance(market_status.get("current_markets"), list):
-                        # Preserve the old slug-shaped field only in the v1
-                        # compatibility response. Modern DTOs stay strict.
-                        market_status = {**market_status, "current_markets": [
-                            {**row, "round_id": row.get("round_id") or row.get("legacy_round_id") or row.get("name")}
-                            for row in market_status["current_markets"] if isinstance(row, dict)]}
-                    value = {"schemaVersion": 1, "asOf": time.time(), **(market_status or cached_live_status())}
-                elif path == "/api/v1/account-data":
-                    value = account_data().snapshot()
-                elif path == "/api/v1/system-metrics":
-                    value = system_metrics().snapshot()
-                elif path == "/api/v1/orders":
-                    query = parse_qs(urlsplit(self.path).query)
-                    run_id = query.get("run_id", [None])[0]
-                    if not run_id or len(run_id) > 200:
-                        raise ValueError("请指定运行编号")
-                    run_id = _scoped_run_id(run_id)
-                    if run_id is None:
-                        raise KeyError("Run is not registered")
-                    ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
-                    stamp = query.get("as_of", [None])[0]
-                    cutoff = query.get("snapshot_event_id", [None])[0]
-                    value = {"schemaVersion": 1, **ledger.orders_page(run_id,
-                             limit=int(query.get("limit", ["10"])[0]),
-                             offset=int(query.get("offset", ["0"])[0]),
-                             status=query.get("status", [None])[0], market=query.get("market", [None])[0],
-                             as_of=float(stamp) if stamp else None,
-                             snapshot_event_id=int(cutoff) if cutoff else None)}
-                elif path in {"/api/v1/runs", "/api/v1/events", "/api/v1/summary"}:
-                    query = parse_qs(urlsplit(self.path).query)
-                    if path.endswith("/runs"):
-                        account_id = _current_account_id()
-                        if not account_id:
-                            # A missing account identity must never turn into
-                            # an unscoped historical listing.
-                            value = {"schemaVersion": 1, "runs": [], "next_before_id": None,
-                                     "available": False, "stale": True,
-                                     "error": "account_not_configured"}
-                        else:
-                            ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
-                            before_id = query.get("before_id", [None])[0]
-                            limit = int(query.get("limit", ["50"])[0])
-                            value = {"schemaVersion": 1, **ledger.list_runs_page(
-                                before_id=int(before_id) if before_id else None, limit=limit,
-                                account_id=account_id)}
-                    else:
-                        ledger = Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
-                        run_id = query.get("run_id", [None])[0]
-                        if not run_id or len(run_id) > 200:
-                            raise ValueError("请指定运行编号")
-                        run_id = _scoped_run_id(run_id)
-                        if run_id is None:
-                            raise KeyError("Run is not registered")
-                        if path.endswith("/summary"):
-                            value = {"schemaVersion": 1, "summary": ledger.summary(run_id)}
-                        else:
-                            cursor = query.get("before_id", [None])[0]
-                            value = {"schemaVersion": 1, **ledger.events(run_id,
-                                     before_id=int(cursor) if cursor else None,
-                                     limit=int(query.get("limit", ["50"])[0]))}
-                else:
-                    self._send_json(b'{"error":"not found"}', 404)
-                    return
-                if path != "/api/v1/markets":
-                    value["control_source"] = control_source()
-                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
-            except KeyError:
-                self._send_json(b'{"error":"run not found"}', 404)
-            except (ValueError, TypeError):
-                self._send_json('{"error":"请求参数不正确"}'.encode(), 400)
-            except (OSError, sqlite3.Error, RuntimeError):
-                self._send_json('{"error":"数据暂不可用，请稍后重试"}'.encode(), 503)
-
         def _stream(self, paths: list[str]) -> None:
             """GET /api/stream?p=<rest path>&p=...: server-sent events. Every
             message is {"path", "version", "body"} where body is exactly what a
@@ -3004,8 +2887,8 @@ def make_handler(root: Path):
 
         def _send_json(self, body: bytes, status: int = 200, response_headers: dict[str, str] | None = None) -> None:
             path = self.path.split("?", 1)[0]
-            modern = path.startswith("/api/") and not path.startswith(("/api/v1/", "/api/trading/")) and path not in {
-                "/api/strategy-config", "/api/live", "/api/account/status", "/api/account/check", "/api/account/save"}
+            modern = path.startswith("/api/") and not path.startswith("/api/trading/") and path not in {
+                "/api/live", "/api/account/status", "/api/account/check", "/api/account/save"}
             if modern:
                 value = json.loads(body)
                 cacheable = self.command == "GET" and (path in {
@@ -3041,16 +2924,13 @@ def make_handler(root: Path):
             if path == "/api/runtime/market-pool":
                 self.do_POST()
                 return
-            if path != "/api/strategy-config":
-                self._send_json(b'{"error":"not found"}', 404)
-                return
-            self.do_POST()
+            self._send_json(b'{"error":"not found"}', 404)
 
         def do_POST(self) -> None:  # noqa: N802
             path = self.path.split("?", 1)[0]
             modern_order_path = path.startswith("/api/orders/") and path.endswith("/cancel")
-            if path not in {"/api/account/check", "/api/account/save", "/api/strategy-config",
-                            "/api/trading/control", "/api/trading/auth/session", "/api/runtime/commands",
+            if path not in {"/api/account/check", "/api/account/save",
+                            "/api/trading/auth/session", "/api/runtime/commands",
                             "/api/strategy/drafts", "/api/strategy/activate", "/api/runtime/flatten",
                             "/api/runtime/market-pool", "/api/ledger/reset"} and not modern_order_path:
                 self._send_json(b'{"error":"not found"}', 404)
@@ -3200,27 +3080,7 @@ def make_handler(root: Path):
                         "error": "当前运行时只提供账本查询；撤单和清余量由交易运行会话处理"},
                         ensure_ascii=False).encode("utf-8"), 501)
                     return
-                mode = payload.get("mode", "live")
-                if path == "/api/trading/control":
-                    mode = (strategy_config_store().get()["config"]["mode"] if payload.get("action") == "start"
-                            else trading_status(include_stats=False).get("mode"))
-                auth_error = _control_request_error(self.headers, mode)
-                if auth_error:
-                    status, message = auth_error
-                    self._send_json(
-                        json.dumps({"ok": False, "error": message}, ensure_ascii=False).encode("utf-8"),
-                        status,
-                    )
-                    return
-                if path == "/api/strategy-config":
-                    result = save_strategy_config(payload)
-                    self._send_json(json.dumps({"ok": True, **result}, ensure_ascii=False).encode("utf-8"))
-                    return
-                elif path == "/api/trading/control":
-                    result = strategy_control(payload)
-                else:
-                    raise ValueError("不支持的交易接口")
-                self._send_json(json.dumps({"ok": True, "status": result}, ensure_ascii=False).encode("utf-8"))
+                raise ValueError("不支持的交易接口")
             except account_store.AccountCheckError as exc:
                 self._send_json(json.dumps({"ok": False, "error": str(exc), "error_code": exc.code,
                                             "retryable": exc.retryable}, ensure_ascii=False).encode("utf-8"), exc.http_status)

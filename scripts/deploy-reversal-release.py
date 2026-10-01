@@ -113,8 +113,12 @@ def checked_target(name):
     return target
 def status():
     try:
-        with urllib.request.urlopen('http://127.0.0.1:18766/api/v1/status',timeout=15) as response:
-            return json.load(response)
+        with urllib.request.urlopen('http://127.0.0.1:18766/api/runtime/status',timeout=15) as response:
+            runtime=json.load(response)
+        with urllib.request.urlopen('http://127.0.0.1:18766/api/account/status',timeout=15) as response:
+            account=json.load(response)
+        return {'running':runtime.get('processRunning'),'live_unlocked':account.get('server_live_enabled'),
+                'execution':runtime.get('execution'),'strategy_id':runtime.get('strategyId')}
     except urllib.error.URLError as error:
         # The first deployment may not have installed the dashboard unit yet.
         # Only a local connection refusal is treated as an absent service; all
@@ -393,7 +397,7 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
 result={'revision':manifest['revision'],'release':str(release),'files_verified':len(manifest['files']),
         'files_changed':len(changed),'files_removed':len(obsolete),'dashboard_restarted':restarted,
         'nginx_reloaded':nginx_needs_update,
-        'status':{k:after.get(k) for k in ('running','mode','execution','strategy_id','live_unlocked')}}
+        'status':{k:after.get(k) for k in ('running','execution','strategy_id','live_unlocked')}}
 (release/'result.json').write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps(result))
 '''
