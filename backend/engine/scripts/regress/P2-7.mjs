@@ -13,6 +13,9 @@ assert.equal(safeErrorMessage("HTTP request failed. Status: 429"), "HTTP request
 // --- edge: secrets never pass ---
 assert.equal(safeErrorMessage("invalid POLYMARKET_PRIVATE_KEY format"), "sensitive provider error");
 assert.equal(safeErrorMessage("bad api key"), "sensitive provider error");
+assert.equal(safeErrorMessage("invalid auth token"), "sensitive provider error");
+// review: an outcome-token error is a real cause, not a credential
+assert.equal(safeErrorMessage("no UP/DOWN token mapping"), "no UP/DOWN token mapping");
 const key = "0x" + "ab".repeat(32);
 assert.ok(!safeErrorMessage(`signer ${key} rejected`).includes("ab".repeat(32)), "a 64-hex value is redacted");
 assert.ok(safeErrorMessage("x".repeat(2000)).length <= 500, "bounded");

@@ -109,7 +109,7 @@ export function settlementPassWants(market: { id: string; endsAt: number }, now:
 export function safeErrorMessage(message: string | undefined): string | undefined {
   const value = String(message ?? "").slice(0, 500);
   if (!value) return undefined;
-  if (/secret|token|passphrase|password|private[ _-]?key|api[ _-]?key|mnemonic|diagnostic stdout/i.test(value)) {
+  if (/secret|(?:api|auth|access|bearer|refresh|session)[ _-]?token|passphrase|password|private[ _-]?key|api[ _-]?key|mnemonic|diagnostic stdout/i.test(value)) {
     return "sensitive provider error";
   }
   return value.replace(/(0x)?[0-9a-fA-F]{64}/g, "<redacted-64hex>");
