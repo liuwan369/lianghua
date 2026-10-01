@@ -290,7 +290,9 @@
         const raw = await modernOrLegacy(() => core.api.diagnostics(), () => core.api.legacySystemMetrics());
         const status = resourceStatus(raw);
         const current = store.getState().diagnostics;
-        if (status !== "ready" && current.data) return store.setSlice("diagnostics", { ...current, status, stale: true, error: raw?.error || "诊断数据已过期，保留最近成功数据" });
+        // A degraded report IS the news (trading process failed, collector stale):
+        // show it instead of freezing on the last healthy snapshot (BUGS P2-16).
+        if (status !== "ready" && status !== "degraded" && current.data) return store.setSlice("diagnostics", { ...current, status, stale: true, error: raw?.error || "诊断数据已过期，保留最近成功数据" });
         return store.setSlice("diagnostics", { status, stale: status === "stale", data: raw || {}, error: raw?.error || null });
       });
     },
