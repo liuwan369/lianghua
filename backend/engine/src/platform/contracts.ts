@@ -210,6 +210,10 @@ export interface Position {
   shares: number;
   costUsd: number;
   realizedPnlUsd: number;
+  /** The venue's own mark (Data API curPrice) from the last account read. */
+  markPrice?: number;
+  /** The market has resolved: markPrice is the payout per share (1 or 0). */
+  resolved?: boolean;
 }
 export interface AccountSnapshot {
   accountId: string;

@@ -650,7 +650,12 @@ export class TradingCore {
    * exposure: the same 100 shares halted at a 0.10 bid and did not halt once the
    * bid was gone. */
   private markValue(position: Position): number {
-    const mark = this.books.get(position.tokenId)?.bid ?? this.lastBidByToken.get(position.tokenId);
+    // A resolved market is worth its payout, not the last bid (a 0.98 bid on a
+    // winner under-reported it, BUGS A4). Without a quote, the venue's own mark
+    // survives a restart; valuing at cost hid an open loss from the daily-loss
+    // stop until the venue resolved the round, 13-18 minutes later (BUGS H1).
+    if (position.resolved && position.markPrice != null) return position.shares * position.markPrice;
+    const mark = this.books.get(position.tokenId)?.bid ?? this.lastBidByToken.get(position.tokenId) ?? position.markPrice;
     return mark == null ? position.costUsd : position.shares * mark;
   }
   private updateRisk(): void {

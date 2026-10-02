@@ -154,7 +154,10 @@ export function accountSnapshot(raw: unknown): AccountSnapshot {
       // Data API marks resolved outcome tokens redeemable. A redeemable loser
       // with an explicit zero value is historical residue, not executable inventory.
       if (p.redeemable === true && Number.isFinite(currentValue) && currentValue === 0) return [];
-      return [{ tokenId: String(p.asset), shares, costUsd: shares * avg, realizedPnlUsd: numeric(p.realizedPnl ?? 0) }];
+      const curPrice = numeric(p.curPrice);
+      return [{ tokenId: String(p.asset), shares, costUsd: shares * avg, realizedPnlUsd: numeric(p.realizedPnl ?? 0),
+        ...(Number.isFinite(curPrice) && curPrice >= 0 && curPrice <= 1 ? { markPrice: curPrice } : {}),
+        ...(p.redeemable === true ? { resolved: true } : {}) }];
     }) };
   return result;
 }
