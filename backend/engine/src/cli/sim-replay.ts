@@ -67,16 +67,26 @@ export function simBookFromRecord(record: Record<string, unknown>): SimBook | un
 }
 
 async function replayFile(sim: ReversalSim, asset: string, path: string): Promise<void> {
-  const lines = createInterface({ input: createReadStream(path).pipe(createGunzip()), crlfDelay: Infinity });
-  for await (const line of lines) {
-    if (!line.trim()) continue;
-    let record: Record<string, unknown>;
-    try { record = JSON.parse(line); } catch { continue; }
-    const t = typeof record.t === "number" ? record.t : undefined;
-    const book = simBookFromRecord(record);
-    if (!book || t === undefined) continue;
-    try { sim.observe(asset, book, t); } catch { sim.dropped += 1; }
-  }
+  // The current day's file is still being appended, so its last gzip member is
+  // usually incomplete. Treat that as end-of-data for this file (Z_SYNC_FLUSH
+  // between members lets zlib read every finished one), and never let one bad
+  // file stop the other coins.
+  const gunzip = createGunzip();
+  gunzip.on("error", () => { /* truncated trailing member: stop this file */ });
+  const source = createReadStream(path);
+  source.on("error", () => { /* unreadable file: skip it */ });
+  const lines = createInterface({ input: source.pipe(gunzip), crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line.trim()) continue;
+      let record: Record<string, unknown>;
+      try { record = JSON.parse(line); } catch { continue; }
+      const t = typeof record.t === "number" ? record.t : undefined;
+      const book = simBookFromRecord(record);
+      if (!book || t === undefined) continue;
+      try { sim.observe(asset, book, t); } catch { sim.dropped += 1; }
+    }
+  } catch { /* a truncated final member surfaces here: the finished rounds are kept */ }
 }
 
 export async function runSimReplay(options: SimReplayOptions): Promise<{ files: number; rounds: number }> {
