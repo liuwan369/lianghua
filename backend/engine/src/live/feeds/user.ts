@@ -465,12 +465,32 @@ export function runUserFeed(
   let authenticated = false;
   let gapStartUnix: number | undefined;
 
+  // Ledger ids written but not delivered: the sink threw after the append.
+  // A retry must deliver them even though the ledger now calls them duplicates.
+  const undelivered = new Set<string>();
+  // The parsers mark both the trade id and "<id>:<status>[:fee:x]" as seen.
+  const forgetTrade = (tradeId: string) => {
+    seenTrades.delete(tradeId);
+    for (const key of seenTrades) if (key.startsWith(`${tradeId}:`)) seenTrades.delete(key);
+  };
   const emitEvent = (event: UserFeedEvent): void => {
     const id = event.kind === "exchangeFill"
       ? (event.tradeId && event.orderId ? `fill:${event.tradeId}:${event.orderId}${event.fill.status ? `:${event.fill.status}${event.fill.feeUsd != null ? `:fee:${event.fill.feeUsd}` : ""}` : ""}` : undefined)
       : `cancel:${event.orderId}`;
-    if (opts.ledger && id && !opts.ledger.append(id, event)) return;
-    sink({ kind: "user", event });
+    try {
+      if (opts.ledger && id && !opts.ledger.append(id, event) && !undelivered.has(id)) return;
+    } catch (error) {
+      // Not written: forget the trade so compensation parses it again (review).
+      if (event.kind === "exchangeFill" && event.tradeId) forgetTrade(event.tradeId);
+      throw error;
+    }
+    try { sink({ kind: "user", event }); }
+    catch (error) {
+      if (id) undelivered.add(id);
+      if (event.kind === "exchangeFill" && event.tradeId) forgetTrade(event.tradeId);
+      throw error;
+    }
+    if (id) undelivered.delete(id);
   };
 
   const emitRaw = (raw: unknown) => {
@@ -558,6 +578,19 @@ export function runUserFeed(
         // them, so a fill or cancellation pushed in that window was silently
         // lost (BUGS P3-5). Hold them and replay once the listener is up.
         const early: unknown[] = [];
+        // Parse one frame into the pending queue; shared by the live handler
+        // and by the replay of frames held during authentication/compensation.
+        const acceptFrame = (data: unknown) => {
+          const text = String(data);
+          if (text === "PONG" || text === "pong" || isUserChannelEvidence(text, opts) || isUserChannelFailure(text)) return;
+          try {
+            const value = JSON.parse(text) as unknown;
+            for (const raw of Array.isArray(value) ? value : [value]) {
+              if (raw && typeof raw === "object") (raw as Record<string, unknown>).__receivedAtUnix = lastTransportAtMs / 1000;
+              pending.accept(raw);
+            }
+          } catch { console.warn("user message rejected: invalid_json"); }
+        };
         const holdEarly = (data: unknown) => {
           if (early.length < 10_000) early.push(data);
           else { discontinuity = true; gapStartUnix ??= Date.now() / 1000; }   // overflow is a gap, not silence
@@ -585,12 +618,16 @@ export function runUserFeed(
           }
           authenticated = credentialsValid;
         }
+        let compensated = false;
         if (connectedOnce) {
           discontinuity = true;
           opts.ledger?.markDiscontinuous("user websocket reconnect");
           setReady(false);
           if (opts.fetchRecentTrades && opts.fetchOpenOrders) {
-            const afterUnix = Math.max(0, (gapStartUnix ?? lastTransportAtMs / 1000) - 5);
+            // Pin the gap start now: if this socket also dies, the next attempt
+            // must look back from here, not from its own auth time (BUGS U1).
+            gapStartUnix ??= lastTransportAtMs / 1000;
+            const afterUnix = Math.max(0, gapStartUnix - 5);
             const [first, firstOpen] = await Promise.all([
               opts.fetchRecentTrades(afterUnix).catch(() => null),
               opts.fetchOpenOrders().catch(() => null),
@@ -611,10 +648,9 @@ export function runUserFeed(
                   // Do not mark the ledger continuous or replay the same order.
                   if (authenticated) setReady(true);
                 } else {
-                  opts.ledger?.markResynced("authenticated REST trade and account compensation");
-                  discontinuity = false;
-                  gapStartUnix = undefined;
-                  if (authenticated) setReady(true);
+                  // Declared continuous only below, once this socket is known
+                  // to be still open (BUGS U1).
+                  compensated = true;
                 }
               } catch {
                 // Stable REST lists do not prove the local ledger is current.
@@ -638,8 +674,20 @@ export function runUserFeed(
         }
         // Compensation may have marked the feed ready after the socket died.
         if (closedEarly || ws.readyState !== WebSocket.OPEN) {
+          // The next attempt must look back from here, including on the first
+          // connection, where no compensation ran (review).
+          gapStartUnix ??= lastTransportAtMs / 1000;
+          // Frames this authenticated socket delivered before it died are real
+          // venue events: book them instead of dropping them (BUGS U1).
+          for (const data of early.splice(0)) acceptFrame(data);
           setReady(false);
           throw new Error("user websocket closed during authentication or reconnect compensation");
+        }
+        if (compensated) {
+          opts.ledger?.markResynced("authenticated REST trade and account compensation");
+          discontinuity = false;
+          gapStartUnix = undefined;
+          if (authenticated) setReady(true);
         }
         console.info("user feed connected + subscription sent");
 
@@ -775,7 +823,16 @@ export function runUserFeed(
       Date.now() - lastTransportAtMs <= maxStaleMs,
     registerOrder: (orderId: string, tradeIds: string[] = []) => {
       pending.register(orderId);
-      void reconcileTrades(tradeIds);
+      // A throw here (e.g. the event ledger's fsync on a full disk) was an
+      // unhandled rejection, which ends a Node 24 process mid-round. Treat it
+      // like a failed WS frame: mark the gap and reconnect (BUGS H2).
+      void reconcileTrades(tradeIds).catch((error) => {
+        console.error(`trade reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+        discontinuity = true;
+        gapStartUnix ??= lastTransportAtMs / 1000;
+        try { setReady(false); } catch { /* the status sink failed too; the reconnect still runs */ }
+        activeWs?.terminate();
+      });
     },
     reconcileRecentTrades: async (afterUnix: number) => {
       if (!opts.fetchRecentTrades) {
