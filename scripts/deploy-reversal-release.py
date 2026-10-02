@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.error
 import paramiko
 
@@ -140,7 +141,6 @@ unit_names={'config/pm-system-dashboard-dublin.service':'pm-system-dashboard-dub
             'config/pm-clob-market-snapshot.service':'pm-clob-market-snapshot.service'}
 nginx_specs={
     'config/pm-system-dashboard-dublin-public.conf': '/etc/nginx/sites-available/pm-dashboard-public',
-    'config/pm-system-dashboard-dublin-renew-http.conf': '/etc/nginx/sites-available/pm-dashboard-renew-http',
 }
 obsolete=set(manifest.get('removed',[]))
 retired_units_from_manifest={unit_names[name] for name in obsolete if name in unit_names}
@@ -300,11 +300,25 @@ with tarfile.open(release/'program.tar.gz','r:gz') as bundle:
             for name,target_name in nginx_specs.items():
                 source=root/name
                 subprocess.run(['install','-m','0644',str(source),target_name],check=True)
+
             nginx_public_link.parent.mkdir(parents=True,exist_ok=True)
             subprocess.run(['ln','-sfn',nginx_specs['config/pm-system-dashboard-dublin-public.conf'],
                             str(nginx_public_link)],check=True)
             subprocess.run(['nginx','-t'],check=True)
             subprocess.run(['systemctl','reload','nginx'],check=True)
+        # Renewal is answered by the public site's port-80 webroot location now;
+        # the old hooks swapped the whole console to a 503 page every renewal.
+        for hook in (Path('/etc/letsencrypt/renewal-hooks/pre/pm-dashboard-http'),
+                     Path('/etc/letsencrypt/renewal-hooks/post/pm-dashboard-https'),
+                     Path('/etc/nginx/sites-available/pm-dashboard-renew-http')):
+            hook.unlink(missing_ok=True)
+        # The system journal had no size cap (second audit O9).
+        journald=Path('/etc/systemd/journald.conf.d/pm-system.conf')
+        journald_text='[Journal]'+chr(10)+'SystemMaxUse=1G'+chr(10)
+        if not journald.is_file() or journald.read_text()!=journald_text:
+            journald.parent.mkdir(parents=True,exist_ok=True)
+            journald.write_text(journald_text)
+            subprocess.run(['systemctl','restart','systemd-journald'],check=True)
         mismatches=[name for name,digest in manifest['files'].items()
                     if hashlib.sha256(checked_target(name).read_bytes()).hexdigest()!=digest]
         if mismatches:
@@ -415,11 +429,54 @@ try:
         with sftp.open(directory + "/apply.py", "w") as out:
             out.write(REMOTE_SCRIPT)
     lock = "/root/pm-system/data/dashboard/deployment.lock"
-    _, stdout, stderr = client.exec_command("mkdir -p /root/pm-system/data/dashboard; flock -n -x " + lock + " python3 " + directory + "/apply.py " + directory, timeout=120)
-    output, error = stdout.read().decode(), stderr.read().decode()
-    if stdout.channel.recv_exit_status():
+    # The remote apply runs to success or rollback on its own; a local timeout
+    # used to report "failed" while the release had gone live (second audit).
+    # Wait long enough, and on a lost channel read the release's own result.
+    _, stdout, stderr = client.exec_command("mkdir -p /root/pm-system/data/dashboard; flock -n -x " + lock + " python3 " + directory + "/apply.py " + directory, timeout=300)
+    try:
+        output, error = stdout.read().decode(), stderr.read().decode()
+        status = stdout.channel.recv_exit_status()
+    except (OSError, paramiko.SSHException):
+        # Still applying or the channel dropped: wait for the release's own
+        # result instead of reporting an outcome we do not know.
+        client.close()
+        output = None
+        for _ in range(60):
+            time.sleep(10)
+            try:
+                client.connect("34.242.206.196", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
+                with client.open_sftp() as sftp, sftp.open(directory + "/result.json") as handle:
+                    output = handle.read().decode()
+                break
+            except (OSError, paramiko.SSHException):
+                client.close()
+        if output is None:
+            raise RuntimeError("deploy outcome unknown after 10 min: check " + directory + "/result.json")
+        error, status = "", 0
+    if status:
         raise RuntimeError(error[:2500] + output[:2500])
     result = json.loads(output)
+    # Keep the last 5 releases on both sides: every deploy left one forever.
+    client.exec_command("cd /root/.pm-releases && ls -1t | tail -n +6 | xargs -r rm -rf --", timeout=60)[1].channel.recv_exit_status()
+    kept = sorted((p for p in (ROOT/".deploy").iterdir() if p.name != RELEASE + "-result.json"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+    releases = []
+    for path in kept:
+        stem = path.name.removesuffix("-build").removesuffix(".tar.gz").removesuffix("-result.json")
+        if stem not in releases:
+            releases.append(stem)
+    for path in kept:
+        stem = path.name.removesuffix("-build").removesuffix(".tar.gz").removesuffix("-result.json")
+        if stem not in releases[:5] and stem != RELEASE:
+            if path.is_dir():
+                # A build links the live checkout's node_modules: drop the link
+                # itself first so rmtree can never walk into the real one.
+                link = path / "backend/engine/node_modules"
+                if link.is_symlink() or os.path.isjunction(link):
+                    os.unlink(link) if not link.is_dir() else os.rmdir(link)
+                shutil.rmtree(path)
+            else:
+                path.unlink()
     result["archive_sha256"] = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
     result["manifest"] = MANIFEST
     (ROOT/".deploy"/(RELEASE+"-result.json")).write_text(json.dumps(result,indent=2)+"\n",encoding="utf-8")

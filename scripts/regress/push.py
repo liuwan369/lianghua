@@ -196,6 +196,23 @@ class Tokens(unittest.TestCase):
         hub._render("/api/fills")
         self.assertEqual(len(calls), 2, "a changed ledger is rendered at once")
 
+    def test_unsubscribe_during_render_leaves_nothing_behind(self):
+        """Second audit C1: a render finishing after its last subscriber left
+        stored the body forever (200 cycles held 40 MB in the audit)."""
+        from dashboard.push import PushHub
+        hub_ref = {}
+        def render(path):
+            hub_ref["hub"].unsubscribe(hub_ref["client"])   # the browser leaves mid-render
+            return 200, json.dumps({"path": path}).encode()
+        hub = PushHub(render)
+        hub_ref["hub"] = hub
+        for round_id in range(5):
+            path = f"/api/markets/0xm/snapshot?roundId={round_id}"
+            hub_ref["client"] = hub.subscribe([path])
+            hub._render(path)
+        self.assertEqual((len(hub.latest), len(hub.rendered_token), len(hub.next_due)), (0, 0, 0),
+                         "nothing is kept for paths nobody subscribes to")
+
 
 if __name__ == "__main__":
     unittest.main()

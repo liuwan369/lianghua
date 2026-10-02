@@ -1,4 +1,7 @@
 [Unit]
+# Stop restarting after 20 failures in 5 minutes (a broken release looped forever).
+StartLimitIntervalSec=300
+StartLimitBurst=20
 Description=Polymarket BTC 5m simple trading dashboard (Dublin, local only)
 After=network-online.target pm-clob-market-snapshot.service
 Wants=network-online.target pm-clob-market-snapshot.service
@@ -20,6 +23,10 @@ EnvironmentFile=-/root/pm-system/config/dashboard-secret.env
 ExecStart=/usr/bin/python3 /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
 Restart=always
 RestartSec=3
+# The trading engine runs in its own systemd scope (pm-engine-<run_id>), so
+# neither this limit nor a restart of this unit reaches it (BUGS O2). A leak
+# here must not push the 1.9 GB box into a global OOM.
+MemoryMax=900M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

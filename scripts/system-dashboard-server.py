@@ -9,6 +9,7 @@ import io
 import json
 import math
 import os
+import shutil
 import secrets
 import signal
 import shlex
@@ -1633,6 +1634,8 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         log_dir = TRADING_ROOT / "results" / "live"
         log_dir.mkdir(parents=True, exist_ok=True)
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
+        # Journals grew 69-113 MB/h while trading and nothing removed them.
+        prune_run_journals(log_dir, RUN_JOURNALS_KEPT - 1)
         candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
         candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
         candidate_state = log_dir / f"dashboard-{run_id}.platform-state.json"
@@ -1676,6 +1679,16 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
                 args.extend(["--expected-market-id", market_id, "--expected-round-id", round_id])
         env = _trading_environment()
         env["LIVE"] = "true"
+        # The engine runs in its own systemd scope: in this unit's cgroup a
+        # control-plane restart, crash or OOM kill took the live engine down
+        # mid-round (BUGS O2). The scope survives; restore reattaches by pid.
+        systemd_run = shutil.which("systemd-run") if os.environ.get("INVOCATION_ID") else None
+        if systemd_run:
+            # systemd-run --scope execs in place (same pid, so stop and restore
+            # signal and match the engine directly); choom makes the kernel
+            # pick anything else first under memory pressure.
+            args = [systemd_run, "--scope", "--quiet", "--collect", f"--unit=pm-engine-{run_id}",
+                    "choom", "-n", "-500", "--", *args]
         creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             _trading_process = subprocess.Popen(
@@ -2407,6 +2420,31 @@ def _range_start_for(range_name: str):
 
 def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+
+
+RUN_JOURNALS_KEPT = 20
+
+
+def prune_run_journals(live: Path, keep: int = RUN_JOURNALS_KEPT) -> list[str]:
+    """Delete the files of all but the newest `keep` runs (journal growth).
+
+    A run is `dashboard-<run_id>.*`: journal, console log, control and stop
+    files. Settlement records and the strategy's platform-state are shared
+    across runs and never touched. Called before a new run starts, with no
+    engine running, so no file here is being written.
+    """
+    runs: dict[str, list[Path]] = {}
+    for path in live.glob("dashboard-*") if live.exists() else []:
+        if not path.is_file() or ".settlements.json" in path.name or ".platform-state.json" in path.name:
+            continue
+        runs.setdefault(path.name.split(".", 1)[0], []).append(path)
+    newest = sorted(runs, key=lambda run: max(p.stat().st_mtime for p in runs[run]), reverse=True)
+    removed = []
+    for run in newest[keep:]:
+        for path in runs[run]:
+            path.unlink(missing_ok=True)
+            removed.append(path.name)
+    return removed
 
 
 def reset_ledger_data() -> dict:

@@ -151,12 +151,20 @@ class PushHub:
                 if token is not None and fresh and self.rendered_token.get(path) == token:
                     return  # the source did not change; skip the render entirely
             status, body = self.render(path)
-            self.rendered_token[path] = token
             if status != 200:
+                with self.lock:
+                    if path in self.next_due:
+                        self.rendered_token[path] = token
                 return  # keep the last good body; the browser's REST fallback reports the error
             mark = fingerprint(json.loads(body))
             now = time.monotonic()
             with self.lock:
+                # The last subscriber may have left while this rendered: storing
+                # the body then left it orphaned forever, and a later subscriber
+                # was first sent that hours-old body (second audit C1).
+                if path not in self.next_due:
+                    return
+                self.rendered_token[path] = token
                 prior = self.latest.get(path)
                 # Unchanged content is still re-sent every KEEPALIVE seconds so
                 # the browser's copy carries an honest, recent asOf.
