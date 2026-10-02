@@ -71,8 +71,26 @@ const submitted = (actions) => actions.find((a) => a.kind === "submit")?.order;
   const s = createStrategy({ stageShares: [5, 18, 54, 130], maxStages: 4 });
   let t = START - 8; s.onEvent({ kind: "timer", ts: t }, ctx(t));
   t = START + 1; s.onEvent({ kind: "book", snapshot: snap(t, 0.60, 0.40) }, ctx(t));
-  s.onEvent({ kind: "error", strategyId: "btc-reversal", code: "account_recovery_started", message: "account_recovery_started" }, ctx(t));
+  s.onEvent({ kind: "error", strategyId: "btc-reversal", code: "account_recovery_started", message: "account_recovery_started", marketIds: ["0xm"] }, ctx(t));
   t += 0.5; assert.equal(submitted(s.onEvent({ kind: "book", snapshot: snap(t, 0.68, 0.32) }, ctx(t))), undefined,
-    "after a recovery the next sample rebuilds the baseline instead of trading a stale crossing");
+    "after a recovery that blocks this market the next sample rebuilds the baseline instead of trading a stale crossing");
+}
+// --- U2: a recovery that blocks no market (the one after each confirmed
+// settlement) keeps the live round's baseline and its crossing ---
+{
+  const s = createStrategy({ stageShares: [5, 18, 54, 130], maxStages: 4 });
+  let t = START - 8; s.onEvent({ kind: "timer", ts: t }, ctx(t));
+  t = START + 1; s.onEvent({ kind: "book", snapshot: snap(t, 0.60, 0.40) }, ctx(t));
+  s.onEvent({ kind: "error", strategyId: "btc-reversal", code: "account_recovery_started", message: "account_recovery_started", marketIds: [] }, ctx(t));
+  t += 0.5; assert.ok(submitted(s.onEvent({ kind: "book", snapshot: snap(t, 0.68, 0.32) }, ctx(t))),
+    "U2: the crossing right after a settlement-time recovery is traded");
+}
+// --- U2 edge: a recovery blocking another market leaves this one alone ---
+{
+  const s = createStrategy({ stageShares: [5, 18, 54, 130], maxStages: 4 });
+  let t = START - 8; s.onEvent({ kind: "timer", ts: t }, ctx(t));
+  t = START + 1; s.onEvent({ kind: "book", snapshot: snap(t, 0.60, 0.40) }, ctx(t));
+  s.onEvent({ kind: "error", strategyId: "btc-reversal", code: "account_recovery_started", message: "account_recovery_started", marketIds: ["0xother"] }, ctx(t));
+  t += 0.5; assert.ok(submitted(s.onEvent({ kind: "book", snapshot: snap(t, 0.68, 0.32) }, ctx(t))), "U2: another market's recovery does not reset this round");
 }
 console.log("P2-12 OK");

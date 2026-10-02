@@ -259,7 +259,12 @@ export class BtcReversalStrategy implements StrategyPlugin {
       || event.message.startsWith("market_feed_unhealthy:")
       || event.message === "account_recovery_started");
     if (quoteGateBlocked) {
-      this.resetQuoteReference(event.marketId);
+      if (event.kind === "error" && event.message === "account_recovery_started" && Array.isArray(event.marketIds)) {
+        // Only the markets the recovery blocks (BUGS U2).
+        for (const marketId of event.marketIds) this.resetQuoteReference(marketId);
+      } else {
+        this.resetQuoteReference(event.marketId);
+      }
     }
     if (event.kind === "stopped") this.resetQuoteReference();
 

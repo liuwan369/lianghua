@@ -710,11 +710,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (marketId) recoveryMarkets.add(marketId);
     }
     platform.core.setRecovering(true, recoveryMarkets.size ? [...recoveryMarkets] : []);
-    // Account recovery is one shared account-wide job. Emit one global event
-    // so the strategy invalidates every cached quote once without attributing
-    // the recovery to an arbitrary future market or round.
+    // Account recovery is one shared account-wide job; it blocks only the
+    // markets with unresolved orders. Name them so the strategy resets just
+    // those baselines: a settlement-time recovery that blocks nothing used to
+    // wipe the live round's baseline and cost it a crossing (BUGS U2).
     platform.ingest({ kind: "error", strategyId: "btc-reversal",
-      code: "account_recovery_started", message: "account_recovery_started" });
+      code: "account_recovery_started", message: "account_recovery_started", marketIds: [...recoveryMarkets] });
     recoveryJob = (async () => {
       await platform.idle();
       const tradeScanComplete = new Set<string>();

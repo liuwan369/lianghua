@@ -393,7 +393,9 @@ export type TradingEvent =
   | { kind: "latency"; metric: string; durationMs: number; ts: number; marketId?: string;
       tokenId?: string; strategyId?: string; clientOrderId?: string; orderId?: string; outcome?: string }
   | { kind: "stopped"; reason: string }
-  | { kind: "error"; message: string; strategyId?: string; clientOrderId?: string; orderId?: string; marketId?: string; code?: string };
+  | { kind: "error"; message: string; strategyId?: string; clientOrderId?: string; orderId?: string; marketId?: string; code?: string;
+      /** account_recovery_started: the markets whose orders the recovery blocks. */
+      marketIds?: string[] };
 export type StrategyAction =
   | { kind: "submit"; order: Omit<OrderRequest, "strategyId"> }
   | { kind: "cancel"; orderId: string }
