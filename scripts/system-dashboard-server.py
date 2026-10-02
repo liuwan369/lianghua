@@ -2422,6 +2422,80 @@ def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
 
 
+# Paper simulator (模拟交易): per-round firing counts written by the collector's
+# ReversalSim to data/sim/<asset>.jsonl. Read-only here; never a trading path.
+SIM_DIR = DEPLOYMENT_LOCK_PATH.parents[1] / "sim"
+_SIM_MAX_ROUNDS = 2000
+
+
+def _api_sim(asset_id: str, days: int) -> dict:
+    """Latest-first rounds plus a summary of the firing distribution, uncapped.
+
+    The whole point is the count: maxFirings and the full distribution tell the
+    operator how deep the ladder must be (the max could be ~67). The firing
+    distribution lists every value seen, 0..max, with no capping.
+    """
+    asset = str(asset_id or "").strip().lower()
+    if not _ASSET_ID_RE.fullmatch(asset):
+        raise ValueError("invalid assetId")
+    cutoff = time.time() - max(1, min(int(days or 10), 3650)) * 86400
+    path = SIM_DIR / f"{asset}.jsonl"
+    rounds: list[dict] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict) or not isinstance(row.get("startsAt"), (int, float)):
+                    continue
+                if row["startsAt"] < cutoff:
+                    continue
+                rounds.append(row)
+    except OSError:
+        rounds = []
+    rounds.sort(key=lambda item: item.get("startsAt", 0), reverse=True)
+    rounds = rounds[:_SIM_MAX_ROUNDS]
+
+    distribution: dict[str, int] = {}
+    win_by_firings: dict[str, dict] = {}
+    with_firing = 0
+    max_firings = 0
+    max_round = None
+    pnl4_total = 0.0
+    for row in rounds:
+        firings = int(row.get("firings") or 0)
+        distribution[str(firings)] = distribution.get(str(firings), 0) + 1
+        if firings >= 1:
+            with_firing += 1
+        if firings > max_firings:
+            max_firings = firings
+            max_round = {"roundId": row.get("roundId"), "startsAt": row.get("startsAt"), "firings": firings}
+        bucket = win_by_firings.setdefault(str(firings), {"rounds": 0, "wins": 0})
+        bucket["rounds"] += 1
+        # A "win" here is the simulated first-trigger direction matching the
+        # winner, a crude read of whether firing at all paid off.
+        events = row.get("events") or []
+        if events and row.get("winner") and events[0].get("dir") == row.get("winner"):
+            bucket["wins"] += 1
+        if isinstance(row.get("simPnl4"), (int, float)):
+            pnl4_total += row["simPnl4"]
+    # Fill the distribution with every value 0..max so the chart shows no gaps.
+    for value in range(0, max_firings + 1):
+        distribution.setdefault(str(value), 0)
+    win_rate = {key: round(bucket["wins"] / bucket["rounds"], 4) if bucket["rounds"] else None
+                for key, bucket in win_by_firings.items()}
+    summary = {"rounds": len(rounds), "withFiring": with_firing, "maxFirings": max_firings,
+               "maxRound": max_round, "avgFirings": round(sum(int(r.get("firings") or 0) for r in rounds) / len(rounds), 2)
+               if rounds else 0, "distribution": distribution, "winRateByFirings": win_rate,
+               "simPnl4Total": round(pnl4_total, 3)}
+    return {"schemaVersion": 1, "assetId": asset, "rounds": rounds, "summary": summary}
+
+
 RUN_JOURNALS_KEPT = 20
 
 
@@ -2906,6 +2980,15 @@ def make_handler(root: Path):
                     self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_event_query","stale":true}', 400)
+                return
+            if path == "/api/sim":
+                asset_id = (query.get("assetId") or ["btc"])[0]
+                try:
+                    days = int((query.get("days") or ["10"])[0])
+                except (ValueError, TypeError):
+                    days = 10
+                self._send_json(json.dumps(_api_sim(asset_id, days), ensure_ascii=False,
+                                           allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/rounds":
                 run_id = (_scoped_run_id(query["runId"][0]) if query.get("runId") else _api_run_id())

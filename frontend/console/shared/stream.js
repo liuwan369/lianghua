@@ -9,7 +9,7 @@
 (() => {
   const PUSHABLE = ["/api/markets", "/api/runtime/status", "/api/rounds", "/api/fills", "/api/settlements",
     "/api/events", "/api/account/snapshot", "/api/metrics/summary", "/api/account/status",
-    "/api/runtime/market-pool", "/api/strategy/config", "/api/diagnostics/health"];
+    "/api/runtime/market-pool", "/api/strategy/config", "/api/sim", "/api/diagnostics/health"];
   // A path the page stopped requesting drops out after this. Longer than the
   // slowest poll (account status every 30 s): at 30 s that path left and
   // rejoined the set, and every change reopened the stream.

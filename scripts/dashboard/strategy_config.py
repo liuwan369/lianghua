@@ -24,7 +24,7 @@ SUPPORTED_ASSET_IDS = frozenset({"btc", "eth", "sol", "xrp", "doge", "hype", "bn
 
 def default_config() -> dict:
     return {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
-            "stageShares": [5, 18, 54, 130], "maxStages": 4,
+            "stageShares": [5, 20, 60, 140], "maxStages": 4,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live",
             "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5}

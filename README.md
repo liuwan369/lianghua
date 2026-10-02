@@ -4,11 +4,12 @@
 
 ## 控制台
 
-https://34-242-206-196.sslip.io/console/ （nginx basic auth）。四个页面，都在 `frontend/console/`：
+https://34-242-206-196.sslip.io/console/ （nginx basic auth）。五个页面，都在 `frontend/console/`：
 
 - 自动交易 `auto-trade.html`（首页，`index.html` 跳转到这里）：启动/暂停/停止、当前场盘口、本场持仓与订单、历史订单（按场次）、交易统计、服务器状态、清空数据。
 - 市场 `market.html`：币种目录，选一个币进运行池。
 - 策略 `strategy.html`：策略参数，保存草稿、发布。
+- 模拟交易 `sim.html`：用真实行情回放真实策略，只数每场触发次数（首次 + 每次反转），不下单。看清分布好决定阶梯深度。
 - 设置 `settings.html`：连接诊断、账户检查与保存、控制密码、运行日志。
 
 ## 服务器
