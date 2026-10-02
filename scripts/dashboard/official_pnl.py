@@ -46,11 +46,14 @@ def round_results(snapshot) -> dict | None:
 
     None when the venue data is not available, so callers can say so instead
     of showing zeros."""
-    if not isinstance(snapshot, dict):
+    # A stale snapshot is old data (BUGS A2), and a section whose later pages
+    # failed is a partial list: page 1 of closed positions is sorted by
+    # realised PnL, so it showed all-time -3.56 as +131 (BUGS A1).
+    if not isinstance(snapshot, dict) or snapshot.get("stale") is True:
         return None
     closed = snapshot.get("closed_positions") or {}
     held = snapshot.get("positions") or {}
-    if closed.get("available") is not True or held.get("available") is not True:
+    if any(section.get("available") is not True or section.get("complete") is False for section in (closed, held)):
         return None
     results: dict = {}
     seen = set()

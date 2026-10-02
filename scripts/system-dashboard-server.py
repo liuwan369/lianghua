@@ -70,6 +70,7 @@ _live_cache_at = 0.0
 _live_cache_mtime: int | None = None
 _live_wanted_at = 0.0
 _official_cache: tuple = (None, None)   # (account checked marker, round results)
+_official_last_good: tuple | None = None   # (round results, time) of the last complete venue read
 _ACCOUNT_HISTORY_SECTIONS = frozenset({"trades", "activity", "closed_positions", "order_history", "fees", "rewards", "reconciliation"})
 _account_report: dict | None = None
 _account_report_identity: str | None = None
@@ -2340,23 +2341,39 @@ def _official_results() -> dict | None:
     """Settled round results from the venue's Data API, via the account
     reader's last snapshot (no extra request). Recomputed only when that
     snapshot changes."""
-    global _official_cache
+    global _official_cache, _official_last_good
     reader = account_data()
-    marker = reader._checked
-    if marker and _official_cache[0] == marker:
+    snapshot = reader.snapshot()
+    marker = (reader._checked, snapshot.get("stale") is True)
+    if marker[0] and _official_cache[0] == marker:
         return _official_cache[1]
-    results = official_pnl.round_results(reader.snapshot())
+    results = official_pnl.round_results(snapshot)
+    if results is not None:
+        _official_last_good = (results, time.time())
     _official_cache = (marker, results)
     return results
+
+
+def _official_or_last() -> tuple[dict | None, float | None]:
+    """The venue's results, or its last good ones with their time when the
+    current read is unavailable. Never the ledger's own figures: switching
+    sources made the headline numbers jump between two calculations (BUGS A3)."""
+    results = _official_results()
+    if results is not None:
+        return results, None
+    if _official_last_good is not None:
+        return _official_last_good
+    return None, None
 
 
 def _apply_official(stats: dict, run_id: str, range_name: str, asset_id, market_id=None, round_filter=None) -> dict:
     """Replace the ledger's settled figures with the venue's own (user decision
     2026-10-01). Rounds the engine traded that the venue has not settled yet
     stay as committed cost. Unchanged when the venue data is unavailable."""
-    results = _official_results()
+    results, stale_since = _official_or_last()
     if results is None:
-        return {**stats, "pnl_source": "ledger", "pnl_source_error": "official_data_unavailable"}
+        return {**stats, "pnl_source": "ledger", "pnl_source_error": "official_data_unavailable",
+                "status": "stale", "stale": True}
     traded = _api_ledger().traded_rounds(run_id, range=range_name, asset_id=asset_id)
     start = _range_start_for(range_name)
     if range_name == "run":
@@ -2372,7 +2389,12 @@ def _apply_official(stats: dict, run_id: str, range_name: str, asset_id, market_
     summary = official_pnl.summarize(results, keys)
     unsettled_cost = round(sum(pending.values()), 6)
     settled = summary["settled_pnl"]
-    return {**stats, **summary, "settled_pnl_pending": len(pending),
+    official_stale = {"status": "stale", "stale": True, "pnl_source_error": "official_data_stale",
+                      "pnl_source_as_of": stale_since} if stale_since is not None else {}
+    # Pending settlements follow the same rule as unsettled rounds: traded,
+    # ended, not settled by the venue. The ledger's own count kept a round the
+    # venue redeemed after the engine stopped pending forever (BUGS C2).
+    return {**stats, **summary, **official_stale, "settled_pnl_pending": len(pending), "pending_settlements": len(pending),
             "unsettled_cost": unsettled_cost, "unsettled_rounds": len(pending),
             "exposed_pnl": None if settled is None and not pending else round((settled or 0) - unsettled_cost, 6),
             "pnl_source": "polymarket-data-api",
@@ -2804,7 +2826,8 @@ def make_handler(root: Path):
                     return
                 stats = _apply_official(stats, run_id, requested_range, asset_id, market_id, round_id_filter)
                 metadata = _ledger_metadata(run_id)
-                stale = metadata["stale"] or stats.get("completeness") != "caught_up"
+                # Official figures that are old or missing make the summary stale too (BUGS A3).
+                stale = metadata["stale"] or stats.get("completeness") != "caught_up" or stats.get("stale") is True
                 value = {"schemaVersion": 1, "status": "stale" if stale else "ready",
                          "available": True, **stats, **metadata,
                          "fills": stats.get("fill_count"), "orders": stats.get("order_count"),
@@ -2829,11 +2852,14 @@ def make_handler(root: Path):
                              else _modern_events(event_run_id, query, kinds={"fill"} if path == "/api/fills" else None))
                     if path == "/api/settlements":
                         # Same PnL as the history table: the venue's (official_pnl).
-                        results = _official_results()
+                        results, _ = _official_or_last()
                         for item in value.get("items") or []:
                             official = None if results is None else results.get((item.get("assetId"), str(item.get("roundId"))))
                             item["pnl"] = official["pnl"] if official else None
                             item["pnlSource"] = "polymarket-data-api" if official else None
+                            if official:
+                                item["state"] = "confirmed"
+                                item["accountingState"] = "confirmed"
                     # A new fill changes the wallet balance. Drop the account
                     # cache so the next /api/account/snapshot reflects it instead
                     # of waiting out the refresh interval.
@@ -2858,14 +2884,17 @@ def make_handler(root: Path):
                         round_id=(query.get("roundId") or [None])[0])
                     # A finished round's result is the venue's (official_pnl);
                     # the ledger lists what the engine traded and its cost.
-                    results = _official_results()
+                    results, _ = _official_or_last()
                     for item in data.get("rounds") or []:
                         official = None if results is None else results.get((item.get("assetId"), str(item.get("roundId"))))
                         item["pnl"] = official["pnl"] if official else None
                         item["pnlSource"] = "polymarket-data-api" if official else None
                         if official:
+                            # One state per round: the venue settled it (BUGS C2).
                             item["status"] = "已结算"
                             item["settled"] = True
+                            item["settlementState"] = "confirmed"
+                            item["settlementReason"] = "官方已结算"
                     metadata = _ledger_metadata(run_id)
                     value = {"schemaVersion": 1, "available": True, "source": "ledger", **data,
                              "asOf": metadata.get("asOf"), "stale": metadata["stale"],
