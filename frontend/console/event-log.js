@@ -9,10 +9,10 @@
   panel.innerHTML = `
       <section class="log-panel" aria-labelledby="log-title">
         <div class="panel-heading"><div><p class="eyebrow">\u7CFB\u7EDF\u4E8B\u4EF6</p><h2 id="log-title">\u8FD0\u884C\u65E5\u5FD7</h2></div><div class="log-state"><span class="state-dot"></span><span data-events-state>\u4E8B\u4EF6\u5F85\u63A5\u5165</span><small>\u670D\u52A1\u5668\u6570\u636E</small></div></div>
-        <ol class="log-list" data-overview-log-list aria-live="polite">
+        <ol class="log-list" data-event-log-list aria-live="polite">
           <li class="log-entry"><time>--</time><span class="log-icon neutral-icon">\u2022</span><div><strong>\u8FD0\u884C\u4E8B\u4EF6\u5F85\u540E\u7AEF\u8FD4\u56DE</strong><p>\u672A\u6536\u5230\u670D\u52A1\u5668\u4E8B\u4EF6\uFF0C\u6CA1\u6709\u5047\u6570\u636E\u5C55\u793A</p></div><span class="log-status muted-text">\u5F85\u63A5\u5165</span></li>
         </ol>
-        <div class="log-footer"><span><i class="tiny-dot"></i>\u53EA\u663E\u793A\u5F53\u524D\u8FD0\u884C\u76F8\u5173\u4E8B\u4EF6</span><span>\u5386\u53F2\u4E8B\u4EF6\u653E\u5728\u8BA2\u5355\u4E0E\u8FD0\u884C\u8BB0\u5F55\u4E2D</span></div>
+        <div class="log-footer"><span><i class="tiny-dot"></i>\u53EA\u663E\u793A\u5F53\u524D\u8FD0\u884C\u76F8\u5173\u4E8B\u4EF6</span></div>
       </section>
 `;
   const text = (selector, value) => {
@@ -22,7 +22,7 @@
   const setHtml = (node, value) => { if (node && node.innerHTML !== value) node.innerHTML = value; };
   const renderEvents = (resource) => {
     text("[data-events-state]", resource?.status === "stale" ? "数据过期 · 保留最近事件" : resource?.status === "ready" ? "已读取" : "事件待接入");
-    const list = document.querySelector("[data-overview-log-list]");
+    const list = document.querySelector("[data-event-log-list]");
     if (list) list.classList.toggle("is-stale", resource?.status !== "ready" || resource?.stale === true);
     if (resource?.status !== "ready") return;
     const items = Array.isArray(resource.items) ? resource.items : [];
@@ -142,11 +142,13 @@
   };
   store.subscribe("events", renderEvents);
   // A run-level feed: scoped to the current run, not to one round.
-  var refresh = () => {
+  // Re-read the run each time: loading it once at page load kept showing the
+  // previous run's events after a new run started (BUGS F2).
+  var refresh = () => adapter.loadRuntime().catch(() => null).then(() => {
     const runId = store.getState().runtime?.runId || null;
     return adapter.loadEvents(runId, runId ? { runId } : {}).catch(() => null);
-  };
-  void adapter.loadRuntime().catch(() => null).finally(refresh);
+  });
+  void refresh();
   window.setInterval(() => { if (!document.hidden) void refresh(); }, 15000);
   if (window.PolyPreviewStream) window.PolyPreviewStream.onUpdate("/api/events", () => void refresh());
 })();

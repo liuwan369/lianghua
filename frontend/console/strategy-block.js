@@ -20,7 +20,7 @@
 
     <main class="preview-main strategy-main">
       <header class="preview-header strategy-header">
-        <div class="hero-copy"><p class="eyebrow">策略配置</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip" data-asset-chip>BTC \xB7 5 分钟</span></div><p class="subtitle">\u8C03\u6574\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u89E6\u53D1\u3001\u5206\u9636\u6BB5\u4E70\u5165\u548C\u8FD0\u884C\u8FB9\u754C\u3002</p></div>
+        <div class="hero-copy"><p class="eyebrow">策略配置</p><div class="hero-title-row"><h1>\u7B56\u7565</h1><span class="language-chip" data-asset-chip>BTC \xB7 5 分钟</span></div><p class="subtitle" data-asset-subtitle>调整五分钟反转策略的触发、分阶段买入和运行边界。</p></div>
         <div class="strategy-header-side"><span class="strategy-state-chip"><i></i>后端未连接</span><div class="header-status-grid"><article class="header-status"><span>\u7B56\u7565\u6807\u8BC6</span><strong>btc-reversal</strong></article><article class="header-status"><span>\u5F53\u524D\u7248\u672C</span><strong data-strategy-revision>--</strong></article><article class="header-status"><span>\u8FD0\u884C\u6A21\u5F0F</span><strong>\u5B9E\u76D8\u7B56\u7565</strong></article><article class="header-status"><span>\u751F\u6548\u65F6\u673A</span><strong>未来未创建场次</strong></article></div></div>
       </header>
 
@@ -56,14 +56,14 @@
             </div></div><div class="runtime-note"><span class="info-dot">i</span><span>\u6682\u505C\u65B0\u589E\u4F1A\u4FDD\u7559\u73B0\u6709\u8BA2\u5355\uFF1B\u505C\u6B62\u4F1A\u64A4\u9500\u4F59\u91CF\uFF0C\u5DF2\u6210\u4EA4\u6301\u4ED3\u4FDD\u7559\u3002\u8FD0\u884C\u65F6\u957F\u5728\u4E0B\u6B21\u542F\u52A8\u65F6\u751F\u6548\u3002</span></div>
           </div>
 
-          <div class="strategy-savebar"><span class="save-state" data-save-state>\u5F53\u524D\u6CA1\u6709\u672A\u4FDD\u5B58\u4FEE\u6539</span><div><button type="button" class="secondary-button" data-reset>\u64A4\u9500\u4FEE\u6539</button><button type="button" class="secondary-button" data-reload>重新读取</button><button type="button" class="save-button" data-save>\u4FDD\u5B58\u7B56\u7565\u8349\u7A3F</button><button type="button" class="save-button" data-activate disabled>激活已保存草稿</button></div></div>
+          <div class="strategy-savebar"><span class="save-state" data-save-state>\u5F53\u524D\u6CA1\u6709\u672A\u4FDD\u5B58\u4FEE\u6539</span><div><button type="button" class="secondary-button" data-switch-asset hidden>切换策略币种</button><button type="button" class="secondary-button" data-reset>\u64A4\u9500\u4FEE\u6539</button><button type="button" class="secondary-button" data-reload>重新读取</button><button type="button" class="save-button" data-save>\u4FDD\u5B58\u7B56\u7565\u8349\u7A3F</button><button type="button" class="save-button" data-activate disabled>激活已保存草稿</button></div></div>
           <p class="save-state" data-draft-state role="status">尚无可激活草稿</p>
         </div>
 
         <aside class="strategy-aside">
           <section class="preview-card"><div class="panel-heading"><div><p class="eyebrow">实时预览</p><h2>\u53C2\u6570\u9884\u89C8</h2></div><span class="preview-dot"><i></i>\u5F85\u4FDD\u5B58</span></div><div class="preview-price"><div><span>\u89E6\u53D1\u4EF7</span><strong data-preview-trigger>--</strong></div><span class="preview-arrow">\u2192</span><div><span>\u6700\u9AD8\u4E70\u5165</span><strong data-preview-max>--</strong></div></div><div class="preview-steps"><div class="preview-step-heading"><span>\u5206\u9636\u6BB5\u4E70\u5165\u8BA1\u5212</span><b data-preview-total>--</b></div><ol></ol></div></section>
           <section class="activation-card"><div class="activation-heading"><span class="activation-icon">\u25F7</span><div><h3>\u751F\u6548\u89C4\u5219</h3><p>\u4E0D\u4F1A\u7ACB\u5373\u6539\u53D8\u5F53\u524D\u8FD0\u884C</p></div></div><div class="activation-line"><i class="done"></i><div><strong>保存策略草稿</strong><small>仅保存，不发布、不启动</small></div></div><div class="activation-line"><i></i><div><strong>另行激活草稿</strong><small>当前和已预热场次配置保持不变</small></div></div><div class="activation-line"><i></i><div><strong>\u81EA\u52A8\u4EA4\u6613\u8BFB\u53D6</strong><small>激活后仅影响未来未创建场次</small></div></div></section>
-          <section class="guardrail-card"><div class="guardrail-heading"><span>\u7B56\u7565\u7EA6\u675F</span><b>4 \u9879</b></div><ul><li><i>\u2713</i>\u5355\u4E00 BTC \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565</li><li><i>\u2713</i>\u4EF7\u683C\u4F7F\u7528\u9650\u4EF7\uFF0C\u4E0D\u8FFD\u9AD8</li><li><i>\u2713</i>\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3</li><li><i>\u2713</i>\u4FDD\u5B58\u4E0D\u4F1A\u81EA\u52A8\u542F\u52A8\u4EA4\u6613</li></ul></section>
+          <section class="guardrail-card"><div class="guardrail-heading"><span>\u7B56\u7565\u7EA6\u675F</span><b>4 \u9879</b></div><ul><li><i>\u2713</i><span data-asset-constraint>单一币种五分钟反转策略</span></li><li><i>\u2713</i>\u4EF7\u683C\u4F7F\u7528\u9650\u4EF7\uFF0C\u4E0D\u8FFD\u9AD8</li><li><i>\u2713</i>\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3</li><li><i>\u2713</i>\u4FDD\u5B58\u4E0D\u4F1A\u81EA\u52A8\u542F\u52A8\u4EA4\u6613</li></ul></section>
         </aside>
       </section>
     </main>
@@ -114,20 +114,22 @@
   // The asset comes from the URL / shared config / the server's own published
   // config — never a hardcoded coin. The gate still requires the published
   // config to target this exact asset; it is just no longer BTC-only.
-  const selectedAsset = () => String(
-    core.config.selectedAssetId
-    || new URLSearchParams(window.location.search).get("assetId")
-    || vm.strategyAssetId(resource?.data || {})
-    || "btc"
-  ).toLowerCase();
+  // The published coin is the default. A coin from the URL (the market page's
+  // "go switch the strategy coin") is only used after the operator presses
+  // 切换策略币种: the URL alone used to retarget any save, so a budget edit
+  // after browsing another coin silently switched the traded coin (BUGS F1).
+  let assetSwitchConfirmed = false;
+  const urlAsset = () => String(core.config.selectedAssetId || new URLSearchParams(window.location.search).get("assetId") || "").toLowerCase();
+  const publishedAssetId = () => String(vm.strategyAssetId(resource?.data || {}) || "").toLowerCase();
+  const switchOffered = () => Boolean(urlAsset() && publishedAssetId() && urlAsset() !== publishedAssetId());
+  const selectedAsset = () => (assetSwitchConfirmed && urlAsset()) || publishedAssetId() || urlAsset() || "btc";
   const assetLabel = () => vm.assetSymbol(selectedAsset(), "BTC");
   // Editing needs a published config, not one that already targets the
   // selected coin: requiring a match made switching coins impossible from any
   // page (BUGS P2-18). Saving submits the selected coin; the server's
   // _validate_running_asset rejects a switch while a run is active.
   const hasPublished = () => Array.isArray(published()?.stageShares) && published().stageShares.length > 0;
-  const publishedAsset = () => String(vm.strategyAssetId(published() || {}) || "").toLowerCase();
-  const switchingAsset = () => hasPublished() && publishedAsset() !== selectedAsset();
+  const switchingAsset = () => hasPublished() && publishedAssetId() !== selectedAsset();
   const draft = () => resource?.draft || null;
   const validDraft = () => {
     const value = draft();
@@ -143,6 +145,10 @@
     root.querySelector("[data-save]").disabled = busy || !available;
     root.querySelector("[data-reset]").disabled = busy || !available;
     root.querySelector("[data-reload]").disabled = busy;
+    const switchButton = root.querySelector("[data-switch-asset]");
+    switchButton.hidden = !switchOffered() || assetSwitchConfirmed;
+    switchButton.disabled = busy || !hasPublished();
+    switchButton.textContent = `切换为 ${vm.assetSymbol(urlAsset(), "--")}`;
     root.querySelector("[data-activate]").disabled = busy || dirty || !validDraft() || resource.status !== "ready";
   };
   const updatePreview = () => {
@@ -194,12 +200,14 @@
     resource = next;
     text("[data-strategy-revision]", resource.revision == null ? "--" : `版本 ${resource.revision}`);
     text(".identity-tags .identity-tag:last-child", resource.revision == null ? "已发布版本待读取" : `已发布版本 ${resource.revision}`);
-    text(".strategy-state-chip", resource.status === "ready" ? hasPublished() ? (switchingAsset() ? `已发布 ${vm.assetSymbol(publishedAsset(), "--")} · 将切换为 ${assetLabel()}` : `${assetLabel()} 服务器配置已读取`) : "尚无已发布配置" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
+    text(".strategy-state-chip", resource.status === "ready" ? hasPublished() ? (switchingAsset() ? `已发布 ${vm.assetSymbol(publishedAssetId(), "--")} · 将切换为 ${assetLabel()}` : `${assetLabel()} 服务器配置已读取`) : "尚无已发布配置" : resource.status === "stale" ? "连接中断 · 保留配置和编辑" : "配置待接入");
     // Static template copy said "BTC" regardless of the selected asset, so the
     // page claimed BTC while configuring eth/sol.
     text("[data-asset-chip]", `${assetLabel()} · 5 分钟`);
     text("[data-asset-title]", `${assetLabel()} 五分钟反转`);
     text("[data-asset-copy]", `面向 ${assetLabel()} 五分钟反转策略的交易控制台。`);
+    text("[data-asset-subtitle]", `调整单一 ${assetLabel()} 五分钟反转策略的触发、分阶段买入和运行边界。`);
+    text("[data-asset-constraint]", `单一 ${assetLabel()} 五分钟反转策略`);
     const savedDraft = draft();
     text("[data-draft-state]", validDraft()
       ? `草稿 ${savedDraft.draftId} · ${String(savedDraft.config.assetId || "--").toUpperCase()} · 基于版本 ${savedDraft.expectedRevision} · 未激活`
@@ -222,7 +230,8 @@
     }
     if (!busy && resource.status === "unavailable") setMessage("策略配置不可用，等待接口恢复。");
     if (!busy && resource.status === "ready" && !hasPublished()) setMessage("服务器还没有已发布的策略配置，编辑、保存和激活已停用。");
-    else if (!busy && !dirty && switchingAsset()) setMessage(`当前已发布策略的币种是 ${vm.assetSymbol(publishedAsset(), "--")}。保存并激活后，策略币种将改为 ${assetLabel()}；交易运行中不能切换。`);
+    else if (!busy && !dirty && !assetSwitchConfirmed && switchOffered()) setMessage(`当前策略币种是 ${vm.assetSymbol(publishedAssetId(), "--")}；保存只改参数。要改为 ${vm.assetSymbol(urlAsset(), "--")}，先点「切换为 ${vm.assetSymbol(urlAsset(), "--")}」。`);
+    else if (!busy && !dirty && switchingAsset()) setMessage(`当前已发布策略的币种是 ${vm.assetSymbol(publishedAssetId(), "--")}。保存并激活后，策略币种将改为 ${assetLabel()}；交易运行中不能切换。`);
     else if (!busy && savedDraft && !vm.strategyTargets(savedDraft.config, selectedAsset())) setMessage(`服务器草稿目标不是 ${assetLabel()}，激活已停用；请先在服务器更正草稿。`);
     if (!dirty && !busy && !hasPublished() && !validDraft()) {
       field("trigger").value = "";
@@ -254,6 +263,13 @@
   root.querySelectorAll("[data-preset], [data-remove-preset], [data-add-preset], [data-create-preset]").forEach((button) => {
     button.disabled = true;
     button.title = "参考参数接口尚未提供";
+  });
+  root.querySelector("[data-switch-asset]").addEventListener("click", () => {
+    if (busy || !switchOffered()) return;
+    assetSwitchConfirmed = true;
+    dirty = true;
+    receive(resource);
+    controls();
   });
   root.querySelector("[data-reset]").addEventListener("click", () => {
     if (busy || !published()) return;
@@ -302,15 +318,6 @@
     try {
       const result = await adapter.saveStrategy(payload);
       if (!vm.strategyTargets(result?.config, selectedAsset())) throw new Error(`服务器保存回执没有确认 ${assetLabel()} 目标；输入已保留，不能激活。`);
-      if (result?.published === true) {
-        resource = store.getState().strategy;
-        dirty = false;
-        formConfig = { ...result.config, stageShares: [...result.config.stageShares] };
-        baselineRevision = result.revision;
-        formKey = `revision:${result.revision}`;
-        setMessage("旧版策略接口已保存并发布；启动时使用该服务器版本。现代草稿接口接入后可恢复单独激活。");
-        return;
-      }
       if (result?.accepted === false || typeof result?.draftId !== "string" || !Number.isInteger(result.expectedRevision) || !result.config) throw new Error(result?.message || "接口没有确认草稿已保存；输入已保留。");
       resource = store.getState().strategy;
       dirty = false;

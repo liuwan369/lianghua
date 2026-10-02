@@ -102,5 +102,20 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const stuck = [...written.values()].some((value) => value.includes("策略接口断开"));
   assert.ok(!stuck, "P3-16: after the API recovers the disconnect notice is gone");
 }
+// ---------- settings run log: BUGS F2 ----------
+{
+  let runId = "RUN-OLD";
+  const asked = [];
+  const reply = (url) => {
+    if (url.includes("/api/runtime/status")) return { schemaVersion: 1, asOf: now(), stale: false, status: "running", processRunning: true, processRunningFresh: true, runId, markets: [] };
+    if (url.includes("/api/events")) { asked.push(new URL(url, "http://x").searchParams.get("runId")); return { schemaVersion: 1, asOf: now(), stale: false, items: [] }; }
+    return { schemaVersion: 1, asOf: now(), stale: false, items: [] };
+  };
+  const { window } = page([...shared, "settings-block.js", "event-log.js"], "settings-block-root", reply);
+  await wait(300);
+  runId = "RUN-NEW";                        // a new run starts while the page is open
+  await new Promise((r) => setTimeout(r, 15500));
+  assert.ok(asked.includes("RUN-NEW"), `F2: the run log follows the new run; asked ${[...new Set(asked)]}`);
+}
 console.log("small-fixes OK");
 process.exit(0);

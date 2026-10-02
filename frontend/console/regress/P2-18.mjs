@@ -13,19 +13,27 @@ const config = { assetId: "btc", triggerPrice: 0.67, confirmationPrice: 0.7, max
   roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10, durationMinutes: 0, maxRounds: 3, mode: "live",
   maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
 const posted = [];
+const handlers = new Map();
 const written = new Map(), inputs = [];
 const element = (selector) => {
   const node = new Proxy({ dataset: {}, style: {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    setAttribute() {}, removeAttribute() {}, hasAttribute: () => false, getAttribute: () => null, addEventListener() {}, focus() {},
+    setAttribute() {}, removeAttribute() {}, hasAttribute: () => false, getAttribute: () => null,
+    addEventListener(type, fn) { if (type === "click" && selector) handlers.set(selector, fn); }, focus() {},
     closest: () => element(), insertAdjacentHTML() {}, appendChild() {}, remove() {}, children: [], value: "", disabled: false }, {
     get: (t, k) => k === "textContent" ? written.get(selector) ?? "" : k === "innerHTML" ? "" : k === "querySelector" ? lookup
-      : k === "querySelectorAll" ? (s) => s.includes("[data-field]") ? inputs : [] : k in t ? t[k] : undefined,
+      : k === "value" && selector in formValues ? formValues[selector] : k === "value" && selector === "stage0" ? "5"
+      : k === "querySelectorAll" ? (s) => s.includes("[data-field]") ? inputs : s.includes("[data-stage]") ? [stage] : [] : k in t ? t[k] : undefined,
     set: (t, k, v) => { if (k === "textContent" && selector) written.set(selector, String(v)); else t[k] = v; return true; } });
   return node;
 };
 for (let i = 0; i < 4; i += 1) inputs.push(element(`input${i}`));
 const nodes = new Map();
 const lookup = (s) => { if (!nodes.has(s)) nodes.set(s, element(s)); return nodes.get(s); };
+// A filled-in form, as the operator would leave it.
+const formValues = { '[data-field="trigger"]': "67", '[data-field="confirm"]': "70", '[data-field="maxPrice"]': "70",
+  "[data-stage-count]": "1", "[data-max-stages]": "1", '[data-runtime-field="roundBudget"]': "5",
+  '[data-runtime-field="totalBudget"]': "10", '[data-runtime-field="lossLimit"]': "10", '[data-runtime-field="rounds"]': "3" };
+const stage = element("stage0");
 const window = { location: { search: "?assetId=eth", origin: "http://x", href: "http://x/strategy.html?assetId=eth", pathname: "/strategy.html" },
   addEventListener() {}, removeEventListener() {}, setTimeout, clearTimeout, setInterval, clearInterval, console, URLSearchParams, URL,
   AbortController, history: { replaceState() {} }, navigator: {}, HTMLElement: function () {},
@@ -48,9 +56,19 @@ for (const f of ["shared/preview-core.js", "shared/view-model.js", "shared/previ
 await new Promise((r) => setTimeout(r, 400));
 assert.equal(lookup("[data-save]").disabled, false, "saving is allowed for a different coin");
 assert.ok(inputs.every((input) => input.disabled === false), "inputs are editable");
-const note = [...written.values()].find((value) => value.includes("将改为 ETH")) || "";
-assert.ok(note, "the page says the coin will switch to ETH");
-await window.PolyPreviewAdapter.saveStrategy({ ...config, assetId: "eth" });
-assert.equal(posted.at(-1)?.body?.config?.assetId, "eth", "the draft submits the selected coin");
+// BUGS F1: arriving with ?assetId=eth must not retarget a save by itself.
+const clicks = new Map();
+const offer = [...written.values()].find((value) => value.includes("先点「切换为 ETH」")) || "";
+assert.ok(offer, "the page offers the switch instead of assuming it");
+assert.equal(lookup("[data-switch-asset]").hidden, false, "the switch button is shown");
+const saveHandler = handlers.get("[data-save]"), switchHandler = handlers.get("[data-switch-asset]");
+await saveHandler();
+await new Promise((r) => setTimeout(r, 50));
+assert.equal(posted.at(-1)?.body?.config?.assetId, "btc", "F1: a plain save keeps the published coin");
+// P2-18: after the explicit switch, saving submits the new coin.
+switchHandler();
+await saveHandler();
+await new Promise((r) => setTimeout(r, 50));
+assert.equal(posted.at(-1)?.body?.config?.assetId, "eth", "P2-18: after 切换为 ETH the draft submits ETH");
 console.log("P2-18 OK");
 process.exit(0);

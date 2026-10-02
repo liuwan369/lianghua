@@ -64,7 +64,7 @@
       <section class="latency-panel" aria-labelledby="latency-title">
         <div class="panel-heading compact-heading">
           <div><p class="eyebrow">\u6267\u884C\u5EF6\u8FDF</p><h2 id="latency-title">\u4EA4\u6613\u901F\u5EA6</h2></div>
-          <div class="latency-heading-meta"><span class="sample-dot"></span><span data-latency-state>\u5F53\u524D\u8FD0\u884C p95</span><button type="button" class="quiet-button">\u67E5\u770B\u5168\u90E8\u5EF6\u8FDF</button></div>
+          <div class="latency-heading-meta"><span class="sample-dot"></span><span data-latency-state>\u5F53\u524D\u8FD0\u884C p95</span></div>
         </div>
         <div class="latency-grid">
           <article class="latency-card"><span>\u884C\u60C5\u5230\u51B3\u7B56</span><strong><b data-latency="decision">--</b><em>ms</em></strong><small>\u5B9E\u65F6\u884C\u60C5\u5230\u7B56\u7565\u5224\u65AD\u5B8C\u6210</small></article>
@@ -79,7 +79,7 @@
         <div class="panel-heading">
           <div><p class="eyebrow">\u8FD0\u884C\u5E02\u573A</p><h2 id="market-pool-title">\u5F53\u524D\u8FD0\u884C\u6C60</h2></div>
           <div class="pool-actions">
-            <label class="market-selector" data-market-selector-wrap><span>查看市场</span><select data-market-selector><option value="">等待市场目录</option></select></label>
+
             <a class="pool-link" href="market.html" data-manage-markets>\u7BA1\u7406\u5E02\u573A <span>↗</span></a>
           </div>
         </div>
@@ -113,7 +113,7 @@
               <table class="depth-table asks"><tbody data-depth-asks="up"></tbody></table>
             </section>
             <section class="depth-book down-depth" aria-label="NO \u4E94\u6863\u6DF1\u5EA6">
-              <div class="depth-book-title"><span class="direction-dot down-dot"></span><strong>NO</strong><small>\u5356\u51FA\u65B9\u5411</small></div>
+              <div class="depth-book-title"><span class="direction-dot down-dot"></span><strong>NO</strong><small>买入方向</small></div>
               <table class="depth-table"><thead><tr><th>\u6863\u4F4D</th><th>\u4EF7\u683C</th><th>\u6570\u91CF</th><th>\u6DF1\u5EA6</th></tr></thead><tbody data-depth="down"></tbody></table>
               <div class="depth-divider"><span>\u5356\u51FA</span><span>---</span></div>
               <table class="depth-table asks"><tbody data-depth-asks="down"></tbody></table>
@@ -225,17 +225,10 @@
     }
     return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
   };
-  var renderMarketSelector = function() {
-    var selector = document.querySelector("[data-market-selector]");
-    if (!selector) return;
-    var selectorWrap = document.querySelector("[data-market-selector-wrap]");
-    if (selectorWrap) selectorWrap.hidden = marketAssets.length < 2;
-    html(selector, '<option value="">请选择市场</option>' + marketAssets.map(function(asset) { return `<option value="${window.PolyPreview.format.escape(asset.id)}" title="${window.PolyPreview.format.escape(asset.name)}">${window.PolyPreview.format.escape(asset.symbol)} · ${window.PolyPreview.format.escape(asset.cycle || "5分钟")}</option>`; }).join(""));
-    selector.value = assetById(selectedAssetId) ? selectedAssetId : "";
-    selector.disabled = marketAssets.length === 0;
-  };
+  // The page shows the run pool's coin only. A "查看市场" dropdown here
+  // changed nothing on screen but rewrote ?assetId, which the strategy page then
+  // used to retarget a save (BUGS F1); coins are chosen on the market page.
   var renderMarketPool = function() {
-    renderMarketSelector();
     var enabledAssets = marketPool.desiredIds.map(assetById).filter(Boolean);
     var runningAssets = marketPool.currentIds.map(assetById).filter(Boolean);
     var visibleAssets = [...new Map([...runningAssets, ...enabledAssets].map((asset) => [asset.id, asset])).values()];
@@ -252,12 +245,8 @@
     text("[data-active-market]", activeMarket);
     // The eyebrow said "BTC 五分钟反转" no matter which asset was selected.
     text("[data-asset-eyebrow]", `${vm.assetSymbol(selectedAssetId, "--")} 五分钟反转 · 实盘控制`);
-    text("[data-market-pool-note]", marketPool.stale ? "运行池连接中断 · 保留服务器最近确认配置" : marketPool.pendingDesiredIds ? "变更已提交 · 等待服务器确认运行池" : visibleAssets.length ? "单实例运行一个资产；详情选择只切换查看内容，运行状态以服务器确认结果为准。" : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
+    text("[data-market-pool-note]", marketPool.stale ? "运行池连接中断 · 保留服务器最近确认配置" : marketPool.pendingDesiredIds ? "变更已提交 · 等待服务器确认运行池" : visibleAssets.length ? "单实例运行一个资产（在市场页选择）；运行状态以服务器确认结果为准。" : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
-  var marketSelector = document.querySelector("[data-market-selector]");
-  marketSelector?.addEventListener("change", function(event) {
-    if (event.target.value && event.target.value !== selectedAssetId) store.setSelectedMarket(event.target.value);
-  });
   var snapshotWatermarks = new Map();
   var snapshotExpiryTimer = null;
   var snapshotRefreshTimer = null;
@@ -1331,11 +1320,6 @@
   // Per-round history is served by /api/rounds, aggregated from durable fills,
   // so this panel keeps working after the run stops. Only the buttons without a
   // backing endpoint stay disabled.
-  document.querySelectorAll(".latency-heading-meta .quiet-button").forEach(function(button) {
-    button.disabled = true;
-    button.title = "此详情功能尚未接入";
-    button.textContent += " · 未提供";
-  });
   // Settlement states are internal identifiers; the panel must not leak raw
   // values like "unsupported" to the operator.
   var settlementLabel = function(round) {
