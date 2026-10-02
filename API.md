@@ -40,7 +40,8 @@
 | `/api/events?runId=&cursor=&limit=` | 事件分页 `items[]`、`cursor` |
 | `/api/fills?…` | 成交事件分页（同一成交可能有多条修订） |
 | `/api/settlements?…` | 每场最新结算；`pnl` 取官方结果，`pnlSource` |
-| `/api/sim?assetId=&days=N` | 模拟交易：真实策略在真实行情上每场的触发次数（不碰实盘）。`rounds[]`（最新在前，最多 2000）每项 `{roundId,startsAt,firings,reversals,winner,simPnl4,simPnlAll,events[]}`，`events[]` 每项 `{i,t,dir,ask,shares}`；`summary`：`rounds`、`withFiring`、`maxFirings`、`maxRound`、`avgFirings`、`distribution`（0..max 每个值都有桶，不截断）、`winRateByFirings`、`simPnl4Total`。数据源 `data/sim/<asset>.jsonl` |
+| `/api/sim?assetId=&days=N` | 模拟交易：真实策略在真实行情上每场的触发次数（不碰实盘）。`rounds[]`（最新在前，最多 2000）每项 `{roundId,startsAt,firings,reversals,winner,simPnl4,simPnlAll,events[]}`，`events[]` 每项 `{i,t,dir,ask,shares}`；`summary`：`rounds`、`withFiring`、`maxFirings`、`maxRound`、`avgFirings`、`medianFirings`、`over4`（出手 >4 的场数）、`distribution`（0..max 每个值都有桶，不截断）、`winRateByFirings`、`simPnl4Total`。数据源 `data/sim/<asset>.jsonl` |
+| `/api/sim/overview?days=N` | 模拟交易七币对比：`coins[]`（btc/eth/sol/xrp/doge/hype/bnb）每项 `{assetId,rounds,avgFirings,medianFirings,maxFirings,over4,over4Pct,simPnl4Total}`，逐币复用 `/api/sim` 的 summary |
 | `/api/live` | 采集器快照（引擎发现兜底用） |
 
 ## POST / PUT
@@ -71,6 +72,6 @@
 | `/api/settlements`、`/api/events`、`/api/account/snapshot` | 1 |
 | `/api/metrics/summary`、`/api/account/status`、`/api/runtime/market-pool`、`/api/strategy/config` | 2 |
 | `/api/diagnostics/health` | 5 |
-| `/api/sim` | 10（新一场的结果每 5 分钟才出现一行） |
+| `/api/sim`、`/api/sim/overview` | 10（新一场的结果每 5 分钟才出现一行） |
 
 账本类路径只在 `ledger.sqlite3`/WAL/`snapshot.json` 变了才重渲染；市场路径看采集器文件和账本；账户快照看读取器刷新时间。推送断开时 `shared/stream.js` 让页面退回普通轮询。

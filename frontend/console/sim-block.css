@@ -1,56 +1,101 @@
-.sim-main { display: flex; flex-direction: column; gap: 18px; }
-.sim-caveat {
-  margin-top: 10px; padding: 8px 12px; border-radius: 8px;
-  background: rgba(255, 176, 32, 0.12); border: 1px solid rgba(255, 176, 32, 0.35);
-  color: #ffce7a; font-size: 13px;
+/* 模拟交易页。壳样式来自 settings-block.css（.settings-preview 网格 + 侧栏 + hero），
+   这里只补该页独有的控件、分布图和表格，颜色全部取自既有调色盘。 */
+.sim-main { display: flex; flex-direction: column; gap: 16px; }
+.sim-panel {
+  padding: 18px; border: 1px solid var(--line); border-radius: 11px;
+  background: linear-gradient(145deg, #193555, #12263f); box-shadow: 0 8px 22px #02081466;
 }
-.sim-controls { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
-.sim-field { display: flex; flex-direction: column; gap: 4px; }
-.sim-field label { font-size: 12px; color: var(--muted, #8ea4bf); }
-.sim-field select {
-  min-width: 120px; padding: 8px 10px; border-radius: 8px;
-  background: rgba(13, 27, 46, 0.9); color: #e8f1ff; border: 1px solid rgba(120, 160, 210, 0.3);
-}
-.sim-source { font-size: 12px; color: var(--muted, #8ea4bf); margin-bottom: 8px; }
-.sim-source.sim-error { color: #ff8a8a; }
 
-.sim-bignums { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+/* 控件行：币种/天数药丸 + 更新时间 + 刷新按钮 */
+.sim-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sim-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.sim-pill {
+  padding: 7px 13px; border: 1px solid #345b7c; border-radius: 999px;
+  background: #102944; color: var(--muted); font-size: 12px; transition: .18s ease;
+}
+.sim-pill:hover { border-color: #76b7f6; color: #e7f2ff; }
+.sim-pill.active { border-color: #73b8f4; background: linear-gradient(135deg, #2974b6, #205287); color: #fff; }
+.sim-updated { margin-left: auto; color: var(--muted); font-size: 12px; }
+.sim-updated.sim-error { color: #ff9a9a; }
+
+/* 一句话结论 */
+.sim-conclusion { border-color: #477caf; }
+.sim-conclusion-text { margin: 8px 0 0; color: #f0f6ff; font-size: 16px; line-height: 1.7; }
+.sim-definition { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+/* 四张统计卡 */
+.sim-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .sim-stat {
-  display: flex; flex-direction: column; gap: 6px; padding: 16px;
-  border-radius: 12px; background: rgba(13, 27, 46, 0.75); border: 1px solid rgba(120, 160, 210, 0.18);
+  display: flex; flex-direction: column; gap: 5px; padding: 15px;
+  border: 1px solid #345b7c; border-radius: 10px; background: #102944;
 }
-.sim-stat span { font-size: 13px; color: var(--muted, #8ea4bf); }
-.sim-stat strong { font-size: 30px; color: #e8f1ff; line-height: 1; }
-.sim-stat small { font-size: 12px; color: var(--muted, #8ea4bf); }
-.sim-stat-max { border-color: rgba(96, 196, 255, 0.5); background: rgba(16, 46, 74, 0.8); }
-.sim-stat-max strong { color: #6fd0ff; }
+.sim-stat > span { color: var(--muted); font-size: 12px; }
+.sim-stat strong { color: #edf7ff; font-size: 28px; line-height: 1.05; }
+.sim-stat small { color: var(--faint); font-size: 11px; line-height: 1.4; }
+.sim-stat-warn { border-color: #765e32; background: #30291a; }
+.sim-stat-warn strong { color: var(--amber); }
 
-.sim-dist, .sim-rounds {
-  padding: 16px; border-radius: 12px; background: rgba(13, 27, 46, 0.6);
-  border: 1px solid rgba(120, 160, 210, 0.16);
+/* 分布图：横向条 */
+.sim-legend { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 14px; color: var(--muted); font-size: 12px; }
+.sim-key { display: inline-block; width: 13px; height: 13px; border-radius: 3px; margin-right: 2px; vertical-align: -2px; }
+.sim-key.sim-zero { background: #43607d; }
+.sim-key.sim-ladder { background: var(--blue); }
+.sim-key.sim-over { background: var(--amber); }
+.sim-chart-head, .sim-row {
+  display: grid; grid-template-columns: 96px minmax(0, 1fr) 64px 64px 128px;
+  align-items: center; gap: 10px;
 }
-.sim-chart {
-  display: flex; align-items: flex-end; gap: 4px; min-height: 160px;
-  overflow-x: auto; padding-top: 20px;
-}
-.sim-bar { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-width: 22px; flex: 1 0 auto; height: 150px; }
-.sim-bar-fill { width: 70%; min-height: 2px; background: linear-gradient(180deg, #6fd0ff, #2f7fd0); border-radius: 3px 3px 0 0; }
-.sim-bar-count { font-size: 11px; color: #cfe3ff; height: 14px; }
-.sim-bar-label { font-size: 11px; color: var(--muted, #8ea4bf); margin-top: 4px; }
+.sim-chart-head { padding: 0 0 7px; color: var(--faint); font-size: 11px; border-bottom: 1px solid #294b68; }
+.sim-chart { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.sim-row { padding: 3px 0; font-size: 12px; }
+.sim-row-label { color: #cfe0f2; }
+.sim-row-track { height: 15px; border-radius: 4px; background: #0b1c30; overflow: hidden; }
+.sim-row-track i { display: block; height: 100%; border-radius: 4px; }
+.sim-row-count { color: #edf7ff; font-weight: 600; }
+.sim-row-pct, .sim-row-cum { color: var(--muted); }
+.sim-row.sim-zero .sim-row-track i { background: #43607d; }
+.sim-row.sim-ladder .sim-row-track i { background: linear-gradient(90deg, #3d8ed0, var(--blue)); }
+.sim-row.sim-over .sim-row-track i { background: linear-gradient(90deg, #c79a3f, var(--amber)); }
+.sim-row.sim-over .sim-row-label, .sim-row.sim-over .sim-row-count { color: var(--amber); }
+.sim-row-empty { opacity: .4; }
 
-.sim-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-.sim-table th, .sim-table td { padding: 8px 10px; text-align: left; font-size: 13px; border-bottom: 1px solid rgba(120, 160, 210, 0.12); }
-.sim-table th { color: var(--muted, #8ea4bf); font-weight: 600; }
-.sim-firings { font-weight: 700; color: #6fd0ff; }
-.sim-expand {
-  padding: 4px 10px; border-radius: 6px; cursor: pointer;
-  background: rgba(96, 196, 255, 0.14); color: #cfe3ff; border: 1px solid rgba(96, 196, 255, 0.3);
+/* 表格（对比 + 明细） */
+.sim-scroll { overflow-x: auto; }
+.sim-table { width: 100%; border-collapse: collapse; margin-top: 4px; min-width: 560px; }
+.sim-table th, .sim-table td { padding: 9px 10px; text-align: left; font-size: 12px; border-bottom: 1px solid #294b68; white-space: nowrap; }
+.sim-table thead th { color: var(--faint); font-weight: 600; }
+.sim-table tbody th { color: #edf7ff; font-weight: 600; }
+.sim-coin-row { cursor: pointer; transition: .15s ease; }
+.sim-coin-row:hover, .sim-coin-row:focus-visible { background: #163c70; outline: none; }
+.sim-coin-row.active { background: #1b3c5f; box-shadow: inset 3px 0 #78b7ff; }
+.sim-firings { font-weight: 700; color: var(--blue); }
+.sim-firings.sim-warn, .sim-warn { color: var(--amber); }
+.sim-up { color: var(--green); }
+.sim-down { color: #ff9a9a; }
+.sim-chips { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.sim-chip { padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #26394d; color: #a6bbce; }
+.sim-chip.sim-up { background: rgba(140, 240, 188, 0.16); color: var(--green); }
+.sim-chip.sim-down { background: rgba(255, 154, 154, 0.16); color: #ff9a9a; }
+.sim-chip.sim-more { background: #16304d; color: var(--muted); }
+.sim-expand { padding: 4px 11px; font-size: 11px; }
+.sim-detail-row td { background: #0b1c30; }
+.sim-events { list-style: none; margin: 0; padding: 4px 0; display: flex; flex-direction: column; gap: 4px; }
+.sim-events li { color: #cfe0f2; font-size: 12px; }
+.sim-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 14px; color: var(--muted); font-size: 12px; }
+.sim-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 18px 0; }
+.sim-footnote {
+  margin: 2px 0 0; padding: 11px 13px; border: 1px solid #665a38; border-radius: 8px;
+  background: #2e281b; color: #cdbb8e; font-size: 12px; line-height: 1.6;
 }
-.sim-detail-row td { background: rgba(8, 18, 32, 0.6); }
-.sim-events { list-style: none; margin: 0; padding: 6px 0; display: flex; flex-direction: column; gap: 4px; }
-.sim-events li { display: flex; gap: 14px; font-size: 12px; color: #cfe3ff; align-items: center; }
-.sim-ev-i { color: var(--muted, #8ea4bf); min-width: 36px; }
-.sim-ev-dir { padding: 1px 7px; border-radius: 10px; font-size: 11px; }
-.sim-ev-up { background: rgba(70, 200, 130, 0.18); color: #6fe0a0; }
-.sim-ev-down { background: rgba(255, 110, 110, 0.18); color: #ff9a9a; }
-.sim-empty { color: var(--muted, #8ea4bf); font-size: 13px; padding: 16px 0; text-align: center; }
+.sim-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+@media (max-width: 820px) {
+  .sim-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sim-chart-head { display: none; }
+  .sim-row { grid-template-columns: 78px minmax(0, 1fr) 52px; }
+  .sim-row-pct, .sim-row-cum { display: none; }
+  .sim-updated { margin-left: 0; width: 100%; order: 9; }
+}
+@media (max-width: 520px) {
+  .sim-stats { grid-template-columns: 1fr; }
+}

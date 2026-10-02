@@ -130,6 +130,8 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 
 ## 策略 `btc-reversal`
 
+> 改策略参数或逻辑前，先读 [STRATEGY-RESEARCH.md](STRATEGY-RESEARCH.md)：回测结论（现有规则在录制数据上没有优势）和回测踩过的坑。
+
 默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,18,54,130]`、`maxStages 4`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结，本场到结束都用这份。

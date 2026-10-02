@@ -83,6 +83,32 @@ class SimApi(unittest.TestCase):
         self.assertEqual(out["summary"]["rounds"], 1, "the ancient round is outside the day window")
         self.assertEqual(out["summary"]["maxFirings"], 3)
 
+    def test_median_in_summary(self):
+        base = 1_799_900_100
+        write_rounds(self.sim_dir, "btc", [
+            {"asset": "btc", "roundId": str(base + i), "startsAt": base + i, "firings": f, "events": []}
+            for i, f in enumerate([1, 1, 2, 5, 67])])
+        self.assertEqual(server._api_sim("btc", 3650)["summary"]["medianFirings"], 2)
+
+    def test_overview_lists_seven_coins(self):
+        base = 1_799_900_100
+        write_rounds(self.sim_dir, "btc", [
+            {"asset": "btc", "roundId": str(base + i), "startsAt": base + i, "firings": f,
+             "simPnl4": 0.5, "events": []}
+            for i, f in enumerate([0, 1, 2, 4, 5, 67])])
+        coins = server._api_sim_overview(3650)["coins"]
+        self.assertEqual([c["assetId"] for c in coins], ["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"])
+        btc = coins[0]
+        self.assertEqual(btc["rounds"], 6)
+        self.assertEqual(btc["maxFirings"], 67)
+        self.assertEqual(btc["medianFirings"], 3)
+        self.assertEqual(btc["over4"], 2)
+        self.assertAlmostEqual(btc["over4Pct"], 33.3, places=1)
+        self.assertAlmostEqual(btc["simPnl4Total"], 3.0, places=3)
+        self.assertEqual(coins[1]["rounds"], 0)
+        self.assertEqual(coins[1]["over4Pct"], 0)
+        self.assertEqual(coins[1]["medianFirings"], 0)
+
     def test_bad_asset_rejected(self):
         with self.assertRaises(ValueError):
             server._api_sim("../etc", 10)

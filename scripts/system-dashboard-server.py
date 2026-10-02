@@ -2489,11 +2489,32 @@ def _api_sim(asset_id: str, days: int) -> dict:
         distribution.setdefault(str(value), 0)
     win_rate = {key: round(bucket["wins"] / bucket["rounds"], 4) if bucket["rounds"] else None
                 for key, bucket in win_by_firings.items()}
+    counts = sorted(int(r.get("firings") or 0) for r in rounds)
+    middle = len(counts) // 2
+    median = (counts[middle] if len(counts) % 2 else (counts[middle - 1] + counts[middle]) / 2) if counts else 0
     summary = {"rounds": len(rounds), "withFiring": with_firing, "maxFirings": max_firings,
-               "maxRound": max_round, "avgFirings": round(sum(int(r.get("firings") or 0) for r in rounds) / len(rounds), 2)
-               if rounds else 0, "distribution": distribution, "winRateByFirings": win_rate,
+               "maxRound": max_round, "avgFirings": round(sum(counts) / len(counts), 2) if counts else 0,
+               "medianFirings": median, "over4": sum(1 for value in counts if value > 4),
+               "distribution": distribution, "winRateByFirings": win_rate,
                "simPnl4Total": round(pnl4_total, 3)}
     return {"schemaVersion": 1, "assetId": asset, "rounds": rounds, "summary": summary}
+
+
+_SIM_COINS = ("btc", "eth", "sol", "xrp", "doge", "hype", "bnb")
+
+
+def _api_sim_overview(days: int) -> dict:
+    """One summary row per coin for the 模拟交易 comparison table."""
+    coins = []
+    for asset in _SIM_COINS:
+        summary = _api_sim(asset, days)["summary"]
+        rounds = summary["rounds"]
+        coins.append({"assetId": asset, "rounds": rounds, "avgFirings": summary["avgFirings"],
+                      "medianFirings": summary["medianFirings"], "maxFirings": summary["maxFirings"],
+                      "over4": summary["over4"],
+                      "over4Pct": round(summary["over4"] * 100 / rounds, 1) if rounds else 0,
+                      "simPnl4Total": summary["simPnl4Total"]})
+    return {"schemaVersion": 1, "days": days, "coins": coins}
 
 
 RUN_JOURNALS_KEPT = 20
@@ -2981,14 +3002,14 @@ def make_handler(root: Path):
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_event_query","stale":true}', 400)
                 return
-            if path == "/api/sim":
+            if path in ("/api/sim", "/api/sim/overview"):
                 asset_id = (query.get("assetId") or ["btc"])[0]
                 try:
-                    days = int((query.get("days") or ["10"])[0])
+                    days = max(1, min(int((query.get("days") or ["10"])[0]), 3650))
                 except (ValueError, TypeError):
                     days = 10
-                self._send_json(json.dumps(_api_sim(asset_id, days), ensure_ascii=False,
-                                           allow_nan=False).encode("utf-8"))
+                value = _api_sim_overview(days) if path == "/api/sim/overview" else _api_sim(asset_id, days)
+                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/rounds":
                 run_id = (_scoped_run_id(query["runId"][0]) if query.get("runId") else _api_run_id())
