@@ -8,7 +8,8 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync, exist
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { MarketRecorder, recordedBook, beijingDay } from "../../dist/cli/market-recorder.js";
+import { MarketRecorder, recordedBook } from "../../dist/cli/market-recorder.js";
+import { accountDayKey as beijingDay } from "../../dist/live/account-day.js";
 
 const dir = mkdtempSync(join(tmpdir(), "rec-"));
 const now = 1_790_870_000;  // 2026-10-02 07:33 Beijing

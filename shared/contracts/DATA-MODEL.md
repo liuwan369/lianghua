@@ -22,13 +22,13 @@
 
 `{ assets, desiredIds, currentIds, nextRoundIds, updatedAt, source }`
 
-`desiredIds/currentIds/nextRoundIds` 是服务器确认的资产 ID 列表，不能将浏览器选择当作已确认配置；当前控制面运行时支持集合为 `btc`、`eth`、`sol`，`btc` 仍兼容旧调用方。运行时未声明可交易能力的资产必须显示为 unavailable/disabled，不能由账本猜测或放行；单实例运行池只能有一个资产。
+`desiredIds/currentIds/nextRoundIds` 是服务器确认的资产 ID 列表，不能将浏览器选择当作已确认配置；当前控制面运行时支持集合为 `btc`、`eth`、`sol`、`xrp`、`doge`、`hype`、`bnb`（`scripts/dashboard/strategy_config.py` 的 `SUPPORTED_ASSET_IDS`），`btc` 仍兼容旧调用方。运行时未声明可交易能力的资产必须显示为 unavailable/disabled，不能由账本猜测或放行；单实例运行池只能有一个资产。
 
 ### OrderBookViewModel
 
 `{ marketId, roundId, yes: { bids, asks }, no: { bids, asks }, sequence, sourceAt, expiresAt, stale }`
 
-采集器持久化的 canonical paired snapshot 可提供同一对象的五档和 freshness 字段，但它只用于只读展示，`strategyEligible=false`；只有交易运行时 accepted snapshot 才能作为策略可用输入。缺少 canonical snapshot 时，legacy best bid/ask 不能伪造成五档；实时流能力尚未提供。
+采集器持久化的 canonical paired snapshot 可提供同一对象的五档和 freshness 字段，但它只用于只读展示，`strategyEligible=false`；只有交易运行时 accepted snapshot 才能作为策略可用输入。缺少 canonical snapshot 时，legacy best bid/ask 不能伪造成五档。实时推送走 `/api/stream`（SSE，`scripts/dashboard/push.py`）。
 
 ### RoundPositionViewModel
 
@@ -44,7 +44,7 @@
 
 价格单位固定为 USD 概率（0 到 1）或固定为 cents，二者不能混用。当前设计稿输入是 cents、预览显示 USD，接入时必须在 adapter 统一成一种。
 
-草稿单独持久化并带 `draftId`；保存草稿不改变运行版本。激活请求使用 `expectedRevision/draftId`，成功发布返回 `activationScope="future_uncreated_round"`，仅影响尚未创建的未来场次。当前及已预热场次继续使用冻结版本。`effectiveRoundId` 只能省略或为 `null`，指定场次激活尚未提供。旧 `PUT /api/strategy-config` 仍是保存即发布。
+草稿单独持久化并带 `draftId`；保存草稿不改变运行版本。激活请求使用 `expectedRevision/draftId`，成功发布返回 `activationScope="future_uncreated_round"`，仅影响尚未创建的未来场次。当前及已预热场次继续使用冻结版本。`effectiveRoundId` 只能省略或为 `null`，指定场次激活尚未提供。
 
 ### SystemHealthViewModel / AccountViewModel / ActivityEventViewModel
 
@@ -62,7 +62,7 @@
 
 成本在成交时已经支出，收益要等结算确认，所以"已成交未结算"的场次成本已知、收益未知，必须单独暴露而不能从统计里省略：省略会把亏损显示成盈利，是交易面板最危险的错误方向。`unsettled_cost/unsettled_rounds/exposed_pnl` 承担这个职责，`exposed_pnl` 与已确认 `pnl` 并列，结算确认后两者收敛。同理，个别场次算不出盈亏时要报告已知部分并用 `settled_pnl_pending` 标注未知场次数，不能因为一场缺值就隐藏整体数字。
 
-统计区分 `settled_wins/settled_losses/settled_draws/pending_settlements`；`abs(pnl) <= 1e-9` 为平局，胜率仅计算 `wins / (wins + losses)`，分母为零时为 `null`。`range=run` 为当前运行；`today/month/all` 汇总同一账户已投影的实盘运行，账户标识未知时仅统计当前运行，`today` 按 UTC 当日、`month` 按 UTC 当月一日起的事件时间过滤。汇总不能宣称为账户完整历史。
+统计区分 `settled_wins/settled_losses/settled_draws/pending_settlements`；`abs(pnl) <= 1e-9` 为平局，胜率仅计算 `wins / (wins + losses)`，分母为零时为 `null`。`range=run` 为当前运行；`today/month/all` 汇总同一账户已投影的实盘运行，账户标识未知时仅统计当前运行，`today` 按北京时间（UTC+8）当日、`month` 按北京时间当月一日起的事件时间过滤（`scripts/dashboard/ledger.py` 的 `RISK_DAY_TZ`）。汇总不能宣称为账户完整历史。
 
 延迟样本是按 run 的诊断数据，重跑即可再生，因此只保留最近若干个确实含样本的 run（`LATENCY_RUN_RETENTION`），更早的 run 整体删除，不做聚合归档。删除只释放到 SQLite freelist，可回收比例较大时在 ingest 事务外单独 `VACUUM` 回收磁盘。清理只在 ingest 时触发，重启本身不会改变体积。
 
@@ -74,8 +74,8 @@
 
 浏览器中的 `PolyPreviewStore` 不存放秘密，只保存可展示状态：
 
-- `marketCatalog`：BTC 当前场次、报价元数据。
-- `marketPool`：服务器确认的固定 BTC 运行状态。
+- `marketCatalog`：所配置币种的当前场次、报价元数据。
+- `marketPool`：服务器确认的运行池状态（策略只交易配置的一个币种）。
 - `runtime`：运行状态、来源、过期标记和按市场摘要。
 - `strategy`、`account`、`diagnostics`、`metrics`、`events`：各自独立更新。
 

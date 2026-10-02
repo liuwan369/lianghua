@@ -10,6 +10,7 @@
 import { createWriteStream, mkdirSync, readdirSync, statSync, unlinkSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 import { constants, createGzip, type Gzip } from "node:zlib";
+import { accountDayKey } from "../live/account-day.js";
 
 /** One recorded book event. Short keys keep ~100 events/s affordable. */
 export interface RecordedBook {
@@ -29,8 +30,6 @@ export interface MarketRecorderOptions {
   now?: () => number;
 }
 
-const BEIJING_OFFSET_SEC = 8 * 3600;
-export const beijingDay = (unixSec: number): string => new Date((unixSec + BEIJING_OFFSET_SEC) * 1000).toISOString().slice(0, 10);
 
 export class MarketRecorder {
   private readonly streams = new Map<string, { day: string; gzip: Gzip; file: WriteStream }>();
@@ -53,7 +52,7 @@ export class MarketRecorder {
   }
 
   record(book: RecordedBook): void {
-    const day = beijingDay(book.t);
+    const day = accountDayKey(book.t);
     let entry = this.streams.get(book.a);
     if (!entry || entry.day !== day) {
       entry?.gzip.end();
@@ -76,7 +75,7 @@ export class MarketRecorder {
 
   /** Delete day files older than retentionDays (by the date in the name). */
   prune(): void {
-    const keepFrom = beijingDay(this.now() - this.options.retentionDays * 86400);
+    const keepFrom = accountDayKey(this.now() - this.options.retentionDays * 86400);
     let assets: string[];
     try { assets = readdirSync(this.options.directory); } catch { return; }
     for (const asset of assets) {

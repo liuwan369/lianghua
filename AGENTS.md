@@ -20,8 +20,8 @@
 **所有工作的入口是 [WORK-PLAN.md](WORK-PLAN.md)**，不只是 BUGS.md。它按依赖顺序收齐了全部任务，最前面有文档地图。要做的分四块，一块都不能漏：
 
 1. **修 bug**：[BUGS.md](BUGS.md) 全部未修复条目（带 P 编号）。怎么修按 [FIX-PROCESS.md](FIX-PROCESS.md) 的车道和 7 步流程。
-2. **推送改造**：[PUSH-ARCHITECTURE.md](PUSH-ARCHITECTURE.md)，轮询改 SSE 推送（WORK-PLAN 阶段 D）。
-3. **界面重构**：[UI-REDESIGN.md](UI-REDESIGN.md)，合并页面、删总览、历史订单按场次、三个控制按钮状态、市场页单币预选（WORK-PLAN 阶段 G）。
+2. **推送改造**（已完成）：[PUSH-ARCHITECTURE.md](PUSH-ARCHITECTURE.md)，轮询改 SSE 推送（WORK-PLAN 阶段 D）。
+3. **界面重构**（已完成，G1-G7）：[UI-REDESIGN.md](UI-REDESIGN.md)，合并页面、删总览、历史订单按场次、三个控制按钮状态、市场页单币预选（WORK-PLAN 阶段 G）。
 4. **真多币并行**：UI-REDESIGN.md 第 7 节（WORK-PLAN 阶段 H），动交易核心，**必须等 L4 风控和 L6 策略验证完**。
 
 **顺序**：先 WORK-PLAN 定"先做哪条"，再按 FIX-PROCESS 的车道动手。前端 `frontend/console/**` 的 bug 修复和界面重构**由同一个 agent 一起做**：两者改同一批代码（尤其 `auto-trade-block.js`），分开做等于重写两遍。

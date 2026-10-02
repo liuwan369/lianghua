@@ -183,7 +183,7 @@ async function fetchBySlug(slug: string, asset: string, signal?: AbortSignal): P
  * collector is available. This endpoint never places orders; it only supplies
  * the current market identifiers collected from Gamma. */
 async function fetchFromCollector(asset: string, signal?: AbortSignal): Promise<Candidate | undefined> {
-  const base = process.env.PM_LIVE_URL ?? "http://127.0.0.1:8765/api/live";
+  const base = process.env.PM_LIVE_URL ?? "http://127.0.0.1:18766/api/live";
   try {
     // The local collector is the low-latency source on the trading host. Keep
     // this probe short so a stale/unavailable dashboard cannot delay discovery.

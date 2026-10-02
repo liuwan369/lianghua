@@ -295,7 +295,7 @@
     /**
      * `ranges` limits which windows are fetched. Auto-trade only renders the
      * current run's latency histogram, so it passes ["run"] instead of paying for
-     * the today aggregate it never reads; overview needs both.
+     * the today aggregate it never reads.
      */
     async loadMetrics(runId, ranges = ["today", "month", "run"]) {
       return readSlice("metrics", async () => {

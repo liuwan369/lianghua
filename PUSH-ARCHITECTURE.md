@@ -190,7 +190,7 @@ nginx 日志里 2 小时 20 分钟、一个浏览器就发了 1 万多次请求�
 | **5. 前端数据池补块** | `frontend/console/shared/preview-store.js` | 新增 position、orders 两块 | — |
 | **6. 前端推送客户端** | `frontend/console/shared/api-adapter.js`（或新 `stream.js`） | `EventSource` 连 `/api/stream`，收到哪块就写进数据池哪块；断开退回轮询 | 断网/重启控制面后自动恢复 |
 | **7. 自动交易页改订阅** | `frontend/console/auto-trade-block.js` | 那 6 块从"拿返回值画"改成"订阅数据池画"；保留现有的身份校验（`matchesIdentity`、`contextVersion`） | 逐块对比，推送前后显示一致 |
-| **8. 其他页面** | `overview-block.js`、`market-block.js` | 已经订阅数据池，只需确认推送能驱动 | — |
+| **8. 其他页面** | `market-block.js`（总览页 `overview-block.js` 已删除） | 已经订阅数据池，只需确认推送能驱动 | — |
 | **9. 收尾** | 各页 | 轮询间隔拉长成兜底；删掉 `ws-client.js`；`/api/bootstrap` 改成支持推送 | 请求量对比，确认白拉的请求基本消失 |
 
 ## 7. 后期改前端方不方便

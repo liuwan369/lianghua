@@ -23,7 +23,7 @@
 | 应用能力与版本 | GET | `/api/bootstrap` | 页面首次加载 |
 | 市场目录 | GET | `/api/markets?assetId=btc&asset=crypto&duration=5m` | `assetId` 可选过滤；运行时 accepted snapshot 优先；采集器 canonical paired snapshot 只读展示 |
 | 单市场快照 | GET | `/api/markets/{marketId}/snapshot` | 首次加载/断线恢复 |
-| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前控制面支持 `btc/eth/sol`，单实例只能选择一个。`currentIds` 和 `effectiveRoundId` 仅在运行时新鲜且运行中时填充，否则为空/`null`；`nextRoundIds` 目前恒为空数组（服务器未实现下一场预告），前端不得据此推断下一场。`btc` 是兼容别名，未知资产拒绝保存 |
+| 运行池 | GET/PUT | `/api/runtime/market-pool` | 服务器持久化规范化 `assetId` 列表；当前控制面支持 `btc/eth/sol/xrp/doge/hype/bnb`，单实例只能选择一个。`currentIds` 和 `effectiveRoundId` 仅在运行时新鲜且运行中时填充，否则为空/`null`；`nextRoundIds` 目前恒为空数组（服务器未实现下一场预告），前端不得据此推断下一场。`btc` 是兼容别名，未知资产拒绝保存 |
 | 运行状态 | GET | `/api/runtime/status` | 首次加载、断线恢复 |
 | 交易控制 | POST | `/api/runtime/commands` | start/pause/stop，带 requestId |
 | 控制会话 | POST | `/api/trading/auth/session` | 用 `X-PM-Control-Token` 换取控制会话 cookie；前端 `openControlSession()` 调用 |
@@ -50,6 +50,8 @@
 
 统计响应提供规范字段 `fill_count`、`order_count`、`fill_notional`、`fees`、`estimated_fees`、`settled_markets`、`pnl`、`pnl_semantics`、`settled_wins`、`settled_losses`、`settled_draws`、`pending_settlements`、`settled_pnl_pending`、`win_rate`、`unsettled_cost`、`unsettled_rounds` 和 `exposed_pnl`（驼峰别名 `unsettledCost`、`unsettledRounds`、`exposedPnl`）。资本在成交时已经支出，收益只有结算确认后才可证明，所以只报已结算盈亏会把"已花钱但未确认"的场次当成没交易过，等于把亏损显示成盈利。`exposed_pnl` = 已确认盈亏 − 未结算场次的已投入成本，与 `pnl` 并列显示；结算确认后该场次移出 `unsettled_rounds`，两个数字自动收敛，全部确认后相等。`settled_pnl` 报告**已知**部分而不是因为个别场次缺盈亏就整体隐藏，未知场次数由 `settled_pnl_pending` 同时给出。为旧控制台保留 `fills=fill_count`、`orders=order_count`、`wins=settled_wins`、`losses=settled_losses`；`orders` 必须使用订单生命周期计数，不能用成交数代替。`fees` 只包含已确认费用，`estimated_fees` 单独保留运行时估算费用，不把估算费用当成已确认费用。
 
+已结算盈亏以交易所 Data API 为准：服务器在账本统计之上用 `scripts/dashboard/official_pnl.py` 的结果替换已结算字段（`_apply_official`），此时 `pnl_source="polymarket-data-api"`、`pnl_semantics="venue_realized_pnl_net_of_fees"`；`pending_settlements`、`settled_pnl_pending` 和 `unsettled_rounds` 都是"已交易、已收盘、交易所还没报结果"的场次数。交易所数据不可用时退回账本口径，`pnl_source="ledger"`、`pnl_source_error="official_data_unavailable"`、`stale=true`；沿用上次成功的交易所结果时 `stale=true`、`pnl_source_error="official_data_stale"`，`pnl_source_as_of` 给出该结果的时间。
+
 费用来源分三级，只有第三级才算估算。Polymarket 的费用是**撮合时即确定的公式值**，不是事后结算数字：`fee = C × feeRate × p × (1 - p)`，四舍五入到 5 位小数，crypto 市场 taker 费率 0.07、maker 0，makers 不收费（见 <https://docs.polymarket.com/polymarket-learn/trading/fees>）。因此：
 
 - `fee_source="reported"`：交易所在成交回报里直接给出的费用，最权威。实测 maker 成交为 0。
@@ -60,7 +62,7 @@
 
 无当前 run 或统计投影尚未建立时，`/api/metrics/summary` 使用 HTTP 200 和 `status="unavailable"`、`available=false`、`stale=true`、`completeness="unavailable"`（投影等待时为 `waiting`）；金额、计数、胜率及 `asOf` 为 `null`。投影查询成功后返回 `available=true`；若尚未追上 journal，仍可带最后投影值并同时标记 stale。账户保存回执 `{ok:true,report:{saved:true,...}}` 仅表示配置已保存；其中 `account_check_ready`、`live_start_ready` 和 `settlement_credentials_ready` 独立表达检查/启动资格，保存成功不代表账户已检查通过。
 
-`platform_settlement` 只有 `state=confirmed` 且 `payout_verified=true` 才计入已确认结算，同一结算重复记录不重复计数。`pnl` 是已确认结算净盈亏，不是钱包现金对账；只有完整的已确认成交、实际手续费及已核实结算款齐全，且平台持仓快照可核对成交成本时才给数值，否则为 `null`。`abs(pnl) <= 1e-9` 为平局，不计失败；胜率分母仅包含盈亏已确定的胜局与负局，无结果或平局不进入分母，分母为零时 `win_rate=null`。
+`platform_settlement` 只有 `state=confirmed` 且 `payout_verified=true` 才计入已确认结算，同一结算重复记录不重复计数。`pnl_source="ledger"` 时，`pnl` 是已确认结算净盈亏，不是钱包现金对账；只有完整的已确认成交、实际手续费及已核实结算款齐全，且平台持仓快照可核对成交成本时才给数值，否则为 `null`。`abs(pnl) <= 1e-9` 为平局，不计失败；胜率分母仅包含盈亏已确定的胜局与负局，无结果或平局不进入分母，分母为零时 `win_rate=null`。
 
 账本从交易运行时 `platform_status.runtime.markets` 取得身份映射：`marketId` 是 conditionId，`roundId` 是运行时明确提供的 BTC 五分钟边界标识。`market.name`/`market_slug` 只是兼容显示字段，不能在缺少 `roundId` 时代填。`order`/`fill` 事件即使只带 `market_slug`，也会在映射到达后补齐两个字段；结算事件即使只带 `market_id`，也会补齐 `round_id`。映射尚未发布时标识保持 `null`，不得用事件时间或当前场次猜测旧订单所属轮次。运行重启后同一账户的成交汇总按 `trade_id + order_id` 的经济身份去重，账户之间不合并；单次 journal 的 `event_id` 只用于事件记录去重，不能作为跨运行成交身份。
 
@@ -70,7 +72,7 @@
 
 订单 DTO 包含订单状态及其 `fills`。持仓 DTO 包含 `available`、`yesShares`、`noShares`、`averagePrice`、`occupiedUsd` 和按结果的 `outcomePnl`，找不到对应场次时为 unavailable；只有来源明确确认的零持仓才可表示 empty。运行时快照存放在 `platform_runtime`，每个 run **只保留一行最新快照**，因此交易停止后历史场次在快照中不再存在；此时持仓 DTO 改由成交记录回落，返回 `source="fills"` 并给出 `totalShares`、`averagePrice`、`occupiedUsd`、`fees`、`settlementState`、`creditedUsd`。成交记录无法区分多空分腿，所以 `yesShares/noShares` 为 `null` 而不是断言零。前端必须把 `source="fills"` 当成可渲染的历史数据，不能当成读取失败而清空面板——这与"只有明确确认的零持仓才可表示 empty"是同一条规则。`/api/fills` 返回成交 journal 修订记录，同一经济成交可能有多条状态/费用修订；每条记录必须保留 `tradeId/orderId/tradeStatus/feeUsd`（同时兼容 snake_case），不能将各页记录直接累加为成交金额；汇总以 `trade_id + order_id` 去重后的投影结果为准。`/api/settlements` 每场只返回最新结算状态，包含 `state/payout_verified/pnl/accounting_state/pnl_error`；有成交场次的 `accounting_state` 为 `confirmed` 或 `pending`，`pnl_error` 为 `payout_unverified`、`cost_basis_unverified` 或 `null`。明确确认无成交且无持仓的场次使用 `accounting_state=no_trade`、`pnl_error=no_trade`、`redemption_required=false`，表示无需赎回而不是待结算，不伪造 `payout_verified` 或 `pnl`。
 
-市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。每行还返回 `supported` 和 `canEnable`（两者都等于「`assetId` 属于服务器支持集合」，当前支持集为 `btc/eth/sol`）以及 `current`（本场是否正在进行）和 snake_case 兼容的 `market_id`/`round_id`。`canEnable` 是前端判断能否加入运行池的实际依据；前端不猜测资格，缺少该字段即视为不可启用。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；每行还返回 `collector_online/healthy/quote_fresh/stale/strategyEligible`，顶层 `collector_online` 表示至少一行健康，`partial` 表示同批次存在健康和失效资产。采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`depthAvailable=true` 还要求 YES/NO 五档完整且各自 `depthExpiresAt`（如提供）晚于当前时间；过期深度不能冒充可用五档。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
+市场目录返回 `assetId/symbol/name/marketId/roundId/cycle/startAt/endAt/yesToken/noToken/yesBid/yesAsk/noBid/noAsk/volume/liquidity/quoteAt/sourceAt/expiresAt/enabled/nextRound`，并在有 canonical paired snapshot 时保留 `yes/no/orderBook/sequence/depthAvailable/strategyEligible`。每行还返回 `supported` 和 `canEnable`（两者都等于「`assetId` 属于服务器支持集合」，当前支持集为 `btc/eth/sol/xrp/doge/hype/bnb`）以及 `current`（本场是否正在进行）和 snake_case 兼容的 `market_id`/`round_id`。`canEnable` 是前端判断能否加入运行池的实际依据；前端不猜测资格，缺少该字段即视为不可启用。采集器文件的 `current_markets[*].snapshot`（兼容 `paired_snapshot`）必须包含 `marketId/roundId/sequence/sourceAt/expiresAt/YES/NO`；每行还返回 `collector_online/healthy/quote_fresh/stale/strategyEligible`，顶层 `collector_online` 表示至少一行健康，`partial` 表示同批次存在健康和失效资产。采集器快照即使新鲜也始终 `strategyEligible=false`，只有交易运行时 accepted snapshot 才能表示策略可用。`depthAvailable=true` 还要求 YES/NO 五档完整且各自 `depthExpiresAt`（如提供）晚于当前时间；过期深度不能冒充可用五档。`marketId` 是 Polymarket conditionId，未知时为 `null`，不得用 slug 冒充；`roundId` 是运行时或 canonical 快照明确提供的 BTC 五分钟起始 Unix 边界字符串，未知时为 `null`，不能从 `name/slug` 或当前时间推导。两者在行情、运行状态、订单、持仓与事件中保持一致。不要让页面直接使用旧的 `up_bid/down_bid` 字段。
 
 `name` 是后端 slug（例如 `btc-updown-5m-1790647800`），是身份字段而不是展示字段：直接当标题会把时间戳怼给用户。前端视图模型据此派生 `label`（例如 `BTC 5分钟 · 10:20 场`）和 `closeText`（本地时分），标题与列表用派生值，完整 slug 降到副行保留可追溯性。派生字段随场次翻滚变化，必须参与行重绘比对键，否则行会停留在上一场的时间。同理 `endAt` 是 Unix 秒，任何界面都不能原样显示。
 
@@ -119,8 +121,8 @@ await PolyPreviewAdapter.commandRuntime({ action: "start", strategyId, revision,
 await PolyPreviewAdapter.saveStrategy(draft);
 ```
 
-adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。数据源只有后端一个：不存在预览/演示模式（`demo` 在配置展开之后被硬编码为 `false`，外部配置无法开启），后端未连接时显示 unavailable/stale，不模拟成功，也不把本地草稿当成服务器运行状态。`preview-core.js` 里的 `storage` 已无任何调用方，运行池、行情、持仓、订单和账户都不写入浏览器本地存储。
+adapter 完成 DTO 转换后写入 `PolyPreviewStore`，页面只订阅对应分片。数据源只有后端一个：不存在预览/演示模式（`demo` 在配置展开之后被硬编码为 `false`，外部配置无法开启），后端未连接时显示 unavailable/stale，不模拟成功，也不把本地草稿当成服务器运行状态。运行池、行情、持仓、订单和账户都不写入浏览器本地存储。
 
 共享层文件名和全局对象仍带 `preview`/`PolyPreview` 前缀，这只是历史命名，不表示预览环境；生产就是用这些名字。
 
-策略 presets、指定场次激活、逐笔撤单、flatten 和实时流尚未接通，展示为不可用，不模拟成功。运行池编辑已接通（`capabilityDetails.editMarketPool=true`，GET/PUT `/api/runtime/market-pool` 可用），不属于这一类。账户页面只读取服务器保存状态；账户秘密不进入 DTO、浏览器存储或日志，如需更换账户，由服务器环境配置或部署系统完成。
+策略 presets、指定场次激活、逐笔撤单和 flatten 尚未接通，展示为不可用，不模拟成功。运行池编辑已接通（`capabilityDetails.editMarketPool=true`，GET/PUT `/api/runtime/market-pool` 可用），不属于这一类。账户页面只读取服务器保存状态；账户秘密不进入 DTO、浏览器存储或日志，如需更换账户，由服务器环境配置或部署系统完成。

@@ -14,28 +14,6 @@
     listeners.set(name, list);
     return () => listeners.set(name, list.filter((item) => item !== fn));
   };
-  const safeJson = (value) => {
-    try { return JSON.stringify(value); } catch { return null; }
-  };
-  const storage = {
-    read(key, fallback) {
-      try {
-        const value = JSON.parse(window.localStorage.getItem(key) || "null");
-        if (value && value.version === VERSION) return value.data;
-        // One-time compatibility for the earlier raw preview object.
-        return value && typeof value === "object" ? value : fallback;
-      } catch { return fallback; }
-    },
-    write(key, data) {
-      try {
-        const value = safeJson({ version: VERSION, data });
-        if (value) window.localStorage.setItem(key, value);
-        emit(`storage:${key}`, data);
-        return true;
-      } catch { return false; }
-    },
-    remove(key) { try { window.localStorage.removeItem(key); } catch {} }
-  };
   const request = async (path, options = {}) => {
     // A pushed body is what this GET would return right now (shared/stream.js).
     if ((options.method || "GET").toUpperCase() === "GET" && window.PolyPreviewStream) {
@@ -271,5 +249,5 @@
   // Backend is the default. Preserve an explicitly supplied mode for hosts
   // that use it as metadata, while keeping local/demo data disabled.
   const config = { apiBase: "", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, mode: "backend", ...runtimeConfig, demo: false };
-  window.PolyPreview = Object.freeze({ VERSION, config, api, storage, request, createResource, format, NAV_ITEMS, navMarkup, bindNav, navigate, setSelectedAssetUrl, on, emit });
+  window.PolyPreview = Object.freeze({ VERSION, config, api, request, createResource, format, NAV_ITEMS, navMarkup, bindNav, navigate, setSelectedAssetUrl, on, emit });
 })();

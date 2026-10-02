@@ -748,9 +748,8 @@
     var confirmed = scoped.filter(function(fill) { return String(fill.tradeStatus || fill.trade_status || fill.status || "").toUpperCase() !== "FAILED"; });
     // The fills endpoint intentionally exposes journal revisions (MATCHED ->
     // MINED -> CONFIRMED). Keep those rows available to the detail view, but
-    // make the headline match the economic fill count used by the ledger. Use the
-    // shared dedup so this count cannot disagree with the overview page: it keys
-    // on trade+order+market+round and drops rows without market/round identity
+    // make the headline match the economic fill count used by the ledger. The
+    // shared dedup keys on trade+order+market+round and drops rows without market/round identity
     // instead of counting them per row.
     var deduped = vm.uniqueFills({ fills: confirmed }, ledgerContext());
     var economicCount = deduped.count == null ? 0 : deduped.count;
@@ -914,9 +913,8 @@
       // round change).
       if (!reason && action === "pause" && (!runtimeActive || stopping)) reason = stopping ? "交易进程正在停止" : "没有运行中的交易进程";
       if (!reason && action === "stop" && (!runtimeActive || stopping)) reason = stopping ? "停止请求已提交，等待进程退出" : "没有运行中的交易进程";
-      // Shared start ladder: same order and wording as the overview page so the
-      // two cannot disagree. This page's freshness fact is its dedicated snapshot
-      // poll rather than the catalog row.
+      // Shared start ladder (vm.startBlockReason). This page's freshness fact is
+      // its dedicated snapshot poll rather than the catalog row.
       var initialPool = store.canInitializeMarketPool(marketPool);
       var poolSelected = marketPool.desiredIds.includes(context.assetId);
       var catalogReason = vm.catalogItemStartReason(catalog, asset);

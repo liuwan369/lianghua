@@ -1,6 +1,6 @@
 # 系统技术架构
 
-Polymarket 五分钟反转实盘系统。本文件是**唯一的架构基准**：任何 AI 或人接手前先读完它，改动后同步更新它。旧文档（`shared/contracts/*`、`frontend/console/docs/*`）只作接口细节参考，冲突时以本文件和代码为准。
+Polymarket 五分钟反转实盘系统。本文件是**唯一的架构基准**：任何 AI 或人接手前先读完它，改动后同步更新它。旧文档（`shared/contracts/*`）只作接口细节参考，冲突时以本文件和代码为准。
 
 最后核对：2026-09-29，版本 `640a419`。行号会随代码变化漂移，以函数名为准。
 
@@ -144,7 +144,7 @@ Linux 发 SIGTERM。引擎依次：暂停 → 撤掉所有挂单 → 对账 → 
 
 ### 连接保活（`640a419` 已上线）
 
-- **问题**：Node 默认 dispatcher 连接空闲 4 秒就关，而每轮只下一单、相隔 300 秒，所以每单都要重新握手（冷 80–139ms，热 24–29ms）。SDK 的 25 秒心跳走 axios，是另一条连接，保不住下单这条。
+- **问题**：Node 默认 dispatcher 连接空闲 4 秒就关，而每轮只下一单、相隔 300 秒，所以每单都要重新握手（冷 80–139ms，热 24–29ms）。SDK 的心跳（5 秒一次）走 axios，是另一条连接，保不住下单这条。
 - **修法**：`live/clob/client.ts` 的 `installKeepAliveTransport()` 把 undici `Agent`（keepAliveTimeout 60s）装成全局 dispatcher，外加每 30 秒 `touchTransport()` 发一次 GET `/time`。探针验证：空闲 300 秒后仍复用同一条连接，34.6ms。
 - **不能踩的坑**：
   - **必须用 `Agent`，不能用 `Pool`**。Pool 只绑一个域名，而全局 fetch 还要访问 Gamma、data-api、RPC、relayer，换成 Pool 这些全部断掉。
@@ -205,9 +205,11 @@ Linux 发 SIGTERM。引擎依次：暂停 → 撤掉所有挂单 → 对账 → 
 ## 7. 结算与账本
 
 - **结算**：每 15 秒扫一遍已收盘的市场。跳过还有挂单或成交未终结的市场；等市场判定后，经 collateral adapter 调 `redeemPositions` 赎回。每个钱包同时只有一笔待确认交易。能识别场馆的自动赎回（它常比我们早一个块）。停机时最多再等 5 分钟把结算跑完。
-- **Journal**：`results/live/dashboard-<run_id>.jsonl`，只追加，不 fsync。记录 order、fill、latency、settlement、status 等事件。
+- **Journal**：`results/live/dashboard-<run_id>.jsonl`，只追加，不 fsync。记录 order、fill、latency、settlement、status 等事件。每个盘口的延迟指标按 1/10 抽样（`PER_BOOK_LATENCY_SAMPLE_EVERY`）。
+- **磁盘**：控制面启动新 run 前只保留最新 20 个 run 的 journal 及其附属文件（`RUN_JOURNALS_KEPT`），结算记录和 platform-state 不删。
+- **进程隔离**：引擎跑在独立的 systemd scope `pm-engine-<run_id>` 里，重启控制面不会停掉引擎。
 - **账本**：`results/dashboard/ledger.sqlite3`，由投影进程写，控制面只读。主要表：`runs`、`events`、`order_details`、`trade_details`、`settlement_details`、`latency_samples`、`platform_runtime`。
-- **PnL**：只统计已验证的结算。`pnl = 实际到账 − Σ(买入金额 + 手续费)`。这是引擎口径，不等于钱包对账口径。
+- **PnL**：已结算盈亏以交易所 Data API 为准（见 §8「已结算盈亏的来源」）：`/api/metrics/summary` 经 `_apply_official` 用 `scripts/dashboard/official_pnl.py` 的结果替换账本的已结算数字，返回 `pnl_source="polymarket-data-api"`；交易所数据取不到时退回账本口径（只统计已验证结算，`pnl = 实际到账 − Σ(买入金额 + 手续费)`），返回 `pnl_source="ledger"`、`pnl_source_error="official_data_unavailable"`、`stale=true`；沿用上次成功的交易所结果时带 `stale=true`、`pnl_source_error="official_data_stale"` 和 `pnl_source_as_of`。
 
 ---
 
@@ -295,7 +297,7 @@ python scripts/deploy-reversal-release.py     # 不带参数，部署当前 HEAD
 
 ### 验证方式
 
-本地只能跑 `npm run typecheck` 和 `npm run build`，项目**没有测试框架**。真实验证必须在服务器上做：
+本地能跑 `npm run typecheck`、`npm run build` 和回归脚本（无测试框架，都是独立脚本）：`backend/engine/scripts/check-*.mjs` 与 `backend/engine/scripts/regress/*.mjs`（node，先 `npm run build`）、`scripts/regress/*.py`（python）、`frontend/console/regress/*.mjs`（node）。真实交易链路验证必须在服务器上做：
 
 ```
 ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196
@@ -313,7 +315,7 @@ curl -s http://127.0.0.1:18766/api/runtime/status        # 必须在服务器内
 | 用户 WS PING / 重连 | 10s / 2s | `feeds/user.ts` |
 | 策略报价最大年龄 / 两边时间差 | 2s / 1.5s | 策略配置 |
 | 下单超时 | 3s | `DEFAULT_ORDER_TIMEOUT_MS` |
-| SDK 心跳 | 25s | `startHeartbeat` |
+| SDK 心跳 / 单次超时 | 5s / 2s | `startHeartbeat`（25s 会让场馆撤掉全部挂单，BUGS P1-12） |
 | 下单连接保活 idle / touch | 60s / 30s | `TRANSPORT_*` |
 | 市场发现 / 换轮预热 | 15s / 提前 10s | `cli/platform.ts` |
 | 结算扫描 | 15s | 同上 |

@@ -8,9 +8,24 @@ import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { loadAccountConfig } from "./account.js";
 import { inspectWalletAddress } from "./clob/wallet.js";
-import type { ExternalCashFlow, PositionRelease } from "./account-equity.js";
 
 type Row = Record<string, unknown>;
+
+export interface ExternalCashFlow {
+  id: string;
+  kind: 'deposit' | 'withdrawal';
+  amountMicrousd: number;
+  atMs: number;
+  confirmed: boolean;
+}
+
+export interface PositionRelease {
+  conditionId: string;
+  assetId: string;
+  fromQuantityMicros: number;
+  toQuantityMicros: number;
+  evidenceId: string;
+}
 export interface Section { available: boolean; complete: boolean; items: Row[]; pages: number; checked_at: string; error_code?: string; value?: number; source: string; snapshot_token?: string }
 type Getter = (path: string, params?: Record<string, string>) => Promise<unknown>;
 const endCursor = "LTE=";

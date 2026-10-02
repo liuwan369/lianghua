@@ -218,7 +218,7 @@
     if (!assetId || String(target) !== String(assetId)) return "激活策略与所选市场不一致，请切换市场或重新激活策略";
     return "";
   };
-  // Single source for account balances. Overview and auto-trade previously used
+  // Single source for account balances. Pages previously used
   // different field chains, so the same snapshot could show a number on one page
   // and "--" on the other. `runtime` is the optional runtime slice used as a last
   // resort for the available figure.
@@ -310,7 +310,7 @@
     return { running: "运行中", starting: "启动中", paused: "已暂停", stopping: "停止中",
       stopped: "已停止", failed: "运行失败", idle: "空闲", unavailable: "运行状态不可用" }[key] || "";
   };
-  // Shared account-readiness ladder. Overview and auto-trade previously kept
+  // Shared account-readiness ladder. Pages previously kept
   // byte-identical copies of this chain, which is how their error dictionaries
   // drifted apart. `resource` is the accountStatus slice ({status, stale, error,
   // data}). Returns "" when the account is cleared to start.
@@ -333,11 +333,9 @@
     return "";
   };
   /**
-   * Single source for the start-gate ladder. Overview and auto-trade each kept a
-   * copy in a different order with different wording, so the two pages could
-   * disagree about whether trading may start. Callers pass their own
-   * `snapshotFresh` fact (overview judges the catalog row, auto-trade its
-   * dedicated snapshot poll) plus the store slices; the order and the messages
+   * Single source for the start-gate ladder. Callers pass their own
+   * `snapshotFresh` fact (auto-trade judges its dedicated snapshot poll) plus
+   * the store slices; the order and the messages
    * live here. Returns "" when every gate passes.
    */
   const startBlockReason = (input = {}) => {

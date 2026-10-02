@@ -31,9 +31,9 @@
 
 ---
 
-## 2. 测试怎么写（仓库现在没有测试框架）
+## 2. 测试怎么写（不用测试框架，都是独立脚本）
 
-仓库目前只有三个检查脚本：`backend/engine/scripts/check-order-path.mjs`、`check-l2-headers.mjs`、`check-redundant-feed.mjs`。它们直接用 dist 里的真实模块，只假造网关，已经证明这种写法有效：P0-2、P1-7 都是用它的框架复现出来的。
+回归测试分四处：`backend/engine/scripts/check-*.mjs` 和 `backend/engine/scripts/regress/*.mjs`（node，先 `npm run build`）、`scripts/regress/*.py`（python）、`frontend/console/regress/*.mjs`（node）。引擎脚本直接用 dist 里的真实模块，只假造网关：P0-2、P1-7 都是这样复现出来的。
 
 **不引入新测试框架**，沿用这个写法：
 

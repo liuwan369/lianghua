@@ -1,12 +1,12 @@
 import type { AccountSnapshot, Book, CashFlowTracking, CancellationSource, CoreOptions, CoreState, ExecutionTiming, GatewayAck, Instrument, MarketInfo, OrderRecord,
   OrderRequest, Position, RiskView, TradeFill, TradingEvent, VenueStateSource } from "./contracts.js";
+import { accountDayKey as dayOf } from "../live/account-day.js";
 
 const EPS = 1e-8;
 const active = (order: OrderRecord) => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status);
 const reservationPending = (order: OrderRecord) => active(order) || order.reconciliationPending === true;
 const copy = <T>(value: T): T => structuredClone(value);
 const finite = (value: number) => Number.isFinite(value);
-const dayOf = (ts: number) => new Date(ts * 1000 + 8 * 3600_000).toISOString().slice(0, 10);
 /** Marks a caller-demanded halt. Deliberately avoids the word "reconciliation"
  * so no substring test can mistake it for one this core may clear on its own. */
 const OPERATOR_HALT_SUFFIX = "operator halt requires manual release";
