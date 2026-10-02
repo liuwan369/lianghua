@@ -161,7 +161,11 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     if (stopped) return Promise.resolve();
     const now = deps.now();
     const next = target ?? (Math.floor(now / MARKET_WINDOW_SEC) + 1) * MARKET_WINDOW_SEC;
-    const jobs = assets.flatMap(asset => (target == null ? [now, next] : [next]).map(at => {
+    // The periodic pass looks up only the current round. Asking for the next
+    // one too opened its sockets ~296 s early (Gamma lists it as soon as the
+    // current round starts), bypassing the 75 s prewarm and doubling sockets
+    // and reconnect churn (BUGS M1). scheduleBoundaryDiscovery owns the next.
+    const jobs = assets.flatMap(asset => (target == null ? [now] : [next]).map(at => {
       const key = `${asset}:${Math.floor(at / MARKET_WINDOW_SEC)}`;
       const existing = discoveryJobs.get(key);
       if (existing) return existing;

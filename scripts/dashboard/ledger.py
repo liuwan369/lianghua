@@ -2296,6 +2296,11 @@ class Ledger:
             for run in runs:
                 try:
                     pending = max(0, Path(run["path"]).stat().st_size - run["byte_offset"])
+                except FileNotFoundError:
+                    # An old run's journal pruned by retention: its rows are
+                    # final, not stale. Retention never removes the newest
+                    # runs, so a missing file is never a run still being read.
+                    pending = 0
                 except OSError:
                     pending = None
                 stale |= bool(run["source_error"] or run["invalid_records"] or pending is None or pending)

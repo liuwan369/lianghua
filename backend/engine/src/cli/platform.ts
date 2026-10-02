@@ -25,6 +25,8 @@ export const SHUTDOWN_STAGE_MAX_MS = 30_000;
 const BEST_EFFORT_LATENCY_METRICS = new Set([
   "book_batch_apply", "book_processing", "market_age", "strategy_decision", "ws_receive_to_decision",
 ]);
+const PER_BOOK_LATENCY_SAMPLE_EVERY = 10;
+const perBookLatencySeen = new Map<string, number>();
 
 export function countActiveOrders(state: Pick<CoreState, "orders" | "quarantinedOrderIds">): number {
   return state.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
@@ -709,8 +711,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         market_id: event.marketId ?? null, token_id: event.tokenId ?? null,
         strategy_id: event.strategyId ?? null, client_order_id: event.clientOrderId ?? null,
         order_id: event.orderId ?? null, outcome: event.outcome ?? null, engine_ts: event.ts };
-      if (BEST_EFFORT_LATENCY_METRICS.has(event.metric)) journal?.writeTelemetry("latency", fields);
-      else journal?.write("latency", fields);
+      if (BEST_EFFORT_LATENCY_METRICS.has(event.metric)) {
+        // Per-book metrics were 64% of the journal (69-113 MB/h while trading).
+        // One in ten still gives thousands of samples per run for the p50/p95
+        // the console shows (second audit, journal growth).
+        const seen = (perBookLatencySeen.get(event.metric) ?? 0) + 1;
+        perBookLatencySeen.set(event.metric, seen);
+        if (seen % PER_BOOK_LATENCY_SAMPLE_EVERY === 1) journal?.writeTelemetry("latency", fields);
+      } else journal?.write("latency", fields);
     } else if (event.kind === "error") {
       if (event.code === "order_abandoned") {
         journal?.write("order_abandoned", { client_order_id: event.clientOrderId ?? null,

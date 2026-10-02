@@ -31,7 +31,7 @@ export const PM_WS_RECONNECT_BASE_MS = 250;
 export const PM_WS_RECONNECT_MAX_MS = 30_000;
 const PM_WS_MAX_CLOCK_SKEW_MS = 1_000;
 const PM_WS_WATCHDOG_INTERVAL_MS = 1_000;
-const PM_WS_RECONNECT_STABLE_MS = 30_000;
+const PM_WS_RECONNECT_STABLE_MS = 3_000;
 
 export interface WatchdogState {
   nowMs: number;
@@ -701,7 +701,8 @@ function runSingleSocketFeed(
             lastUpAtMs, lastDownAtMs, lastUpSourceStaleAtMs, lastDownSourceStaleAtMs,
             hasCompleteBook });
           if (!reason) return;
-          console.warn(`polymarket feed watchdog terminating stale socket: ${reason}`);
+          console.warn(`polymarket feed watchdog terminating stale socket: ${reason}`
+            + ` round=${identity.roundId ?? "-"} market=${identity.marketId?.slice(0, 10) ?? "-"}`);
           hasCompleteBook = false;
           setConnected(false);
           ws.terminate();
@@ -898,6 +899,12 @@ function runSingleSocketFeed(
                 lastDownSourceStaleAtMs = 0;
               }
               if (sourceFresh) {
+                // A fresh pair a few seconds into the connection proves this
+                // socket works: start backoff over. Waiting for 30 s connected
+                // never happened on quiet books the 5 s watchdog kills first,
+                // so backoff climbed to its 30 s cap (second audit, collector
+                // gaps). The short minimum keeps a socket the venue closes
+                // right after its snapshot from reconnecting every 250 ms.
                 if (atMs - connectedAtMs >= PM_WS_RECONNECT_STABLE_MS) reconnectAttempt = 0;
                 lastFreshBilateralAtMs = Math.min(atMs, upExchangeMs, downExchangeMs);
               }
@@ -1026,7 +1033,7 @@ function runSingleSocketFeed(
 
       if (alive && nowUnix() < deadline) {
         const delayMs = reconnectDelayMs(reconnectAttempt++);
-        console.warn(`polymarket feed dropped, reconnecting in ${Math.round(delayMs)}ms`);
+        console.warn(`polymarket feed dropped, reconnecting in ${Math.round(delayMs)}ms round=${identity.roundId ?? "-"}`);
         try {
           await delay(Math.min(delayMs, Math.max(0, (deadline - nowUnix()) * 1000)),
             undefined, { signal: stopSignal.signal });
