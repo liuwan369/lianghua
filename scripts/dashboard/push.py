@@ -1,4 +1,4 @@
-"""Server-sent push for the console (PUSH-ARCHITECTURE.md).
+"""Server-sent push for the console (ARCHITECTURE.md, push).
 
 A browser subscribes to the exact REST paths it would otherwise poll. Each
 distinct path is rendered by the real GET handler, so a pushed body is the REST

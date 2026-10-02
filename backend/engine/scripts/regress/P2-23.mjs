@@ -1,4 +1,4 @@
-// BUGS.md P2-23 (found in the batch 2 live run): once a round's settlement was
+// P2-23 (found in the batch 2 live run): once a round's settlement was
 // confirmed, every 15 s pass settled it again. The adapter answered from its
 // record, but the CLI ran connection.recoverAccount() on every "confirmed",
 // and each recovery emits account_recovery_started, which resets the

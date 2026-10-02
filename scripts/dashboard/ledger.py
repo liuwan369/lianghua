@@ -1073,12 +1073,6 @@ class Ledger:
                 db.execute("UPDATE settlement_details SET market_id=?,round_id=?,payload=? WHERE run_id=? AND asset_id=? AND market=?",
                            (event.get("market_id"), event.get("round_id"), payload, run_id, asset_id, row["market"]))
 
-    def list_runs(self, *, limit=100):
-        limit = max(1, min(int(limit), 200))
-        with self._connect() as db:
-            return [dict(row) for row in db.execute(
-                "SELECT run_id,mode,account_id,config_revision,created_at FROM runs ORDER BY created_at DESC LIMIT ?", (limit,))]
-
     @staticmethod
     def _fingerprints(source, offset, prefix_length):
         source.seek(0)
@@ -2328,25 +2322,6 @@ class Ledger:
                     "pnl_semantics": "engine_settlement_net_of_fees; not_wallet_reconciliation",
                     "completeness": "incomplete" if stale else "caught_up", "lag_bytes": lag,
                     "error": "statistics projection incomplete" if stale else None}
-
-    def list_runs_page(self, *, before_id=None, limit=50, account_id=None):
-        """Return a bounded, stable page of runs without reading journal files."""
-        limit = max(1, min(int(limit), 200))
-        with self._connect() as db:
-            args = []
-            clause = ""
-            if before_id is not None:
-                clause = " WHERE rowid < ?"
-                args.append(int(before_id))
-            if account_id is not None:
-                clause += " AND " if clause else " WHERE "
-                clause += "lower(account_id)=lower(?)"
-                args.append(account_id)
-            args.append(limit + 1)
-            rows = list(db.execute("""SELECT rowid AS id,run_id,mode,account_id,config_revision,created_at
-                FROM runs""" + clause + " ORDER BY rowid DESC LIMIT ?", args))
-            runs = [dict(row) for row in rows[:limit]]
-            return {"runs": runs, "next_before_id": runs[-1]["id"] if len(rows) > limit else None}
 
     def run_account_id(self, run_id):
         """Return the durable account owner for access control checks."""

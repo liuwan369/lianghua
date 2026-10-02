@@ -1,5 +1,3 @@
-import { Side } from "../models.js";
-
 const GAMMA = "https://gamma-api.polymarket.com";
 export const DEFAULT_MARKET_ASSET = "btc";
 const FIVE_MINUTES_SEC = 300;
@@ -32,10 +30,6 @@ export interface Market {
   downToken: string;
   start: number;
   end: number;
-}
-
-export function marketToken(mkt: Market, side: Side): string {
-  return side === Side.Up ? mkt.upToken : mkt.downToken;
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {

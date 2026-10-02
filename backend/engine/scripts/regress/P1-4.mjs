@@ -1,4 +1,4 @@
-// BUGS.md P1-4, engine half: winning rounds almost never got a PnL. The venue
+// P1-4, engine half: winning rounds almost never got a PnL. The venue
 // usually auto-redeems a winner before we do; that payout was found and stored
 // (settlements.json creditedPusd 5000000) but without its transaction hash, so
 // result() reported payoutVerified=false and dropped creditedUsd, and the

@@ -1,4 +1,4 @@
-// BUGS.md P1-5 (root cause of P2-19): when the wallet already holds 0 of a
+// P1-5 (root cause of P2-19): when the wallet already holds 0 of a
 // round's tokens, live-settlement's zero-balance branch recognises that the
 // venue's auto-redeem relayer cashed them out and returns "confirmed" -- but it
 // never writes state.records[key] nor calls save(). The next poll therefore has

@@ -26,22 +26,20 @@ ENGINE_ROOT = "backend/engine/"
 FRONTEND_ROOT = "frontend/console/"
 CONTROL_SCRIPTS_ROOT = "scripts/"
 CONTROL_CONFIG_ROOT = "config/"
-PROGRAM_PREFIXES = (ENGINE_ROOT + "src/", FRONTEND_ROOT, CONTROL_SCRIPTS_ROOT, CONTROL_CONFIG_ROOT, "shared/contracts/")
+PROGRAM_PREFIXES = (ENGINE_ROOT + "src/", FRONTEND_ROOT, CONTROL_SCRIPTS_ROOT, CONTROL_CONFIG_ROOT)
 ENGINE_METADATA = {ENGINE_ROOT + name for name in (".env.example", "README.md", "package.json", "package-lock.json")}
 GENERATED_PREFIXES = (ENGINE_ROOT + "dist/",)
 
 
 def target_name(source: str) -> str | None:
     if (source.startswith(ENGINE_ROOT) or source.startswith(FRONTEND_ROOT)
-            or source.startswith(CONTROL_SCRIPTS_ROOT) or source.startswith(CONTROL_CONFIG_ROOT)
-            or source.startswith("shared/contracts/")):
+            or source.startswith(CONTROL_SCRIPTS_ROOT) or source.startswith(CONTROL_CONFIG_ROOT)):
         return source
     return None
 
 
 def release_path(name: str) -> bool:
-    return (name.startswith(PROGRAM_PREFIXES) or name.startswith(FRONTEND_ROOT)
-            or name.startswith("shared/contracts/") or name in ENGINE_METADATA
+    return (name.startswith(PROGRAM_PREFIXES) or name.startswith(FRONTEND_ROOT) or name in ENGINE_METADATA
             or name in {"README.md", "scripts/system-dashboard-server.py",
                         "scripts/dashboard_account.py", "scripts/deploy-reversal-release.py",
                         "config/pm-system-dashboard-dublin.service",
@@ -65,7 +63,7 @@ for source in ("scripts/system-dashboard-server.py", "scripts/dashboard_account.
 BUILD = ROOT / ".deploy" / (RELEASE + "-build")
 BUILD.parent.mkdir(parents=True, exist_ok=True)
 BUILD.mkdir()
-sources = subprocess.check_output(["git", "archive", REV, "backend/engine", "frontend/console", "scripts", "config", "shared/contracts"], cwd=ROOT)
+sources = subprocess.check_output(["git", "archive", REV, "backend/engine", "frontend/console", "scripts", "config"], cwd=ROOT)
 with tarfile.open(fileobj=io.BytesIO(sources)) as source_archive:
     source_archive.extractall(BUILD, filter="data")
 engine_project = BUILD / "backend/engine"
@@ -101,7 +99,7 @@ import grp, hashlib, json, os, sys, tarfile, urllib.request, subprocess
 root=Path('/root/pm-system').resolve()
 release=Path(sys.argv[1]).resolve()
 manifest=json.loads((release/'manifest.json').read_text())
-allowed_prefixes=('backend/engine/','frontend/console/','scripts/','config/','shared/contracts/')
+allowed_prefixes=('backend/engine/','frontend/console/','scripts/','config/')
 allowed_exact={'README.md','scripts/system-dashboard-server.py','scripts/dashboard_account.py',
                'scripts/deploy-reversal-release.py','config/pm-system-dashboard-dublin.service',
                'config/pm-clob-market-snapshot.service'}
@@ -151,7 +149,7 @@ retired_units_from_manifest={unit_names[name] for name in obsolete if name in un
 # EnvironmentFile=config/dashboard-secret.env, an operator file git never
 # tracks (BUGS P1-11). Config files git deletes still leave through
 # manifest['removed'].
-cleanup_prefixes=('backend/engine/src/','backend/engine/dist/','frontend/console/','scripts/','shared/contracts/')
+cleanup_prefixes=('backend/engine/src/','backend/engine/dist/','frontend/console/','scripts/')
 for prefix in cleanup_prefixes:
     base=root/prefix
     if not base.is_dir():

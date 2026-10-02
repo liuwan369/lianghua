@@ -449,6 +449,3 @@ export async function connectAtomicAccountReader(walletOverride?: string) {
     return authoritativePacket(payload, wallet);
   };
 }
-
-/** Alias matching the execution gate's injected bootstrap terminology. */
-export const connectAuthoritativeOpeningReader = connectAtomicAccountReader;

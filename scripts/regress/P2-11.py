@@ -1,4 +1,4 @@
-"""BUGS.md P2-11: /api/runtime/status crashed for the first 0-3 s of every run.
+"""P2-11: /api/runtime/status crashed for the first 0-3 s of every run.
 
 trading_status() guarded every runtime read with isinstance(runtime, dict)
 except runtime_row_fresh, which called runtime.get() while the new run had no

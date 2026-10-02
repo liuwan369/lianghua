@@ -1,4 +1,4 @@
-// BUGS.md P2-9: the engine's round result (netIfUpUsd / netIfDownUsd) accepted
+// P2-9: the engine's round result (netIfUpUsd / netIfDownUsd) accepted
 // only venue-reported fees, while the ledger also accepts rate-derived ones.
 // Taker fills rarely get a reported fee, so the same round had a ledger PnL
 // and blank UP/DOWN result columns.

@@ -1,4 +1,4 @@
-// BUGS.md P1-9: --max-rounds counted every closed market toward the limit,
+// P1-9: --max-rounds counted every closed market toward the limit,
 // including the round already running at startup (the strategy parks it as
 // waiting_next_round and never trades it) and old markets restored from the
 // state file for settlement recovery. So "run N rounds" traded at most N-1,

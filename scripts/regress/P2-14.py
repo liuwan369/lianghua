@@ -1,4 +1,4 @@
-"""BUGS.md P2-14: account balance went blank ~3.2 s after every fill.
+"""P2-14: account balance went blank ~3.2 s after every fill.
 
 A fill calls AccountData.invalidate() to refresh at once; invalidate() dropped
 the identity, so _account() treated it as a new account: the cache became

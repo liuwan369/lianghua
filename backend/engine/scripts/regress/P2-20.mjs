@@ -1,4 +1,4 @@
-// BUGS.md P2-20: partial fills are summed as floats (97.85 + 4.1 =
+// P2-20: partial fills are summed as floats (97.85 + 4.1 =
 // 101.94999999999999) and then compared to the venue's size_matched (101.95)
 // with strict !==. While the order is still open every reconcile() therefore
 // throws "apply missing fills before reconciliation" and the market stays

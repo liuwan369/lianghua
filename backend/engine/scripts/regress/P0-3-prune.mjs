@@ -1,4 +1,4 @@
-// BUGS.md P0-3, state half: every round, market, order and fill stayed in the
+// P0-3, state half: every round, market, order and fill stayed in the
 // state file forever (28 rounds / 100 KB after one day), and the settlement
 // file kept every confirmed record. Old rounds were re-validated on every
 // start: a legacy round (1790687700, sized by an older rule) stopped batch 2's

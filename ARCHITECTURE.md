@@ -1,351 +1,205 @@
-# 系统技术架构
+# 系统架构
 
-Polymarket 五分钟反转实盘系统。本文件是**唯一的架构基准**：任何 AI 或人接手前先读完它，改动后同步更新它。旧文档（`shared/contracts/*`）只作接口细节参考，冲突时以本文件和代码为准。
+唯一的架构文档。改了架构就同步改这里。行号会漂移，以文件和函数名为准。
 
-最后核对：2026-09-29，版本 `640a419`。行号会随代码变化漂移，以函数名为准。
-
----
-
-## 0. 一分钟看懂
-
-- **做什么**：盯 Polymarket 的 BTC "5 分钟涨跌"盘。任意一边的卖一价从下往上穿过触发价（默认 0.67）时，以限价（默认 0.70）买入穿越的那一边；反向再穿越时加仓另一边，最多 4 级。每轮收盘后链上结算赎回。
-- **在哪跑**：AWS 都柏林单机 `root@34.242.206.196`，目录 `/root/pm-system`。本地 Windows 只写代码，不能跑交易链路。
-- **几个进程**：控制面（Python）按需拉起交易引擎（Node）；另外常驻一个行情采集器（Node）、一个账本投影（Python）和一个账户读取子进程（Node）。
-- **真钱**。账户秘密只在服务器上，不进源码、日志、浏览器。
-
-## 1. 铁律
-
-对所有 AI 和人生效，冲突时铁律优先：
-
-1. 禁止过度工程化、过早抽象：先写具体可用的代码。
-2. 禁止流程主义、审计驱动：别拿报告代替改代码。
-3. 禁止用安全门槛替代交付：拦住不显示不是修复。
-4. 分轻重缓急：先修会亏钱、会漏单、会卡交易的问题。
-5. 热路径要最快的实现，动手前查业界做法对照。
-6. **先量后改**：瓶颈必须有实测数据（服务器 journal 或探针），不凭感觉。
-7. 在现有系统上**逐层调优**，不推倒重建。
-8. 对话简洁，可以幽默。
-
----
-
-## 2. 进程与部署拓扑
+## 进程
 
 ```
-                      nginx (443, basic auth, 10 r/s)
-                               │
-                  ┌────────────▼─────────────┐
-                  │ 控制面 system-dashboard-  │  127.0.0.1:18766 only
-                  │ server.py (systemd)       │
-                  └─┬──────┬──────┬───────┬───┘
-       spawn/stop   │      │      │       │ read
-   ┌────────────────▼┐  ┌──▼────┐ ┌▼─────────────┐  ┌──────────────────┐
-   │ 交易引擎         │  │投影    │ │account-data  │  │ market-snapshot  │
-   │ dist/cli/       │  │worker │ │(node 子进程)  │  │ .json            │
-   │ platform.js     │  │.py    │ └──────────────┘  └────────▲─────────┘
-   └──┬───────┬──────┘  └──┬────┘                            │ 250ms
-      │WS/HTTP│ journal    │ ledger.sqlite3        ┌──────────┴────────┐
-      ▼       └───────────►│                        │ 行情采集器         │
-   Polymarket CLOB / Polygon                        │ market-snapshot.js│
-                                                    │ (systemd,常驻)    │
-                                                    └───────────────────┘
+ 浏览器 ──https──> nginx 443 (basic auth, 10 r/s)
+                      │ X-PM-Authenticated
+                      ▼
+        控制面 system-dashboard-server.py  127.0.0.1:18766
+        (systemd: pm-system-dashboard-dublin)
+          │ 子进程: projection_worker.py ── journal → ledger.sqlite3
+          │ 子进程: node dist/cli/account-data.js（账户只读，15 s 刷新）
+          │ 启停: systemd-run --scope pm-engine-<run_id> + choom -500
+          ▼
+        交易引擎 node dist/cli/platform.js --live ──WS/HTTP──> Polymarket CLOB / Polygon
+          │ 写 results/live/dashboard-<run_id>.jsonl
+
+        行情采集器 node dist/cli/market-snapshot.js (systemd: pm-clob-market-snapshot)
+          ├─ 每 250 ms 写 data/dashboard/market-snapshot.json（控制台展示用）
+          └─ 记录器 market-recorder → data/market-history/
 ```
 
-| 进程 | 入口 | 启动方式 | 职责 |
-|---|---|---|---|
-| 控制面 | `scripts/system-dashboard-server.py` | systemd `pm-system-dashboard-dublin`，只绑 127.0.0.1:18766 | HTTP API、静态前端、启停引擎、账户检查 |
-| 交易引擎 | `backend/engine/dist/cli/platform.js --live` | 控制面 `_start_trading` 按需 spawn，一次一个 | 行情→策略→下单→成交→结算 |
-| 行情采集器 | `dist/cli/market-snapshot.js` | systemd `pm-clob-market-snapshot`，常驻 | 7 个币种的盘口，每 250ms 原子写 `data/dashboard/market-snapshot.json`，`--stale-after-ms 2000` |
-| 账本投影 | `scripts/dashboard/projection_worker.py` | 控制面拉起，每 250ms 一轮 | journal → `ledger.sqlite3` |
-| 账户读取 | `dist/cli/account-data.js` | 控制面常驻子进程，15s 刷新 | 余额、挂单、持仓、成交 |
+| 进程 | 启动方式 | 职责 |
+|---|---|---|
+| 控制面 | systemd `pm-system-dashboard-dublin`，`MemoryMax=900M` | HTTP API、托管前端、启停引擎、账户检查、SSE 推送 |
+| 交易引擎 | 控制面 `_start_trading`，一次只跑一个 | 行情 → 策略 → 下单 → 成交 → 结算 |
+| 行情采集器 | systemd `pm-clob-market-snapshot`，常驻 | 7 个币（btc,eth,sol,xrp,doge,hype,bnb）的公共盘口，`--stale-after-ms 2000`；同时做全量行情记录 |
+| 账本投影 | 控制面拉起 `scripts/dashboard/projection_worker.py`，约 250 ms 一轮 | 读 journal，写 `results/dashboard/ledger.sqlite3` |
+| 账户读取 | 控制面常驻子进程 `dist/cli/account-data.js`，每 15 s | 余额、挂单、持仓、成交、Data API 平仓结果 |
 
-**引擎下单用的是它自己的行情 WS，不读采集器文件。** 采集器只供前端展示，以及引擎发现市场失败时兜底。
+引擎下单用自己的行情 WS，不读采集器文件。采集器文件只给控制台看，另外在 Gamma 发现失败时给引擎兜底（`live/discovery.ts` 读 `/api/live`）。
 
-### 启动引擎（控制面 `strategy_control` → `_start_trading`）
+引擎跑在独立 systemd scope `pm-engine-<run_id>` 里（`systemd-run --scope` 原地 exec，pid 不变；`choom -n -500` 降低被 OOM 杀的优先级），所以重启控制面不会停掉引擎，控制面重启后按 pid 重新接管。
 
-必须全部满足：已保存的策略版本号、UUID 请求号、明确一个 marketId+roundId、`PM_TRADING_LIVE_UNLOCK=1`、账户检查通过、当前没有在跑的引擎。
+### 启动与停止
+
+启动（`strategy_control` → `_start_trading`）必须同时满足：策略已保存且请求带上当前版本号、UUID `requestId`、`marketIds` 恰好一个能唯一对上目录的 marketId+roundId、`confirm_live`、服务器环境 `PM_TRADING_LIVE_UNLOCK=1`、账户检查通过、没有在跑的引擎、拿到 `deployment.lock`。启动前清理旧 journal，只保留最新 20 个 run。
 
 ```
 node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds <n>
-  --journal-file results/live/dashboard-<run_id>.jsonl --state-file <state>
-  --stop-file <journal>.stop --strategy btc-reversal --asset btc
-  --strategy-config results/dashboard/btc-reversal-config.json
-  --control-file <journal>.control.json --expected-market-id X --expected-round-id Y
+  --journal-file results/live/dashboard-<run_id>.jsonl --state-file results/live/btc-reversal-<hash>.platform-state.json
+  --stop-file <journal>.stop --strategy btc-reversal --asset <币> --strategy-config results/dashboard/btc-reversal-config.json
+  --control-file <journal>.control.json --expected-market-id <id> --expected-round-id <roundId>
 ```
 
-### 停止
+暂停/恢复：控制面写 `<journal>.control.json` 的 `paused`，引擎每 1 s 读一次（同一个定时器也热加载策略配置）。
 
-Linux 发 SIGTERM。引擎依次：暂停 → 撤掉所有挂单 → 对账 → 等结算跑完 → 落盘退出。控制面最多等 8 秒，**超时也绝不 kill 实盘进程**。账户读到零挂单才算"已确认停止"。
+停止：Linux 发 SIGTERM。引擎暂停 → 撤掉所有挂单 → 对账 → 最多再等 5 分钟把结算跑完 → 落盘退出。控制面最多等 8 s，超时也不 kill 实盘进程。账户快照读到零挂单才算"已确认停止"。
 
----
+## 模块
 
-## 3. 引擎模块地图（`backend/engine/src`）
+### `backend/engine/src`
 
-| 目录/文件 | 负责 |
+| 文件 | 职责 |
 |---|---|
-| `cli/platform.ts` | 引擎入口：参数解析、市场发现与换轮、策略挂载、配置热加载（1s）、结算调度（15s）、写 journal、停机流程 |
-| `platform/core.ts` | **交易核心** `TradingCore`：账本、资金预留、风控与停机、下单/撤单/成交/对账 |
-| `platform/platform.ts` | `TradingPlatform`：盘口状态、事件发布给策略、结算入口 |
-| `platform/polymarket.ts` | 实盘连接器：网关、行情队列与消费、快照校验、用户 feed、账户恢复、各类定时器 |
-| `platform/store.ts` | 状态文件落盘（fsync）、下单前签名意图文件 `.intent` |
-| `platform/journal.ts` | 异步 JSONL 事件日志（不 fsync） |
-| `platform/live-settlement.ts`、`settlement.ts` | 链上赎回（EOA 或 relayer），可断点续做 |
-| `platform/snapshot-gate.ts` | 双边盘口快照是否可交易（纯函数） |
-| `platform/cash-flows.ts` | 链上充提分类（算真实 PnL 用） |
+| `cli/platform.ts` | 引擎唯一入口：参数、市场发现与换轮（15 s 发现，提前 10 s 预热下一场）、策略挂载、配置/控制文件 1 s 轮询、结算调度 15 s、写 journal、停机流程 |
+| `cli/market-snapshot.ts` | 行情采集器入口 |
+| `cli/market-recorder.ts` | 采集器内的全量行情记录（gzip JSONL，按天轮换、过期删除） |
+| `cli/account-data.ts` | 账户读取器入口（stdin 收只读命令，JSONL 输出） |
+| `cli/account-check.ts` | 一次性账户检查（钱包、签名、授权、余额） |
+| `platform/core.ts` | `TradingCore`：资金预留、订单状态机、成交入账、持仓、风控与停机、对账 |
+| `platform/platform.ts` | `TradingPlatform`：盘口状态、把事件发布给策略、结算入口 |
+| `platform/polymarket.ts` | 实盘连接器：下单网关、行情队列、快照校验、用户 feed、账户恢复、心跳 |
+| `platform/snapshot-gate.ts` | 双边盘口快照能否交易（纯函数） |
+| `platform/store.ts` | 状态文件原子落盘（`.lock`/`.next`），下单前签名意图 `.intent` |
+| `platform/journal.ts` | 异步 JSONL journal |
+| `platform/live-settlement.ts`、`settlement.ts` | 收盘后结算：Gamma 查结果、赎回、到账核对 |
+| `platform/cash-flows.ts` | 链上充提分类，调整日内基线 |
 | `platform/contracts.ts` | 共享类型 |
-| `live/clob/client.ts` | `ClobWrapper`：签名、**下单 HTTP**、撤单、对账读取、连接保活 |
-| `live/clob/wallet.ts` | 钱包、funder、签名类型解析 |
-| `live/feeds/polymarket.ts` | 公共行情 WS：L2 + 快速 BBO 合并、新鲜度看门狗 |
-| `live/feeds/user.ts` | 私有用户 WS：订单与成交事件，断线后 REST 补单 |
-| `live/feeds/index.ts` | `FeedQueue`：同一 key 只留最新盘口，优先事件先出 |
+| `live/clob/client.ts` | `ClobWrapper`：签名、下单 HTTP（超时 3 s）、撤单、心跳、连接保活（undici Agent，空闲 60 s，每 30 s 触达） |
+| `live/clob/wallet.ts` | 钱包、funder、签名类型 |
+| `live/feeds/polymarket.ts` | 公共行情 WS：L2 盘口、新鲜度看门狗 |
+| `live/feeds/user.ts` | 认证用户 WS：订单与成交，断线补偿 |
+| `live/feeds/index.ts` | `FeedQueue`：同一 key 只留最新盘口 |
+| `live/feeds/btc.ts` | 外部交易所参考价（遥测，不参与决策） |
+| `live/orderbook.ts` | 本地 L2 盘口副本 |
 | `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘，采集器兜底 |
-| `live/account-*.ts` | 账户读取与权益（控制面 account-data 用） |
-| `strategies/btc-reversal.ts` | 策略本体（见 §5） |
-| `models.ts` | 价格量化、手续费公式：`shares × rate × (p(1−p))^exp` |
+| `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
+| `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
+| `strategies/btc-reversal.ts` | 策略本体 |
+| `models.ts` | 价格量化、手续费公式 `shares × rate × (p(1−p))^exp` |
 
----
+### `scripts/`
 
-## 4. 热路径：从一帧行情到下单
+| 文件 | 职责 |
+|---|---|
+| `system-dashboard-server.py` | 控制面：路由、鉴权、启停引擎、PnL 拼装、静态前端 |
+| `dashboard/push.py` | `PushHub`：SSE 推送，按路径节奏重渲染 |
+| `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计） |
+| `dashboard/projection_worker.py` | 投影子进程，不读账户配置 |
+| `dashboard/read_model.py` | 拉起并读取投影快照 |
+| `dashboard/official_pnl.py` | 从 Data API 结果按场次算官方盈亏 |
+| `dashboard/account_data.py` | 管理 account-data 子进程，缓存快照 |
+| `dashboard/strategy_config.py` | 策略配置与草稿持久化、支持的币种 |
+| `dashboard/config.py` | 配置文件锁与错误类型 |
+| `dashboard/market_snapshot.py` | 校验采集器快照 |
+| `dashboard/system_metrics.py` | 主机与进程指标 |
+| `dashboard_account.py` | 账户配置的检查与保存，响应不含秘密 |
+| `deploy-reversal-release.py` | 部署 |
 
-这是延迟优化的主战场。`[I/O]` 标出下单前的每次磁盘或网络操作。
+### `frontend/console/`
+
+| 文件 | 职责 |
+|---|---|
+| `*.html` + `*-block.js/css` | 四个页面：自动交易、市场、策略、设置 |
+| `stats-panel.js` | 自动交易页的交易统计、服务器状态、清空数据 |
+| `event-log.js` | 设置页的运行日志 |
+| `shared/preview-core.js` | 请求、侧栏、格式化 |
+| `shared/stream.js` | 推送客户端：登记页面的 GET，用一条 EventSource 订阅 |
+| `shared/api-adapter.js` | 接口适配 |
+| `shared/view-model.js` | 数据整形（场次标签等） |
+| `shared/preview-store.js` | 页面状态 |
+
+## 数据流
 
 ```
-1  feeds/polymarket.ts  ws.on("message")
-     JSON.parse → 身份/时钟过滤 → applyMessage(L2) → bestBidAskChanges(快速BBO)
-     → 新鲜度≤2s → 发布门(顶档变/250ms/健康变/深度变) → sink({kind:"book"})
-2  platform/polymarket.ts  FeedQueue.push（每个 key 只留最新）→ 消费循环
-     → acceptSnapshot（snapshot-gate 校验，行情+feed 都健康）
-3  platform.ts  ingestSnapshot → core.markBatch → publish(book)
-4  platform.ts  publish：每个事件 freeze(clone()) 一次，所有消费者共享同一份
-     → 监听者（journal 异步写）→ strategy.onEvent(shared, context())
-5  strategies/btc-reversal.ts  onEvent → 返回 submit 动作
-6  core.ts  submit（clientOrderId 去重）→ submitOrder
-     → 风控门 → 预留资金 → 状态 SUBMITTING → gateway.submit
-7  platform/polymarket.ts  网关：要求行情 WS、feed、用户 feed 全部健康
-8  clob/client.ts  submitOrder
-     → negRisk（已由 warmMarket 缓存）
-     → SDK createOrder 本地 EIP-712 签名（不走网络）
-     → [I/O 磁盘] onPrepared → store.savePreparedOrder：写 .intent 并 fsync
-     → l2Json（HMAC 请求头）→ fetchJson → [I/O 网络] fetch POST /order
+行情 WS ─> feeds/polymarket ─> FeedQueue ─> snapshot-gate ─> platform.publish ─> 策略 onEvent
+策略 submit ─> core 风控/预留 ─> .intent fsync ─> CLOB POST /order
+用户 WS 订单/成交 ─> core 入账（状态 fsync）─> journal
+journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/stream (SSE) ─> 页面
+账户读取器 ─> /api/account/snapshot、official_pnl ─> 统计与历史
 ```
 
-**下单后**：用户 WS 推订单/成交 → `core.observeVenueStatus` / `core.applyFill`（fsync 状态）→ 策略记录阶段。ACK 里的 tradeIds 在 0/250/750/1500ms 用 REST 各核对一次。
+签名后、POST 前把签名和载荷 fsync 到 `<state>.intent`。POST 结果不明时订单进 `UNKNOWN` 并阻断该市场，等对账，绝不为不确定的 POST 再生成一张新单；重启后只会原样重发同一份已签名订单。
 
-### 实测延迟（2026-09-29，4 笔真实下单）
+## 策略 `btc-reversal`
 
-| 段 | 中位 | 归属 |
-|---|---|---|
-| 触发 → 发出 POST | ~22ms | 我们 |
-| 签名 | ~4.4ms | 我们 |
-| `.intent` fsync | ~4ms | 我们（不能砍，见 §6） |
-| 等场馆首字节 `response_headers` | ~307ms | 网络+场馆撮合 |
-| 端到端 | ~334ms（首笔 1018ms） | |
+默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,18,54,130]`、`maxStages 4`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
-**结论：90% 以上是等场馆。** 我们自己能控的只有 30–40ms。
+- 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结，本场到结束都用这份。
+- 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
+- 双边报价门：未过期、年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、时间戳不倒退。
+- 第一对报价只做基线。行情断线、暂停、账户恢复后基线作废，重建基线后才认新的穿越。
+- 触发：某一边卖一价 `prev < triggerPrice` 且 `now ≥ triggerPrice`，只有一边穿越。从两边都在下方或都在上方同时变成两边都在上方属歧义，等下一帧明确方向。
+- 下单：买穿越的那一边，GTC 限价 `maxBuyPrice`，股数 `stageShares[已用级数]`，`clientOrderId = <instanceId>:<marketId>:<阶段号>`。
+- 阶梯：与上一级同方向不加仓，所以各级 UP/DOWN 交替。被拒、放弃或撤单时 0 成交的阶段不占级数。
+- `confirmationPrice` 只更新确认方向和 `confirmationCount`，不是下单条件。
+- 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
+- 收盘时撤掉未成交的余单；未提交的 `CREATED` 意图标为 `ABANDONED`。
 
-### 连接保活（`640a419` 已上线）
+## 风控（`platform/core.ts`）
 
-- **问题**：Node 默认 dispatcher 连接空闲 4 秒就关，而每轮只下一单、相隔 300 秒，所以每单都要重新握手（冷 80–139ms，热 24–29ms）。SDK 的心跳（5 秒一次）走 axios，是另一条连接，保不住下单这条。
-- **修法**：`live/clob/client.ts` 的 `installKeepAliveTransport()` 把 undici `Agent`（keepAliveTimeout 60s）装成全局 dispatcher，外加每 30 秒 `touchTransport()` 发一次 GET `/time`。探针验证：空闲 300 秒后仍复用同一条连接，34.6ms。
-- **不能踩的坑**：
-  - **必须用 `Agent`，不能用 `Pool`**。Pool 只绑一个域名，而全局 fetch 还要访问 Gamma、data-api、RPC、relayer，换成 Pool 这些全部断掉。
-  - **不能设 `connections`**。它限制的是每个域名的并发数；行情发现一次就同时发 4 个 CLOB 请求，下单会排在后面超时，然后被标成 UNKNOWN，系统随即停止交易。
-  - `pipelining` 必须保持 1。
-  - `touchTransport` 必须读完响应体，否则连接不会还回池子。
-  - undici 版本锁死为 `7.18.2`，与 Node 24.13.0 内置版本一致。
+- 单场预算 `roundBudgetUsd`：本场两个 token 的持仓成本 + 挂单预留 + 新单成本。
+- 总预算 `totalBudgetUsd`：全部占用 + 新单成本。可用资金 `availableUsd` 同时受现金和资本上限约束。
+- 日内亏损 `dailyLossUsd`：权益 = 现金 + 持仓盯市，按北京日（UTC+8）换日重设基线；权益跌破基线减上限即停止新开仓，换日自动解除。充提按链上记录调整基线。
+- 盯市优先级：当前买一 → 见过的最后买一 → 场馆给的 mark（重启后保住，不会把未平亏损当成本藏起来）→ 成本；已判定的市场按赔付价。
+- 其他停机原因：订单状态未知 / 签名身份 / 重启恢复的订单需对账（对账后自动解除，按市场隔离）；状态持久化失败（不自动解除）。
+- 心跳：`startHeartbeat` 每 5 s 一次，单次超时 2 s，失败立即重试一次。场馆 10 s 收不到心跳会撤掉全部挂单。
 
----
+## 用户 feed 断线补偿（`live/feeds/user.ts`）
 
-## 5. 策略逻辑（`strategies/btc-reversal.ts`）
+断线重连后先关闭下单门，从断线时刻往前 5 s 起，用 REST 拉两次近期成交和未结订单，间隔 250 ms，两次一致才入账并调用 `reconcileAfterReconnect` 对账，然后才恢复。补偿期间到达的 WS 帧会被入账而不是丢弃；不一致或失败就断开重连（2 s 后）。
 
-| 参数 | 默认 | 含义 |
-|---|---|---|
-| `triggerPrice` | 0.67 | 卖一价从下往上穿过它就入场 |
-| `maxBuyPrice` | 0.70 | 下单限价（GTC、非 postOnly） |
-| `confirmationPrice` | 0.70 | 只做统计，**不是入场条件** |
-| `stageShares` | `[5,18,54,130]`（线上 `[5,18,60,120]`） | 每一级的股数 |
-| `maxStages` | 4 | 每轮最多几级 |
-| `roundBudgetUsd` / `totalBudgetUsd` | 不限 | 单轮 / 总占用上限 |
-| `maxRounds` | 0（不限） | 跑几轮后停（由 CLI 数收盘轮数） |
-| `maxQuoteAgeSeconds` / `maxQuoteSkewSeconds` | 2 / 1.5 | 行情多旧、两边时间差多大就不交易 |
+## 结算
 
-**判定流程**：
+引擎每 15 s 扫已收盘的市场，跳过还有挂单或成交未终结的；用 Gamma（`gamma-api.polymarket.com/markets?condition_ids=`）查判定结果，再赎回。Polymarket 自己的自动赎回常常抢先一个块，结算适配器会查到这笔外部赎回并按实际到账确认。结算状态存在 `<state>.settlements.json`，清空数据时保留（里面有未完成的赎回）。
 
-1. 只在 `now <= market.startsAt` 时接新一轮，中途启动要等下一轮。配置每秒热加载一次，但**下一轮开始才生效**。
-2. 双边报价过门：未过期、不超过 2 秒、两边时间差不超过 1.5 秒、时间戳不倒退。
-3. 第一对报价只记作基线，不交易。
-4. 入场：`prev.ask < trigger && now.ask >= trigger`，并且**只能有一边**穿越。两边同时在触发价上方属于歧义，不交易。
-5. 买穿越的那一边，股数 = `stageShares[已用级数]`。同方向不重复加仓，所以各级 UP/DOWN 交替。
-6. 预算三道检查：单轮预算、总预算、可用资金。
-7. `clientOrderId = ${instanceId}:${marketId}:${stageIndex}`，每一级固定一个 ID，天然幂等。
-8. 收盘时撤掉未成交的挂单。
+## 盈亏口径
 
-被拒的单，或撤单时一股没成交的单，**不占级数**。
+已结算盈亏以 Polymarket 官方 Data API 为准（`scripts/dashboard/official_pnl.py`）：`closed-positions` 的 `realizedPnl`，加上 `positions` 里已判定未赎回的 `cashPnl + realizedPnl`（输掉的 token 永远在这里），按 slug `<币>-updown-5m-<roundId>` 对到场次。数据来自账户读取器的快照，不额外请求。
 
----
+- 账户快照完整且新鲜才算一次有效读取；读取失败时沿用上一次成功结果，标 `stale=true`、`pnl_source_error="official_data_stale"`、`pnl_source_as_of`。
+- 从未成功读取时才退回账本口径：`pnl_source="ledger"`、`pnl_source_error="official_data_unavailable"`。
+- 账本负责进行中的场次，以及"已交易、已收盘、官方还没出结果"的投入成本（`unsettled_cost`、`exposed_pnl`）。
+- 场次表和结算列表里，官方已有结果的场次统一显示为已结算。
 
-## 6. 风控与安全门（`platform/core.ts`）
-
-| 停机原因 | 触发 | 怎么解除 |
-|---|---|---|
-| 日内亏损上限 | 按买一价盯市的权益低于当日基线减 `dailyLossUsd`（UTC+8 换日） | 换日或调高上限；停机期间仍允许卖出 |
-| 订单状态未知需对账 | POST 超时或结果不明 | 对账完成后自动解除（按市场隔离） |
-| 签名身份需对账 | 签名哈希 ≠ 场馆 orderId | 对账后自动解除 |
-| 重启恢复的订单需对账 | 重启时 `.intent` 有未决订单 | 对账后自动解除 |
-| 状态持久化失败 | fsync 失败 | **不自动解除** |
-| 平台已停止 | `stop()` | 下次恢复 |
-
-**下单门**：账户恢复中、该市场被阻断、已停机、tick/最小量、手续费预留、单轮预算、单笔上限、挂单数上限、可用资金。
-
-**资金预留**：买单预留 `金额 + 手续费`，按成交比例释放，拒单、撤单确认或对账发现订单不存在时退回。`availableUsd = min(现金 − 预留, 资本上限 − 已占用)`。
-
-**签名先落盘，再发 POST（不能砍）**：签完名、发 POST 之前，把签名哈希和载荷 fsync 到 `<state>.intent`。进程若在 POST 途中崩溃，重启后能凭签名去场馆查这单到底发没发出去，只在收盘前、且查询返回 404 时，原样重发**同一份签名**。原则：**绝不为一个不确定的 POST 再生成一张新单**，否则可能重复下单。代价约 4ms。
-
----
-
-## 7. 结算与账本
-
-- **结算**：每 15 秒扫一遍已收盘的市场。跳过还有挂单或成交未终结的市场；等市场判定后，经 collateral adapter 调 `redeemPositions` 赎回。每个钱包同时只有一笔待确认交易。能识别场馆的自动赎回（它常比我们早一个块）。停机时最多再等 5 分钟把结算跑完。
-- **Journal**：`results/live/dashboard-<run_id>.jsonl`，只追加，不 fsync。记录 order、fill、latency、settlement、status 等事件。每个盘口的延迟指标按 1/10 抽样（`PER_BOOK_LATENCY_SAMPLE_EVERY`）。
-- **磁盘**：控制面启动新 run 前只保留最新 20 个 run 的 journal 及其附属文件（`RUN_JOURNALS_KEPT`），结算记录和 platform-state 不删。
-- **进程隔离**：引擎跑在独立的 systemd scope `pm-engine-<run_id>` 里，重启控制面不会停掉引擎。
-- **账本**：`results/dashboard/ledger.sqlite3`，由投影进程写，控制面只读。主要表：`runs`、`events`、`order_details`、`trade_details`、`settlement_details`、`latency_samples`、`platform_runtime`。
-- **PnL**：已结算盈亏以交易所 Data API 为准（见 §8「已结算盈亏的来源」）：`/api/metrics/summary` 经 `_apply_official` 用 `scripts/dashboard/official_pnl.py` 的结果替换账本的已结算数字，返回 `pnl_source="polymarket-data-api"`；交易所数据取不到时退回账本口径（只统计已验证结算，`pnl = 实际到账 − Σ(买入金额 + 手续费)`），返回 `pnl_source="ledger"`、`pnl_source_error="official_data_unavailable"`、`stale=true`；沿用上次成功的交易所结果时带 `stale=true`、`pnl_source_error="official_data_stale"` 和 `pnl_source_as_of`。
-
----
-
-## 8. 控制 API（`scripts/system-dashboard-server.py`）
-
-应用只监听 127.0.0.1:18766。外网经 nginx 进来，需要 basic auth，限流 10 r/s。GET 没有应用层鉴权；POST 需要控制会话 cookie、token，或 nginx 传来的已认证头，且 Origin 必须等于 Host。
-
-| 常用 GET | 用途 |
-|---|---|
-| `/api/runtime/status` | 引擎状态、风控、资金 |
-| `/api/markets`、`/api/markets/{id}/snapshot` | 市场目录与盘口 |
-| `/api/strategy/config` | 已保存的配置和草稿 |
-| `/api/account/status`、`/api/account/snapshot` | 账户就绪情况与余额持仓 |
-| `/api/rounds`、`/api/rounds/{id}/orders`、`/position` | 每轮历史 |
-| `/api/fills`、`/api/settlements`、`/api/events`、`/api/metrics/summary` | 账本查询 |
-| `/api/diagnostics/health` | 各服务健康 |
-| `/api/stream?p=<GET 路径>&p=...` | 服务器推送（SSE）：订阅的每个 GET 路径，内容一变就推它的完整响应体（和直接 GET 完全一样）；新连接先收全量，15 秒心跳，最多 50 条连接 |
-
-| POST | 用途 |
-|---|---|
-| `/api/runtime/commands` | start / stop / pause / resume |
-| `/api/strategy/drafts`、`/api/strategy/activate` | 保存草稿、发布配置 |
-| `/api/runtime/market-pool` | 选择币种 |
-| `/api/ledger/reset` | 清空数据（保留结算记录），需 `confirm:"RESET"` 且没有引擎在跑 |
-| `/api/account/check`、`/api/account/save` | 账户检查与保存 |
-| `/api/trading/auth/session` | 登录控制会话 |
-
-**已结算盈亏的来源**：交易所 Data API（`closed-positions` 已兑换的赢场 `realizedPnl`；`positions` 里已结算未兑换的仓位 `cashPnl + realizedPnl`，输场都在这）。由账户读取器拉取，`scripts/dashboard/official_pnl.py` 按 slug `<币>-updown-5m-<roundId>` 对到场次。账本只算正在进行的那一场和"已交易、交易所还没报结果"的投入成本。
-
-**行情记录**：采集器把每个盘口事件写进 `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz`（时间、场次、序号、交易所时间、买一卖一、五档），保留 10 天，`zcat` 可读（正在写的当天文件末尾会提示 unexpected end of file，属正常）。
-
-**没有**延迟查询接口。延迟数据在 journal 的 order 事件和 `ledger.sqlite3` 的 `latency_samples` 表里。
-
----
-
-## 9. 前端（`frontend/console`）
-
-纯静态页面，由控制面托管。每页加载 `shared/`（`preview-core` 负责请求，`stream` 负责推送，`api-adapter` 负责接口适配，`view-model` 负责数据整形，`preview-store` 管状态），再加载本页的 block JS。
-
-**推送优先、轮询兜底**：页面发出的每个 GET 自动登记到 `shared/stream.js`，它用一条 `EventSource` 连 `/api/stream` 订阅这些路径；推送连着时，`request()` 直接用推来的最新响应体，不走网络，各块收到推送就立刻重画。推送断了，原来的定时轮询照常走网络。页面加载后服务器 0 个轮询请求（浏览器实测）。
-
-推送节奏（`scripts/dashboard/push.py` 的 `CADENCE`）：单个市场盘口 100ms（随采集器 250ms 写入），运行状态 250ms，场次/成交 500ms，账户快照、事件、结算 1s，币种目录 2s，统计 2s，诊断 5s；内容没变不渲染、不推送，每 5 秒补发一次。一个自动交易页实测：首次全量约 190KB，之后约 38KB/s。账户快照的 HTTP 响应只含余额、占用、持仓和挂单（成交史、链上活动等 400KB 不发给浏览器）。
-
-| 页面 | 看什么 | 主要轮询 |
-|---|---|---|
-| `auto-trade`（主页，`index.html` 跳这里） | 启停、当前轮盘口、本场持仓与订单、历史订单（按场次，前 10）、交易统计（大字=今日）、服务器状态、清空数据 | 推送；兜底盘口 500ms，持仓/订单 1s，状态 2s |
-| `market` | 市场目录；单选预选，点「确认启用」才写运行池 | 推送；兜底 1s |
-| `strategy` | 策略参数表单 | 进页面读一次 |
-| `settings` | 连接诊断、账户检查、控制密码、运行日志 | 推送；兜底按需 |
-
----
-
-## 10. 服务器上的状态文件
+## 磁盘上的文件
 
 `E` = `/root/pm-system/backend/engine`
 
-| 路径 | 谁写 |
+| 路径 | 说明 |
 |---|---|
-| `E/results/live/dashboard-<run_id>.jsonl` / `.console.log` | 引擎 |
-| `E/results/live/dashboard-<run_id>.control.json` | 控制面写，引擎每秒读（暂停/恢复） |
-| `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎 |
-| `…platform-state.json.settlements.json` | 引擎结算（清空数据时保留） |
-| `E/results/dashboard/btc-reversal-config.json`、`.draft.json` | 控制面 |
-| `E/results/dashboard/market_pool.json` | 控制面 |
-| `E/results/dashboard/ledger.sqlite3` | 投影进程 |
-| `E/results/dashboard-state.json` | 控制面（当前 run 信息） |
-| `/root/pm-system/data/dashboard/market-snapshot.json` | 采集器 |
-| `/root/pm-system/data/dashboard/deployment.lock` | 部署和启动共用的 flock |
-| `/root/.config/pm-system/account.json` | 账户配置（秘密） |
-| `/root/.pm-releases/<release>/` | 部署归档与回滚材料 |
+| `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 前只保留最新 20 个。每个盘口的延迟指标按 1/10 抽样写入 |
+| `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎状态，按账户跨 run 共用 |
+| `…platform-state.json.settlements.json` | 结算记录，清空数据时保留 |
+| `E/results/dashboard/btc-reversal-config.json`、`btc-reversal-config.draft.json` | 已发布配置、草稿 |
+| `E/results/dashboard/market_pool.json` | 运行池 |
+| `E/results/dashboard/ledger.sqlite3`、`snapshot.json` | 账本投影 |
+| `E/results/dashboard-state.json` | 控制面当前 run 信息 |
+| `/root/pm-system/data/dashboard/market-snapshot.json` | 采集器快照 |
+| `/root/pm-system/data/dashboard/deployment.lock` | 部署与启动共用的 flock |
+| `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz` | 全量行情记录，保留 10 天 |
 
----
+行情记录每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
 
-## 11. 部署
+秘密只在服务器：账户配置 `/root/.config/pm-system/account.json`、`/root/pm-system/config/dashboard-secret.env`、nginx 口令 `/etc/nginx/pm-dashboard.htpasswd`。不进源码、日志、文档、浏览器。
 
-```
-python scripts/deploy-reversal-release.py     # 不带参数，部署当前 HEAD
-```
+## 部署与回滚
 
-- 只部署**已提交**的版本：按 `git archive` 在本地构建，打包源码和 `dist`，SFTP 上传后在服务器上应用。
-- 前提：**交易必须是停止状态**，否则直接拒绝。
-- 应用时在 `deployment.lock` 下执行；清理不在清单里的旧文件，校验哈希，必要时重启控制面和采集器。任何一步出错都会自动回滚，回滚材料在 `/root/.pm-releases/<release>/before.tar.gz`。
-- **服务器的 `node_modules` 不归部署管**。新增 npm 依赖要先在服务器上手动装：`cd /root/pm-system/backend/engine && npm install <pkg>@<ver>`。
-- 服务器上的 git HEAD 不会随部署更新；判断实际运行的版本，看 release 目录名或文件哈希。
+`python scripts/deploy-reversal-release.py`（无参数）：
 
-### 验证方式
+1. 本地用 `git archive HEAD` 在 `.deploy/<release>-build` 构建 `dist`，打包源码、`dist` 和清单（每个文件的 sha256、历史上删过的文件）。
+2. SFTP 上传到 `/root/.pm-releases/<release>/`，在服务器上于 `deployment.lock` 下应用。交易必须是停止状态，否则拒绝。
+3. 先把将被覆盖的文件打包成 `before.tar.gz`，再写入新文件、删掉已删除的文件、校验哈希、按需重载 systemd/nginx、重启采集器和控制面，最后确认控制面回到"停止 + 实盘锁不变"。
+4. 任何一步失败都从 `before.tar.gz` 自动回滚。服务器和本地各保留最近 5 个发布。
 
-本地能跑 `npm run typecheck`、`npm run build` 和回归脚本（无测试框架，都是独立脚本）：`backend/engine/scripts/check-*.mjs` 与 `backend/engine/scripts/regress/*.mjs`（node，先 `npm run build`）、`scripts/regress/*.py`（python）、`frontend/console/regress/*.mjs`（node）。真实交易链路验证必须在服务器上做：
+服务器 `node_modules` 不归部署管，新增 npm 依赖要先在服务器上手动装。服务器上的 git HEAD 不随部署变，看 release 目录名判断线上版本。
 
-```
-ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196
-curl -s http://127.0.0.1:18766/api/runtime/status        # 必须在服务器内执行
-```
+## 已知限制与延后
 
----
-
-## 12. 关键时间常数
-
-| 项 | 值 | 位置 |
-|---|---|---|
-| 行情 WS PING / 看门狗 / 消息超时 | 5s / 1s / 15s | `feeds/polymarket.ts` |
-| 行情源最大年龄 | 2s | 同上 |
-| 用户 WS PING / 重连 | 10s / 2s | `feeds/user.ts` |
-| 策略报价最大年龄 / 两边时间差 | 2s / 1.5s | 策略配置 |
-| 下单超时 | 3s | `DEFAULT_ORDER_TIMEOUT_MS` |
-| SDK 心跳 / 单次超时 | 5s / 2s | `startHeartbeat`（25s 会让场馆撤掉全部挂单，BUGS P1-12） |
-| 下单连接保活 idle / touch | 60s / 30s | `TRANSPORT_*` |
-| 市场发现 / 换轮预热 | 15s / 提前 10s | `cli/platform.ts` |
-| 结算扫描 | 15s | 同上 |
-| 资金流刷新 | 30s | `platform/polymarket.ts` |
-| 状态非关键落盘防抖 | 25ms | `store.ts` |
-| 采集器发布 / 过期 | 250ms / 2s | `market-snapshot.ts` |
-
----
-
-## 13. 路线图（从底层往上，逐层重构验证）
-
-这是一次系统重构：每层的功能都要重新验证，不默认旧行为正确。顺序从最底层的输入往上走，因为上层依赖下层的正确性——行情不稳时调策略毫无意义。
-
-每层同一个套路：**读代码 → 服务器实测 → 写状态文档 → 最小改动 → 小额实盘确认 → 再上一层**。
-
-| 层 | 状态 | 说明 |
-|---|---|---|
-| L0 实时行情输入 | 🔄 进行中 | 市场发现、5m 场次、YES/NO、盘口、sequence、时间戳、过期、断线恢复。状态见 [MARKET-DATA.md](MARKET-DATA.md) |
-| L1 下单网络层 | ✅ `640a419` 已实盘验证 | 连接保活 + 事件共享冻结。首单 `response_headers` 从 988ms 降到 236ms |
-| L2 决策→下单 | ✅ `123d942` 已实盘验证 | 触发→POST 从 47ms 降到 15.8ms：原生 HMAC 头、签名预热、去掉冗余状态拷贝 |
-| L3 订单回报 | ✅ 已核对，健康，未改代码 | 成交在 ACK 前后 ~0.5s 到、MATCHED 即入账；无丢单/重复；状态见 [ORDER-FLOW.md](ORDER-FLOW.md) |
-| L4 风控/账务 | ✅ 已核对：现金链干净，核心不改 | 五源现金分毫不差；乱在显示口径不统一。见 [ACCOUNTING.md](ACCOUNTING.md) |
-
-**所有待办（BUGS.md 全部未修复条目 + 推送改造 + 各层待确认）按先后顺序收在 [WORK-PLAN.md](WORK-PLAN.md)。**
-| L5 结算 / 账本 | 待做 | 赢亏算得准；延迟数据没有查询接口 |
-| L6 策略 | 待做（最后） | 触发价、加仓级数、胜率——只有下面几层可信了才有意义 |
-
-**顺序修正记录**：早期把顺序排成 下单→决策→策略→风控→账本，遗漏了最底层的行情输入，且把策略排得过前。已改为 L0..L6 自底向上。
-
-### 已知但暂不处理
-
-- `AbortSignal.any` 叠加长命 signal 的内存泄漏（Node 24.13.0 的 bug），出现在资金流扫描和市场发现里，约 12MB/天，**不在下单路径上**。先看进程实际跑多久再决定。
-- 本地 node_modules 的 `undici` 装自 npmmirror 镜像，版本和完整性哈希与官方一致。
+- O1：服务器 root 允许密码 SSH 登录且对公网开放。计划调试完后在 Lightsail 防火墙设 IP 白名单（80 端口需对外开放以续期证书）。
+- O3：没有任何备份（账本、结算记录、账户配置只在这一块盘上）。调试完后再做。
+- C30：账本自己计算已结算盈亏的旧逻辑（`scripts/dashboard/ledger.py`）待官方数据连续稳定、没出现 `ledger` 回退后删除。

@@ -1,4 +1,4 @@
-// BUGS.md P0-2: a local cancel after the order already had reconciliationPending
+// P0-2: a local cancel after the order already had reconciliationPending
 // cleared (by a WS "live" status, or by a partial fill) leaves the CANCELLED
 // order still holding its reservation, which validateAccount rejects on the
 // next reconcile and on every restart.

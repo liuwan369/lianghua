@@ -1,4 +1,4 @@
-"""BUGS.md P2-1: with the ladder used up, "current stage" showed "--".
+"""P2-1: with the ladder used up, "current stage" showed "--".
 
 The engine publishes consumedStages, but the ledger's round projection
 whitelist dropped it, so the frontend fell back to nextStage - 1, and nextStage

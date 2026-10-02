@@ -1,4 +1,4 @@
-// BUGS.md P1-8: a WS "live" that arrives before the HTTP ACK (the norm on this
+// P1-8: a WS "live" that arrives before the HTTP ACK (the norm on this
 // venue) runs refreshReconciliationRisk while our own order is still
 // SUBMITTING. core.ts:348-351 then treats that in-flight order as a restored
 // one and halts the WHOLE account with "restored orders require

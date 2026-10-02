@@ -1,4 +1,4 @@
-// BUGS.md P2-12 and P3-6, both in the round's first seconds.
+// P2-12 and P3-6, both in the round's first seconds.
 //
 // P2-12: a round is created ~10 s before it starts with the config of that
 // moment, but at start it re-cloned the live config, so a config published in

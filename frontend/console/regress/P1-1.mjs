@@ -1,4 +1,4 @@
-// BUGS.md P1-1: saving the strategy from the console silently cleared maxRounds.
+// P1-1: saving the strategy from the console silently cleared maxRounds.
 // saveStrategy rebuilt the config from a fixed whitelist that missed maxRounds,
 // and the backend filled the gap with 0 = run forever. Live: revision 22 had
 // maxRounds=3, the draft saved from the page had 0.

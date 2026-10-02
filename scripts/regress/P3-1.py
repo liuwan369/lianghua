@@ -1,4 +1,4 @@
-"""BUGS.md P3-1 / P3-2: event severity and size.
+"""P3-1 / P3-2: event severity and size.
 
 P3-1: _event_dto marked every kind=error event "error", so account_recovery_started
 (a notice) was red; the console's code-based rule never ran because the server's

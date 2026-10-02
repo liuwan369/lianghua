@@ -1,4 +1,4 @@
-// BUGS.md P1-10: starting in a round's last minutes always failed. There the
+// P1-10: starting in a round's last minutes always failed. There the
 // console offers only the next round, the control plane passed that as the
 // expected identity, and the engine, which discovers the current round, threw
 // "initial discovered market does not match". Live: two failed runs created at

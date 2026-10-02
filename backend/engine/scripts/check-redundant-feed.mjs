@@ -137,7 +137,7 @@ console.log("PASS 3b sockets out of step: numbering continues across sockets");
 }
 console.log("PASS 3c late older copy from a slower socket is dropped");
 
-// --- 3d. BUGS.md P1-2: sides advance on different sockets ---
+// --- 3d. P1-2: sides advance on different sockets ---
 // Socket B alone moves DOWN; socket A alone then moves UP across the trigger
 // while A's own DOWN is still old. The UP cross must reach the consumer
 // immediately, paired with B's newer DOWN. A per-frame merge dropped it.

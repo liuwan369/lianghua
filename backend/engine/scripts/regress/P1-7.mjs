@@ -1,4 +1,4 @@
-// BUGS.md P1-7: a reconcile that runs seconds after a fill uses an account
+// P1-7: a reconcile that runs seconds after a fill uses an account
 // snapshot the venue has not yet updated for that fill (MATCHED -> MINED ->
 // CONFIRMED takes ~2-7s on chain). core.reconcile replaced cash/positions
 // wholesale and flagged the fill accountingCashSuperseded by timestamp alone,

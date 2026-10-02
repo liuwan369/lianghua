@@ -1,4 +1,4 @@
-"""BUGS.md P1-11: the deploy cleanup deleted every untracked file under config/.
+"""P1-11: the deploy cleanup deleted every untracked file under config/.
 
 The remote script swept config/ like a program directory, so an operator file
 such as config/dashboard-secret.env (referenced by the dashboard unit's

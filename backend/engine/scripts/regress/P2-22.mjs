@@ -1,4 +1,4 @@
-// BUGS.md P2-22: a venue "canceled" that arrives (via User WS) while the order
+// P2-22: a venue "canceled" that arrives (via User WS) while the order
 // is still SUBMITTING only records venueStatus; the order stays SUBMITTING. The
 // HTTP ACK then promotes it to OPEN (core.ts:957) without checking venueStatus,
 // leaving OPEN + venueStatus=canceled with the reservation still held. Found

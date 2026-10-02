@@ -1,4 +1,4 @@
-"""BUGS.md P2-7, control-plane half: a failed run's stop message now carries the
+"""P2-7, control-plane half: a failed run's stop message now carries the
 engine's own cause instead of only "交易进程异常退出".
 
 Uses the console-log shape of the real failed start on 2026-09-30

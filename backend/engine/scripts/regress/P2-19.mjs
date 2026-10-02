@@ -1,4 +1,4 @@
-// BUGS.md P2-19: a round that Gamma no longer lists makes backend.market()
+// P2-19: a round that Gamma no longer lists makes backend.market()
 // throw settlement_market_not_found BEFORE the zero-balance branch runs, and
 // the lane catches it as "unsupported" without writing any record. So an old
 // round that was already auto-redeemed (under the pre-P1-5 code nothing was

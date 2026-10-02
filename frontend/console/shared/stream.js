@@ -1,5 +1,5 @@
 "use strict";
-// Console push client (PUSH-ARCHITECTURE.md). Every GET the page makes through
+// Console push client (ARCHITECTURE.md, push). Every GET the page makes through
 // PolyPreview's request() is noted here; the pushable ones are subscribed on one
 // EventSource to /api/stream. While the stream is open, request() answers those
 // paths from the latest pushed body (the server renders it with the same GET

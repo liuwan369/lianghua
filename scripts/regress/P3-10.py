@@ -1,4 +1,4 @@
-"""BUGS.md P3-10: after a round change, /api/markets could return the round
+"""P3-10: after a round change, /api/markets could return the round
 that just ended as current.
 
 _modern_markets keeps a cached row when the fresh one is stale (failed()),

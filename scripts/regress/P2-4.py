@@ -1,4 +1,4 @@
-"""BUGS.md P2-4: /api/metrics/summary crashed with None - float.
+"""P2-4: /api/metrics/summary crashed with None - float.
 
 metrics_summary computed exposed_pnl as known_pnl - unsettled_cost whenever
 there were unsettled rounds, even when no round had a known PnL yet. Live run

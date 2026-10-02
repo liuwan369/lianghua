@@ -1,4 +1,4 @@
-// BUGS.md P1-13 (found in the batch 2 live run): Gamma /markets defaults to
+// P1-13 (found in the batch 2 live run): Gamma /markets defaults to
 // closed=false, so the settlement lookup by condition_ids returns [] for any
 // round once it closes. The round we had just traded (1790785800, 5 DOWN held)
 // went pending -> "unsupported settlement_market_not_found" and stayed there:

@@ -1,4 +1,4 @@
-// BUGS.md P2-7: a failed start logged only its phase (platform_run_failed) and
+// P2-7: a failed start logged only its phase (platform_run_failed) and
 // the CLI printed a generic "platform could not complete". Four failed starts on
 // 09-29 could not be told apart. The real message is now kept, minus secrets.
 //

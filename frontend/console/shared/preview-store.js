@@ -80,5 +80,5 @@
     return update("marketCatalog", { selectedId });
   };
   const setSlice = (slice, value) => update(slice, value);
-  window.PolyPreviewStore = Object.freeze({ getState: () => state, subscribe, update, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket, canInitializeMarketPool });
+  window.PolyPreviewStore = Object.freeze({ getState: () => state, subscribe, setSlice, setMarketCatalog, setMarketPool, setSelectedMarket, canInitializeMarketPool });
 })();

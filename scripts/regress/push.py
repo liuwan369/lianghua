@@ -1,4 +1,4 @@
-"""Console push (PUSH-ARCHITECTURE.md step 3): GET /api/stream.
+"""Console push (ARCHITECTURE.md, push): GET /api/stream.
 
 Runs the real control-plane handler on a local port with stubbed data
 sources and checks what a browser would rely on:

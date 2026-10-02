@@ -1,40 +1,26 @@
-# Polymarket BTC 五分钟反转系统
+# 工作规则
 
-本仓库只保留一套可运行源码，维护范围是 BTC 五分钟反转策略及其行情、执行、结算、账本 API 和前端控制台。
+本仓库是 Polymarket 五分钟反转实盘系统，真钱。先读 [README.md](README.md) 和 [ARCHITECTURE.md](ARCHITECTURE.md)，接口看 [API.md](API.md)。
 
-## 规则
-
-- 交付优先，保持实时交易链路简单，不恢复做市、paper 或研究链路。
-- **行情全量记录**（用户 2026-10-01 决定）：采集器把每个盘口事件写进 `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz`，保留 10 天，供复盘和回测用。记录只在采集器进程里做，不进交易引擎、不影响下单；回测工具另外写，读这些文件，不接实盘。
-- 行情、策略、订单、成交、结算、账本和前端必须使用同一份 `marketId`、`roundId` 和盘口快照。
-- 过期、断线或不完整行情不得触发交易，也不得在前端伪造成功状态。
-- 实时交易路径不能等待历史查询、慢统计或资源采样。
-- 账户秘密只由服务器环境和服务器账户配置管理，不进入源码、日志、文档或浏览器。
-- 服务器 `/root/pm-system` 是生产运行目录；账户配置不纳入源码清理，运行数据的清理按铁律最后一条先报再删。
-- 修改后先做能运行的验证，再报告修改、验证和真实风险。
-- **开工前先读 [ARCHITECTURE.md](ARCHITECTURE.md)**：进程、热路径、风控、部署和路线图都在里面；改了架构要同步更新它。
-- **已知错误在 [BUGS.md](BUGS.md)**：动到相关代码时顺手修掉；修好后把条目移到"已修复"并写上提交号。
-
-## 全部要做的事：从 WORK-PLAN.md 进
-
-**所有工作的入口是 [WORK-PLAN.md](WORK-PLAN.md)**，不只是 BUGS.md。它按依赖顺序收齐了全部任务，最前面有文档地图。要做的分四块，一块都不能漏：
-
-1. **修 bug**：[BUGS.md](BUGS.md) 全部未修复条目（带 P 编号）。怎么修按 [FIX-PROCESS.md](FIX-PROCESS.md) 的车道和 7 步流程。
-2. **推送改造**（已完成）：[PUSH-ARCHITECTURE.md](PUSH-ARCHITECTURE.md)，轮询改 SSE 推送（WORK-PLAN 阶段 D）。
-3. **界面重构**（已完成，G1-G7）：[UI-REDESIGN.md](UI-REDESIGN.md)，合并页面、删总览、历史订单按场次、三个控制按钮状态、市场页单币预选（WORK-PLAN 阶段 G）。
-4. **真多币并行**：UI-REDESIGN.md 第 7 节（WORK-PLAN 阶段 H），动交易核心，**必须等 L4 风控和 L6 策略验证完**。
-
-**顺序**：先 WORK-PLAN 定"先做哪条"，再按 FIX-PROCESS 的车道动手。前端 `frontend/console/**` 的 bug 修复和界面重构**由同一个 agent 一起做**：两者改同一批代码（尤其 `auto-trade-block.js`），分开做等于重写两遍。
-
-## 铁律（所有 agent 必须遵守）
+## 铁律
 
 - 禁止过度工程化、过早抽象：先写具体可用的代码，不为假想需求留扩展点。
 - 禁止流程主义、审计驱动开发：不拿报告、清单、评审文档代替改代码。
 - 禁止用安全门槛替代交付：拦住不显示不是修复，要交付能用的行为。
 - 分轻重缓急：先修会亏钱、会漏单、会卡交易的问题。
-- 模块用最强的实现：热路径要快、反应要快，追求最优解而不只是能跑。
-- 动手前查互联网资料对照，确认做法是不是业界最优。
-- 对话简洁明了，可以幽默，给点情绪价值。
-- **系统只有一份，新的替换旧的，旧的删干净**：新实现上线、验证可用后，同一个提交里（或紧接着的下一个）删掉被替换的旧代码、旧兼容分支、旧脚本、旧文档和不再有用的数据，不留"备用"、不留"以防万一"。一样东西只能有一个版本在用，免得被覆盖、被污染、以后分不清新旧。
-  - 代码和文档靠 git 就能找回，直接删。
-  - 服务器上的运行数据（journal、账本、状态文件、发布备份）删了就回不来：先列清单和影响，用户点头后再删。
+- 热路径用最快的实现；动手前查业界做法对照。
+- 对话用中文，简洁明了，可以幽默。
+- 系统只有一份：新的替换旧的，旧代码、旧兼容分支、旧脚本、旧文档在同一个或紧接着的提交里删干净，不留"备用"。
+- 服务器上的运行数据（journal、账本、状态文件、结算记录、发布备份）删了回不来：先列清单和影响，用户同意后再删。
+- 小额实盘验证必须用户明确同意后才跑。
+- 秘密（私钥、API 凭证、控制密码、basic auth 口令）不进源码、日志、文档、浏览器，也不在对话里打印。
+- 修 bug 先写测试：测试在旧代码上失败，修好后通过。
+- 改了架构或接口，同步更新 ARCHITECTURE.md / API.md。
+
+## 怎么干活
+
+- 构建：`cd backend/engine && npm run typecheck && npm run build`
+- 测试：`node backend/engine/scripts/regress/*.mjs`（先 build）、`node backend/engine/scripts/check-*.mjs`、`python scripts/regress/*.py`、`node frontend/console/regress/*.mjs`。逐个运行，退出码 0 即通过。
+- 部署：提交后 `python scripts/deploy-reversal-release.py`，部署的是 HEAD，交易必须已停止。
+- 服务器：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196`，运行目录 `/root/pm-system`；控制面只在服务器本机可直连，如 `curl -s http://127.0.0.1:18766/api/runtime/status`。
+- 去哪看：策略 `backend/engine/src/strategies/btc-reversal.ts`；下单与风控 `backend/engine/src/platform/core.ts`、`platform/polymarket.ts`、`live/clob/client.ts`；入口 `backend/engine/src/cli/platform.ts`；控制面 `scripts/system-dashboard-server.py`；账本 `scripts/dashboard/ledger.py`；前端 `frontend/console/`。

@@ -119,10 +119,6 @@ export async function discoverMarket(
     name: String(market.slug ?? `${asset}-updown-5m-${start}`), startsAt: start, endsAt: end, instruments }];
 }
 
-export async function discoverBtcMarket(at = Date.now() / 1000, directOnly = false, signal?: AbortSignal): Promise<MarketInfo[]> {
-  return discoverMarket("btc", at, directOnly, signal);
-}
-
 export function accountSnapshot(raw: unknown): AccountSnapshot {
   const data = row(raw), collateral = row(data.collateral), positions = row(data.positions), open = row(data.open_orders);
   if (![collateral, positions, open].every(s => s.available === true && s.complete === true)

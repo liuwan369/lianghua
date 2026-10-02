@@ -25,7 +25,3 @@ export const CTF_EXCHANGE =
 /** Neg-risk CTF Exchange V2. */
 export const NEG_RISK_CTF_EXCHANGE =
   "0xe2222d279d744050d28e00520010520000310F59" as Address;
-
-/** @deprecated V1 exchange — do not use for new orders. */
-export const CTF_EXCHANGE_V1 =
-  "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E" as Address;

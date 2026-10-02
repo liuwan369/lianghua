@@ -1,4 +1,4 @@
-// BUGS.md P0-3: every 2 s the engine writes one platform_status line holding
+// P0-3: every 2 s the engine writes one platform_status line holding
 // ALL strategy rounds plus every market / snapshot / book it has ever seen,
 // none of which is ever pruned. The ledger reads 256 KB per pass and marks the
 // run broken once a single line exceeds it (~4 h continuous); the journal

@@ -1,4 +1,4 @@
-// BUGS.md P1-12: the CLOB heartbeat ran every 25 s, but once an account sends
+// P1-12: the CLOB heartbeat ran every 25 s, but once an account sends
 // heartbeats the venue cancels ALL its open orders when 10 s pass without one.
 // Live run 131143 lost two resting orders exactly 14.0 s after a heartbeat.
 // A single failed heartbeat must also be retried at once, not left to the next

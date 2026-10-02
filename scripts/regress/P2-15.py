@@ -1,4 +1,4 @@
-"""BUGS.md P2-15: a read between the projection worker's two writes said "stale".
+"""P2-15: a read between the projection worker's two writes said "stale".
 
 The worker writes snapshot.json, then heartbeat.json. A read in between sees a
 new snapshot_version with the old heartbeat; read_model set checked_at = 0, so

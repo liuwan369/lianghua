@@ -1,4 +1,4 @@
-"""BUGS.md P1-4, ledger half: winning rounds got no PnL; win rate was fiction.
+"""P1-4, ledger half: winning rounds got no PnL; win rate was fiction.
 
 Replays batch 2's two real live runs (fixtures/: trimmed journals of runs
 20260930-162501 and 20260930-170531; settlement events carry the fields the

@@ -5,7 +5,6 @@
    * Pages can keep their current markup while the mock source is replaced by
    * the real adapter later. Production must not use localStorage as runtime truth.
    */
-  const VERSION = 1;
   const listeners = new Map();
   const emit = (name, value) => (listeners.get(name) || []).forEach((fn) => fn(value));
   const on = (name, fn) => {
@@ -39,7 +38,6 @@
       throw error;
     } finally { window.clearTimeout(timeout); }
   };
-  const createResource = () => ({ data: null, error: null, receivedAt: 0, loading: false, stale: false });
   const format = {
     clock(value = Date.now()) { return new Date(value).toLocaleTimeString("zh-CN", { hour12: false }); },
     timestampMs(value) {
@@ -157,11 +155,6 @@
     const active = item.key === activeKey;
     return `<button class="nav-item${active ? " active" : ""}" type="button" data-preview-nav="${item.label}" data-preview-target="${item.target}"${active ? ' aria-current="page"' : ""}><span>${item.icon}</span>${item.label}</button>`;
   }).join("");
-  const bindNav = (root) => {
-    (root || document).querySelectorAll("[data-preview-nav]").forEach((button) => {
-      button.addEventListener("click", () => navigate(button.dataset.previewTarget));
-    });
-  };
   const selectedAssetFromUrl = new URLSearchParams(window.location.search).get("assetId");
   const setSelectedAssetUrl = (assetId) => {
     config.selectedAssetId = assetId || null;
@@ -249,5 +242,5 @@
   // Backend is the default. Preserve an explicitly supplied mode for hosts
   // that use it as metadata, while keeping local/demo data disabled.
   const config = { apiBase: "", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, mode: "backend", ...runtimeConfig, demo: false };
-  window.PolyPreview = Object.freeze({ VERSION, config, api, request, createResource, format, NAV_ITEMS, navMarkup, bindNav, navigate, setSelectedAssetUrl, on, emit });
+  window.PolyPreview = Object.freeze({ config, api, request, format, navMarkup, navigate, setSelectedAssetUrl, on, emit });
 })();

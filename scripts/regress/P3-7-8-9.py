@@ -1,4 +1,4 @@
-"""BUGS.md P3-7, P3-8, P3-9: the stop path, on the real control-plane module.
+"""P3-7, P3-8, P3-9: the stop path, on the real control-plane module.
 
 P3-8: stop_trading waited up to 8 s for the child inside _trading_lock, so
       every status read blocked and the console's requests timed out.

@@ -1,4 +1,4 @@
-// BUGS.md P0-1: after a REJECTED (or 0-fill CANCELLED) stage, the strategy sizes
+// P0-1: after a REJECTED (or 0-fill CANCELLED) stage, the strategy sizes
 // and directs the next stage by CONSUMED rungs (rejected ones don't count), but
 // restore() validates by array index and forbids two adjacent same-direction
 // stages. So a real persisted ladder throws "invalid persisted reversal stage"

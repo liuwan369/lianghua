@@ -425,10 +425,6 @@
       label
     };
   };
-  const isBtcStrategyConfig = (config = {}) => {
-    const candidate = config && typeof config === "object" ? config : {};
-    return String(strategyAssetId(candidate) || "").toLowerCase() === "btc";
-  };
   /**
    * Does this strategy config explicitly target `assetId`? The gate itself is
    * real — activating a config whose asset does not match the selected market
@@ -445,5 +441,5 @@
     const value = String(assetId || "").trim();
     return value ? value.split("-")[0].toUpperCase() : fallback;
   };
-  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, runtimeStartBlockReason, catalogItemStartReason, accountStartBlockReason, startBlockReason, accountBalance, runtimeStateLabel, eventSeverity, collapseEvents, payloadOf, finite, matchesIdentity, hasFreshBbo, strategyAssetId, strategyAssetStartReason, fillRecords, fillIdentity, uniqueFills, uniqueFillCount, settlementStatus, isBtcStrategyConfig, strategyTargets, assetSymbol });
+  window.PolyPreviewViewModel = Object.freeze({ market, catalog, pool, runtime, catalogItemStartReason, startBlockReason, accountBalance, runtimeStateLabel, eventSeverity, collapseEvents, matchesIdentity, hasFreshBbo, strategyAssetId, uniqueFills, uniqueFillCount, settlementStatus, strategyTargets, assetSymbol });
 })();

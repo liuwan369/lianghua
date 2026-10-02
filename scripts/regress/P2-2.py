@@ -1,4 +1,4 @@
-"""BUGS.md P2-2: the market endpoint re-read the collector file only once a second.
+"""P2-2: the market endpoint re-read the collector file only once a second.
 
 The collector rewrites market-snapshot.json every 250 ms; _live_status_fetch
 returned its cache for a full second, so quotes ran up to 27 frames behind

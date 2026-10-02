@@ -1,4 +1,4 @@
-"""BUGS.md P1-6: a trade that goes MATCHED then FAILED stays a ghost fill.
+"""P1-6: a trade that goes MATCHED then FAILED stays a ghost fill.
 
 The engine writes every revision of one trade with engine_ts = the venue's
 match_time, which never changes. _trade_revision accepted a FAILED only when

@@ -1,4 +1,4 @@
-"""BUGS.md P1-3: "today" had two day boundaries.
+"""P1-3: "today" had two day boundaries.
 
 The engine's daily-loss stop resets at 00:00 UTC+8 (core.ts dayOf); the ledger's
 range=today and range=month started at 00:00 UTC. Between 00:00 and 08:00
