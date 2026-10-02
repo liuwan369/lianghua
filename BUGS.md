@@ -11,6 +11,60 @@
 
 ## 未修复
 
+### 第二次全面检查（2026-10-02，9 路并行 + 5 路反驳核实）
+
+9 个智能体按热路径、账本结算、行情、成交回报、控制面、前端、性能、运维安全、文档对照分头查，约 60 条；再由 5 个智能体逐条反驳，**推翻 3 条**（D13 目录推送间隔、H3 换场预算、M3 录制序号重复），多条降级。下面只列通过核实的。
+
+#### P1
+
+**U1 断线补偿期间连接再断，这一笔成交永远记不上（我在 P3-5 修复里引入）**
+- **位置**：`backend/engine/src/live/feeds/user.ts` 补偿流程：`markResynced`、清 `gapStartUnix`、`discontinuity=false` 都在 `closedEarly` 检查之前；`closedEarly` 时缓存帧直接丢弃，`gapStartUnix` 也没记。
+- **复现**（真实 dist + 本地 WS，两次独立复现）：连接 2 补偿 4.5 秒期间推一笔吃单成交后掐断 → 日志先出现 `ledger RESYNC`、`healthy=true`，再抛错；连接 3 的补查起点 = 自己认证时间 − 5 秒，晚于成交时间 → 成交始终未送达，账本仍标"连续"。补偿只剩 0.3 秒时则能补上。
+- **兜底都接不住**：5 秒清理只管 UNKNOWN/待核对订单；重连快照只看订单在不在、不看 size_matched；场次结束撤单后 recoverAccount 跳过已撤订单。持仓股数靠 reconcile 最终会对，但这笔的成本、盈亏和阶梯 `filledShares` 一直是错的。
+- **影响**：部分成交 + 场次末撤单时少记钱（实盘 15 次运行里 user WS 一次没断过，这条路径还没真走到）。
+- **修法**：补偿开始就 `gapStartUnix ??= afterUnix`；`closedEarly`/`readyState` 检查通过之后才 `markResynced`、清标记；`closedEarly` 时把已认证连接的缓存帧照常交给 `pending.accept`。
+
+**O1 服务器 root 允许密码登录，防火墙关闭**
+- **实测**：`sshd -T` → `permitrootlogin yes`、`passwordauthentication yes`；root 设了密码；`ufw` inactive、iptables 全放行；auth.log 1633 次失败尝试（24 小时 272 次）。成功登录全部来自你自己的 IP 段，没有被入侵迹象。
+- **影响**：一旦 root 密码被猜中，钱包私钥（`/root/.config/pm-system/account.json`）直接暴露。
+- **修法**：`PasswordAuthentication no`、`PermitRootLogin prohibit-password`；Lightsail 防火墙只放行你的 IP 访问 22。**需要你决定**：关掉后只能用密钥登录。
+
+**O2 控制面退出时把交易引擎一起杀掉，且没有内存上限**
+- **实测**：引擎由控制面 `subprocess.Popen` 启动，在同一个 cgroup；单元 `KillMode=control-group`、`Restart=always`、`MemoryMax=infinity`；机器 1.9GB 内存无 swap，09-15 已发生过一次全局 OOM。P3-7 只修了"事后记录原因"，没修根因。
+- **影响**：控制面崩溃、OOM、`systemctl restart` 或系统更新重启，都会在场次中途杀掉实盘引擎，阶梯和持仓被丢下。
+- **修法**：引擎用 `systemd-run --unit=pm-engine-<run_id>` 独立单元启动，控制面按单元名重新接管；控制面加 `MemoryMax`。
+
+**O3 没有任何备份**
+- **实测**：无 crontab、无备份 timer、无 aws CLI。`ledger.sqlite3`、`*.settlements.json`、`account.json` 只在这一块盘上。Lightsail 快照是否开启从服务器里看不到（疑似未开）。
+- **修法**：开 Lightsail 自动快照；每晚 sqlite `.backup` + 结算记录加密拷到盘外。
+
+#### P2
+
+- **H1 引擎重启后，日内止损看不到未结算持仓的浮亏**：`core.ts` 的 `lastBidByToken` 只在内存；重启后已结束未结算的持仓按成本估值（复现：−8 → 0），交易所约 13–18 分钟后才把输家标 0。已触发的止损会保留。最坏多亏约一场：止损 $10 时实际可能 $15–20，且只在那个窗口内重启才会发生。修法：把每个 token 的最后标记价存进 `CoreState`，或场次结束且无报价时按 0 估值直到结算。
+- **H2 成交补查路径没有异常保护，出错会让引擎进程直接退出**：`user.ts` `void reconcileTrades(...)` 无 catch，里面账本 `appendFileSync/fsyncSync` 没包；整个引擎没有 `unhandledRejection` 处理，Node 24 默认直接退出；控制面不自动重启引擎。触发条件是磁盘满或 I/O 错误。修法：`.catch` 置不健康并记日志，或像 WS 路径一样包 try/catch。
+- **A1 官方数据只拿到一部分时，盈亏可能变号**：`account-data.ts` 第一页成功就 `available=true`，后面页失败只标 `complete=false`；控制面重启后的第一次刷新没有旧数据可回落；`official_pnl.round_results` 只看 `available`。复现（真实模块 + 真实数据截到第 1 页）：全部历史 **−3.56 → +131.32**（官方按盈利降序返回，第一页几乎全是赢）。窗口约 15 秒。修法：`round_results` 还要求 `complete is True`。
+- **A2 账户快照过期后，官方盈亏仍被当作新数据**：过期只改顶层 `available`，分区标记不变；`_official_results` 按 `_checked` 缓存，失败不重置。修法：`snapshot.stale` 时返回 None。
+- **A3 官方数据不可用时，悄悄换成账本的另一套数**：`_apply_official` 回落账本、状态仍是 ready，前端不读 `pnl_source`。两套数差别大（今日账本 +1.50 vs 官方 +3.07）。修法：保留上次官方结果并标过期，不换口径。
+- **F1 自动交易页的「查看市场」下拉悄悄改了策略币种**：选 ETH 后页面仍是 BTC，但网址写成 `?assetId=eth` 并带到策略页；只改预算保存，草稿也会存成 ETH；停机时激活，下次启动交易的就是 ETH，运行池还是 BTC。策略页会提示"将改为 ETH"，运行中不能切。修法：删掉这个下拉（页面本来就只显示运行池币种），策略页默认用已发布币种、只在明确操作时切换。
+- **M1 采集器提前约 5 分钟就连下一场**：`market-snapshot.ts` 每 15 秒都查 `[now, next]`，75 秒预热形同虚设。实测下一场首条数据中位数提前 296 秒；连接数 21–40；每分钟重连约 32 次（8.4 小时 16,283 次）。只影响采集器（引擎有自己的行情）。修法：周期查询只查 `[now]`，下一场交给边界预热。
+- **采集器在每场后段提前约 1 分钟没数据**：前 230 秒正常（最长间隔中位 1.27 秒），但每场从 +140～+240 秒起常有一段静默，比引擎早停约 1 分钟。机制推测是看门狗 5 秒一边无报价就断开 + 退避只在连满 30 秒后清零（`polymarket.ts` `PM_WS_RECONNECT_STABLE_MS`），未逐条证实。影响控制台末段显示和录制的回测数据。修法：收到任何完整盘口就把退避清零；看门狗日志带上币种和场次。
+- **运行日志没有自动清理**：交易时 69–113MB/小时（约 64% 是逐帧延迟指标）；默认 `maxRounds=0` 即无限场；只有手动"清空数据"会删。一直跑 20–31 天会把 52GB 写满（按目前用量要几年）。修法：逐帧延迟改成每秒汇总或抽样；只保留最近 N 次运行的日志。
+- **D1/D2/D3 文档会把人带错**：ARCHITECTURE.md 写心跳 25 秒（代码 5 秒，照文档改回去就会重现 P1-12 挂单被撤）；DATA-MODEL.md 写统计按 UTC 日（实际北京时间）；ARCHITECTURE.md §7 和 API-CONTRACT.md 仍写盈亏由账本算（实际官方数据，且有 `pnl_source` 回落）。
+
+#### P3
+
+- **U2 结算确认后清掉所有正在跑的场次的行情基线**：`account_recovery_started` 不带市场，下一场会丢一次跨价。修法：只重置受影响的市场，列表为空时不重置。
+- **A4 已结算赢家按买一 0.98 估值**：日内盈亏少算约 2%，结算后消失，偏保守。
+- **C1 推送服务内存泄漏**：退订和渲染撞上时数据永久留在内存（复现 200 次约 40MB；实际每次几 KB，较慢）。修法：渲染完持锁检查路径仍被订阅。
+- **C2/F3 同一场既"已结算"又"待确认"**：`/api/rounds` 只改了 status/settled，没改 settlementState；`pending_settlements` 来自账本。线上 1790889300 可见。
+- **F2 设置页运行日志停在打开时的那次运行**。
+- **F4–F6 文案和残留**：NO 盘口写"卖出方向"；策略页副标题写死 BTC；"查看全部延迟"按钮永久禁用；日志脚注指向已删页面。
+- **推送连接没有按客户端限制数量**（C3 合并）：一个已登录客户端可以占满 50 个名额，其他页面退回轮询。
+- **D4–D16 文档与残留代码**：文档写只支持 3 个币（实际 7 个）；654 行没人用的旧风控/预留代码（`account-control.ts` 等，内含没生效的 30 美元止损）；北京时间日界写了 5 份、币种列表写了 4 份、手续费兜底 0.07 写了 3 份（其中一处舍入方向不同）；ARCHITECTURE.md 说"没有测试框架"（实际约 50 个回归测试）；UI-REDESIGN/README/AGENTS 仍把已完成的推送和界面重构列为待做；`discovery.ts` 默认端口 8765（实际 18766，靠环境变量才对）；前端残留 `storage` 导出、`overview` 注释和选择器。
+- **运维小项**：部署 120 秒超时可能误报结果；`.pm-releases` 34 个、本机 `.deploy` 42 个旧版本不清理；`/root/pm-probe` 旧探针目录（含运行数据，删前要你同意）；两份控制台密码文件；nginx 缺 HSTS；证书续期期间整站 503；journald 无上限。
+- **M4**：10-02 18:07 UTC 之前录的五档有交叉（深度修复前），回测要跳过 `t < 1790878037`。
+
+
 ---
 
 ## 已修复
