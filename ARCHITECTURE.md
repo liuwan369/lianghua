@@ -20,7 +20,7 @@
         行情采集器 node dist/cli/market-snapshot.js (systemd: pm-clob-market-snapshot)
           ├─ 每 250 ms 写 data/dashboard/market-snapshot.json（控制台展示用）
           ├─ 记录器 market-recorder → data/market-history/
-          └─ 模拟交易 reversal-sim → data/sim/（真实策略跑真实行情，只数触发次数）
+          └─ 模拟交易 reversal-sim → data/sim/（三种做法跑真实行情：实盘现状 / 建议·立即 / 建议·停1秒）
 ```
 
 | 进程 | 启动方式 | 职责 |
@@ -82,7 +82,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
 | `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
 | `strategies/btc-reversal.ts` | 策略本体 |
-| `sim/reversal-sim.ts` | 模拟交易：每币两份真实 `BtcReversalStrategy`，喂真实盘口，统计每场触发次数（首次 + 每次反转，不设上限）。阶梯 `[5,20,60,140,…140]`、`maxStages 1000`、无预算/亏损上限；每次 `submit` 回灌一张合成 FILLED 订单让级数被消费、方向推进。RAW 份吃全部原始帧（`firingsRaw`，实盘规则原样）；FILTERED 份（主数 `firings`）丢掉两边卖价和 >1.05 的乱帧，且一边卖价须在 0.67 上连续停 1 秒才以原价喂给策略（之前喂 0.669）。FILTERED 的每次出手在 0.3 秒后第一帧按该边 ≤0.70 的卖档成交（最便宜先吃，每档量本场只用一次，没成交的不补，下界；回合结束前没帧为 `too_late`；1790878037 前深度不可信为 `no_depth`，盈亏 null），taker 费 `polymarketFillFee` 0.07。赢方取最后一个非乱帧。只写从开场 10 秒内就看着的场次，收盘后写一行 `data/sim/<币>.jsonl`（`schemaVersion 2`）。绝不碰实盘下单/账本/配置 |
+| `sim/reversal-sim.ts` | 模拟交易，每场三种做法（`schemaVersion 3`，每场一行 `data/sim/<币>.jsonl`，只写开场 10 秒内就看着的场次）。A 实盘现状：每场一份真实 `BtcReversalStrategy`（开场第一帧创建、收盘丢弃）吃全部原始帧，阶梯 `[5,20,60,140,…140]`、`maxStages 1000`、无预算；每次 submit 是 0.70 的 GTC 限价买单，t+0.3 到交易所，[t+0.3,t+1.3] 内第一帧吃该边 ≤0.70 卖档（taker），余量挂到收盘：之后每帧 ≤0.70 档位上比上一帧新增的量（加量或新档位）按先挂先成交（maker，费 0），每边每价记上次看到的量，不重复用；提交即消耗一档（0 成交也算），回灌 OPEN/PARTIAL/FILLED，收盘 CANCELLED。B1 建议·立即 / B2 建议·停1秒：模拟器里的纯状态机，只用干净帧（两边卖价和 ≤1.05），首帧只定基线；B1 上一帧 <0.67 本帧 ≥0.67 即触发，B2 真上穿后在 0.67 上停满 1 秒触发（每次上方停留只触发一次）。只 FAK：[t+0.3,t+1.3] 内第一帧按上限吃卖档（每档量本场只用一次，没吃到的丢弃；没帧 `gap`，到收盘 `too_late`）。第 1 档 5 股 ≤0.70，0 成交不算档；有持仓后只在落后一边（按持股数）上穿时对冲：第 k 档 `[5,20,60,140,…]`，上限为满足 `held[X]+S ≥ cost+S·(p+fee(p))` 的最高分价（≤0.99），最优卖价高于上限 `over_cap`；对冲部分成交且仍落后，下次上穿补同一档（`topup`）。taker 费 `polymarketFillFee` 0.07；1790878037 前深度不可信 `no_depth`，盈亏 null；赢方取最后一个干净帧（卖价或买价 ≥0.9）；盈亏 = held[赢方] − cost（含费）。绝不碰实盘下单/账本/配置 |
 | `models.ts` | 价格量化、手续费公式 `shares × rate × (p(1−p))^exp` |
 
 ### `scripts/`
@@ -107,7 +107,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
-| `*.html` + `*-block.js/css` | 五个页面：自动交易、市场、策略、模拟交易（`sim.html`，读 `/api/sim` 看每场触发次数分布和每档能否买到）、设置 |
+| `*.html` + `*-block.js/css` | 五个页面：自动交易、市场、策略、模拟交易（`sim.html`，读 `/api/sim` 比三种做法的出手次数、每档能否买到和模拟盈亏）、设置 |
 | `stats-panel.js` | 自动交易页的交易统计、服务器状态、清空数据 |
 | `event-log.js` | 设置页的运行日志 |
 | `shared/preview-core.js` | 请求、侧栏、格式化 |

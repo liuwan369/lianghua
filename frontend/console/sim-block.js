@@ -1,17 +1,24 @@
 "use strict";
-// 模拟交易页：真实策略跑在真实行情上，数每场出手几次（第 1 次触发 + 每次反向触发），
-// 不设上限，用来决定阶梯要几档。数据来自 /api/sim 与 /api/sim/overview，只读，
-// 绝不碰实盘下单、账本或实盘配置。
+// 模拟交易页：在真实行情上比三种做法——实盘现状 / 建议·立即 / 建议·停1秒——
+// 每场出手几次、每档能不能买到、模拟盈亏。数据来自 /api/sim 与 /api/sim/overview，
+// 只读，绝不碰实盘下单、账本或实盘配置。
 (() => {
   const { request, format, navMarkup, navigate } = window.PolyPreview;
   const COINS = ["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"];
   const DAYS = [1, 3, 7, 10];
+  const VARIANTS = [
+    ["A", "实盘现状", "现在实盘的做法：卖价上穿 0.67 就按 5/20/60/140 股挂 0.70 限价单，没成交的挂到收盘，这一档照样算用掉。"],
+    ["B1", "建议·立即", "卖价一过 0.67 立刻吃单，吃不到的不要；第 1 档 5 股 ≤0.70，之后只在落后那边上穿时补，价格不超过保本价，没买到不算一档。"],
+    ["B2", "建议·停1秒", "规则同「建议·立即」，但卖价要在 0.67 上停满 1 秒才出手，滤掉一闪而过的假突破。"],
+  ];
+  const VARIANT_NAME = Object.fromEntries(VARIANTS.map(([key, name]) => [key, name]));
   const LADDER = 4;          // 阶梯档数：5/20/60/140 股
   const PAGE_SIZE = 50;
   const CHIPS_SHOWN = 12;
   const params = new URLSearchParams(window.location.search);
   let assetId = COINS.includes((params.get("assetId") || "").toLowerCase()) ? params.get("assetId").toLowerCase() : "btc";
   let days = DAYS.includes(Number(params.get("days"))) ? Number(params.get("days")) : 10;
+  let variant = VARIANT_NAME[params.get("variant")] ? params.get("variant") : "B1";
   let filter = "all";
   let page = 0;
   let sim = null;
@@ -27,14 +34,14 @@
     <aside class="preview-sidebar">
       <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>交易控制台</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
-      <p class="sidebar-copy">用真实行情回放真实策略，只数出手次数，不下任何单。</p>
+      <p class="sidebar-copy">用真实行情回放三种做法，比出手次数、成交和盈亏，不下任何单。</p>
       <nav aria-label="控制台导航">${navMarkup("sim")}</nav>
       <div class="sidebar-status"><i></i><span>模拟数据</span><small>只读 · 不下单</small></div>
     </aside>
     <main class="settings-main sim-main">
       <header class="preview-header">
-        <div class="hero-copy"><p class="eyebrow">模拟交易 · 出手次数</p><div class="hero-title-row"><h1>模拟交易</h1><span class="language-chip">真实行情 · 不下单</span></div>
-        <p class="subtitle">每场策略会出手几次，决定阶梯要几档。</p></div>
+        <div class="hero-copy"><p class="eyebrow">模拟交易 · 三种做法对比</p><div class="hero-title-row"><h1>模拟交易</h1><span class="language-chip">真实行情 · 不下单</span></div>
+        <p class="subtitle">实盘现状和两种建议做法，在同样的行情上谁出手更少、买得到、亏得少。</p></div>
       </header>
 
       <section class="sim-controls" aria-label="筛选">
@@ -44,11 +51,22 @@
         <button type="button" class="action-button" data-refresh><span aria-hidden="true">↻</span>刷新</button>
       </section>
 
+      <section class="sim-panel" aria-labelledby="sim-compare-title">
+        <div class="panel-heading"><div><p class="eyebrow">对比</p><h3 id="sim-compare-title">三种做法对比</h3></div><span class="panel-meta">当前币种 · 同一批场次</span></div>
+        <div class="sim-scroll"><table class="sim-table">
+          <thead><tr><th scope="col">做法</th><th scope="col">平均出手</th><th scope="col">最多</th><th scope="col">&gt;${LADDER} 次场数</th><th scope="col">第1档全部买到</th><th scope="col">第2档</th><th scope="col">第3档</th><th scope="col">第4档</th><th scope="col">模拟盈亏 总</th><th scope="col">每场</th><th scope="col">最差一场</th></tr></thead>
+          <tbody data-compare></tbody>
+        </table></div>
+      </section>
+
+      <section class="sim-controls" aria-label="做法">
+        <div class="sim-pills" role="group" aria-label="看哪种做法" data-variants></div>
+      </section>
+
       <section class="sim-panel sim-conclusion" aria-label="一句话结论">
         <p class="eyebrow">一句话结论</p>
         <p class="sim-conclusion-text" data-conclusion>读取中…</p>
-        <p class="sim-definition">出手 = 第 1 次触发（任一边卖价从 0.67 下方涨到 0.67 以上）+ 之后每次反向触发。同一边重复上穿不算。</p>
-        <p class="sim-definition">已过滤：两边卖价和 >1.05 的乱价；卖价须在 0.67 上停 1 秒才算一次；成交按 0.3 秒后的五档深度，每档只用一次，没成交的不补。</p>
+        <p class="sim-definition" data-variant-definition></p>
       </section>
 
       <section class="sim-stats" aria-label="汇总">
@@ -66,9 +84,9 @@
       </section>
 
       <section class="sim-panel" aria-labelledby="sim-fill-title">
-        <div class="panel-heading"><div><p class="eyebrow">成交</p><h3 id="sim-fill-title">每档能不能买到</h3></div><span class="panel-meta">0.3 秒后的卖单深度，限价 0.70</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">成交</p><h3 id="sim-fill-title">每档能不能买到</h3></div><span class="panel-meta">0.3 秒后的卖单深度</span></div>
         <div class="sim-scroll"><table class="sim-table">
-          <thead><tr><th scope="col">档位</th><th scope="col">触发次数</th><th scope="col">全部买到</th><th scope="col">部分</th><th scope="col">没买到</th><th scope="col">来不及</th><th scope="col">平均买到比例</th><th scope="col">0.70 内平均可买量</th></tr></thead>
+          <thead><tr><th scope="col">档位</th><th scope="col">尝试次数</th><th scope="col">全部买到</th><th scope="col">部分</th><th scope="col">没买到</th><th scope="col">超过保本价</th><th scope="col">断档</th><th scope="col">平均买到比例</th><th scope="col">平均可买量</th></tr></thead>
           <tbody data-fill></tbody>
         </table></div>
       </section>
@@ -76,7 +94,7 @@
       <section class="sim-panel" aria-labelledby="sim-coins-title">
         <div class="panel-heading"><div><p class="eyebrow">对比</p><h3 id="sim-coins-title">七个币对比</h3></div><span class="panel-meta">点一行切换币种</span></div>
         <div class="sim-scroll"><table class="sim-table">
-          <thead><tr><th scope="col">币种</th><th scope="col">场次</th><th scope="col">平均出手</th><th scope="col">中位数</th><th scope="col">最多</th><th scope="col">≤${LADDER} 次占比</th><th scope="col">&gt;${LADDER} 次场数</th><th scope="col">模拟盈亏(前${LADDER}档)</th></tr></thead>
+          <thead><tr><th scope="col">币种</th><th scope="col">场次</th><th scope="col">实盘现状最多出手</th><th scope="col">盈亏·实盘现状</th><th scope="col">盈亏·建议·立即</th><th scope="col">盈亏·建议·停1秒</th></tr></thead>
           <tbody data-overview></tbody>
         </table></div>
       </section>
@@ -85,13 +103,13 @@
         <div class="panel-heading"><div><p class="eyebrow">明细</p><h3 id="sim-rounds-title">场次明细</h3></div><span class="panel-meta" data-rounds-caption></span></div>
         <div class="sim-pills" role="group" aria-label="筛选场次" data-filters></div>
         <div class="sim-scroll"><table class="sim-table">
-          <thead><tr><th scope="col">时间（北京）</th><th scope="col">出手次数</th><th scope="col">方向序列</th><th scope="col">赢方</th><th scope="col">模拟盈亏(前${LADDER}档)</th><th scope="col"><span class="sim-sr">展开</span></th></tr></thead>
+          <thead><tr><th scope="col">时间（北京）</th><th scope="col">出手次数</th><th scope="col">方向序列</th><th scope="col">赢方</th><th scope="col">模拟盈亏</th><th scope="col"><span class="sim-sr">展开</span></th></tr></thead>
           <tbody data-rounds></tbody>
         </table></div>
         <div class="sim-pager" data-pager></div>
       </section>
 
-      <p class="sim-footnote" role="note">模拟：成交按 0.3 秒后那一刻 0.70 以内的卖单深度算，没买到的部分不再补，不含排队；盈亏只按前 4 档 5/20/60/140 股估算，实盘仍可能更差。</p>
+      <p class="sim-footnote" role="note">模拟：成交按 0.3 秒后的五档深度，每档只用一次，没考虑别人抢单；实盘只会更差。</p>
     </main>
   </div>`;
 
@@ -105,7 +123,9 @@
   const pct = (part, whole, digits = 0) => (whole ? ((part * 100) / whole).toFixed(digits) : "0");
   const money = (value) => (Number.isFinite(value)
     ? `<span class="${value > 0 ? "sim-up" : value < 0 ? "sim-down" : ""}">${value > 0 ? "+" : ""}${value.toFixed(2)}</span>` : "--");
-  const FILL_TEXT = { full: "全部买到", partial: "部分", none: "没买到", too_late: "来不及", no_depth: "无深度数据" };
+  const FILL_TEXT = { full: "全部买到", partial: "部分", none: "没买到", over_cap: "超过保本价", topup: "补同一档",
+    gap: "断档", too_late: "来不及", no_depth: "无深度数据" };
+  const num2 = (value) => (Number.isFinite(value) ? Number(value).toFixed(2) : "--");
   const dirText = (dir) => (dir === "UP" ? "涨" : dir === "DOWN" ? "跌" : "未定");
   const dirClass = (dir) => (dir === "UP" ? "sim-up" : dir === "DOWN" ? "sim-down" : "");
   const pill = (attr, value, label, active) =>
@@ -114,6 +134,8 @@
   const renderControls = () => {
     el("[data-coins]").innerHTML = COINS.map((coin) => pill("data-coin", coin, coin.toUpperCase(), coin === assetId)).join("");
     el("[data-days]").innerHTML = DAYS.map((value) => pill("data-day", value, `${value} 天`, value === days)).join("");
+    el("[data-variants]").innerHTML = VARIANTS.map(([key, name]) => pill("data-variant", key, name, key === variant)).join("");
+    el("[data-variant-definition]").textContent = `${VARIANT_NAME[variant]}：${VARIANTS.find(([key]) => key === variant)[2]}`;
     el("[data-filters]").innerHTML = [["all", "全部"], ["over4", `只看 >${LADDER} 次`], ["zero", "只看 0 次"]]
       .map(([key, label]) => pill("data-filter", key, label, key === filter)).join("");
   };
@@ -128,18 +150,30 @@
     const over = total - within;
     const maxAt = summary.maxRound ? beijing(summary.maxRound.startsAt) : "--";
     el("[data-conclusion]").textContent = total
-      ? `${coin} 最近 ${days} 天 ${total} 场：${pct(dist["1"] || 0, total)}% 只出手 1 次，${pct(within, total)}% 不超过 ${LADDER} 次；`
-        + `最多一场出手 ${summary.maxFirings} 次（${maxAt}）。按 ${LADDER} 档阶梯，${pct(over, total)}% 的场次会不够用。`
-      : `${coin} 最近 ${days} 天还没有模拟场次。`;
-    if (total) el("[data-conclusion]").textContent += `实盘规则原样数（不过滤）最多 ${summary.rawMax ?? "--"} 次。`;
+      ? `【${VARIANT_NAME[variant]}】${coin} 最近 ${days} 天 ${total} 场：${pct(within, total)}% 不超过 ${LADDER} 次，`
+        + `最多一场出手 ${summary.maxFirings} 次（${maxAt}），${pct(over, total)}% 的场次超过 ${LADDER} 次；`
+        + `模拟盈亏共 ${num2(summary.pnlTotal)}，每场 ${num2(summary.pnlPerRound)}。`
+      : `【${VARIANT_NAME[variant]}】${coin} 最近 ${days} 天还没有模拟场次。`;
     el("[data-stat-rounds]").textContent = String(total);
     el("[data-stat-rounds-sub]").textContent = `有行情的场次，其中 ${summary.withFiring || 0} 场有出手`;
     el("[data-stat-avg]").textContent = String(summary.avgFirings ?? 0);
-    el("[data-stat-avg-sub]").textContent = `次 · 中位数 ${summary.medianFirings ?? "--"} 次 · 不过滤 ${summary.rawAvg ?? "--"}`;
+    el("[data-stat-avg-sub]").textContent = `次 · 中位数 ${summary.medianFirings ?? "--"} 次`;
     el("[data-stat-max]").textContent = String(summary.maxFirings || 0);
-    el("[data-stat-maxround]").textContent = `${summary.maxRound ? `次 · ${maxAt}（北京）` : "次"} · 不过滤 ${summary.rawMax ?? "--"}`;
+    el("[data-stat-maxround]").textContent = summary.maxRound ? `次 · ${maxAt}（北京）` : "次";
     el("[data-stat-over4]").textContent = `${over} 场`;
-    el("[data-stat-over4-sub]").textContent = `占 ${pct(over, total, 1)}%，${LADDER} 档阶梯不够用 · 不过滤 ${summary.rawOver4 ?? "--"} 场`;
+    el("[data-stat-over4-sub]").textContent = `占 ${pct(over, total, 1)}%，${LADDER} 档阶梯不够用`;
+  };
+
+  const renderCompare = () => {
+    const compare = sim.compare || {};
+    el("[data-compare]").innerHTML = VARIANTS.map(([key, name, note]) => {
+      const row = compare[key] || {};
+      const full = row.rungFullPct || {};
+      return `<tr class="sim-compare-row${key === variant ? " active" : ""}"><th scope="row">${esc(name)}<small class="sim-variant-note">${esc(note)}</small></th>`
+        + `<td>${row.avgFirings ?? 0}</td><td>${row.maxFirings ?? 0}</td><td class="${row.over4 ? "sim-warn" : ""}">${row.over4 ?? 0}</td>`
+        + ["1", "2", "3", "4"].map((rung) => `<td>${full[rung] ?? 0}%</td>`).join("")
+        + `<td>${money(row.pnlTotal)}</td><td>${money(row.pnlPerRound)}</td><td>${money(row.worstPnl)}</td></tr>`;
+    }).join("");
   };
 
   const renderChart = () => {
@@ -172,21 +206,21 @@
     el("[data-fill]").innerHTML = ["1", "2", "3", "4", "5+"].map((rung) => {
       const row = fill[rung] || {};
       return `<tr><th scope="row">${rung === "5+" ? "第 5 档及以后" : `第 ${rung} 档`}</th><td>${row.count || 0}</td>`
-        + `<td>${row.full || 0}（${row.fullPct ?? 0}%）</td><td>${row.partial || 0}</td><td>${row.none || 0}</td><td>${row.tooLate || 0}</td>`
+        + `<td>${row.full || 0}（${row.fullPct ?? 0}%）</td><td>${row.partial || 0}</td><td>${row.none || 0}</td>`
+        + `<td class="${row.overCap ? "sim-warn" : ""}">${row.overCap || 0}</td><td>${row.gap || 0}</td>`
         + `<td>${row.avgFilledPct ?? 0}%</td><td>${row.avgAvail ?? 0} 股</td></tr>`;
     }).join("");
   };
 
   const renderOverview = () => {
     const body = el("[data-overview]");
-    if (!overview) { body.innerHTML = `<tr><td colspan="8" class="sim-empty">暂无数据</td></tr>`; return; }
+    if (!overview) { body.innerHTML = `<tr><td colspan="6" class="sim-empty">暂无数据</td></tr>`; return; }
     body.innerHTML = (overview.coins || []).map((row) => {
       const active = row.assetId === assetId;
-      const within = row.rounds ? (100 - row.over4Pct).toFixed(1) : "0";
+      const v = row.variants || {};
       return `<tr class="sim-coin-row${active ? " active" : ""}" data-coin-row="${esc(row.assetId)}" tabindex="0" aria-current="${active}">`
-        + `<th scope="row">${esc(String(row.assetId).toUpperCase())}</th><td>${row.rounds}</td><td>${row.avgFirings}</td>`
-        + `<td>${row.medianFirings}</td><td>${row.maxFirings}</td><td>${within}%</td>`
-        + `<td class="${row.over4 ? "sim-warn" : ""}">${row.over4}（${row.over4Pct}%）</td><td>${money(row.simPnl4Total)}</td></tr>`;
+        + `<th scope="row">${esc(String(row.assetId).toUpperCase())}</th><td>${row.rounds}</td><td>${(v.A || {}).maxFirings ?? 0}</td>`
+        + VARIANTS.map(([key]) => `<td>${money((v[key] || {}).pnlTotal)}</td>`).join("") + `</tr>`;
     }).join("");
   };
 
@@ -208,12 +242,12 @@
         + (events.length > CHIPS_SHOWN ? `<span class="sim-chip sim-more">+${events.length - CHIPS_SHOWN}</span>` : "");
       const detail = open
         ? `<tr class="sim-detail-row"><td colspan="6"><ol class="sim-events">${events.map((event) =>
-          `<li>第 ${event.i} 次 · 第 ${Math.round(event.t)} 秒 · <span class="${dirClass(event.dir)}">${dirText(event.dir)}</span> · 卖价 ${Number(event.ask).toFixed(2)} · 要买 ${event.shares} · 0.70内可买 ${event.avail ?? "--"} · 实际买到 ${event.filled ?? "--"} · ${FILL_TEXT[event.status] || "--"}</li>`).join("") || "<li>本场没有出手</li>"}</ol></td></tr>`
+          `<li>第 ${event.rung} 档 · 第 ${Math.round(event.t)} 秒 · <span class="${dirClass(event.dir)}">${dirText(event.dir)}</span> · 卖价 ${num2(event.ask)} · 要买 ${event.want} · 上限 ${num2(event.cap)} · 可买 ${event.avail ?? "--"} · 买到 ${event.filled ?? "--"}${event.maker ? `（挂单成交 ${event.maker}）` : ""} · 均价 ${num2(event.avgPrice)} · ${FILL_TEXT[event.status] || "--"}</li>`).join("") || "<li>本场没有出手</li>"}</ol></td></tr>`
         : "";
       return `<tr class="sim-round-row" data-round="${esc(key)}" data-firings="${firings}">`
-        + `<td>${beijing(round.startsAt)}</td><td class="sim-firings${firings > LADDER ? " sim-warn" : ""}">${firings} <small class="sim-raw">原 ${Number(round.firingsRaw) || 0}</small></td>`
+        + `<td>${beijing(round.startsAt)}</td><td class="sim-firings${firings > LADDER ? " sim-warn" : ""}">${firings}</td>`
         + `<td><span class="sim-chips">${chips || "—"}</span></td>`
-        + `<td class="${dirClass(round.winner)}">${dirText(round.winner)}</td><td>${money(round.simPnl4)}</td>`
+        + `<td class="${dirClass(round.winner)}">${dirText(round.winner)}</td><td>${money(round.pnl)}</td>`
         + `<td><button class="action-button sim-expand" type="button" data-expand="${esc(key)}" aria-expanded="${open}">${open ? "收起" : "展开"}</button></td></tr>${detail}`;
     }).join("") || `<tr><td colspan="6" class="sim-empty">没有符合条件的场次</td></tr>`;
     el("[data-pager]").innerHTML = pages > 1
@@ -227,6 +261,7 @@
     renderControls();
     renderOverview();
     if (!sim) return;
+    renderCompare();
     renderSummary();
     renderChart();
     renderFill();
@@ -240,10 +275,11 @@
     const source = el("[data-source]");
     try {
       const [simData, overviewData] = await Promise.all([
-        request(`/api/sim?assetId=${encodeURIComponent(assetId)}&days=${days}`),
+        request(`/api/sim?assetId=${encodeURIComponent(assetId)}&days=${days}&variant=${variant}`),
         request(`/api/sim/overview?days=${days}`).catch(() => null),
       ]);
-      sim = { rounds: simData.rounds || [], summary: simData.summary || { rounds: 0, maxFirings: 0, distribution: {} } };
+      sim = { rounds: simData.rounds || [], compare: simData.compare || {},
+        summary: simData.summary || { rounds: 0, maxFirings: 0, distribution: {} } };
       overview = overviewData;
       render();
       source.textContent = `更新于 ${format.clock()}`;
@@ -260,6 +296,7 @@
     const url = new URL(window.location.href);
     url.searchParams.set("assetId", assetId);
     url.searchParams.set("days", String(days));
+    url.searchParams.set("variant", variant);
     window.history.replaceState(null, "", `${url.pathname}${url.search}`);
   };
   const reload = () => { expanded.clear(); page = 0; syncUrl(); renderControls(); load(); };
@@ -270,6 +307,7 @@
     let value;
     if ((value = hit("data-coin")) !== null || (value = hit("data-coin-row")) !== null) { switchCoin(value); return; }
     if ((value = hit("data-day")) !== null) { days = Number(value); reload(); return; }
+    if ((value = hit("data-variant")) !== null) { if (VARIANT_NAME[value]) { variant = value; reload(); } return; }
     if ((value = hit("data-filter")) !== null) { filter = value; page = 0; render(); return; }
     if ((value = hit("data-page")) !== null) { page = Math.max(0, Number(value)); renderRounds(); return; }
     if ((value = hit("data-expand")) !== null) { if (expanded.has(value)) expanded.delete(value); else expanded.add(value); renderRounds(); return; }

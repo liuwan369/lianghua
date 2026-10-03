@@ -27,6 +27,6 @@ try { lines = readFileSync(join(dir, "btc.jsonl"), "utf8").trim().split("\n").fi
 rmSync(dir, { recursive: true, force: true });
 assert.equal(lines.length, 1, "the ended round is written when the next round's books arrive");
 assert.equal(lines[0].roundId, String(R));
-assert.equal(lines[0].firings, 1);
+assert.equal(lines[0].variants.A.firings, 1);
 assert.equal(lines[0].winner, "UP");
 console.log("sim-live-finalize OK");

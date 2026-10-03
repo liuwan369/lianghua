@@ -1,8 +1,10 @@
-// 模拟交易页 (sim.html + sim-block.js). With stub data whose max firing is 67:
-// the conclusion sentence names 67 and the >4 share, the chart has one row for
-// every value 0..67 (no capping) with the 67 count printed, the seven-coin table
-// renders from /api/sim/overview, and the ">4 次" filter leaves only rounds
-// with more than 4 firings. sim.html loads the shared shell stylesheet.
+// 模拟交易页 (sim.html + sim-block.js), three variants. With stub data:
+// the "三种做法对比" card has a row per variant (实盘现状 / 建议·立即 / 建议·停1秒)
+// with its explanation line; variant pills (default 建议·立即) switch the
+// conclusion, stat cards, chart, rung table and round list by requesting
+// /api/sim?variant=; the chart has one row for every value 0..max (no capping);
+// the rung table has a 超过保本价 column; events show Chinese labels; the
+// seven-coin table shows PnL for all three variants. sim.html loads the shell CSS.
 //
 // Run:  node frontend/console/regress/sim.mjs
 import assert from "node:assert/strict";
@@ -41,32 +43,37 @@ const dom = makeDom();
 const root = dom.lookup("#sim-block-root");
 const requests = [];
 const base = 1799900100;
+const ev = (k, status) => ({ rung: k + 1, t: 10 + k, dir: k % 2 ? "DOWN" : "UP", ask: 0.68, want: 5, cap: 0.7,
+  avail: 37, filled: status === "full" ? 5 : 2, avgPrice: 0.69, cost: 3.4, fee: 0.07, status });
 const round = (i, firings, winner = "UP") => ({
-  asset: "btc", roundId: String(base - i * 300), startsAt: base - i * 300, firings, reversals: Math.max(0, firings - 1),
-  firingsRaw: firings + 13, winner, simPnl4: firings ? 1 : 0, depthOk: true,
-  events: Array.from({ length: firings }, (_, k) => ({ i: k + 1, t: 10 + k, dir: k % 2 ? "DOWN" : "UP", ask: 0.68, shares: 5,
-    avail: 37, filled: k ? 2 : 5, cost: 3.4, status: k ? "partial" : "full" })),
-});
-const rounds = [round(0, 67), round(1, 0, "DOWN"), round(2, 1), round(3, 1), round(4, 2), round(5, 5)];
-const distribution = {};
-for (let v = 0; v <= 67; v += 1) distribution[String(v)] = 0;
-for (const r of rounds) distribution[String(r.firings)] += 1;
-const simBody = {
-  schemaVersion: 1, assetId: "btc", rounds,
-  summary: { rounds: 6, withFiring: 5, maxFirings: 67, maxRound: { roundId: String(base), startsAt: base, firings: 67 },
-    avgFirings: 12.67, medianFirings: 1.5, distribution, winRateByFirings: {}, simPnl4Total: 5,
-    rawAvg: 25.67, rawMax: 80, rawOver4: 6,
-    rungFill: { "1": { count: 5, full: 5, partial: 0, none: 0, tooLate: 0, fullPct: 100, avgFilledPct: 100, avgAvail: 37 },
-      "2": { count: 3, full: 1, partial: 1, none: 1, tooLate: 0, fullPct: 33.3, avgFilledPct: 45.5, avgAvail: 12.5 },
-      "3": { count: 0, full: 0, partial: 0, none: 0, tooLate: 0, fullPct: 0, avgFilledPct: 0, avgAvail: 0 },
-      "4": { count: 0, full: 0, partial: 0, none: 0, tooLate: 0, fullPct: 0, avgFilledPct: 0, avgAvail: 0 },
-      "5+": { count: 62, full: 0, partial: 62, none: 0, tooLate: 0, fullPct: 0, avgFilledPct: 1.4, avgAvail: 2 } } },
+  asset: "btc", roundId: String(base - i * 300), startsAt: base - i * 300, depthOk: true, winner, firings,
+  rawSeconds: [], held: { UP: 5, DOWN: 0 }, cost: 3.5, pnl: firings ? 1 : 0,
+  events: Array.from({ length: firings }, (_, k) => ev(k, k ? "partial" : "full")) });
+const fillRow = (count, full, overCap = 0) => ({ count, full, partial: count - full - overCap, none: 0, overCap, gap: 0,
+  fullPct: count ? Math.round(full * 1000 / count) / 10 : 0, avgFilledPct: 45.5, avgAvail: 12.5 });
+const summaryFor = (max, rounds) => {
+  const distribution = {};
+  for (let v = 0; v <= max; v += 1) distribution[String(v)] = 0;
+  for (const r of rounds) distribution[String(r.firings)] += 1;
+  return { rounds: rounds.length, withFiring: 5, maxFirings: max, maxRound: { roundId: String(base), startsAt: base, firings: max },
+    avgFirings: 12.67, medianFirings: 1.5, over4: 2, distribution, pnlTotal: 5, pnlPerRound: 0.833, roundsWithPnl: 6,
+    worstRound: { roundId: String(base), startsAt: base, pnl: -2 },
+    rungFill: { "1": fillRow(5, 5), "2": fillRow(3, 1, 1), "3": fillRow(0, 0), "4": fillRow(0, 0), "5+": fillRow(62, 0, 9) } };
+};
+const compare = {
+  A: { avgFirings: 25.67, maxFirings: 80, over4: 6, rungFullPct: { 1: 90, 2: 70, 3: 40, 4: 10 }, pnlTotal: -42.5, pnlPerRound: -7.08, worstPnl: -30.2, roundsWithPnl: 6 },
+  B1: { avgFirings: 12.67, maxFirings: 67, over4: 2, rungFullPct: { 1: 100, 2: 33.3, 3: 0, 4: 0 }, pnlTotal: 5, pnlPerRound: 0.83, worstPnl: -2, roundsWithPnl: 6 },
+  B2: { avgFirings: 3.1, maxFirings: 9, over4: 1, rungFullPct: { 1: 95, 2: 50, 3: 20, 4: 0 }, pnlTotal: 1.25, pnlPerRound: 0.21, worstPnl: -4, roundsWithPnl: 6 } };
+const bodies = {
+  B1: () => { const rounds = [round(0, 67), round(1, 0, "DOWN"), round(2, 1), round(3, 1), round(4, 2), round(5, 5)];
+    return { schemaVersion: 3, assetId: "btc", variant: "B1", rounds, summary: summaryFor(67, rounds), compare }; },
+  A: () => { const rounds = [round(0, 80), round(1, 3)];
+    return { schemaVersion: 3, assetId: "btc", variant: "A", rounds, summary: summaryFor(80, rounds), compare }; },
 };
 const COINS = ["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"];
-const overviewBody = { schemaVersion: 1, days: 10, coins: COINS.map((assetId, i) => ({
-  assetId, rounds: i ? 0 : 6, avgFirings: i ? 0 : 12.67, medianFirings: i ? 0 : 1.5, maxFirings: i ? 0 : 67,
-  over4: i ? 0 : 2, over4Pct: i ? 0 : 33.3, simPnl4Total: i ? 0 : 5 })) };
-
+const vrow = (pnl) => ({ maxFirings: 0, avgFirings: 0, over4: 0, pnlTotal: pnl, pnlPerRound: 0 });
+const overviewBody = { schemaVersion: 3, days: 10, coins: COINS.map((assetId, i) => ({ assetId, rounds: i ? 0 : 6,
+  variants: { A: vrow(i ? 0 : -42.5), B1: vrow(i ? 0 : 5), B2: vrow(i ? 0 : 1.25) } })) };
 const window = {
   location: { search: "?assetId=btc&days=10", origin: "http://x", href: "http://x/sim.html?assetId=btc&days=10", pathname: "/sim.html" },
   addEventListener() {}, removeEventListener() {}, setTimeout, clearTimeout, setInterval: () => 0, clearInterval,
@@ -77,7 +84,8 @@ const window = {
 window.window = window; window.self = window;
 window.fetch = async (url) => {
   requests.push(String(url));
-  const body = String(url).includes("/api/sim/overview") ? overviewBody : simBody;
+  const body = String(url).includes("/api/sim/overview") ? overviewBody
+    : String(url).includes("variant=A") ? bodies.A() : bodies.B1();
   return { ok: true, status: 200, json: async () => body };
 };
 
@@ -90,7 +98,7 @@ vm.runInContext(readFileSync(new URL("../sim-block.js", import.meta.url), "utf8"
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 await wait(50);
 
-assert.ok(requests.some((u) => u.includes("/api/sim?assetId=btc&days=10")), "requested /api/sim");
+assert.ok(requests.some((u) => u.includes("/api/sim?assetId=btc&days=10&variant=B1")), "requested /api/sim with the default variant B1");
 assert.ok(requests.some((u) => u.includes("/api/sim/overview?days=10")), "requested /api/sim/overview");
 
 // Shell: shared sidebar + nav, coin pills are buttons with aria-pressed.
@@ -99,61 +107,69 @@ const pills = dom.lookup("[data-coins]")._html;
 assert.equal((pills.match(/aria-pressed=/g) || []).length, 7, "seven coin pills");
 assert.ok(pills.includes('data-coin="btc" aria-pressed="true"'), "BTC pill active");
 
-// Conclusion sentence: names 67 and the >4 share (2 of 6 = 33%).
-const conclusion = dom.lookup("[data-conclusion]")._text;
-assert.ok(conclusion.includes("67"), `conclusion names 67: ${conclusion}`);
-assert.ok(conclusion.includes("33%"), `conclusion names the >4 share: ${conclusion}`);
+// Compare card: three rows, each with its plain-Chinese explanation.
+const cmp = dom.lookup("[data-compare]")._html;
+assert.equal((cmp.match(/<tr/g) || []).length, 3, "three variant rows");
+for (const label of ["实盘现状", "建议·立即", "建议·停1秒"]) assert.ok(cmp.includes(label), `compare row ${label}`);
+assert.ok(cmp.includes("25.67") && cmp.includes("80") && cmp.includes("-42.50") && cmp.includes("-30.20"), "A numbers");
+assert.ok(cmp.includes("33.3%") && cmp.includes("+0.83"), "B1 numbers");
+assert.ok(cmp.includes("sim-variant-note"), "each variant has an explanation line");
 
-// Stat cards.
+// Variant pills: default 建议·立即.
+const vpills = dom.lookup("[data-variants]")._html;
+assert.equal((vpills.match(/aria-pressed=/g) || []).length, 3, "three variant pills");
+assert.ok(vpills.includes('data-variant="B1" aria-pressed="true"'), "建议·立即 is the default");
+
+// Conclusion (B1): names the variant, 67 and the >4 share (2 of 6 = 33%).
+let conclusion = dom.lookup("[data-conclusion]")._text;
+assert.ok(conclusion.includes("建议·立即") && conclusion.includes("67") && conclusion.includes("33%"), `conclusion: ${conclusion}`);
 assert.equal(dom.lookup("[data-stat-max]")._text, "67");
 assert.equal(dom.lookup("[data-stat-rounds]")._text, "6");
-assert.ok(dom.lookup("[data-stat-over4]")._text.includes("2"), "over-4 card shows 2 rounds");
 
-// Raw (unfiltered) numbers ride along as comparison text.
-assert.ok(conclusion.includes("实盘规则原样数（不过滤）最多 80 次"), `conclusion names the raw max: ${conclusion}`);
-assert.ok(dom.lookup("[data-stat-maxround]")._text.includes("不过滤 80"), "max card sub-text shows raw");
-assert.ok(dom.lookup("[data-stat-avg-sub]")._text.includes("不过滤 25.67"), "avg card sub-text shows raw");
-assert.ok(root._html.includes("已过滤：两边卖价和 >1.05 的乱价"), "the filters are explained");
-
-// Fill table: one row per rung 1..4 and 5+.
+// Rung table: five rows and the 超过保本价 column.
 const fill = dom.lookup("[data-fill]")._html;
 assert.equal((fill.match(/<tr/g) || []).length, 5, "five fill rows");
-assert.ok(fill.includes("第 1 档") && fill.includes("第 5 档及以后"), "rung labels");
-assert.ok(fill.includes("33.3%") && fill.includes("45.5%") && fill.includes("12.5"), "rung 2 fill numbers");
+assert.ok(root._html.includes("超过保本价"), "over-cap column header");
+assert.ok(fill.includes("第 1 档") && fill.includes("第 5 档及以后") && fill.includes("33.3%"), "rung labels and numbers");
 
-// Chart: one row for every value 0..67, the 67 row prints its count.
-const chart = dom.lookup("[data-chart]")._html;
-const rows = chart.match(/<li class="sim-row[^"]*"[^>]*>[^]*?<\/li>/g) || [];
-assert.equal(rows.length, 68, `a row for every value 0..67, got ${rows.length}`);
-const row67 = rows.find((r) => r.includes("出手 67 次"));
-assert.ok(row67 && row67.includes(">1 场<"), "the 67 row prints its count");
-assert.ok(row67.includes("sim-over"), "the 67 row is tinted as ladder exhausted");
-assert.ok(rows.find((r) => r.includes("出手 3 次")).includes("sim-ladder"), "rows 1..4 are tinted as covered");
+// Chart: one row for every value 0..67.
+const rowsOf = () => dom.lookup("[data-chart]")._html.match(/<li class="sim-row[^"]*"[^>]*>[^]*?<\/li>/g) || [];
+assert.equal(rowsOf().length, 68, `a row for every value 0..67, got ${rowsOf().length}`);
+assert.ok(rowsOf().find((r) => r.includes("出手 67 次")).includes(">1 场<"), "the 67 row prints its count");
 
-// Seven-coin table.
+// Seven-coin table: PnL for the three variants.
 const overview = dom.lookup("[data-overview]")._html;
 assert.equal((overview.match(/data-coin-row=/g) || []).length, 7, "seven coin rows");
-assert.ok(overview.includes("HYPE") && overview.includes("33.3%"), "overview shows coins and >4 share");
+assert.ok(overview.includes("-42.50") && overview.includes("+5.00") && overview.includes("+1.25"), "three PnL columns");
 
-// Rounds table: all six, then the >4 filter leaves only 67 and 5.
+// Rounds and events: Chinese labels.
 const roundRows = () => (dom.lookup("[data-rounds]")._html.match(/data-round="/g) || []).length;
 assert.equal(roundRows(), 6);
 const click = (attr, value) => root.dispatch("click", { target: { closest: (sel) => (sel === `[${attr}]` ? { getAttribute: () => value } : null) } });
 click("data-filter", "over4");
 assert.equal(roundRows(), 2, "the >4 filter shows only rounds with firings > 4");
-assert.ok(!dom.lookup("[data-rounds]")._html.includes('data-firings="1"'), "no 1-firing round under >4");
-assert.ok(dom.lookup("[data-rounds]")._html.includes("原 80"), "round row shows the raw count in grey");
 click("data-expand", String(base));
 const detail = dom.lookup("[data-rounds]")._html;
-assert.ok(detail.includes("0.70内可买 37") && detail.includes("实际买到 2") && detail.includes("部分"), "event shows depth and fill");
-click("data-filter", "zero");
-assert.equal(roundRows(), 1, "the 0 filter shows only rounds with no firing");
+assert.ok(detail.includes("第 2 档") && detail.includes("第 11 秒") && detail.includes("卖价 0.68") && detail.includes("要买 5")
+  && detail.includes("上限 0.70") && detail.includes("可买 37") && detail.includes("买到 2") && detail.includes("均价 0.69")
+  && detail.includes("部分"), `event labels: ${detail.slice(0, 400)}`);
+click("data-filter", "all");
 
-// Clicking a coin row switches the coin.
-const before = requests.length;
+// Switching to 实盘现状 reloads with variant=A and re-renders the chart and conclusion.
+let before = requests.length;
+click("data-variant", "A");
+await wait(30);
+assert.ok(requests.slice(before).some((u) => u.includes("variant=A")), "a variant pill requests that variant");
+conclusion = dom.lookup("[data-conclusion]")._text;
+assert.ok(conclusion.includes("实盘现状") && conclusion.includes("80"), `A conclusion: ${conclusion}`);
+assert.equal(rowsOf().length, 81, "the chart follows the variant");
+assert.equal(roundRows(), 2, "the round list follows the variant");
+
+// Clicking a coin row switches the coin, keeping the variant.
+before = requests.length;
 click("data-coin-row", "eth");
 await wait(30);
-assert.ok(requests.slice(before).some((u) => u.includes("/api/sim?assetId=eth")), "a coin row switches the coin");
+assert.ok(requests.slice(before).some((u) => u.includes("/api/sim?assetId=eth") && u.includes("variant=A")), "coin switch keeps the variant");
 
 console.log("frontend sim OK");
 process.exit(0);
