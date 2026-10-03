@@ -43,8 +43,9 @@ const requests = [];
 const base = 1799900100;
 const round = (i, firings, winner = "UP") => ({
   asset: "btc", roundId: String(base - i * 300), startsAt: base - i * 300, firings, reversals: Math.max(0, firings - 1),
-  winner, simPnl4: firings ? 1 : 0,
-  events: Array.from({ length: firings }, (_, k) => ({ i: k + 1, t: 10 + k, dir: k % 2 ? "DOWN" : "UP", ask: 0.68, shares: 5 })),
+  firingsRaw: firings + 13, winner, simPnl4: firings ? 1 : 0, depthOk: true,
+  events: Array.from({ length: firings }, (_, k) => ({ i: k + 1, t: 10 + k, dir: k % 2 ? "DOWN" : "UP", ask: 0.68, shares: 5,
+    avail: 37, filled: k ? 2 : 5, cost: 3.4, status: k ? "partial" : "full" })),
 });
 const rounds = [round(0, 67), round(1, 0, "DOWN"), round(2, 1), round(3, 1), round(4, 2), round(5, 5)];
 const distribution = {};
@@ -53,7 +54,13 @@ for (const r of rounds) distribution[String(r.firings)] += 1;
 const simBody = {
   schemaVersion: 1, assetId: "btc", rounds,
   summary: { rounds: 6, withFiring: 5, maxFirings: 67, maxRound: { roundId: String(base), startsAt: base, firings: 67 },
-    avgFirings: 12.67, medianFirings: 1.5, distribution, winRateByFirings: {}, simPnl4Total: 5 },
+    avgFirings: 12.67, medianFirings: 1.5, distribution, winRateByFirings: {}, simPnl4Total: 5,
+    rawAvg: 25.67, rawMax: 80, rawOver4: 6,
+    rungFill: { "1": { count: 5, full: 5, partial: 0, none: 0, tooLate: 0, fullPct: 100, avgFilledPct: 100, avgAvail: 37 },
+      "2": { count: 3, full: 1, partial: 1, none: 1, tooLate: 0, fullPct: 33.3, avgFilledPct: 45.5, avgAvail: 12.5 },
+      "3": { count: 0, full: 0, partial: 0, none: 0, tooLate: 0, fullPct: 0, avgFilledPct: 0, avgAvail: 0 },
+      "4": { count: 0, full: 0, partial: 0, none: 0, tooLate: 0, fullPct: 0, avgFilledPct: 0, avgAvail: 0 },
+      "5+": { count: 62, full: 0, partial: 62, none: 0, tooLate: 0, fullPct: 0, avgFilledPct: 1.4, avgAvail: 2 } } },
 };
 const COINS = ["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"];
 const overviewBody = { schemaVersion: 1, days: 10, coins: COINS.map((assetId, i) => ({
@@ -102,6 +109,18 @@ assert.equal(dom.lookup("[data-stat-max]")._text, "67");
 assert.equal(dom.lookup("[data-stat-rounds]")._text, "6");
 assert.ok(dom.lookup("[data-stat-over4]")._text.includes("2"), "over-4 card shows 2 rounds");
 
+// Raw (unfiltered) numbers ride along as comparison text.
+assert.ok(conclusion.includes("实盘规则原样数（不过滤）最多 80 次"), `conclusion names the raw max: ${conclusion}`);
+assert.ok(dom.lookup("[data-stat-maxround]")._text.includes("不过滤 80"), "max card sub-text shows raw");
+assert.ok(dom.lookup("[data-stat-avg-sub]")._text.includes("不过滤 25.67"), "avg card sub-text shows raw");
+assert.ok(root._html.includes("已过滤：两边卖价和 >1.05 的乱价"), "the filters are explained");
+
+// Fill table: one row per rung 1..4 and 5+.
+const fill = dom.lookup("[data-fill]")._html;
+assert.equal((fill.match(/<tr/g) || []).length, 5, "five fill rows");
+assert.ok(fill.includes("第 1 档") && fill.includes("第 5 档及以后"), "rung labels");
+assert.ok(fill.includes("33.3%") && fill.includes("45.5%") && fill.includes("12.5"), "rung 2 fill numbers");
+
 // Chart: one row for every value 0..67, the 67 row prints its count.
 const chart = dom.lookup("[data-chart]")._html;
 const rows = chart.match(/<li class="sim-row[^"]*"[^>]*>[^]*?<\/li>/g) || [];
@@ -123,6 +142,10 @@ const click = (attr, value) => root.dispatch("click", { target: { closest: (sel)
 click("data-filter", "over4");
 assert.equal(roundRows(), 2, "the >4 filter shows only rounds with firings > 4");
 assert.ok(!dom.lookup("[data-rounds]")._html.includes('data-firings="1"'), "no 1-firing round under >4");
+assert.ok(dom.lookup("[data-rounds]")._html.includes("原 80"), "round row shows the raw count in grey");
+click("data-expand", String(base));
+const detail = dom.lookup("[data-rounds]")._html;
+assert.ok(detail.includes("0.70内可买 37") && detail.includes("实际买到 2") && detail.includes("部分"), "event shows depth and fill");
 click("data-filter", "zero");
 assert.equal(roundRows(), 1, "the 0 filter shows only rounds with no firing");
 

@@ -26,7 +26,7 @@ def write_rounds(sim_dir: Path, asset: str, rounds: list[dict]) -> None:
     sim_dir.mkdir(parents=True, exist_ok=True)
     with (sim_dir / f"{asset}.jsonl").open("w", encoding="utf-8") as handle:
         for row in rounds:
-            handle.write(json.dumps(row) + "\n")
+            handle.write(json.dumps({"schemaVersion": 2, **row}) + "\n")
 
 
 class SimApi(unittest.TestCase):
@@ -108,6 +108,48 @@ class SimApi(unittest.TestCase):
         self.assertEqual(coins[1]["rounds"], 0)
         self.assertEqual(coins[1]["over4Pct"], 0)
         self.assertEqual(coins[1]["medianFirings"], 0)
+
+    def test_v1_lines_ignored_and_last_line_per_round_wins(self):
+        base = 1_799_900_100
+        write_rounds(self.sim_dir, "btc", [
+            {"schemaVersion": 1, "roundId": str(base - 300), "startsAt": base - 300, "firings": 58, "events": []},
+            {"roundId": str(base), "startsAt": base, "firings": 9, "firingsRaw": 9, "events": []},
+            {"roundId": str(base), "startsAt": base, "firings": 2, "firingsRaw": 13, "events": []}])
+        out = server._api_sim("btc", 3650)
+        self.assertEqual(out["summary"]["rounds"], 1, "v1 line ignored, duplicate round deduped")
+        self.assertEqual(out["rounds"][0]["firings"], 2, "the last line for a round wins")
+        self.assertEqual(out["summary"]["maxFirings"], 2)
+
+    def test_raw_comparison_and_rung_fill(self):
+        base = 1_799_900_100
+        ev = lambda i, status, filled, avail: {"i": i, "t": 10 + i, "dir": "UP", "ask": 0.68, "shares": 20,
+                                               "avail": avail, "filled": filled, "cost": 0, "status": status}
+        write_rounds(self.sim_dir, "btc", [
+            {"roundId": str(base), "startsAt": base, "firings": 5, "firingsRaw": 13, "depthOk": True, "events": [
+                ev(1, "full", 20, 100), ev(2, "partial", 5, 5), ev(3, "none", 0, 0), ev(4, "too_late", 0, None),
+                ev(5, "full", 20, 40)]},
+            {"roundId": str(base + 300), "startsAt": base + 300, "firings": 1, "firingsRaw": 3, "depthOk": True,
+             "events": [ev(1, "partial", 10, 10)]},
+            {"roundId": str(base + 600), "startsAt": base + 600, "firings": 1, "firingsRaw": 1, "depthOk": False,
+             "events": [ev(1, "no_depth", None, None)]}])
+        summary = server._api_sim("btc", 3650)["summary"]
+        self.assertEqual(summary["rawMax"], 13)
+        self.assertAlmostEqual(summary["rawAvg"], 5.67, places=2)
+        self.assertEqual(summary["rawOver4"], 1)
+        self.assertEqual(summary["over4"], 1)
+        fill = summary["rungFill"]
+        self.assertEqual(list(fill), ["1", "2", "3", "4", "5+"])
+        self.assertEqual(fill["1"]["count"], 2, "no_depth events are left out")
+        self.assertEqual((fill["1"]["full"], fill["1"]["partial"]), (1, 1))
+        self.assertEqual(fill["1"]["fullPct"], 50.0)
+        self.assertEqual(fill["1"]["avgFilledPct"], 75.0)
+        self.assertEqual(fill["1"]["avgAvail"], 55.0)
+        self.assertEqual(fill["3"]["none"], 1)
+        self.assertEqual(fill["4"]["tooLate"], 1)
+        self.assertEqual(fill["5+"]["full"], 1)
+        coin = server._api_sim_overview(3650)["coins"][0]
+        self.assertEqual(coin["rawMax"], 13)
+        self.assertEqual(coin["rungFullPct"], {"1": 50.0, "2": 0.0, "3": 0.0, "4": 0.0})
 
     def test_bad_asset_rejected(self):
         with self.assertRaises(ValueError):

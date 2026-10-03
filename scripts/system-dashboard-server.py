@@ -2426,10 +2426,39 @@ def _api_ledger() -> Ledger:
 # ReversalSim to data/sim/<asset>.jsonl. Read-only here; never a trading path.
 SIM_DIR = DEPLOYMENT_LOCK_PATH.parents[1] / "sim"
 _SIM_MAX_ROUNDS = 2000
+_SIM_SCHEMA = 2
+_SIM_RUNGS = ("1", "2", "3", "4", "5+")
+
+
+def _sim_rung_fill(rounds: list[dict]) -> dict:
+    """Per ladder rung: how many filtered firings the 0.70 depth could fill (no_depth left out)."""
+    keys = {"full": "full", "partial": "partial", "none": "none", "too_late": "tooLate"}
+    acc = {rung: {"count": 0, "full": 0, "partial": 0, "none": 0, "tooLate": 0, "_pct": [], "_avail": []}
+           for rung in _SIM_RUNGS}
+    for row in rounds:
+        for event in row.get("events") or []:
+            status = event.get("status")
+            if status not in keys:
+                continue
+            index = int(event.get("i") or 0)
+            bucket = acc[str(index) if 1 <= index <= 4 else "5+"]
+            bucket["count"] += 1
+            bucket[keys[status]] += 1
+            shares, filled, avail = event.get("shares"), event.get("filled"), event.get("avail")
+            if isinstance(shares, (int, float)) and shares > 0 and isinstance(filled, (int, float)):
+                bucket["_pct"].append(filled * 100 / shares)
+            if isinstance(avail, (int, float)):
+                bucket["_avail"].append(avail)
+    mean = lambda values: round(sum(values) / len(values), 1) if values else 0
+    return {rung: {"count": b["count"], "full": b["full"], "partial": b["partial"], "none": b["none"],
+                   "tooLate": b["tooLate"], "fullPct": round(b["full"] * 100 / b["count"], 1) if b["count"] else 0,
+                   "avgFilledPct": mean(b["_pct"]), "avgAvail": mean(b["_avail"])}
+            for rung, b in acc.items()}
 
 
 def _api_sim(asset_id: str, days: int) -> dict:
-    """Latest-first rounds plus a summary of the firing distribution, uncapped.
+    """Latest-first rounds plus a summary of the FILTERED firing distribution, uncapped,
+    the RAW (live rule verbatim) count for comparison, and per-rung fill rates.
 
     The whole point is the count: maxFirings and the full distribution tell the
     operator how deep the ladder must be (the max could be ~67). The firing
@@ -2440,7 +2469,7 @@ def _api_sim(asset_id: str, days: int) -> dict:
         raise ValueError("invalid assetId")
     cutoff = time.time() - max(1, min(int(days or 10), 3650)) * 86400
     path = SIM_DIR / f"{asset}.jsonl"
-    rounds: list[dict] = []
+    by_round: dict[str, dict] = {}
     try:
         with path.open("r", encoding="utf-8") as handle:
             for line in handle:
@@ -2451,13 +2480,15 @@ def _api_sim(asset_id: str, days: int) -> dict:
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if not isinstance(row, dict) or not isinstance(row.get("startsAt"), (int, float)):
+                # schemaVersion 1 lines (no filter, no fills) are ignored; replay regenerates them.
+                if not isinstance(row, dict) or row.get("schemaVersion") != _SIM_SCHEMA                         or not isinstance(row.get("startsAt"), (int, float)):
                     continue
                 if row["startsAt"] < cutoff:
                     continue
-                rounds.append(row)
+                by_round[str(row.get("roundId"))] = row   # the last line for a round wins
     except OSError:
-        rounds = []
+        by_round = {}
+    rounds = list(by_round.values())
     rounds.sort(key=lambda item: item.get("startsAt", 0), reverse=True)
     rounds = rounds[:_SIM_MAX_ROUNDS]
 
@@ -2490,14 +2521,18 @@ def _api_sim(asset_id: str, days: int) -> dict:
     win_rate = {key: round(bucket["wins"] / bucket["rounds"], 4) if bucket["rounds"] else None
                 for key, bucket in win_by_firings.items()}
     counts = sorted(int(r.get("firings") or 0) for r in rounds)
+    raw = [int(r.get("firingsRaw") or 0) for r in rounds]
     middle = len(counts) // 2
     median = (counts[middle] if len(counts) % 2 else (counts[middle - 1] + counts[middle]) / 2) if counts else 0
     summary = {"rounds": len(rounds), "withFiring": with_firing, "maxFirings": max_firings,
                "maxRound": max_round, "avgFirings": round(sum(counts) / len(counts), 2) if counts else 0,
                "medianFirings": median, "over4": sum(1 for value in counts if value > 4),
                "distribution": distribution, "winRateByFirings": win_rate,
-               "simPnl4Total": round(pnl4_total, 3)}
-    return {"schemaVersion": 1, "assetId": asset, "rounds": rounds, "summary": summary}
+               "simPnl4Total": round(pnl4_total, 3),
+               # The live rule verbatim (no filter), for comparison.
+               "rawAvg": round(sum(raw) / len(raw), 2) if raw else 0, "rawMax": max(raw, default=0),
+               "rawOver4": sum(1 for value in raw if value > 4), "rungFill": _sim_rung_fill(rounds)}
+    return {"schemaVersion": _SIM_SCHEMA, "assetId": asset, "rounds": rounds, "summary": summary}
 
 
 _SIM_COINS = ("btc", "eth", "sol", "xrp", "doge", "hype", "bnb")
@@ -2513,8 +2548,9 @@ def _api_sim_overview(days: int) -> dict:
                       "medianFirings": summary["medianFirings"], "maxFirings": summary["maxFirings"],
                       "over4": summary["over4"],
                       "over4Pct": round(summary["over4"] * 100 / rounds, 1) if rounds else 0,
-                      "simPnl4Total": summary["simPnl4Total"]})
-    return {"schemaVersion": 1, "days": days, "coins": coins}
+                      "simPnl4Total": summary["simPnl4Total"], "rawMax": summary["rawMax"],
+                      "rungFullPct": {rung: summary["rungFill"][rung]["fullPct"] for rung in _SIM_RUNGS[:4]}})
+    return {"schemaVersion": _SIM_SCHEMA, "days": days, "coins": coins}
 
 
 RUN_JOURNALS_KEPT = 20

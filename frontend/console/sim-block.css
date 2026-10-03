@@ -99,3 +99,4 @@
 @media (max-width: 520px) {
   .sim-stats { grid-template-columns: 1fr; }
 }
+.sim-raw { color: var(--faint); font-size: 11px; font-weight: 400; }

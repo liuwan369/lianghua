@@ -18,6 +18,7 @@ const book = (round, t, ua, da) => ({ marketId: `0x${round}`, roundId: String(ro
 // round 1: baseline, then UP crosses; its feed then stops (no book after its end)
 sim.observe("btc", book(R, R + 1, 0.5, 0.5), R + 1);
 sim.observe("btc", book(R, R + 3, 0.68, 0.33), R + 3);
+sim.observe("btc", book(R, R + 4.2, 0.68, 0.33), R + 4.2);   // held 1 s: the filtered count sees it too
 sim.observe("btc", book(R, R + 299, 0.99, 0.02), R + 299);
 // the next round's feed delivers books
 sim.observe("btc", book(R + 300, R + 301, 0.5, 0.5), R + 301);

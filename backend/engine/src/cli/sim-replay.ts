@@ -2,10 +2,12 @@
 // Backfill the paper simulator from recorded market history.
 //
 // Reads data/market-history/<asset>/<date>.jsonl.gz (multi-member gzip; the
-// recordedBook format in market-recorder.ts: t,a,m,r,q,ue,de,ub,ua,db,da,...),
+// recordedBook format in market-recorder.ts: t,a,m,r,q,ue,de,ub,ua,db,da,ual,dal),
 // rebuilds a SimBook for each frame and drives the same ReversalSim the live
 // collector uses, writing the same data/sim/<asset>.jsonl lines. The simulator
-// dedupes by roundId, so replaying days the live sim already wrote is a no-op.
+// dedupes by roundId, so replaying days the live sim already wrote is a no-op,
+// and a round is only written once a later record shows it ended (the round
+// still in progress at the end of the data is left for a later run).
 //
 // Recordings do not carry CLOB token ids, so synthetic consistent ids per market
 // `${m}:up` / `${m}:down` are used (the simulator only needs the pair to be
@@ -16,7 +18,7 @@ import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createGunzip } from "node:zlib";
-import { ReversalSim, type SimBook } from "../sim/reversal-sim.js";
+import { ReversalSim, simLevels, type SimBook } from "../sim/reversal-sim.js";
 
 const WINDOW_SEC = 300;
 
@@ -63,6 +65,7 @@ export function simBookFromRecord(record: Record<string, unknown>): SimBook | un
     ? Math.min(startsAt + WINDOW_SEC, youngest + 2) : startsAt + WINDOW_SEC;
   return { marketId, roundId, upTokenId: `${marketId}:up`, downTokenId: `${marketId}:down`,
     upAsk: num(record.ua), upBid: num(record.ub), downAsk: num(record.da), downBid: num(record.db),
+    upAskLevels: simLevels(record.ual), downAskLevels: simLevels(record.dal),
     upSourceAt: ue, downSourceAt: de, expiresAt, sequence: num(record.q) };
 }
 

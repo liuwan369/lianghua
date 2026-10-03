@@ -22,6 +22,8 @@ const round = (asset) => {
     up = !up;
   }
   rows.push({ t: R + 299, a: asset, m: `0x${asset}`, r: String(R), q: 999, ue: R + 299, de: R + 299, ub: 0.99, ua: 0.99, db: 0.02, da: 0.02 });
+  // the next round's first book: round R is over (a round still in progress is never written)
+  rows.push({ t: R + 301, a: asset, m: `0x${asset}2`, r: String(R + 300), q: 1, ue: R + 301, de: R + 301, ub: 0.5, ua: 0.5, db: 0.5, da: 0.5 });
   return gzipSync(rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
 };
 const day = new Date((R + 8 * 3600) * 1000).toISOString().slice(0, 10);

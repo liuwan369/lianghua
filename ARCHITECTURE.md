@@ -59,7 +59,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `cli/platform.ts` | 引擎唯一入口：参数、市场发现与换轮（15 s 发现，提前 10 s 预热下一场）、策略挂载、配置/控制文件 1 s 轮询、结算调度 15 s、写 journal、停机流程 |
 | `cli/market-snapshot.ts` | 行情采集器入口 |
 | `cli/market-recorder.ts` | 采集器内的全量行情记录（gzip JSONL，按天轮换、过期删除） |
-| `cli/sim-replay.ts` | 回放命令：读 `data/market-history/<币>/<日期>.jsonl.gz`，用同一套模拟器补算历史触发次数，写同样的 `data/sim/<币>.jsonl`（按 roundId 去重，不重复实盘模拟已写的场次） |
+| `cli/sim-replay.ts` | 回放命令：读 `data/market-history/<币>/<日期>.jsonl.gz`，用同一套模拟器补算历史触发次数，写同样的 `data/sim/<币>.jsonl`（按 roundId 去重，不重复实盘模拟已写的场次；某场要等到更晚的记录证明已收盘才写，进行中的不写） |
 | `cli/account-data.ts` | 账户读取器入口（stdin 收只读命令，JSONL 输出） |
 | `cli/account-check.ts` | 一次性账户检查（钱包、签名、授权、余额） |
 | `platform/core.ts` | `TradingCore`：资金预留、订单状态机、成交入账、持仓、风控与停机、对账 |
@@ -82,7 +82,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
 | `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
 | `strategies/btc-reversal.ts` | 策略本体 |
-| `sim/reversal-sim.ts` | 模拟交易：每币一份真实 `BtcReversalStrategy`，喂真实盘口，统计每场触发次数（首次 + 每次反转，不设上限）。阶梯 `[5,20,60,140,…140]`、`maxStages 1000`、无预算/亏损上限；每次 `submit` 回灌一张合成 FILLED 订单让级数被消费、方向推进。绝不碰实盘下单/账本/配置。收盘每场写一行 `data/sim/<币>.jsonl`。假设：每次触发按触发侧卖价成交（卖价 ≤0.70，否则记为未成交），手续费用 `polymarketFillFee` 加密 taker 费率 0.07，无滑点——实盘更差 |
+| `sim/reversal-sim.ts` | 模拟交易：每币两份真实 `BtcReversalStrategy`，喂真实盘口，统计每场触发次数（首次 + 每次反转，不设上限）。阶梯 `[5,20,60,140,…140]`、`maxStages 1000`、无预算/亏损上限；每次 `submit` 回灌一张合成 FILLED 订单让级数被消费、方向推进。RAW 份吃全部原始帧（`firingsRaw`，实盘规则原样）；FILTERED 份（主数 `firings`）丢掉两边卖价和 >1.05 的乱帧，且一边卖价须在 0.67 上连续停 1 秒才以原价喂给策略（之前喂 0.669）。FILTERED 的每次出手在 0.3 秒后第一帧按该边 ≤0.70 的卖档成交（最便宜先吃，每档量本场只用一次，没成交的不补，下界；回合结束前没帧为 `too_late`；1790878037 前深度不可信为 `no_depth`，盈亏 null），taker 费 `polymarketFillFee` 0.07。赢方取最后一个非乱帧。只写从开场 10 秒内就看着的场次，收盘后写一行 `data/sim/<币>.jsonl`（`schemaVersion 2`）。绝不碰实盘下单/账本/配置 |
 | `models.ts` | 价格量化、手续费公式 `shares × rate × (p(1−p))^exp` |
 
 ### `scripts/`
@@ -107,7 +107,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
-| `*.html` + `*-block.js/css` | 五个页面：自动交易、市场、策略、模拟交易（`sim.html`，读 `/api/sim` 看每场触发次数分布）、设置 |
+| `*.html` + `*-block.js/css` | 五个页面：自动交易、市场、策略、模拟交易（`sim.html`，读 `/api/sim` 看每场触发次数分布和每档能否买到）、设置 |
 | `stats-panel.js` | 自动交易页的交易统计、服务器状态、清空数据 |
 | `event-log.js` | 设置页的运行日志 |
 | `shared/preview-core.js` | 请求、侧栏、格式化 |
