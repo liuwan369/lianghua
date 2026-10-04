@@ -2,8 +2,9 @@
 // Backfill the paper simulator from recorded market history.
 //
 // Reads data/market-history/<asset>/<date>.jsonl.gz (multi-member gzip; the
-// recordedBook format in market-recorder.ts: t,a,m,r,q,ue,de,ub,ua,db,da,ual,dal),
-// rebuilds a SimBook for each frame and drives the same ReversalSim the live
+// recordedBook format in market-recorder.ts: t,a,m,r,q,ue,de,ub,ua,db,da,ual,dal,
+// plus trade rows k:"t",tok,p,s,side), rebuilds a SimBook for each frame (and
+// feeds each trade print) and drives the same ReversalSim the live
 // collector uses, writing the same data/sim/<asset>.jsonl lines. The simulator
 // dedupes by roundId, so replaying days the live sim already wrote is a no-op,
 // and a round is only written once a later record shows it ended (the round
@@ -18,7 +19,7 @@ import { createInterface } from "node:readline";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createGunzip } from "node:zlib";
-import { ReversalSim, simLevels, type SimBook } from "../sim/reversal-sim.js";
+import { ReversalSim, simLevels, type SimBook, type SimTrade } from "../sim/reversal-sim.js";
 
 const WINDOW_SEC = 300;
 
@@ -69,6 +70,14 @@ export function simBookFromRecord(record: Record<string, unknown>): SimBook | un
     upSourceAt: ue, downSourceAt: de, expiresAt, sequence: num(record.q) };
 }
 
+/** A recorded trade row (k "t": tok u|d, p, s, side) as a SimTrade. */
+export function simTradeFromRecord(record: Record<string, unknown>): SimTrade | undefined {
+  const { m, r, tok, p, s, side } = record;
+  if (typeof m !== "string" || typeof r !== "string" || (tok !== "u" && tok !== "d")
+    || typeof p !== "number" || typeof s !== "number" || !(s > 0) || typeof side !== "string") return undefined;
+  return { marketId: m, roundId: r, dir: tok === "u" ? "UP" : "DOWN", price: p, shares: s, side };
+}
+
 async function replayFile(sim: ReversalSim, asset: string, path: string): Promise<void> {
   // The current day's file is still being appended, so its last gzip member is
   // usually incomplete. Treat that as end-of-data for this file (Z_SYNC_FLUSH
@@ -85,6 +94,11 @@ async function replayFile(sim: ReversalSim, asset: string, path: string): Promis
       let record: Record<string, unknown>;
       try { record = JSON.parse(line); } catch { continue; }
       const t = typeof record.t === "number" ? record.t : undefined;
+      if (record.k === "t") {
+        const trade = simTradeFromRecord(record);
+        if (trade && t !== undefined) try { sim.observeTrade(asset, trade, t); } catch { sim.dropped += 1; }
+        continue;
+      }
       const book = simBookFromRecord(record);
       if (!book || t === undefined) continue;
       try { sim.observe(asset, book, t); } catch { sim.dropped += 1; }

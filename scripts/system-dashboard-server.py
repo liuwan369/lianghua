@@ -2424,18 +2424,19 @@ def _api_ledger() -> Ledger:
 
 # Paper simulator (模拟交易): one line per round written by the collector's
 # ReversalSim to data/sim/<asset>.jsonl, three variants each: A 实盘现状,
-# B1 建议·立即, B2 建议·停1秒. Read-only here; never a trading path.
+# C 新规则·立即, C2 新规则·停1秒. Read-only here; never a trading path.
 SIM_DIR = DEPLOYMENT_LOCK_PATH.parents[1] / "sim"
 _SIM_MAX_ROUNDS = 2000
-_SIM_SCHEMA = 3
+_SIM_SCHEMA = 4
 _SIM_RUNGS = ("1", "2", "3", "4", "5+")
-_SIM_VARIANTS = ("A", "B1", "B2")
-_SIM_FILL_KEYS = {"full": "full", "partial": "partial", "none": "none", "over_cap": "overCap", "gap": "gap"}
+_SIM_VARIANTS = ("A", "C", "C2")
+_SIM_FILL_KEYS = {"full": "full", "partial": "partial", "none": "none", "skipped": "skipped", "gap": "gap"}
 
 
 def _sim_rung_fill(rounds: list[dict]) -> dict:
-    """Per ladder rung: how many attempts the depth could fill. Top-ups, too_late and no_depth are left out."""
-    acc = {rung: {"count": 0, **{key: 0 for key in _SIM_FILL_KEYS.values()}, "_pct": [], "_avail": []}
+    """Per ladder rung: orders placed and how they filled (`skipped`: a rung-1 FOK that found < 5 shares,
+    not counted; `maker`: orders with a resting fill). too_late and no_depth are left out."""
+    acc = {rung: {"count": 0, **{key: 0 for key in _SIM_FILL_KEYS.values()}, "maker": 0, "_pct": [], "_avail": []}
            for rung in _SIM_RUNGS}
     for row in rounds:
         for event in row.get("events") or []:
@@ -2446,20 +2447,22 @@ def _sim_rung_fill(rounds: list[dict]) -> dict:
             bucket = acc[str(index) if 1 <= index <= 4 else "5+"]
             bucket["count"] += 1
             bucket[key] += 1
+            if (event.get("maker") or 0) > 0:
+                bucket["maker"] += 1
             want, filled, avail = event.get("want"), event.get("filled"), event.get("avail")
             if isinstance(want, (int, float)) and want > 0 and isinstance(filled, (int, float)):
                 bucket["_pct"].append(filled * 100 / want)
             if isinstance(avail, (int, float)):
                 bucket["_avail"].append(avail)
     mean = lambda values: round(sum(values) / len(values), 1) if values else 0
-    return {rung: {"count": b["count"], **{key: b[key] for key in _SIM_FILL_KEYS.values()},
+    return {rung: {"count": b["count"], **{key: b[key] for key in _SIM_FILL_KEYS.values()}, "maker": b["maker"],
                    "fullPct": round(b["full"] * 100 / b["count"], 1) if b["count"] else 0,
                    "avgFilledPct": mean(b["_pct"]), "avgAvail": mean(b["_avail"])}
             for rung, b in acc.items()}
 
 
 def _sim_rows(asset: str, days: int) -> list[dict]:
-    """schemaVersion 3 rows inside the day window, latest first; the last line per round wins."""
+    """schemaVersion 4 rows inside the day window, latest first; the last line per round wins."""
     cutoff = time.time() - max(1, min(int(days or 10), 3650)) * 86400
     by_round: dict[str, dict] = {}
     try:
@@ -2517,7 +2520,7 @@ def _sim_variant_rounds(rows: list[dict], variant: str) -> list[dict]:
     return [{**{key: row.get(key) for key in base}, **(row["variants"].get(variant) or {})} for row in rows]
 
 
-def _api_sim(asset_id: str, days: int, variant: str = "B1") -> dict:
+def _api_sim(asset_id: str, days: int, variant: str = "C") -> dict:
     """Latest-first rounds and the summary of one variant, plus `compare` for all three."""
     asset = str(asset_id or "").strip().lower()
     if not _ASSET_ID_RE.fullmatch(asset):
@@ -2530,7 +2533,7 @@ def _api_sim(asset_id: str, days: int, variant: str = "B1") -> dict:
                       "rungFullPct": {rung: s["rungFill"][rung]["fullPct"] for rung in _SIM_RUNGS[:4]},
                       "pnlTotal": s["pnlTotal"], "pnlPerRound": s["pnlPerRound"],
                       "worstPnl": s["worstRound"]["pnl"] if s["worstRound"] else None,
-                      "roundsWithPnl": s["roundsWithPnl"]}
+                      "roundsWithPnl": s["roundsWithPnl"], "rung1Skipped": s["rungFill"]["1"]["skipped"]}
                for name, s in summaries.items()}
     return {"schemaVersion": _SIM_SCHEMA, "assetId": asset, "variant": variant,
             "rounds": _sim_variant_rounds(rows, variant), "summary": summaries[variant], "compare": compare}
@@ -3043,9 +3046,9 @@ def make_handler(root: Path):
                     days = max(1, min(int((query.get("days") or ["10"])[0]), 3650))
                 except (ValueError, TypeError):
                     days = 10
-                variant = (query.get("variant") or ["B1"])[0]
+                variant = (query.get("variant") or ["C"])[0]
                 if variant not in _SIM_VARIANTS:
-                    variant = "B1"
+                    variant = "C"
                 value = _api_sim_overview(days) if path == "/api/sim/overview" else _api_sim(asset_id, days, variant)
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return

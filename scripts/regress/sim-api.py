@@ -1,10 +1,11 @@
 """/api/sim summary per variant and the three-variant compare block (模拟交易).
 
-The paper simulator writes one schemaVersion 3 line per round to
-data/sim/<asset>.jsonl with variants A (实盘现状), B1 (建议·立即), B2 (建议·停1秒).
-_api_sim(asset, days, variant) must report, uncapped, for the chosen variant:
-max firings and which round, a distribution bucket for every value 0..max,
-per-rung fill rates and PnL; plus `compare` for all three. Older lines are ignored.
+The paper simulator writes one schemaVersion 4 line per round to
+data/sim/<asset>.jsonl with variants A (实盘现状), C (新规则·立即), C2 (新规则·停1秒).
+_api_sim(asset, days, variant) must report, uncapped, for the chosen variant
+(default C): max firings and which round, a distribution bucket for every value
+0..max, per-rung fill rates (skipped rung-1 FOKs, resting fills) and PnL; plus
+`compare` for all three. schemaVersion 3 lines (A/B1/B2) are ignored.
 
 Run:  PYTHONIOENCODING=utf-8 python scripts/regress/sim-api.py
 """
@@ -24,9 +25,10 @@ spec.loader.exec_module(server)
 BASE = 1_799_900_100
 
 
-def ev(rung, status, filled, want=20, avail=None):
+def ev(rung, status, filled, want=20, avail=None, maker=0):
     return {"rung": rung, "t": 10 + rung, "dir": "UP", "ask": 0.68, "want": want, "cap": 0.7, "avail": avail,
-            "filled": filled, "avgPrice": 0.68 if filled else None, "cost": 0, "fee": 0, "status": status}
+            "filled": filled, "avgPrice": 0.68 if filled else None, "cost": 0, "fee": 0, "maker": maker,
+            "status": status}
 
 
 def variant(firings, events=(), pnl=None):
@@ -34,10 +36,10 @@ def variant(firings, events=(), pnl=None):
             "cost": 0, "pnl": pnl}
 
 
-def row(i, a, b1, b2=None):
-    return {"schemaVersion": 3, "asset": "btc", "roundId": str(BASE + i * 300), "marketId": f"0x{i}",
+def row(i, a, c, c2=None):
+    return {"schemaVersion": 4, "asset": "btc", "roundId": str(BASE + i * 300), "marketId": f"0x{i}",
             "startsAt": BASE + i * 300, "depthOk": True, "winner": "UP",
-            "variants": {"A": a, "B1": b1, "B2": b2 or variant(0)}}
+            "variants": {"A": a, "C": c, "C2": c2 or variant(0)}}
 
 
 def write_rows(sim_dir: Path, asset: str, rows: list[dict]) -> None:
@@ -72,23 +74,25 @@ class SimApi(unittest.TestCase):
         self.assertEqual(a["summary"]["over4"], 1)
         self.assertEqual(a["rounds"][0]["roundId"], str(BASE + 600), "latest first")
         self.assertEqual(a["rounds"][0]["firings"], 2, "rounds carry the chosen variant")
-        b1 = server._api_sim("btc", 3650)
-        self.assertEqual(b1["variant"], "B1", "B1 is the default")
-        self.assertEqual(b1["summary"]["maxFirings"], 4)
-        self.assertEqual(b1["summary"]["medianFirings"], 1)
-        self.assertAlmostEqual(b1["summary"]["pnlTotal"], 1.0, places=3)
-        self.assertAlmostEqual(b1["summary"]["pnlPerRound"], 0.333, places=3)
-        self.assertEqual(b1["summary"]["worstRound"]["pnl"], -0.5)
-        with self.assertRaises(ValueError):
-            server._api_sim("btc", 10, "C")
+        c = server._api_sim("btc", 3650)
+        self.assertEqual(c["variant"], "C", "C is the default")
+        self.assertEqual(c["summary"]["maxFirings"], 4)
+        self.assertEqual(c["summary"]["medianFirings"], 1)
+        self.assertAlmostEqual(c["summary"]["pnlTotal"], 1.0, places=3)
+        self.assertAlmostEqual(c["summary"]["pnlPerRound"], 0.333, places=3)
+        self.assertEqual(c["summary"]["worstRound"]["pnl"], -0.5)
+        self.assertEqual(server._api_sim("btc", 3650, "C2")["variant"], "C2")
+        for gone in ("B1", "B2"):
+            with self.assertRaises(ValueError):
+                server._api_sim("btc", 10, gone)
     def test_compare_block(self):
         write_rows(self.sim_dir, "btc", [
             row(0, variant(6, [ev(1, "full", 5, 5)], pnl=-8.6),
-                variant(2, [ev(1, "full", 5, 5), ev(2, "partial", 3)], pnl=2.0),
-                variant(1, [ev(1, "none", 0, 5), ev(1, "full", 5, 5)], pnl=1.0)),
-            row(1, variant(1, [ev(1, "none", 0, 5)], pnl=-3.5), variant(0, [ev(1, "none", 0, 5)], pnl=0.0))])
-        compare = server._api_sim("btc", 3650, "B2")["compare"]
-        self.assertEqual(list(compare), ["A", "B1", "B2"])
+                variant(2, [ev(1, "full", 5, 5), ev(2, "partial", 3, maker=3)], pnl=2.0),
+                variant(1, [ev(1, "skipped", 0, 5), ev(1, "full", 5, 5)], pnl=1.0)),
+            row(1, variant(1, [ev(1, "none", 0, 5)], pnl=-3.5), variant(0, [ev(1, "skipped", 0, 5)], pnl=0.0))])
+        compare = server._api_sim("btc", 3650, "C2")["compare"]
+        self.assertEqual(list(compare), ["A", "C", "C2"])
         self.assertEqual(compare["A"]["maxFirings"], 6)
         self.assertEqual(compare["A"]["over4"], 1)
         self.assertEqual(compare["A"]["avgFirings"], 3.5)
@@ -96,20 +100,24 @@ class SimApi(unittest.TestCase):
         self.assertAlmostEqual(compare["A"]["pnlPerRound"], -6.05, places=3)
         self.assertEqual(compare["A"]["worstPnl"], -8.6)
         self.assertEqual(compare["A"]["rungFullPct"]["1"], 50.0)
-        self.assertEqual(compare["B1"]["rungFullPct"], {"1": 50.0, "2": 0.0, "3": 0, "4": 0})
-        self.assertEqual(compare["B2"]["rungFullPct"]["1"], 50.0)
-        self.assertEqual(compare["B2"]["roundsWithPnl"], 1)
+        self.assertEqual(compare["C"]["rungFullPct"], {"1": 50.0, "2": 0.0, "3": 0, "4": 0})
+        self.assertEqual(compare["C"]["rung1Skipped"], 1)
+        self.assertEqual(compare["C2"]["rungFullPct"]["1"], 50.0)
+        self.assertEqual(compare["C2"]["roundsWithPnl"], 1)
+        self.assertEqual(compare["C2"]["rung1Skipped"], 1)
+        self.assertEqual(compare["A"]["rung1Skipped"], 0)
 
     def test_rung_fill_statuses(self):
         write_rows(self.sim_dir, "btc", [row(0, variant(0), variant(3, [
-            ev(1, "full", 5, 5, avail=100), ev(2, "over_cap", 0, avail=0), ev(2, "partial", 5, avail=5),
-            ev(2, "topup", 15), ev(3, "gap", 0), ev(3, "too_late", 0), ev(4, "no_depth", None),
+            ev(1, "skipped", 0, 5, avail=3), ev(1, "full", 5, 5, avail=100), ev(2, "none", 0, avail=0),
+            ev(2, "partial", 5, avail=5, maker=5), ev(3, "gap", 0), ev(3, "too_late", 0), ev(4, "no_depth", None),
             ev(5, "none", 0, 140, avail=0)]))])
         fill = server._api_sim("btc", 3650)["summary"]["rungFill"]
         self.assertEqual(list(fill), ["1", "2", "3", "4", "5+"])
-        self.assertEqual(fill["1"]["fullPct"], 100.0)
-        self.assertEqual(fill["2"]["count"], 2, "top-ups are not new attempts")
-        self.assertEqual((fill["2"]["overCap"], fill["2"]["partial"]), (1, 1))
+        self.assertEqual((fill["1"]["count"], fill["1"]["skipped"], fill["1"]["full"]), (2, 1, 1))
+        self.assertEqual(fill["1"]["fullPct"], 50.0)
+        self.assertEqual(fill["2"]["count"], 2)
+        self.assertEqual((fill["2"]["none"], fill["2"]["partial"], fill["2"]["maker"]), (1, 1, 1))
         self.assertEqual(fill["2"]["avgFilledPct"], 12.5)
         self.assertEqual(fill["2"]["avgAvail"], 2.5)
         self.assertEqual(fill["3"]["gap"], 1)
@@ -122,9 +130,11 @@ class SimApi(unittest.TestCase):
         ancient["startsAt"] = 100
         write_rows(self.sim_dir, "btc", [
             {"schemaVersion": 2, "roundId": str(BASE - 300), "startsAt": BASE - 300, "firings": 58, "events": []},
+            {"schemaVersion": 3, "asset": "btc", "roundId": str(BASE - 600), "startsAt": BASE - 600, "depthOk": True,
+             "winner": "UP", "variants": {"A": variant(5), "B1": variant(5), "B2": variant(5)}},
             row(0, variant(9), variant(9)), row(0, variant(2), variant(2)), ancient])
         out = server._api_sim("btc", 10, "A")
-        self.assertEqual(out["summary"]["rounds"], 1, "v2 ignored, duplicate deduped, ancient outside the window")
+        self.assertEqual(out["summary"]["rounds"], 1, "v2/v3 ignored, duplicate deduped, ancient outside the window")
         self.assertEqual(out["rounds"][0]["firings"], 2, "the last line for a round wins")
 
     def test_missing_file_is_empty_not_error(self):
@@ -144,8 +154,9 @@ class SimApi(unittest.TestCase):
         self.assertEqual(btc["rounds"], 4)
         self.assertEqual(btc["variants"]["A"], {"maxFirings": 67, "avgFirings": 18.25, "over4": 2,
                                                 "pnlTotal": -4.0, "pnlPerRound": -1.0})
-        self.assertEqual(btc["variants"]["B1"]["pnlTotal"], 2.0)
-        self.assertEqual(coins[1]["variants"]["B2"]["pnlPerRound"], 0)
+        self.assertEqual(list(btc["variants"]), ["A", "C", "C2"])
+        self.assertEqual(btc["variants"]["C"]["pnlTotal"], 2.0)
+        self.assertEqual(coins[1]["variants"]["C2"]["pnlPerRound"], 0)
 
     def test_bad_asset_rejected(self):
         with self.assertRaises(ValueError):

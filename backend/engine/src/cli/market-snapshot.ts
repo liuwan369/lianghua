@@ -7,7 +7,7 @@ import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
-import { MarketRecorder, recordedBook } from "./market-recorder.js";
+import { MarketRecorder, recordedBook, recordedTrade } from "./market-recorder.js";
 import { ReversalSim, simBookFromSnapshot } from "../sim/reversal-sim.js";
 
 const MARKET_WINDOW_SEC = 300;
@@ -197,6 +197,19 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
               const simBook = simBookFromSnapshot(event.snapshot as unknown as Record<string, unknown>);
               if (sim && simBook) sim.observe(asset, simBook, receivedAt);
             } catch { if (sim) sim.dropped += 1; }
+          }
+          else if (event.kind === "marketTrade") {
+            // Trade prints go into the same recording (rows k:"t") and the simulator's resting-fill model.
+            const receivedAt = deps.now();
+            try {
+              const row = recordedTrade(asset, { marketId: market.conditionId, roundId: market.roundId,
+                upToken: market.upToken, downToken: market.downToken }, event, receivedAt);
+              if (row) {
+                recorder?.record(row);
+                sim?.observeTrade(asset, { marketId: row.m, roundId: row.r, dir: row.tok === "u" ? "UP" : "DOWN",
+                  price: row.p, shares: row.s, side: row.side }, receivedAt);
+              }
+            } catch { if (recorder) recorder.dropped += 1; }
           }
           else if (event.kind === "bookStatus") {
             if (event.healthy) projection.markConnected(true);

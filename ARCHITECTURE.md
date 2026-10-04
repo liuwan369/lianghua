@@ -20,7 +20,7 @@
         行情采集器 node dist/cli/market-snapshot.js (systemd: pm-clob-market-snapshot)
           ├─ 每 250 ms 写 data/dashboard/market-snapshot.json（控制台展示用）
           ├─ 记录器 market-recorder → data/market-history/
-          └─ 模拟交易 reversal-sim → data/sim/（三种做法跑真实行情：实盘现状 / 建议·立即 / 建议·停1秒）
+          └─ 模拟交易 reversal-sim → data/sim/（三种做法跑真实行情：实盘现状 / 新规则·立即 / 新规则·停1秒）
 ```
 
 | 进程 | 启动方式 | 职责 |
@@ -58,8 +58,8 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 |---|---|
 | `cli/platform.ts` | 引擎唯一入口：参数、市场发现与换轮（15 s 发现，提前 10 s 预热下一场）、策略挂载、配置/控制文件 1 s 轮询、结算调度 15 s、写 journal、停机流程 |
 | `cli/market-snapshot.ts` | 行情采集器入口 |
-| `cli/market-recorder.ts` | 采集器内的全量行情记录（gzip JSONL，按天轮换、过期删除） |
-| `cli/sim-replay.ts` | 回放命令：读 `data/market-history/<币>/<日期>.jsonl.gz`，用同一套模拟器补算历史触发次数，写同样的 `data/sim/<币>.jsonl`（按 roundId 去重，不重复实盘模拟已写的场次；某场要等到更晚的记录证明已收盘才写，进行中的不写） |
+| `cli/market-recorder.ts` | 采集器内的全量行情记录（盘口和成交，gzip JSONL，按天轮换、过期删除） |
+| `cli/sim-replay.ts` | 回放命令：读 `data/market-history/<币>/<日期>.jsonl.gz`，用同一套模拟器补算历史触发次数（成交行 `k:"t"` 一起回放），写同样的 `data/sim/<币>.jsonl`（按 roundId 去重，不重复实盘模拟已写的场次；某场要等到更晚的记录证明已收盘才写，进行中的不写） |
 | `cli/account-data.ts` | 账户读取器入口（stdin 收只读命令，JSONL 输出） |
 | `cli/account-check.ts` | 一次性账户检查（钱包、签名、授权、余额） |
 | `platform/core.ts` | `TradingCore`：资金预留、订单状态机、成交入账、持仓、风控与停机、对账 |
@@ -82,7 +82,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
 | `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
 | `strategies/btc-reversal.ts` | 策略本体 |
-| `sim/reversal-sim.ts` | 模拟交易，每场三种做法（`schemaVersion 3`，每场一行 `data/sim/<币>.jsonl`，只写开场 10 秒内就看着的场次）。A 实盘现状：每场一份真实 `BtcReversalStrategy`（开场第一帧创建、收盘丢弃）吃全部原始帧，阶梯 `[5,20,60,140,…140]`、`maxStages 1000`、无预算；每次 submit 是 0.70 的 GTC 限价买单，t+0.3 到交易所，[t+0.3,t+1.3] 内第一帧吃该边 ≤0.70 卖档（taker），余量挂到收盘：之后每帧 ≤0.70 档位上比上一帧新增的量（加量或新档位）按先挂先成交（maker，费 0），每边每价记上次看到的量，不重复用；提交即消耗一档（0 成交也算），回灌 OPEN/PARTIAL/FILLED，收盘 CANCELLED。B1 建议·立即 / B2 建议·停1秒：模拟器里的纯状态机，只用干净帧（两边卖价和 ≤1.05），首帧只定基线；B1 上一帧 <0.67 本帧 ≥0.67 即触发，B2 真上穿后在 0.67 上停满 1 秒触发（每次上方停留只触发一次）。只 FAK：[t+0.3,t+1.3] 内第一帧按上限吃卖档（每档量本场只用一次，没吃到的丢弃；没帧 `gap`，到收盘 `too_late`）。第 1 档 5 股 ≤0.70，0 成交不算档；有持仓后只在落后一边（按持股数）上穿时对冲：第 k 档 `[5,20,60,140,…]`，上限为满足 `held[X]+S ≥ cost+S·(p+fee(p))` 的最高分价（≤0.99），最优卖价高于上限 `over_cap`；对冲部分成交且仍落后，下次上穿补同一档（`topup`）。taker 费 `polymarketFillFee` 0.07；1790878037 前深度不可信 `no_depth`，盈亏 null；赢方取最后一个干净帧（卖价或买价 ≥0.9）；盈亏 = held[赢方] − cost（含费）。绝不碰实盘下单/账本/配置 |
+| `sim/reversal-sim.ts` | 模拟交易，每场三种做法（`schemaVersion 4`，每场一行 `data/sim/<币>.jsonl`，只写开场 10 秒内就看着的场次）。A 实盘现状：每场一份真实 `BtcReversalStrategy`（开场第一帧创建、收盘丢弃）吃全部原始帧，阶梯 `[5,20,60,140,…140]`、`maxStages 1000`、无预算；每次 submit 是 0.70 的 GTC 限价买单挂到收盘，提交即消耗一档（0 成交也算），回灌 OPEN/PARTIAL/FILLED，收盘 CANCELLED。C 新规则·立即 / C2 新规则·停1秒：纯状态机，只用干净帧（两边卖价和 ≤1.05），首帧只定基线；C 上一帧 <0.67 本帧 ≥0.67 即触发，C2 真上穿后在 0.67 上停满 1 秒触发（每次上方停留只触发一次）。第 1 档是 FOK 5 股 ≤0.70：到达时没有 5 股就不买（`skipped`），不算档，下次上穿还是第 1 档；没帧 `gap`，到收盘 `too_late`。之后只在落后一边（按持股，平手按最后一档的方向）上穿时对冲：第 k 档 `[5,20,60,140,…]` 挂 0.70 GTC，挂上就算一档，余量挂到收盘；同一边已有挂单时新的上穿忽略。成交模型（A 和 C*）：决定后 0.2 秒到达（实盘实测 0.12–0.28 秒），以交易所时间越过到达时刻的第一帧为准、按当时生效的盘口（上一帧）吃该边 ≤0.70 卖档（taker，每档量本场只用一次），1.2 秒内没帧则直接挂单；挂单成交：有成交记录时，SELL 方向、价格 ≤0.70 的成交按量填（maker，费 0，先挂先成交）；没有成交记录时（旧录像）用代理：该边买一 ≥0.70，或 ≤0.70 的卖一出现新增量，最早的挂单按 0.70 全部成交。没考虑排队先后，对数量偏乐观。`scripts/regress/sim-calibration.mjs` 用 5 笔真实实盘第 1 档订单（3 笔 0.70 maker、2 笔 0.67 taker）的真实录像校准，全部复现。taker 费 `polymarketFillFee` 0.07；1790878037 前深度不可信 `no_depth`，盈亏 null；赢方取最后一个干净帧（卖价或买价 ≥0.9）；盈亏 = held[赢方] − cost（含费）。绝不碰实盘下单/账本/配置 |
 | `models.ts` | 价格量化、手续费公式 `shares × rate × (p(1−p))^exp` |
 
 ### `scripts/`
@@ -189,7 +189,7 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 | `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz` | 全量行情记录，保留 10 天 |
 | `/root/pm-system/data/sim/<币>.jsonl` | 模拟交易每场一行触发统计，启动和每天按 10 天保留期裁剪 |
 
-行情记录每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
+行情记录每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。同一文件里还有成交行（feed 的 `last_trade_price`）：`{t,a,m,r,k:"t",tok:"u"|"d",p 价,s 量,side 吃单方向 BUY|SELL}`，盘口行没有 `k`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
 
 秘密只在服务器：账户配置 `/root/.config/pm-system/account.json`、`/root/pm-system/config/dashboard-secret.env`、nginx 口令 `/etc/nginx/pm-dashboard.htpasswd`。不进源码、日志、文档、浏览器。
 

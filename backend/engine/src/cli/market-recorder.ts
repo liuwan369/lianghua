@@ -22,6 +22,12 @@ export interface RecordedBook {
   dbl?: [number, number][]; dal?: [number, number][];
 }
 
+/** One recorded market trade print (last_trade_price): k "t", side tok u|d,
+ * price p, size s, taker side BUY|SELL. Same file as the books. */
+export interface RecordedTrade {
+  t: number; a: string; m: string; r: string; k: "t"; tok: "u" | "d"; p: number; s: number; side: string;
+}
+
 export interface MarketRecorderOptions {
   directory: string;
   retentionDays: number;
@@ -51,7 +57,7 @@ export class MarketRecorder {
     this.prune();
   }
 
-  record(book: RecordedBook): void {
+  record(book: RecordedBook | RecordedTrade): void {
     const day = accountDayKey(book.t);
     let entry = this.streams.get(book.a);
     if (!entry || entry.day !== day) {
@@ -98,6 +104,15 @@ export class MarketRecorder {
     this.streams.clear();
     return Promise.all(done).then(() => undefined);
   }
+}
+
+/** A feed marketTrade of this round's up or down token as a recorded row. */
+export function recordedTrade(asset: string, market: { marketId: string; roundId: string; upToken: string; downToken: string },
+  trade: { token: string; price: number; shares: number; takerSide: string }, receivedAt: number): RecordedTrade | undefined {
+  const tok = trade.token === market.upToken ? "u" : trade.token === market.downToken ? "d" : undefined;
+  if (!tok) return undefined;
+  return { t: Math.round(receivedAt * 1000) / 1000, a: asset, m: market.marketId, r: market.roundId, k: "t", tok,
+    p: trade.price, s: trade.shares, side: trade.takerSide };
 }
 
 /** The fields worth keeping from a collector book snapshot. */

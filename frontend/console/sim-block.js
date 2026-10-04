@@ -1,5 +1,5 @@
 "use strict";
-// 模拟交易页：在真实行情上比三种做法——实盘现状 / 建议·立即 / 建议·停1秒——
+// 模拟交易页：在真实行情上比三种做法——实盘现状 / 新规则·立即 / 新规则·停1秒——
 // 每场出手几次、每档能不能买到、模拟盈亏。数据来自 /api/sim 与 /api/sim/overview，
 // 只读，绝不碰实盘下单、账本或实盘配置。
 (() => {
@@ -8,8 +8,8 @@
   const DAYS = [1, 3, 7, 10];
   const VARIANTS = [
     ["A", "实盘现状", "现在实盘的做法：卖价上穿 0.67 就按 5/20/60/140 股挂 0.70 限价单，没成交的挂到收盘，这一档照样算用掉。"],
-    ["B1", "建议·立即", "卖价一过 0.67 立刻吃单，吃不到的不要；第 1 档 5 股 ≤0.70，之后只在落后那边上穿时补，价格不超过保本价，没买到不算一档。"],
-    ["B2", "建议·停1秒", "规则同「建议·立即」，但卖价要在 0.67 上停满 1 秒才出手，滤掉一闪而过的假突破。"],
+    ["C", "新规则·立即", "卖价一过 0.67 就出手：第 1 档 5 股要一次买齐（≤0.70），买不齐就不买、不算一档；之后只在落后那边上穿时补 20/60/140 股，挂 0.70 等成交，挂上就算一档。"],
+    ["C2", "新规则·停1秒", "规则同「新规则·立即」，但卖价要在 0.67 上停满 1 秒才出手，滤掉一闪而过的假突破。"],
   ];
   const VARIANT_NAME = Object.fromEntries(VARIANTS.map(([key, name]) => [key, name]));
   const LADDER = 4;          // 阶梯档数：5/20/60/140 股
@@ -18,7 +18,7 @@
   const params = new URLSearchParams(window.location.search);
   let assetId = COINS.includes((params.get("assetId") || "").toLowerCase()) ? params.get("assetId").toLowerCase() : "btc";
   let days = DAYS.includes(Number(params.get("days"))) ? Number(params.get("days")) : 10;
-  let variant = VARIANT_NAME[params.get("variant")] ? params.get("variant") : "B1";
+  let variant = VARIANT_NAME[params.get("variant")] ? params.get("variant") : "C";
   let filter = "all";
   let page = 0;
   let sim = null;
@@ -41,7 +41,7 @@
     <main class="settings-main sim-main">
       <header class="preview-header">
         <div class="hero-copy"><p class="eyebrow">模拟交易 · 三种做法对比</p><div class="hero-title-row"><h1>模拟交易</h1><span class="language-chip">真实行情 · 不下单</span></div>
-        <p class="subtitle">实盘现状和两种建议做法，在同样的行情上谁出手更少、买得到、亏得少。</p></div>
+        <p class="subtitle">实盘现状和新规则（立即 / 停1秒），在同样的行情上谁出手更少、买得到、亏得少。</p></div>
       </header>
 
       <section class="sim-controls" aria-label="筛选">
@@ -84,9 +84,9 @@
       </section>
 
       <section class="sim-panel" aria-labelledby="sim-fill-title">
-        <div class="panel-heading"><div><p class="eyebrow">成交</p><h3 id="sim-fill-title">每档能不能买到</h3></div><span class="panel-meta">0.3 秒后的卖单深度</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">成交</p><h3 id="sim-fill-title">每档能不能买到</h3></div><span class="panel-meta">0.2 秒到达，没吃到的挂 0.70 等成交</span></div>
         <div class="sim-scroll"><table class="sim-table">
-          <thead><tr><th scope="col">档位</th><th scope="col">尝试次数</th><th scope="col">全部买到</th><th scope="col">部分</th><th scope="col">没买到</th><th scope="col">超过保本价</th><th scope="col">断档</th><th scope="col">平均买到比例</th><th scope="col">平均可买量</th></tr></thead>
+          <thead><tr><th scope="col">档位</th><th scope="col">下单次数</th><th scope="col">全部买到</th><th scope="col">部分</th><th scope="col">没买到(第1档不计)</th><th scope="col">挂单后成交</th><th scope="col">平均买到比例</th><th scope="col">0.70内平均可买量</th></tr></thead>
           <tbody data-fill></tbody>
         </table></div>
       </section>
@@ -94,7 +94,7 @@
       <section class="sim-panel" aria-labelledby="sim-coins-title">
         <div class="panel-heading"><div><p class="eyebrow">对比</p><h3 id="sim-coins-title">七个币对比</h3></div><span class="panel-meta">点一行切换币种</span></div>
         <div class="sim-scroll"><table class="sim-table">
-          <thead><tr><th scope="col">币种</th><th scope="col">场次</th><th scope="col">实盘现状最多出手</th><th scope="col">盈亏·实盘现状</th><th scope="col">盈亏·建议·立即</th><th scope="col">盈亏·建议·停1秒</th></tr></thead>
+          <thead><tr><th scope="col">币种</th><th scope="col">场次</th><th scope="col">实盘现状最多出手</th><th scope="col">盈亏·实盘现状</th><th scope="col">盈亏·新规则·立即</th><th scope="col">盈亏·新规则·停1秒</th></tr></thead>
           <tbody data-overview></tbody>
         </table></div>
       </section>
@@ -109,7 +109,7 @@
         <div class="sim-pager" data-pager></div>
       </section>
 
-      <p class="sim-footnote" role="note">模拟：成交按 0.3 秒后的五档深度，每档只用一次，没考虑别人抢单；实盘只会更差。</p>
+      <p class="sim-footnote" role="note">模拟：订单 0.2 秒到达；挂单在买价涨到 0.70 以上或有成交打到 0.70 时算成交；没考虑排队先后，实盘可能更差。</p>
     </main>
   </div>`;
 
@@ -123,7 +123,7 @@
   const pct = (part, whole, digits = 0) => (whole ? ((part * 100) / whole).toFixed(digits) : "0");
   const money = (value) => (Number.isFinite(value)
     ? `<span class="${value > 0 ? "sim-up" : value < 0 ? "sim-down" : ""}">${value > 0 ? "+" : ""}${value.toFixed(2)}</span>` : "--");
-  const FILL_TEXT = { full: "全部买到", partial: "部分", none: "没买到", over_cap: "超过保本价", topup: "补同一档",
+  const FILL_TEXT = { full: "全部买到", partial: "部分", none: "没买到", skipped: "不够 5 股，没买（不算一档）",
     gap: "断档", too_late: "来不及", no_depth: "无深度数据" };
   const num2 = (value) => (Number.isFinite(value) ? Number(value).toFixed(2) : "--");
   const dirText = (dir) => (dir === "UP" ? "涨" : dir === "DOWN" ? "跌" : "未定");
@@ -206,9 +206,9 @@
     el("[data-fill]").innerHTML = ["1", "2", "3", "4", "5+"].map((rung) => {
       const row = fill[rung] || {};
       return `<tr><th scope="row">${rung === "5+" ? "第 5 档及以后" : `第 ${rung} 档`}</th><td>${row.count || 0}</td>`
-        + `<td>${row.full || 0}（${row.fullPct ?? 0}%）</td><td>${row.partial || 0}</td><td>${row.none || 0}</td>`
-        + `<td class="${row.overCap ? "sim-warn" : ""}">${row.overCap || 0}</td><td>${row.gap || 0}</td>`
-        + `<td>${row.avgFilledPct ?? 0}%</td><td>${row.avgAvail ?? 0} 股</td></tr>`;
+        + `<td>${row.full || 0}（${row.fullPct ?? 0}%）</td><td>${row.partial || 0}</td>`
+        + `<td>${(row.none || 0) + (row.gap || 0)}${row.skipped ? `<small class="sim-variant-note">第1档不够 5 股没买 ${row.skipped} 次</small>` : ""}</td>`
+        + `<td>${row.maker || 0}</td><td>${row.avgFilledPct ?? 0}%</td><td>${row.avgAvail ?? 0} 股</td></tr>`;
     }).join("");
   };
 
