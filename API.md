@@ -40,8 +40,8 @@
 | `/api/events?runId=&cursor=&limit=` | 事件分页 `items[]`、`cursor` |
 | `/api/fills?…` | 成交事件分页（同一成交可能有多条修订） |
 | `/api/settlements?…` | 每场最新结算；`pnl` 取官方结果，`pnlSource` |
-| `/api/sim?assetId=&days=N&variant=A\|C\|C2` | 模拟交易三种做法（A 实盘现状、C 新规则·立即、C2 新规则·停1秒，默认 C；不碰实盘）。只读 `schemaVersion 4` 行（旧行，包括 v3 的 B1/B2，忽略），同一 roundId 取最后一行。`variant`；`rounds[]`（最新在前，最多 2000）每项为 `{asset,roundId,marketId,startsAt,depthOk,winner}` 加所选做法的 `{firings,rawSeconds[],events[],held{UP,DOWN},cost,pnl}`；`events[]` 每项 `{rung,t,dir,ask,want,cap,avail,filled,avgPrice,cost,fee,maker,status}`（`maker` 挂单成交股数），`status` 为 `full`/`partial`/`none`/`skipped`（C 第 1 档 FOK 不够 5 股，不算档）/`gap`/`too_late`/`no_depth`（no_depth 时盈亏 null）；`summary`（所选做法）：`rounds`、`withFiring`、`maxFirings`、`maxRound`、`avgFirings`、`medianFirings`、`over4`、`distribution`（0..max 每个值都有桶，不截断）、`rungFill`（键 `1`..`4`、`5+`，每项 `{count,full,partial,none,skipped,gap,maker,fullPct,avgFilledPct,avgAvail}`，`maker` 为有挂单成交的订单数，不含 `too_late`/`no_depth`）、`pnlTotal`、`pnlPerRound`、`roundsWithPnl`、`worstRound`；`compare`：`A`/`C`/`C2` 各 `{avgFirings,maxFirings,over4,rungFullPct{1..4},pnlTotal,pnlPerRound,worstPnl,roundsWithPnl,rung1Skipped}`。非法 `variant` 按 C。数据源 `data/sim/<asset>.jsonl` |
-| `/api/sim/overview?days=N` | 模拟交易七币对比：`coins[]`（btc/eth/sol/xrp/doge/hype/bnb）每项 `{assetId,rounds,variants:{A,C,C2}}`，每种做法 `{maxFirings,avgFirings,over4,pnlTotal,pnlPerRound}` |
+| `/api/reversals?assetId=&days=N` | 反转统计（N 为 1–10 天，北京时间按天）：`days[]` 每天 `{date,rounds,incomplete,avgFirings,medianFirings,maxFirings,maxRound,over4,over4Pct,firstFiringWinPct,distribution,partialLastMinute}`；`total` 同样字段汇总；`rounds[]` 最近 300 场（最新在前）`{roundId,startsAt,firings,reversals,sides[],seconds[],asks[],winner,firstFiringSide,firstFiringWon}`。`distribution` 从 0 到最大值每个值都有。`partialLastMinute` 表示该日期的录制缺每场最后约 50 秒盘口 |
+| `/api/reversals/overview?days=N` | 7 个币对比：`coins[]` 每项 `{assetId,rounds,avgFirings,medianFirings,maxFirings,over4,over4Pct,firstFiringWinPct}` |
 | `/api/live` | 采集器快照（引擎发现兜底用） |
 
 ## POST / PUT
@@ -72,6 +72,6 @@
 | `/api/settlements`、`/api/events`、`/api/account/snapshot` | 1 |
 | `/api/metrics/summary`、`/api/account/status`、`/api/runtime/market-pool`、`/api/strategy/config` | 2 |
 | `/api/diagnostics/health` | 5 |
-| `/api/sim`、`/api/sim/overview` | 10（新一场的结果每 5 分钟才出现一行） |
+| `/api/reversals`、`/api/reversals/overview` | 30（录制最多每 60 秒重算一次） |
 
 账本类路径只在 `ledger.sqlite3`/WAL/`snapshot.json` 变了才重渲染；市场路径看采集器文件和账本；账户快照看读取器刷新时间。推送断开时 `shared/stream.js` 让页面退回普通轮询。

@@ -41,6 +41,7 @@ from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after
                                        validate_snapshot)
 from dashboard.account_data import AccountData
 from dashboard.push import PushHub
+from dashboard import reversals
 from dashboard import official_pnl
 from dashboard.system_metrics import SystemMetrics
 
@@ -2422,137 +2423,26 @@ def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
 
 
-# Paper simulator (模拟交易): one line per round written by the collector's
-# ReversalSim to data/sim/<asset>.jsonl, three variants each: A 实盘现状,
-# C 新规则·立即, C2 新规则·停1秒. Read-only here; never a trading path.
-SIM_DIR = DEPLOYMENT_LOCK_PATH.parents[1] / "sim"
-_SIM_MAX_ROUNDS = 2000
-_SIM_SCHEMA = 4
-_SIM_RUNGS = ("1", "2", "3", "4", "5+")
-_SIM_VARIANTS = ("A", "C", "C2")
-_SIM_FILL_KEYS = {"full": "full", "partial": "partial", "none": "none", "skipped": "skipped", "gap": "gap"}
+# 反转统计: firings per round counted from the market recordings (REVERSAL.md).
+# Read-only; caches per recording day under data/reversals.
+REVERSAL_HISTORY = DEPLOYMENT_LOCK_PATH.parents[1] / "market-history"
+REVERSAL_CACHE = DEPLOYMENT_LOCK_PATH.parents[1] / "reversals"
 
 
-def _sim_rung_fill(rounds: list[dict]) -> dict:
-    """Per ladder rung: orders placed and how they filled (`skipped`: a rung-1 FOK that found < 5 shares,
-    not counted; `maker`: orders with a resting fill). too_late and no_depth are left out."""
-    acc = {rung: {"count": 0, **{key: 0 for key in _SIM_FILL_KEYS.values()}, "maker": 0, "_pct": [], "_avail": []}
-           for rung in _SIM_RUNGS}
-    for row in rounds:
-        for event in row.get("events") or []:
-            key = _SIM_FILL_KEYS.get(event.get("status"))
-            if key is None:
-                continue
-            index = int(event.get("rung") or 0)
-            bucket = acc[str(index) if 1 <= index <= 4 else "5+"]
-            bucket["count"] += 1
-            bucket[key] += 1
-            if (event.get("maker") or 0) > 0:
-                bucket["maker"] += 1
-            want, filled, avail = event.get("want"), event.get("filled"), event.get("avail")
-            if isinstance(want, (int, float)) and want > 0 and isinstance(filled, (int, float)):
-                bucket["_pct"].append(filled * 100 / want)
-            if isinstance(avail, (int, float)):
-                bucket["_avail"].append(avail)
-    mean = lambda values: round(sum(values) / len(values), 1) if values else 0
-    return {rung: {"count": b["count"], **{key: b[key] for key in _SIM_FILL_KEYS.values()}, "maker": b["maker"],
-                   "fullPct": round(b["full"] * 100 / b["count"], 1) if b["count"] else 0,
-                   "avgFilledPct": mean(b["_pct"]), "avgAvail": mean(b["_avail"])}
-            for rung, b in acc.items()}
-
-
-def _sim_rows(asset: str, days: int) -> list[dict]:
-    """schemaVersion 4 rows inside the day window, latest first; the last line per round wins."""
-    cutoff = time.time() - max(1, min(int(days or 10), 3650)) * 86400
-    by_round: dict[str, dict] = {}
-    try:
-        with (SIM_DIR / f"{asset}.jsonl").open("r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                # Older schema lines are ignored; replay regenerates them.
-                if not isinstance(row, dict) or row.get("schemaVersion") != _SIM_SCHEMA \
-                        or not isinstance(row.get("startsAt"), (int, float)) \
-                        or not isinstance(row.get("variants"), dict):
-                    continue
-                if row["startsAt"] >= cutoff:
-                    by_round[str(row.get("roundId"))] = row
-    except OSError:
-        return []
-    rows = sorted(by_round.values(), key=lambda item: item.get("startsAt", 0), reverse=True)
-    return rows[:_SIM_MAX_ROUNDS]
-
-
-def _sim_summary(rounds: list[dict]) -> dict:
-    """One variant: firing distribution (uncapped, every value 0..max), rung fill rates and PnL."""
-    counts = [int(r.get("firings") or 0) for r in rounds]
-    max_firings = max(counts, default=0)
-    distribution = {str(value): 0 for value in range(0, max_firings + 1)}
-    for value in counts:
-        distribution[str(value)] += 1
-    top = next((r for r in rounds if int(r.get("firings") or 0) == max_firings), None) if max_firings else None
-    ordered = sorted(counts)
-    middle = len(ordered) // 2
-    median = (ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2) if ordered else 0
-    priced = [r for r in rounds if isinstance(r.get("pnl"), (int, float))]
-    pnl_total = round(sum(r["pnl"] for r in priced), 3)
-    worst = min(priced, key=lambda r: r["pnl"], default=None)
-    return {"rounds": len(rounds), "withFiring": sum(1 for value in counts if value >= 1),
-            "maxFirings": max_firings,
-            "maxRound": {"roundId": top.get("roundId"), "startsAt": top.get("startsAt"), "firings": max_firings}
-            if top else None,
-            "avgFirings": round(sum(counts) / len(counts), 2) if counts else 0, "medianFirings": median,
-            "over4": sum(1 for value in counts if value > 4), "distribution": distribution,
-            "rungFill": _sim_rung_fill(rounds), "pnlTotal": pnl_total, "roundsWithPnl": len(priced),
-            "pnlPerRound": round(pnl_total / len(priced), 3) if priced else 0,
-            "worstRound": {"roundId": worst.get("roundId"), "startsAt": worst.get("startsAt"), "pnl": worst["pnl"]}
-            if worst else None}
-
-
-def _sim_variant_rounds(rows: list[dict], variant: str) -> list[dict]:
-    """Each round as its base fields plus the chosen variant's result."""
-    base = ("asset", "roundId", "marketId", "startsAt", "depthOk", "winner")
-    return [{**{key: row.get(key) for key in base}, **(row["variants"].get(variant) or {})} for row in rows]
-
-
-def _api_sim(asset_id: str, days: int, variant: str = "C") -> dict:
-    """Latest-first rounds and the summary of one variant, plus `compare` for all three."""
+def _api_reversals(asset_id: str, days: int) -> dict:
     asset = str(asset_id or "").strip().lower()
-    if not _ASSET_ID_RE.fullmatch(asset):
+    if asset not in SUPPORTED_ASSET_IDS:
         raise ValueError("invalid assetId")
-    if variant not in _SIM_VARIANTS:
-        raise ValueError("invalid variant")
-    rows = _sim_rows(asset, days)
-    summaries = {name: _sim_summary(_sim_variant_rounds(rows, name)) for name in _SIM_VARIANTS}
-    compare = {name: {"avgFirings": s["avgFirings"], "maxFirings": s["maxFirings"], "over4": s["over4"],
-                      "rungFullPct": {rung: s["rungFill"][rung]["fullPct"] for rung in _SIM_RUNGS[:4]},
-                      "pnlTotal": s["pnlTotal"], "pnlPerRound": s["pnlPerRound"],
-                      "worstPnl": s["worstRound"]["pnl"] if s["worstRound"] else None,
-                      "roundsWithPnl": s["roundsWithPnl"], "rung1Skipped": s["rungFill"]["1"]["skipped"]}
-               for name, s in summaries.items()}
-    return {"schemaVersion": _SIM_SCHEMA, "assetId": asset, "variant": variant,
-            "rounds": _sim_variant_rounds(rows, variant), "summary": summaries[variant], "compare": compare}
+    return reversals.summary(REVERSAL_HISTORY, REVERSAL_CACHE, asset, days=max(1, min(int(days), 10)))
 
 
-_SIM_COINS = ("btc", "eth", "sol", "xrp", "doge", "hype", "bnb")
-
-
-def _api_sim_overview(days: int) -> dict:
-    """Per coin, per variant: the numbers of the 模拟交易 seven-coin table."""
+def _api_reversals_overview(days: int) -> dict:
     coins = []
-    for asset in _SIM_COINS:
-        rows = _sim_rows(asset, days)
-        variants = {}
-        for name in _SIM_VARIANTS:
-            s = _sim_summary(_sim_variant_rounds(rows, name))
-            variants[name] = {key: s[key] for key in ("maxFirings", "avgFirings", "over4", "pnlTotal", "pnlPerRound")}
-        coins.append({"assetId": asset, "rounds": len(rows), "variants": variants})
-    return {"schemaVersion": _SIM_SCHEMA, "days": days, "coins": coins}
+    for asset in sorted(SUPPORTED_ASSET_IDS, key=["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"].index):
+        total = _api_reversals(asset, days)["total"]
+        coins.append({"assetId": asset, **{key: total[key] for key in (
+            "rounds", "avgFirings", "medianFirings", "maxFirings", "over4", "over4Pct", "firstFiringWinPct")}})
+    return {"schemaVersion": 1, "days": max(1, min(int(days), 10)), "asOf": time.time(), "coins": coins}
 
 
 RUN_JOURNALS_KEPT = 20
@@ -3040,16 +2930,13 @@ def make_handler(root: Path):
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_event_query","stale":true}', 400)
                 return
-            if path in ("/api/sim", "/api/sim/overview"):
-                asset_id = (query.get("assetId") or ["btc"])[0]
+            if path in ("/api/reversals", "/api/reversals/overview"):
                 try:
-                    days = max(1, min(int((query.get("days") or ["10"])[0]), 3650))
+                    days = int((query.get("days") or ["7"])[0])
                 except (ValueError, TypeError):
-                    days = 10
-                variant = (query.get("variant") or ["C"])[0]
-                if variant not in _SIM_VARIANTS:
-                    variant = "C"
-                value = _api_sim_overview(days) if path == "/api/sim/overview" else _api_sim(asset_id, days, variant)
+                    days = 7
+                value = (_api_reversals_overview(days) if path == "/api/reversals/overview"
+                         else _api_reversals((query.get("assetId") or ["btc"])[0], days))
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/rounds":

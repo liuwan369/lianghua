@@ -33,8 +33,8 @@ CADENCE = (
     ("/api/metrics/summary", 2.0),
     ("/api/account/status", 2.0),
     ("/api/runtime/market-pool", 2.0),
+    ("/api/reversals", 30.0),           # recordings are recounted at most once a minute
     ("/api/strategy/config", 2.0),
-    ("/api/sim", 10.0),                 # a new round line only appears every 5 min
     ("/api/diagnostics/health", 5.0),   # embeds the whole catalog again
 )
 MAX_PATHS_PER_CLIENT = 24

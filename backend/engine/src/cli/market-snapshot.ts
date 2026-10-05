@@ -8,7 +8,6 @@ import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
 import { MarketRecorder, recordedTop, recordedBook, recordedTrade } from "./market-recorder.js";
-import { ReversalSim, simBookFromSnapshot } from "../sim/reversal-sim.js";
 
 const MARKET_WINDOW_SEC = 300;
 // Polymarket publishes 5m up/down markets for these seven; verified live that
@@ -33,28 +32,25 @@ export interface MarketSnapshotOptions {
   /** Record every book event here for replay/backtests; unset = no recording. */
   recordDir?: string;
   recordDays: number;
-  /** Run the paper trading simulator and write per-round firing counts here; unset = off. */
-  simDir?: string;
 }
 
 export function parseMarketSnapshotOptions(argv: string[]): MarketSnapshotOptions | undefined {
   const options: MarketSnapshotOptions = { output: "data/dashboard/market-snapshot.json", durationSec: 0,
     staleAfterMs: 2_000, publishMs: 250, discoveryMs: 15_000, recordDays: 10 };
-  const numeric = new Map<string, keyof Omit<MarketSnapshotOptions, "output" | "assets" | "recordDir" | "simDir">>([
+  const numeric = new Map<string, keyof Omit<MarketSnapshotOptions, "output" | "assets" | "recordDir">>([
     ["--duration-sec", "durationSec"], ["--stale-after-ms", "staleAfterMs"],
     ["--publish-ms", "publishMs"], ["--discovery-ms", "discoveryMs"], ["--record-days", "recordDays"],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === "--help" || arg === "-h") {
-      console.log("Usage: market-snapshot [--assets btc,eth,sol,xrp,doge,hype,bnb] [--output path] [--duration-sec seconds] [--stale-after-ms ms] [--publish-ms ms] [--discovery-ms ms] [--record-dir path] [--record-days 10] [--sim-dir path]");
+      console.log("Usage: market-snapshot [--assets btc,eth,sol,xrp,doge,hype,bnb] [--output path] [--duration-sec seconds] [--stale-after-ms ms] [--publish-ms ms] [--discovery-ms ms] [--record-dir path] [--record-days 10]");
       return undefined;
     }
     const value = argv[++index];
     if (!value || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
     if (arg === "--output") options.output = value;
     else if (arg === "--record-dir") options.recordDir = value;
-    else if (arg === "--sim-dir") options.simDir = value;
     else if (arg === "--assets") {
       const assets = value.split(",").map(asset => asset.trim().toLowerCase());
       if (assets.some(asset => !asset)) throw new Error("--assets must contain one or more comma-separated assets");
@@ -111,7 +107,6 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   const finished = new Promise<void>(resolvePromise => { finish = resolvePromise; });
   const discoveryAbort = new AbortController();
   const recorder = options.recordDir ? new MarketRecorder({ directory: options.recordDir, retentionDays: options.recordDays }) : undefined;
-  const sim = options.simDir ? new ReversalSim(options.simDir, { retentionDays: options.recordDays }) : undefined;
   const stop = () => {
     stopped = true;
     discoveryAbort.abort();
@@ -192,11 +187,6 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
             const receivedAt = deps.now();
             try { recorder?.record(recordedBook(asset, event.snapshot as unknown as Record<string, unknown>, receivedAt)); }
             catch { if (recorder) recorder.dropped += 1; }
-            // The simulator is guarded the same way: it must never break the collector.
-            try {
-              const simBook = simBookFromSnapshot(event.snapshot as unknown as Record<string, unknown>);
-              if (sim && simBook) sim.observe(asset, simBook, receivedAt);
-            } catch { if (sim) sim.dropped += 1; }
           }
           else if (event.kind === "bookTop") {
             // One side empty (near the close): record it; the strategy and the
@@ -205,16 +195,11 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
             catch { if (recorder) recorder.dropped += 1; }
           }
           else if (event.kind === "marketTrade") {
-            // Trade prints go into the same recording (rows k:"t") and the simulator's resting-fill model.
-            const receivedAt = deps.now();
+            // Trade prints go into the same recording (rows k:"t").
             try {
               const row = recordedTrade(asset, { marketId: market.conditionId, roundId: market.roundId,
-                upToken: market.upToken, downToken: market.downToken }, event, receivedAt);
-              if (row) {
-                recorder?.record(row);
-                sim?.observeTrade(asset, { marketId: row.m, roundId: row.r, dir: row.tok === "u" ? "UP" : "DOWN",
-                  price: row.p, shares: row.s, side: row.side }, receivedAt);
-              }
+                upToken: market.upToken, downToken: market.downToken }, event, deps.now());
+              if (row) recorder?.record(row);
             } catch { if (recorder) recorder.dropped += 1; }
           }
           else if (event.kind === "bookStatus") {
@@ -284,7 +269,6 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     safePublish();
     await Promise.allSettled(discoveryJobs.values());
     await recorder?.close();
-    try { sim?.flush(); } catch { /* a sim failure must never fail collector shutdown */ }
     process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", interrupt);
     signal?.removeEventListener("abort", stop);
   }

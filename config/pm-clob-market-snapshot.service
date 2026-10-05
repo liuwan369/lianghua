@@ -11,11 +11,7 @@ WorkingDirectory=/root/pm-system/backend/engine
 # for replay/backtests (user decision 2026-10-01). This is not the trading
 # engine's feed, so recording cannot slow an order. ProtectSystem=full leaves
 # /root writable, so the directory needs no ReadWritePaths entry.
-# --sim-dir: the paper "simulated trading" counter (模拟交易). It runs the real
-# reversal strategy on the same real quotes and writes per-round firing counts
-# to data/sim/<asset>.jsonl, so the operator can see how many times the strategy
-# would fire per round (uncapped). It never touches the live order path.
-ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol,xrp,doge,hype,bnb --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000 --record-dir /root/pm-system/data/market-history --record-days 10 --sim-dir /root/pm-system/data/sim
+ExecStart=/usr/local/bin/node /root/pm-system/backend/engine/dist/cli/market-snapshot.js --assets btc,eth,sol,xrp,doge,hype,bnb --output /root/pm-system/data/dashboard/market-snapshot.json --stale-after-ms 2000 --record-dir /root/pm-system/data/market-history --record-days 10
 Restart=always
 RestartSec=1
 Environment=NODE_ENV=production
