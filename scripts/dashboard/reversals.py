@@ -176,7 +176,8 @@ def _stats(rounds: list[dict]) -> dict:
             "firstFiringWinPct": (round(100 * sum(item["firstFiringWon"] for item in judged) / len(judged), 1)
                                   if judged else None),
             "distribution": distribution,
-            "partialLastMinute": any(item["partialLastMinute"] for item in complete)}
+            "partialLastMinute": any(item["partialLastMinute"] for item in complete),
+            "partialRounds": sum(1 for item in complete if item["partialLastMinute"])}
 
 
 def warm(history: Path, cache: Path, assets, *, days: int = 10, today: str | None = None) -> None:

@@ -40,7 +40,7 @@
 | `/api/events?runId=&cursor=&limit=` | 事件分页 `items[]`、`cursor` |
 | `/api/fills?…` | 成交事件分页（同一成交可能有多条修订） |
 | `/api/settlements?…` | 每场最新结算；`pnl` 取官方结果，`pnlSource` |
-| `/api/reversals?assetId=&days=N` | 反转统计（N 为 1–10 天，北京时间按天）：`days[]` 每天 `{date,rounds,incomplete,avgFirings,medianFirings,maxFirings,maxRound,over4,over4Pct,firstFiringWinPct,distribution,partialLastMinute}`；`total` 同样字段汇总；`rounds[]` 最近 300 场（最新在前）`{roundId,startsAt,firings,reversals,sides[],seconds[],asks[],winner,firstFiringSide,firstFiringWon}`。`distribution` 从 0 到最大值每个值都有。`partialLastMinute` 表示该日期的录制缺每场最后约 50 秒盘口 |
+| `/api/reversals?assetId=&days=N` | 反转统计（N 为 1–10 天，北京时间按天）：`days[]` 每天 `{date,rounds,incomplete,avgFirings,medianFirings,maxFirings,maxRound,over4,over4Pct,firstFiringWinPct,distribution,partialLastMinute,partialRounds}`；`total` 同样字段汇总；`rounds[]` 最近 300 场（最新在前）`{roundId,startsAt,firings,reversals,sides[],seconds[],asks[],winner,firstFiringSide,firstFiringWon}`。`distribution` 从 0 到最大值每个值都有。`partialRounds` 是其中缺每场最后约 50 秒盘口的场次数（2026-10-05 05:50 UTC 之前录的） |
 | `/api/reversals/overview?days=N` | 7 个币对比：`coins[]` 每项 `{assetId,rounds,avgFirings,medianFirings,maxFirings,over4,over4Pct,firstFiringWinPct}` |
 | `/api/live` | 采集器快照（引擎发现兜底用） |
 

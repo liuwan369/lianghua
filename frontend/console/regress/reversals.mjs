@@ -30,7 +30,7 @@ const distribution = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [St
 const total = { rounds: 286, incomplete: 2, avgFirings: 1.83, medianFirings: 1, maxFirings: 10,
   maxRound: { roundId: "1790884500", startsAt: 1790884500 }, over4: 10, over4Pct: 3.5, firstFiringWinPct: 64.8,
   distribution, partialLastMinute: true };
-const body = { schemaVersion: 1, assetId: "btc", days: [{ date: "2026-10-02", ...total }], total,
+const body = { schemaVersion: 1, assetId: "btc", days: [{ date: "2026-10-02", ...total, partialRounds: 286 }], total,
   rounds: [{ roundId: "1790884500", startsAt: 1790884500, firings: 10, reversals: 9, winner: "UP",
     sides: ["DOWN", "UP"], seconds: [0.6, 236.1], partialLastMinute: true }] };
 const overview = { schemaVersion: 1, days: 7, coins: ["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"].map((assetId) =>

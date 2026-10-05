@@ -115,7 +115,7 @@
       const atLeast5 = Object.entries(d).reduce((sum, [k, v]) => sum + (Number(k) >= 5 ? v : 0), 0);
       return `<tr><td>${esc(day.date)}</td><td>${day.rounds}</td><td>${num(day.avgFirings)}</td><td>${day.maxFirings}</td>
         <td>${d["0"] || 0}</td><td>${d["1"] || 0}</td><td>${d["2"] || 0}</td><td>${d["3"] || 0}</td><td>${d["4"] || 0}</td>
-        <td class="${atLeast5 ? "rv-warn" : ""}">${atLeast5}</td><td class="rv-note">${day.partialLastMinute ? "缺最后约50秒盘口" : ""}</td></tr>`;
+        <td class="${atLeast5 ? "rv-warn" : ""}">${atLeast5}</td><td class="rv-note">${day.partialRounds ? (day.partialRounds >= day.rounds ? "缺最后约50秒盘口" : `其中 ${day.partialRounds} 场缺最后约50秒盘口`) : "完整"}</td></tr>`;
     }).join("");
   };
 
