@@ -7,7 +7,7 @@ import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
-import { MarketRecorder, recordedBook, recordedTrade } from "./market-recorder.js";
+import { MarketRecorder, recordedTop, recordedBook, recordedTrade } from "./market-recorder.js";
 import { ReversalSim, simBookFromSnapshot } from "../sim/reversal-sim.js";
 
 const MARKET_WINDOW_SEC = 300;
@@ -197,6 +197,12 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
               const simBook = simBookFromSnapshot(event.snapshot as unknown as Record<string, unknown>);
               if (sim && simBook) sim.observe(asset, simBook, receivedAt);
             } catch { if (sim) sim.dropped += 1; }
+          }
+          else if (event.kind === "bookTop") {
+            // One side empty (near the close): record it; the strategy and the
+            // published snapshot keep requiring both sides.
+            try { recorder?.record(recordedTop(asset, event, deps.now())); }
+            catch { if (recorder) recorder.dropped += 1; }
           }
           else if (event.kind === "marketTrade") {
             // Trade prints go into the same recording (rows k:"t") and the simulator's resting-fill model.

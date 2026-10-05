@@ -88,6 +88,13 @@ export type FeedEvent =
   | ({ kind: "oracle"; asset?: string; tsUnix: number; price: number } & ReferenceTimes)
   | { kind: "book"; snapshot: BookSnapshot }
   | { kind: "tickSize"; token: string; tickSize: number; tsUnix: number }
+  /** Top of book while one side is empty (no bid or no ask), for recording
+   * only: the strategy's book event needs both sides, so this frame used to be
+   * dropped and the last ~50 s of every round went unrecorded. */
+  | { kind: "bookTop"; marketId?: string; roundId?: string; tsUnix: number;
+      upBid?: number; upAsk?: number; downBid?: number; downAsk?: number;
+      upAskLevels?: [number, number][]; downAskLevels?: [number, number][];
+      upBidLevels?: [number, number][]; downBidLevels?: [number, number][] }
   | {
       kind: "marketTrade";
       token: string;

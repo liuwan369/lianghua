@@ -475,6 +475,7 @@ export function runPolymarketFeed(
   let lastUpAt = -Infinity, lastDownAt = -Infinity;
   const tickSizeAt = new Map<string, number>();
   const seenTrades = new Set<string>();
+  let lastTopAt = -Infinity;
   const connected: boolean[] = new Array(sockets).fill(false);
   const healthy: boolean[] = new Array(sockets).fill(false);
   let reportedConnected: boolean | undefined;
@@ -547,6 +548,10 @@ export function runPolymarketFeed(
         seenTrades.add(key);
         if (seenTrades.size > 4096) seenTrades.delete(seenTrades.values().next().value!);
         sink(event);
+      } else if (event.kind === "bookTop") {
+        // Both sockets see the same venue frame: forward a one-sided top once.
+        if (event.tsUnix <= lastTopAt) return;
+        lastTopAt = event.tsUnix; sink(event);
       } else sink(event);
     }, upToken, downToken, deadline, { ...identity, sequenceBase: 0 }));
   }
@@ -837,6 +842,13 @@ function runSingleSocketFeed(
               if (!hasUpTop || !hasDownTop) {
                 reportHealth(false, "incomplete_book");
                 hasCompleteBook = false;
+                // Recording only: near the close the winning side has no asks,
+                // which is a real book state, not missing data.
+                sink({ kind: "bookTop", marketId: resolvedMarketId, roundId: inferredRoundId, tsUnix: atMs / 1000,
+                  upBid: fastUp?.bid ?? ub?.[0], upAsk: fastUp?.ask ?? ua?.[0],
+                  downBid: fastDown?.bid ?? db?.[0], downAsk: fastDown?.ask ?? da?.[0],
+                  upAskLevels: up.levels(5).asks, downAskLevels: dn.levels(5).asks,
+                  upBidLevels: up.levels(5).bids, downBidLevels: dn.levels(5).bids });
                 return;
               }
               hasCompleteBook = true;

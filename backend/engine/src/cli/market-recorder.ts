@@ -28,6 +28,13 @@ export interface RecordedTrade {
   t: number; a: string; m: string; r: string; k: "t"; tok: "u" | "d"; p: number; s: number; side: string;
 }
 
+/** A one-sided top of book (k "o"), venue time e; absent fields = empty side. */
+export interface RecordedTop {
+  t: number; a: string; m: string; r: string; k: "o"; e: number;
+  ub?: number; ua?: number; db?: number; da?: number;
+  ubl?: [number, number][]; ual?: [number, number][]; dbl?: [number, number][]; dal?: [number, number][];
+}
+
 export interface MarketRecorderOptions {
   directory: string;
   retentionDays: number;
@@ -57,7 +64,7 @@ export class MarketRecorder {
     this.prune();
   }
 
-  record(book: RecordedBook | RecordedTrade): void {
+  record(book: RecordedBook | RecordedTrade | RecordedTop): void {
     const day = accountDayKey(book.t);
     let entry = this.streams.get(book.a);
     if (!entry || entry.day !== day) {
@@ -116,6 +123,18 @@ export function recordedTrade(asset: string, market: { marketId: string; roundId
 }
 
 /** The fields worth keeping from a collector book snapshot. */
+/** A one-sided top of book (one side has no bid or no ask, e.g. the winner at
+ * 0.99 near the close). Row kind "o"; empty sides are simply absent. */
+export function recordedTop(asset: string, event: { marketId?: string; roundId?: string; tsUnix: number;
+  upBid?: number; upAsk?: number; downBid?: number; downAsk?: number;
+  upAskLevels?: [number, number][]; downAskLevels?: [number, number][];
+  upBidLevels?: [number, number][]; downBidLevels?: [number, number][] }, receivedAt: number): RecordedTop {
+  const five = (levels?: [number, number][]) => levels?.length ? levels.slice(0, 5) : undefined;
+  return { t: Math.round(receivedAt * 1000) / 1000, a: asset, m: String(event.marketId ?? ""), r: String(event.roundId ?? ""),
+    k: "o", e: event.tsUnix, ub: event.upBid, ua: event.upAsk, db: event.downBid, da: event.downAsk,
+    ubl: five(event.upBidLevels), ual: five(event.upAskLevels), dbl: five(event.downBidLevels), dal: five(event.downAskLevels) };
+}
+
 export function recordedBook(asset: string, snapshot: Record<string, unknown>, receivedAt: number): RecordedBook {
   const num = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
   const levels = (value: unknown) => Array.isArray(value)
