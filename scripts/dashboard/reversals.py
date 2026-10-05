@@ -36,53 +36,72 @@ BEIJING = timezone(timedelta(hours=8))
 CACHE_VERSION = 1
 
 
-def count_round(rows: list[dict], start: int) -> dict:
-    """Firings of one round from its rows in time order."""
-    prev: tuple[float, float] | None = None
-    sides: list[str] = []
-    seconds: list[float] = []
-    asks: list[float] = []
-    winner = None
-    first_clean = last_t = None
-    for row in rows:
-        t = row.get("t")
+class _Round:
+    """Counter state of one round, fed one row at a time (rows are never kept:
+    a day of one coin is ~860k rows and holding them got the control plane
+    OOM-killed)."""
+    __slots__ = ("start", "prev", "sides", "seconds", "asks", "winner", "first_clean", "last_t")
+
+    def __init__(self, start: int):
+        self.start = start
+        self.prev: tuple[float, float] | None = None
+        self.sides: list[str] = []
+        self.seconds: list[float] = []
+        self.asks: list[float] = []
+        self.winner = None
+        self.first_clean = self.last_t = None
+
+    def feed(self, row: dict) -> None:
+        t, start = row.get("t"), self.start
         if not isinstance(t, (int, float)) or not (start <= t < start + ROUND_SEC) or row.get("k") == "t":
-            continue
-        last_t = t
+            return
+        self.last_t = t
         ua, da, ub, db = row.get("ua"), row.get("da"), row.get("ub"), row.get("db")
         if (ua or 0) >= WIN_PRICE or (ub or 0) >= WIN_PRICE:
-            winner = "UP"
+            self.winner = "UP"
         elif (da or 0) >= WIN_PRICE or (db or 0) >= WIN_PRICE:
-            winner = "DOWN"
+            self.winner = "DOWN"
         elif ua is not None and da is not None:
-            winner = None
+            self.winner = None
         if row.get("k") == "o" or ua is None or da is None or ua + da > WIDE_SUM:
-            continue
-        if first_clean is None:
-            first_clean = t
-        if prev is not None:
-            for side, before, now in (("UP", prev[0], ua), ("DOWN", prev[1], da)):
-                if before < LINE <= now and (not sides or sides[-1] != side):
-                    sides.append(side)
-                    seconds.append(round(t - start, 1))
-                    asks.append(now)
-        prev = (ua, da)
-    # Before one-sided rows were recorded the book simply stops when the winner
-    # has no asks (median ~242 s): such a round is still counted, and flagged.
-    ends_early = last_t is None or last_t - start < MIN_END_SEC
-    incomplete = (first_clean is None or first_clean - start > START_GRACE_SEC
-                  or (ends_early and start >= ONE_SIDED_FROM))
-    return {"roundId": str(start), "startsAt": start, "firings": len(sides), "reversals": max(0, len(sides) - 1),
-            "sides": sides, "seconds": seconds, "asks": asks, "winner": winner,
-            "firstFiringSide": sides[0] if sides else None,
-            "firstFiringWon": (sides[0] == winner) if sides and winner else None,
-            "incomplete": incomplete, "partialLastMinute": start < ONE_SIDED_FROM}
+            return
+        if self.first_clean is None:
+            self.first_clean = t
+        if self.prev is not None:
+            for side, before, now in (("UP", self.prev[0], ua), ("DOWN", self.prev[1], da)):
+                if before < LINE <= now and (not self.sides or self.sides[-1] != side):
+                    self.sides.append(side)
+                    self.seconds.append(round(t - start, 1))
+                    self.asks.append(now)
+        self.prev = (ua, da)
+
+    def result(self) -> dict:
+        start, sides = self.start, self.sides
+        # Before one-sided rows were recorded the book simply stops when the
+        # winner has no asks (median ~242 s): such a round still counts, flagged.
+        ends_early = self.last_t is None or self.last_t - start < MIN_END_SEC
+        incomplete = (self.first_clean is None or self.first_clean - start > START_GRACE_SEC
+                      or (ends_early and start >= ONE_SIDED_FROM))
+        return {"roundId": str(start), "startsAt": start, "firings": len(sides), "reversals": max(0, len(sides) - 1),
+                "sides": sides, "seconds": self.seconds, "asks": self.asks, "winner": self.winner,
+                "firstFiringSide": sides[0] if sides else None,
+                "firstFiringWon": (sides[0] == self.winner) if sides and self.winner else None,
+                "incomplete": incomplete, "partialLastMinute": start < ONE_SIDED_FROM}
 
 
-def _read_rows(path: Path) -> dict[str, list[dict]]:
-    """Rows per round. The day file is multi-member gzip and the member being
-    written may end mid-way: keep what was read."""
-    rounds: dict[str, list[dict]] = {}
+def count_round(rows: list[dict], start: int) -> dict:
+    """Firings of one round from its rows in time order."""
+    counter = _Round(start)
+    for row in rows:
+        counter.feed(row)
+    return counter.result()
+
+
+def _count_file(path: Path) -> list[dict]:
+    """Count every round of a day file in one pass. The file is multi-member
+    gzip and the member being written may end mid-way: keep what was read.
+    Rows of one round arrive in time order (one collector writes them)."""
+    rounds: dict[str, _Round] = {}
     try:
         with gzip.open(path, "rt", encoding="utf-8") as handle:
             for line in handle:
@@ -93,16 +112,23 @@ def _read_rows(path: Path) -> dict[str, list[dict]]:
                 except ValueError:
                     break
                 round_id = row.get("r")
-                if isinstance(round_id, str) and round_id.isdigit():
-                    rounds.setdefault(round_id, []).append(row)
+                if not (isinstance(round_id, str) and round_id.isdigit()):
+                    continue
+                counter = rounds.get(round_id)
+                if counter is None:
+                    counter = rounds[round_id] = _Round(int(round_id))
+                counter.feed(row)
     except (EOFError, OSError, zlib.error):
         pass
-    return rounds
+    return sorted((counter.result() for counter in rounds.values()), key=lambda item: item["startsAt"])
 
 
-def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float | None = None) -> list[dict]:
+def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float | None = None,
+               cached_only: bool = False) -> list[dict]:
     """Counted rounds of one recording day, cached by file size and mtime. A
-    file still being written is recomputed at most every LIVE_RECOMPUTE_SEC."""
+    file still being written is recomputed at most every LIVE_RECOMPUTE_SEC.
+    cached_only: answer from the cache even if stale and never parse (an HTTP
+    request must not spend a minute on a day file; the warmer does that)."""
     source = history / asset / f"{day}.jsonl.gz"
     try:
         stat = source.stat()
@@ -114,13 +140,13 @@ def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float |
     try:
         cached = json.loads(target.read_text(encoding="utf-8"))
         fresh = cached.get("stamp") == stamp or now - cached.get("computedAt", 0) < LIVE_RECOMPUTE_SEC
-        if cached.get("version") == CACHE_VERSION and fresh:
+        if cached.get("version") == CACHE_VERSION and (fresh or cached_only):
             return cached["rounds"]
     except (OSError, ValueError, KeyError, AttributeError):
         pass
-    rows = _read_rows(source)
-    counted = sorted((count_round(sorted(items, key=lambda row: row.get("t", 0)), int(round_id))
-                      for round_id, items in rows.items()), key=lambda item: item["startsAt"])
+    if cached_only:
+        return []
+    counted = _count_file(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(".tmp")
     temporary.write_text(json.dumps({"version": CACHE_VERSION, "stamp": stamp, "computedAt": now,
@@ -153,14 +179,25 @@ def _stats(rounds: list[dict]) -> dict:
             "partialLastMinute": any(item["partialLastMinute"] for item in complete)}
 
 
-def summary(history: Path, cache: Path, asset: str, *, days: int, today: str | None = None) -> dict:
+def warm(history: Path, cache: Path, assets, *, days: int = 10, today: str | None = None) -> None:
+    """Recount every day file whose cache is missing or stale (run in a
+    low-priority child process: parsing a day takes about a minute)."""
+    today = datetime.strptime(today, "%Y-%m-%d") if today else datetime.now(BEIJING)
+    for offset in range(days):
+        day = (today - timedelta(days=offset)).strftime("%Y-%m-%d")
+        for asset in assets:
+            day_rounds(history, cache, asset, day)
+
+
+def summary(history: Path, cache: Path, asset: str, *, days: int, today: str | None = None,
+            cached_only: bool = False) -> dict:
     """Per-day and total statistics plus the latest rounds, newest first."""
     today = today or datetime.now(BEIJING).strftime("%Y-%m-%d")
     first = datetime.strptime(today, "%Y-%m-%d")
     dates = [(first - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(days)]
     per_day, everything = [], []
     for date in dates:
-        rounds = day_rounds(history, cache, asset, date)
+        rounds = day_rounds(history, cache, asset, date, cached_only=cached_only)
         if not rounds:
             continue
         everything.extend(rounds)
@@ -169,3 +206,15 @@ def summary(history: Path, cache: Path, asset: str, *, days: int, today: str | N
                     key=lambda item: item["startsAt"], reverse=True)[:300]
     return {"schemaVersion": 1, "assetId": asset, "asOf": time.time(), "days": per_day,
             "total": _stats(everything), "rounds": latest}
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Recount the reversal cache from the recordings.")
+    parser.add_argument("--history", type=Path, required=True)
+    parser.add_argument("--cache", type=Path, required=True)
+    parser.add_argument("--assets", default="btc,eth,sol,xrp,doge,hype,bnb")
+    parser.add_argument("--days", type=int, default=10)
+    parser.add_argument("--today", help="last day to count (YYYY-MM-DD, Beijing); default today")
+    options = parser.parse_args()
+    warm(options.history, options.cache, options.assets.split(","), days=options.days, today=options.today)

@@ -139,6 +139,19 @@ class Files(unittest.TestCase):
         self.assertEqual(total["distribution"], {"0": 1, "1": 2, "2": 0, "3": 1}, "every value 0..max is listed")
         self.assertEqual(result["days"][0]["date"], "2027-01-15")
 
+    def test_request_never_parses(self):
+        """A full day takes about a minute to parse and holding it got the
+        control plane OOM-killed: a request reads only the cache."""
+        rows = full_round([book(1, 0.50, 0.51), book(2, 0.68, 0.33)])
+        self.write("2027-01-15.jsonl.gz", rows)
+        empty = reversals.summary(self.history, self.cache, "btc", days=1, today="2027-01-15", cached_only=True)
+        self.assertEqual(empty["total"]["rounds"], 0, "nothing parsed on the request path")
+        import subprocess
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "dashboard" / "reversals.py"), "--history", str(self.history),
+                        "--cache", str(self.cache), "--assets", "btc", "--days", "1", "--today", "2027-01-15"], check=True)
+        warm = reversals.summary(self.history, self.cache, "btc", days=1, today="2027-01-15", cached_only=True)
+        self.assertEqual(warm["total"]["rounds"], 1, "the warmer filled the cache")
+
 
 if __name__ == "__main__":
     unittest.main()
