@@ -1,6 +1,6 @@
 # 工作规则
 
-本仓库是 Polymarket 五分钟反转实盘系统，真钱。先读 [README.md](README.md) 和 [ARCHITECTURE.md](ARCHITECTURE.md)，接口看 [API.md](API.md)。
+本仓库是 Polymarket 五分钟反转实盘系统，真钱。接手先读 [HANDOFF.md](HANDOFF.md)（当前状态和下一步），再读 [README.md](README.md) 和 [ARCHITECTURE.md](ARCHITECTURE.md)，接口看 [API.md](API.md)，已确认的策略规则在 [STRATEGY.md](STRATEGY.md)。
 
 ## 铁律
 
