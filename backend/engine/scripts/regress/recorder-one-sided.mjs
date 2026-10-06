@@ -27,7 +27,7 @@ const run = runMarketSnapshot({ assets: ["btc"], output: join(dir, "snap.json"),
       upBid: 0.99, upAsk: undefined, downBid: undefined, downAsk: 0.01, downAskLevels: [[0.01, 5000]] }), 30);
     return { stop() {} };
   },
-  publish: () => {},
+  publish: () => {}, reference: () => ({ stop() {} }),
 }, abort.signal);
 await new Promise((resolve) => setTimeout(resolve, 400));
 abort.abort(); await run.catch(() => {});

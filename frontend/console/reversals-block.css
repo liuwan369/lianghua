@@ -55,3 +55,4 @@
 .rv-cards-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
 .rv-gain { color: #8cf0bc; }
 .rv-loss { color: #ff9a9a; }
+.rv-sub { margin: 16px 0 8px; color: #c3d8eb; font-size: 12px; font-weight: 600; }

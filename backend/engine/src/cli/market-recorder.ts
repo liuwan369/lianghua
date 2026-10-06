@@ -35,6 +35,14 @@ export interface RecordedTop {
   ubl?: [number, number][]; ual?: [number, number][]; dbl?: [number, number][]; dal?: [number, number][];
 }
 
+/** The coin's own price (k "p"): venue time e, price p, round r in force. */
+export interface RecordedPrice { t: number; a: string; m: string; r: string; k: "p"; e: number; p: number }
+
+export function recordedPrice(asset: string, roundId: string, venueAt: number, price: number, receivedAt: number): RecordedPrice {
+  return { t: Math.round(receivedAt * 1000) / 1000, a: asset, m: "", r: roundId, k: "p",
+    e: Math.round(venueAt * 1000) / 1000, p: price };
+}
+
 export interface MarketRecorderOptions {
   directory: string;
   retentionDays: number;
@@ -64,7 +72,7 @@ export class MarketRecorder {
     this.prune();
   }
 
-  record(book: RecordedBook | RecordedTrade | RecordedTop): void {
+  record(book: RecordedBook | RecordedTrade | RecordedTop | RecordedPrice): void {
     const day = accountDayKey(book.t);
     let entry = this.streams.get(book.a);
     if (!entry || entry.day !== day) {

@@ -32,6 +32,7 @@ const total = { rounds: 286, incomplete: 2, avgFirings: 1.83, medianFirings: 1, 
   distribution, partialLastMinute: true,
   ladder: { ladder: [5, 13, 60], limit: 0.7, rounds: 120, total: 41.3, perRound: 0.344, worst: -45.9,
     byFirings: { "1": { rounds: 60, total: 90, perRound: 1.5 }, "4+": { rounds: 9, total: -300, perRound: -33.3 } } } };
+total.ladderLate = { ladder: [5, 13, 60], rounds: 34, total: -43.2, perRound: -1.27, worst: -41.6, fromSecond: 60, byFirings: {} };
 const body = { schemaVersion: 1, assetId: "btc", days: [{ date: "2026-10-02", ...total, partialRounds: 286 }], total,
   rounds: [{ roundId: "1790884500", startsAt: 1790884500, firings: 10, reversals: 9, winner: "UP",
     sides: ["DOWN", "UP"], seconds: [0.6, 236.1], partialLastMinute: true }] };
@@ -64,5 +65,6 @@ assert.ok(all.includes("HYPE") && all.includes("BNB"), "the 7-coin table renders
 assert.ok(all.includes("5 / 13 / 60"), "the strategy ladder under test is named");
 assert.ok(all.includes("+41.3") && all.includes("-45.9"), "its total and worst round are shown");
 assert.ok(all.includes("4+ 次"), "results are split by firing count");
+assert.ok(all.includes("-43.2") && all.includes("60 秒后"), "the 60 s entry filter is shown next to all rounds, per day");
 console.log("reversals page OK");
 process.exit(0);

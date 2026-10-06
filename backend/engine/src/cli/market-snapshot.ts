@@ -4,10 +4,11 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { findMarket, type Market } from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
+import { runReferenceFeed } from "../live/feeds/btc.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
-import { MarketRecorder, recordedTop, recordedBook, recordedTrade } from "./market-recorder.js";
+import { MarketRecorder, recordedTop, recordedBook, recordedTrade, recordedPrice } from "./market-recorder.js";
 
 const MARKET_WINDOW_SEC = 300;
 // Polymarket publishes 5m up/down markets for these seven; verified live that
@@ -77,6 +78,8 @@ export interface MarketSnapshotDependencies {
   discover: (at: number, directOnly?: boolean, signal?: AbortSignal, asset?: string) => Promise<Market | undefined>;
   feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number, identity?: FeedMarketIdentity) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
+  /** The coin's own price (the venue aggregator the engine uses); recorded only. */
+  reference: (sink: FeedSink, asset: string) => { stop: () => void };
 }
 
 const defaults: MarketSnapshotDependencies = {
@@ -84,6 +87,7 @@ const defaults: MarketSnapshotDependencies = {
   discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, false, directOnly, signal, asset),
   feed: runPolymarketFeed,
   publish: publishSnapshot,
+  reference: (sink, asset) => runReferenceFeed(sink, asset),
 };
 
 /** Runs only public Gamma discovery and the existing public CLOB WS feed. */
@@ -107,6 +111,26 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   const finished = new Promise<void>(resolvePromise => { finish = resolvePromise; });
   const discoveryAbort = new AbortController();
   const recorder = options.recordDir ? new MarketRecorder({ directory: options.recordDir, retentionDays: options.recordDays }) : undefined;
+  // The markets settle on the coin's price at the close against the open:
+  // record that price next to the book, at most one row per coin per second.
+  const references: Array<{ stop: () => void }> = [];
+  if (recorder) {
+    for (const asset of assets) {
+      let lastSecond = -1;
+      try {
+        references.push(deps.reference(event => {
+          if (event.kind !== "btc" && event.kind !== "oracle") return;
+          const second = Math.floor(event.tsUnix);
+          if (second === lastSecond) return;
+          lastSecond = second;
+          const receivedAt = deps.now();
+          const roundId = String(Math.floor(receivedAt / MARKET_WINDOW_SEC) * MARKET_WINDOW_SEC);
+          try { recorder.record(recordedPrice(asset, roundId, event.tsUnix, event.price, receivedAt)); }
+          catch { recorder.dropped += 1; }
+        }, asset));
+      } catch { /* a coin without a reference feed simply records no price */ }
+    }
+  }
   const stop = () => {
     stopped = true;
     discoveryAbort.abort();
@@ -266,6 +290,7 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     clearTimeout(discoveryPrewarmStartTimer); clearTimeout(discoveryBoundaryTimer);
     clearInterval(discoveryPrewarmTimer); clearTimeout(discoveryPrewarmStopTimer);
     for (const item of active.values()) { item.stop(); item.projection.disconnect(); }
+    for (const reference of references) { try { reference.stop(); } catch { /* shutting down */ } }
     safePublish();
     await Promise.allSettled(discoveryJobs.values());
     await recorder?.close();

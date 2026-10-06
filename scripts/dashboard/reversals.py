@@ -162,6 +162,9 @@ def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float |
 LADDER = (5, 13, 60)
 LIMIT = 0.70
 TAKER_FEE = 0.07
+# Under test (operator 2026-10-07): trade only rounds whose first trigger comes
+# at or after this second; an earlier first trigger means the round is skipped.
+LATE_FROM_SEC = 60
 
 
 def ladder_pnl(item: dict, ladder=LADDER, *, fee: bool = True) -> float | None:
@@ -203,7 +206,9 @@ def _stats(rounds: list[dict]) -> dict:
             "distribution": distribution,
             "partialLastMinute": any(item["partialLastMinute"] for item in complete),
             "partialRounds": sum(1 for item in complete if item["partialLastMinute"]),
-            "ladder": _ladder_stats(complete)}
+            "ladder": _ladder_stats(complete),
+            "ladderLate": {**_ladder_stats([item for item in complete if item.get("seconds")
+                                            and item["seconds"][0] >= LATE_FROM_SEC]), "fromSecond": LATE_FROM_SEC}}
 
 
 def _ladder_stats(complete: list[dict]) -> dict:

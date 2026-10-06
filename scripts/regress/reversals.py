@@ -183,6 +183,18 @@ class Ladder(unittest.TestCase):
         self.assertEqual(stats["ladder"]["rounds"], 1)
         self.assertGreater(stats["ladder"]["total"], 1.5, "bought at 0.68, cheaper than the limit")
 
+    def test_late_entry_group(self):
+        """The operator's test (2026-10-07): only rounds whose first trigger comes
+        at or after 60 s are traded; earlier rounds are skipped (no position)."""
+        base = {"incomplete": False, "firstFiringWon": True, "partialLastMinute": False, "roundId": "1", "startsAt": 1}
+        early = {**base, **self.round_(["UP"], [0.70], "DOWN"), "seconds": [12.0]}     # would lose 3.5
+        late = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [75.0]}        # wins
+        stats = reversals._stats([early, late])
+        self.assertEqual(stats["ladder"]["rounds"], 2)
+        self.assertEqual(stats["ladderLate"]["rounds"], 1, "only the round triggered at or after 60 s")
+        self.assertGreater(stats["ladderLate"]["total"], 0)
+        self.assertEqual(stats["ladderLate"]["fromSecond"], 60)
+
 
 if __name__ == "__main__":
     unittest.main()
