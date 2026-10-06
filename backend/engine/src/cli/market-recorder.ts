@@ -71,6 +71,7 @@ export class MarketRecorder {
   private readonly now: () => number;
   dropped = 0;
   written = 0;
+  private closed = false;
 
   constructor(private readonly options: MarketRecorderOptions) {
     this.maxPendingBytes = options.maxPendingBytes ?? 8 * 1024 * 1024;
@@ -84,6 +85,9 @@ export class MarketRecorder {
   }
 
   record(book: RecordedBook | RecordedTrade | RecordedTop | RecordedPrice | RecordedChainlink): void {
+    // A socket message can land after close(): reopening the file then would
+    // interleave a new member with the closing one and break the day file.
+    if (this.closed) { this.dropped += 1; return; }
     const day = accountDayKey(book.t);
     let entry = this.streams.get(book.a);
     if (!entry || entry.day !== day) {
@@ -123,6 +127,7 @@ export class MarketRecorder {
   }
 
   close(): Promise<void> {
+    this.closed = true;
     clearInterval(this.flushTimer); clearInterval(this.pruneTimer);
     const done = [...this.streams.values()].map(({ gzip, file }) => new Promise<void>(resolve => {
       file.once("close", () => resolve()); file.once("error", () => resolve()); gzip.end();

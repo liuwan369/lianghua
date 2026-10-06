@@ -44,5 +44,19 @@ const again = new MarketRecorder({ directory: dir, retentionDays: 10, now: () =>
 again.record(recordedBook("btc", snapshot, now + 20));
 await again.close();
 assert.equal(gunzipSync(readFileSync(file)).toString("utf8").trim().split("\n").length, 1001, "an appended member reads on");
+
+// Shutdown (2026-10-07 deploy): a socket message that lands after close() must
+// not reopen the file. It did, and the new member's writes interleaved with the
+// closing member's last block: every coin's day file broke at the restart, and
+// gzip readers stopped there, losing the rest of the day.
+const late = new MarketRecorder({ directory: dir, retentionDays: 10, now: () => now });
+late.record(recordedBook("btc", snapshot, now + 30));
+const closing = late.close();
+late.record(recordedBook("btc", snapshot, now + 31));
+await closing;
+await new Promise((resolve) => setTimeout(resolve, 200));
+assert.equal(gunzipSync(readFileSync(file)).toString("utf8").trim().split("\n").length, 1002,
+  "a record after close is dropped, and the file stays one valid stream");
+assert.equal(late.dropped, 1, "the late line is counted as dropped");
 rmSync(dir, { recursive: true, force: true });
 console.log("market-recorder OK");

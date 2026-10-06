@@ -15,7 +15,6 @@ recording reaches +240 s. Nothing here trades; it only reads recordings.
 """
 from __future__ import annotations
 
-import gzip
 import json
 import time
 import zlib
@@ -111,29 +110,59 @@ def count_round(rows: list[dict], start: int) -> dict:
     return counter.result()
 
 
-def _count_file(path: Path) -> list[dict]:
-    """Count every round of a day file in one pass. The file is multi-member
-    gzip and the member being written may end mid-way: keep what was read.
-    Rows of one round arrive in time order (one collector writes them)."""
-    rounds: dict[str, _Round] = {}
+GZIP_HEADER = b"\x1f\x8b\x08\x00\x00\x00\x00\x00"  # what the collector's zlib writes
+
+
+def read_lines(path: Path):
+    """Complete lines of a multi-member gzip day file, streamed. A member a
+    collector restart left unfinished (2026-10-07: one in the middle of every
+    day file) is read up to its last whole line; reading resumes at the next
+    member header instead of stopping, so the rest of the day is kept."""
     try:
-        with gzip.open(path, "rt", encoding="utf-8") as handle:
-            for line in handle:
-                if '"k":"t"' in line or '"k": "t"' in line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    break
-                round_id = row.get("r")
-                if not (isinstance(round_id, str) and round_id.isdigit()):
-                    continue
-                counter = rounds.get(round_id)
-                if counter is None:
-                    counter = rounds[round_id] = _Round(int(round_id))
-                counter.feed(row)
-    except (EOFError, OSError, zlib.error):
-        pass
+        data = path.read_bytes()  # compressed: a few MB a day; the text is ~10x
+    except OSError:
+        return
+    pos, pending, inflate = 0, b"", zlib.decompressobj(31)
+    while pos < len(data):
+        piece = data[pos:pos + 65536]
+        try:
+            out = inflate.decompress(piece)
+        except zlib.error:
+            # Broken member: drop its partial line, resume at the next header.
+            at = data.find(GZIP_HEADER, pos + 1)
+            if at < 0:
+                return
+            pos, pending, inflate = at, b"", zlib.decompressobj(31)
+            continue
+        if out:
+            *lines, pending = (pending + out).split(b"\n")
+            for line in lines:
+                yield line.decode("utf-8", "replace")
+        if inflate.eof:
+            pos += len(piece) - len(inflate.unused_data)
+            pending, inflate = b"", zlib.decompressobj(31)
+        else:
+            pos += len(piece)
+
+
+def _count_file(path: Path) -> list[dict]:
+    """Count every round of a day file in one pass. Rows of one round arrive
+    in time order (one collector writes them)."""
+    rounds: dict[str, _Round] = {}
+    for line in read_lines(path):
+        if '"k":"t"' in line or '"k": "t"' in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        round_id = row.get("r")
+        if not (isinstance(round_id, str) and round_id.isdigit()):
+            continue
+        counter = rounds.get(round_id)
+        if counter is None:
+            counter = rounds[round_id] = _Round(int(round_id))
+        counter.feed(row)
     return sorted((counter.result() for counter in rounds.values()), key=lambda item: item["startsAt"])
 
 

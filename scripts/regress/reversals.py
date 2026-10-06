@@ -112,13 +112,26 @@ class Files(unittest.TestCase):
         self.assertGreaterEqual(len(day), 1, "rows before a truncated end are kept")
         self.assertEqual(day[0]["firings"], 1)
         opened = []
-        original = gzip.open
-        gzip.open = lambda *a, **k: opened.append(a) or original(*a, **k)
+        original = reversals.read_lines
+        reversals.read_lines = lambda *a, **k: opened.append(a) or original(*a, **k)
         try:
             reversals.day_rounds(self.history, self.cache, "btc", "2027-01-15", now=time.time() + 3600)
         finally:
-            gzip.open = original
+            reversals.read_lines = original
         self.assertEqual(opened, [], "an unchanged file is answered from the cache")
+
+    def test_broken_member_mid_file(self):
+        """2026-10-07: a collector restart left an unfinished member in the
+        middle of every day file; gzip.open stopped there and lost the rest of
+        the day. Reading resumes at the next member."""
+        first = full_round([book(1, 0.50, 0.51), book(2, 0.68, 0.33)])
+        second = full_round([book(1, 0.50, 0.51, r=R + 300), book(2, 0.33, 0.68, r=R + 300)], r=R + 300)
+        path = self.history / "btc" / "2027-01-15.jsonl.gz"
+        broken = gzip.compress("".join(json.dumps(x) + "\n" for x in first).encode())[:-30]
+        whole = gzip.compress("".join(json.dumps(x) + "\n" for x in second).encode())
+        path.write_bytes(broken + whole)
+        day = reversals.day_rounds(self.history, self.cache, "btc", "2027-01-15")
+        self.assertIn(str(R + 300), [str(x["startsAt"]) for x in day], "the round after the broken member is read")
 
     def test_summary_distribution(self):
         rows = []
