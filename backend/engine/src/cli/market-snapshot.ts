@@ -4,7 +4,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { findMarket, type Market } from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
-import { runReferenceFeed } from "../live/feeds/btc.js";
+import WebSocket from "ws";
+import { referenceVenueProducts } from "../live/feeds/btc.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
@@ -78,8 +79,27 @@ export interface MarketSnapshotDependencies {
   discover: (at: number, directOnly?: boolean, signal?: AbortSignal, asset?: string) => Promise<Market | undefined>;
   feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number, identity?: FeedMarketIdentity) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
-  /** The coin's own price (the venue aggregator the engine uses); recorded only. */
-  reference: (sink: FeedSink, asset: string) => { stop: () => void };
+  /** The coin's own price for the recording: Binance 1 s klines, one socket for
+   * all coins; delivers each parsed message. Recorded only, never traded on. */
+  reference: (onMessage: (message: unknown) => void, assets: readonly string[]) => { stop: () => void };
+}
+
+/** One combined Binance stream of 1 s klines for the given coins, reconnecting
+ * until stopped. One bar per coin per second, so it costs almost no CPU. */
+export function runBinanceKlines(onMessage: (message: unknown) => void, assets: readonly string[]): { stop: () => void } {
+  const streams = assets.map(asset => `${referenceVenueProducts(asset).binance}@kline_1s`).join("/");
+  let stopped = false;
+  let socket: WebSocket | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  const connect = () => {
+    if (stopped) return;
+    const ws = socket = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+    ws.on("message", raw => { try { onMessage(JSON.parse(String(raw))); } catch { /* not JSON */ } });
+    ws.on("error", () => ws.terminate());
+    ws.on("close", () => { if (!stopped) retry = setTimeout(connect, 2_000); });
+  };
+  connect();
+  return { stop: () => { stopped = true; clearTimeout(retry); socket?.terminate(); } };
 }
 
 const defaults: MarketSnapshotDependencies = {
@@ -87,7 +107,7 @@ const defaults: MarketSnapshotDependencies = {
   discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, false, directOnly, signal, asset),
   feed: runPolymarketFeed,
   publish: publishSnapshot,
-  reference: (sink, asset) => runReferenceFeed(sink, asset),
+  reference: runBinanceKlines,
 };
 
 /** Runs only public Gamma discovery and the existing public CLOB WS feed. */
@@ -112,24 +132,23 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   const discoveryAbort = new AbortController();
   const recorder = options.recordDir ? new MarketRecorder({ directory: options.recordDir, retentionDays: options.recordDays }) : undefined;
   // The markets settle on the coin's price at the close against the open:
-  // record that price next to the book, at most one row per coin per second.
+  // record it next to the book, one row per coin per closed 1 s Binance bar.
   const references: Array<{ stop: () => void }> = [];
   if (recorder) {
-    for (const asset of assets) {
-      let lastSecond = -1;
-      try {
-        references.push(deps.reference(event => {
-          if (event.kind !== "btc" && event.kind !== "oracle") return;
-          const second = Math.floor(event.tsUnix);
-          if (second === lastSecond) return;
-          lastSecond = second;
-          const receivedAt = deps.now();
-          const roundId = String(Math.floor(receivedAt / MARKET_WINDOW_SEC) * MARKET_WINDOW_SEC);
-          try { recorder.record(recordedPrice(asset, roundId, event.tsUnix, event.price, receivedAt)); }
-          catch { recorder.dropped += 1; }
-        }, asset));
-      } catch { /* a coin without a reference feed simply records no price */ }
-    }
+    const bySymbol = new Map(assets.map(asset => [referenceVenueProducts(asset).binance.toUpperCase(), asset]));
+    try {
+      references.push(deps.reference(message => {
+        const data = (message as { data?: { e?: string; s?: string; k?: { t?: number; o?: string; c?: string; x?: boolean } } })?.data;
+        const asset = data?.e === "kline" && data.s ? bySymbol.get(data.s) : undefined;
+        const bar = data?.k;
+        if (!asset || !bar?.x || !Number.isFinite(bar.t)) return;
+        const second = bar.t! / 1000, close = Number(bar.c), open = Number(bar.o);
+        if (!(close > 0) || !(open > 0)) return;
+        const roundId = String(Math.floor(second / MARKET_WINDOW_SEC) * MARKET_WINDOW_SEC);
+        try { recorder.record(recordedPrice(asset, roundId, second, close, open, deps.now())); }
+        catch { recorder.dropped += 1; }
+      }, assets));
+    } catch { /* no price recording if the socket cannot be created */ }
   }
   const stop = () => {
     stopped = true;
