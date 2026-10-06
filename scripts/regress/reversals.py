@@ -153,5 +153,36 @@ class Files(unittest.TestCase):
         self.assertEqual(warm["total"]["rounds"], 1, "the warmer filled the cache")
 
 
+class Ladder(unittest.TestCase):
+    """STRATEGY.md section 6: up to 3 rungs 5/13/60 at a 0.70 limit; a rung
+    whose ask at the cross is above 0.70 buys nothing; no 4th rung."""
+
+    def round_(self, sides, asks, winner):
+        return {"sides": sides, "asks": asks, "winner": winner, "firings": len(sides)}
+
+    def test_outcomes_at_070(self):
+        p = lambda r: reversals.ladder_pnl(r, fee=False)
+        self.assertAlmostEqual(p(self.round_(["UP"], [0.70], "UP")), 1.50)
+        self.assertAlmostEqual(p(self.round_(["UP", "DOWN"], [0.70, 0.70], "DOWN")), 0.40)
+        self.assertAlmostEqual(p(self.round_(["UP", "DOWN", "UP"], [0.70] * 3, "UP")), 10.40)
+        self.assertAlmostEqual(p(self.round_(["UP", "DOWN", "UP", "DOWN"], [0.70] * 4, "DOWN")), -41.60,
+                               msg="a 4th reversal buys nothing; the held shares settle")
+
+    def test_above_limit_not_bought(self):
+        r = self.round_(["UP", "DOWN"], [0.70, 0.75], "DOWN")
+        self.assertAlmostEqual(reversals.ladder_pnl(r, fee=False), -3.50, msg="the 0.75 hedge is not filled at a 0.70 limit")
+
+    def test_no_winner(self):
+        self.assertIsNone(reversals.ladder_pnl(self.round_(["UP"], [0.70], None)))
+
+    def test_summary_has_ladder(self):
+        rounds = [{**self.round_(["UP"], [0.68], "UP"), "incomplete": False, "firstFiringWon": True,
+                   "partialLastMinute": False, "roundId": "1", "startsAt": 1}]
+        stats = reversals._stats(rounds)
+        self.assertIn("ladder", stats)
+        self.assertEqual(stats["ladder"]["rounds"], 1)
+        self.assertGreater(stats["ladder"]["total"], 1.5, "bought at 0.68, cheaper than the limit")
+
+
 if __name__ == "__main__":
     unittest.main()

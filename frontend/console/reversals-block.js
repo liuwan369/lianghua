@@ -63,6 +63,20 @@
         <div class="rv-dist" data-dist></div>
       </section>
 
+      <section class="diagnostic-panel rv-panel" aria-labelledby="rv-ladder-title">
+        <div class="panel-heading"><div><p class="eyebrow">按策略测</p><h3 id="rv-ladder-title">阶梯 <span data-ladder-name>5 / 13 / 60</span> 的结果</h3></div><span class="panel-meta">STRATEGY.md 第 6 条</span></div>
+        <p class="rv-hint">每次触发挂 0.70 限价：触发那一刻卖价 ≤ 0.70 才算买到（按当时卖价加手续费），否则这一档没买到；最多 3 档，之后不再加仓，持仓留到收盘。只算录全了最后一分钟、看得出赢家的场次。没算排队和抢单，实盘会差一些。</p>
+        <div class="rv-cards rv-cards-3">
+          <article class="rv-card"><span>合计</span><strong data-ladder-total>--</strong><small data-ladder-rounds></small></article>
+          <article class="rv-card"><span>每场平均</span><strong data-ladder-per>--</strong><small>美元</small></article>
+          <article class="rv-card rv-card-warn"><span>最差一场</span><strong data-ladder-worst>--</strong><small>美元</small></article>
+        </div>
+        <div class="rv-scroll"><table class="rv-table">
+          <thead><tr><th scope="col">触发几次</th><th scope="col">场次</th><th scope="col">合计</th><th scope="col">每场平均</th></tr></thead>
+          <tbody data-ladder-body></tbody>
+        </table></div>
+      </section>
+
       <section class="diagnostic-panel rv-panel" aria-labelledby="rv-coins-title">
         <div class="panel-heading"><div><p class="eyebrow">对比</p><h3 id="rv-coins-title">7 个币</h3></div><span class="panel-meta">点一行切换币种</span></div>
         <div class="rv-scroll"><table class="rv-table">
@@ -137,6 +151,20 @@
     }).join("");
   };
 
+  const money = (value) => Number.isFinite(value) ? `${value >= 0 ? "+" : ""}${num(value)}` : "--";
+  const renderLadder = (ladder) => {
+    if (!ladder) return;
+    set("[data-ladder-name]", (ladder.ladder || []).join(" / "));
+    set("[data-ladder-total]", money(ladder.total));
+    set("[data-ladder-rounds]", `${ladder.rounds} 场`);
+    set("[data-ladder-per]", money(ladder.perRound));
+    set("[data-ladder-worst]", money(ladder.worst));
+    const rows = Object.entries(ladder.byFirings || {});
+    el("[data-ladder-body]").innerHTML = rows.length ? rows.map(([key, group]) => `<tr><td>${esc(key)} 次</td><td>${group.rounds}</td>
+      <td class="${group.total < 0 ? "rv-loss" : "rv-gain"}">${money(group.total)}</td><td>${money(group.perRound)}</td></tr>`).join("")
+      : `<tr><td colspan="4" class="rv-empty">还没有录全最后一分钟的场次</td></tr>`;
+  };
+
   const renderCoins = (coins) => {
     el("[data-coins-body]").innerHTML = (coins || []).map((coin) => `<tr class="rv-coin-row${coin.assetId === assetId ? " active" : ""}" data-pick="${esc(coin.assetId)}" tabindex="0">
       <th scope="row">${esc(coin.assetId.toUpperCase())}</th><td>${coin.rounds}</td><td>${num(coin.avgFirings)}</td><td>${coin.medianFirings ?? "--"}</td>
@@ -178,6 +206,7 @@
       renderTotal(data.total || {});
       renderDays(data.days || []);
       renderDist((data.total || {}).distribution, (data.total || {}).rounds);
+      renderLadder((data.total || {}).ladder);
       renderCoins(overview.coins);
       renderRounds(data.rounds || []);
       set("[data-source]", `已更新 ${format.clock()}`);

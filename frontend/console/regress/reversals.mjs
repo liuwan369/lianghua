@@ -1,7 +1,7 @@
 // 反转统计页 (reversals.html + reversals-block.js): renders the counts from
 // /api/reversals and /api/reversals/overview with a stub DOM. Checks the
 // summary, the per-day table, a distribution row for every value 0..max, the
-// 7-coin table, and that nothing about money (盈亏, 成交, 阶梯) appears.
+// 7-coin table, and the STRATEGY.md ladder test (5/13/60) per firing count.
 //
 // Run:  node frontend/console/regress/reversals.mjs
 import assert from "node:assert/strict";
@@ -29,7 +29,9 @@ root.querySelector = lookup;
 const distribution = Object.fromEntries(Array.from({ length: 11 }, (_, i) => [String(i), i === 10 ? 1 : i === 1 ? 140 : 3]));
 const total = { rounds: 286, incomplete: 2, avgFirings: 1.83, medianFirings: 1, maxFirings: 10,
   maxRound: { roundId: "1790884500", startsAt: 1790884500 }, over4: 10, over4Pct: 3.5, firstFiringWinPct: 64.8,
-  distribution, partialLastMinute: true };
+  distribution, partialLastMinute: true,
+  ladder: { ladder: [5, 13, 60], limit: 0.7, rounds: 120, total: 41.3, perRound: 0.344, worst: -45.9,
+    byFirings: { "1": { rounds: 60, total: 90, perRound: 1.5 }, "4+": { rounds: 9, total: -300, perRound: -33.3 } } } };
 const body = { schemaVersion: 1, assetId: "btc", days: [{ date: "2026-10-02", ...total, partialRounds: 286 }], total,
   rounds: [{ roundId: "1790884500", startsAt: 1790884500, firings: 10, reversals: 9, winner: "UP",
     sides: ["DOWN", "UP"], seconds: [0.6, 236.1], partialLastMinute: true }] };
@@ -59,6 +61,8 @@ assert.ok(all.includes("2026-10-02"), "per-day table lists the day");
 assert.ok(all.includes("缺最后约50秒盘口"), "old days are flagged");
 for (let value = 0; value <= 10; value += 1) assert.ok(all.includes(`触发 ${value} 次`), `distribution has a row for ${value}`);
 assert.ok(all.includes("HYPE") && all.includes("BNB"), "the 7-coin table renders");
-assert.ok(!/盈亏|成交|阶梯/.test(all), "no money, fills or ladder on this page");
+assert.ok(all.includes("5 / 13 / 60"), "the strategy ladder under test is named");
+assert.ok(all.includes("+41.3") && all.includes("-45.9"), "its total and worst round are shown");
+assert.ok(all.includes("4+ 次"), "results are split by firing count");
 console.log("reversals page OK");
 process.exit(0);

@@ -51,3 +51,7 @@
   .rv-dist-row { grid-template-columns: 70px minmax(80px, 1fr) 54px 48px; }
   .rv-dist-cum { display: none; }
 }
+.rv-hint { margin: 0 0 12px; color: #86a2ba; font-size: 11px; line-height: 1.6; }
+.rv-cards-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 12px; }
+.rv-gain { color: #8cf0bc; }
+.rv-loss { color: #ff9a9a; }

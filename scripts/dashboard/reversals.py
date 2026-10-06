@@ -155,6 +155,31 @@ def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float |
     return counted
 
 
+# STRATEGY.md section 6 (2026-10-07): up to 3 rungs at a 0.70 limit. A rung
+# whose ask at the cross is above the limit buys nothing; after rung 3 nothing
+# more is bought and the held shares settle. Fills at the recorded ask with the
+# taker fee; no queue or competition, so live will be somewhat worse.
+LADDER = (5, 13, 60)
+LIMIT = 0.70
+TAKER_FEE = 0.07
+
+
+def ladder_pnl(item: dict, ladder=LADDER, *, fee: bool = True) -> float | None:
+    """Settled result of one round under the ladder; None if the winner is unknown."""
+    winner = item.get("winner")
+    if winner not in ("UP", "DOWN"):
+        return None
+    held = {"UP": 0.0, "DOWN": 0.0}
+    cost = 0.0
+    for shares, side, ask in zip(ladder, item.get("sides") or [], item.get("asks") or []):
+        if ask is None or ask > LIMIT + 1e-9:
+            continue
+        price = ask if fee else LIMIT
+        held[side] += shares
+        cost += shares * (price + (TAKER_FEE * price * (1 - price) if fee else 0.0))
+    return round(held[winner] - cost, 4)
+
+
 def _stats(rounds: list[dict]) -> dict:
     complete = [item for item in rounds if not item["incomplete"]]
     firings = sorted(item["firings"] for item in complete)
@@ -177,7 +202,25 @@ def _stats(rounds: list[dict]) -> dict:
                                   if judged else None),
             "distribution": distribution,
             "partialLastMinute": any(item["partialLastMinute"] for item in complete),
-            "partialRounds": sum(1 for item in complete if item["partialLastMinute"])}
+            "partialRounds": sum(1 for item in complete if item["partialLastMinute"]),
+            "ladder": _ladder_stats(complete)}
+
+
+def _ladder_stats(complete: list[dict]) -> dict:
+    """The ladder's result per firing count, over rounds with a known winner
+    and the full last minute recorded (older rounds would hide late reversals)."""
+    judged = [(item, ladder_pnl(item)) for item in complete if not item["partialLastMinute"]]
+    judged = [(item, value) for item, value in judged if value is not None]
+    groups: dict[str, list[float]] = {}
+    for item, value in judged:
+        key = str(item["firings"]) if item["firings"] < len(LADDER) + 1 else f"{len(LADDER) + 1}+"
+        groups.setdefault(key, []).append(value)
+    values = [value for _, value in judged]
+    return {"ladder": list(LADDER), "limit": LIMIT, "rounds": len(values),
+            "total": round(sum(values), 2), "perRound": round(sum(values) / len(values), 3) if values else None,
+            "worst": round(min(values), 2) if values else None,
+            "byFirings": {key: {"rounds": len(group), "total": round(sum(group), 2),
+                                "perRound": round(sum(group) / len(group), 3)} for key, group in sorted(groups.items())}}
 
 
 def warm(history: Path, cache: Path, assets, *, days: int = 10, today: str | None = None) -> None:
