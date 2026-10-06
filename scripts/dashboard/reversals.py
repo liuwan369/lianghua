@@ -33,14 +33,18 @@ WIN_PRICE = 0.9
 ONE_SIDED_FROM = 1791143400
 LIVE_RECOMPUTE_SEC = 60
 BEIJING = timezone(timedelta(hours=8))
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+# STRATEGY.md section 6: the ladder under test and its limit price.
+LADDER = (5, 13, 60)
+LIMIT = 0.70
+TAKER_FEE = 0.07
 
 
 class _Round:
     """Counter state of one round, fed one row at a time (rows are never kept:
     a day of one coin is ~860k rows and holding them got the control plane
     OOM-killed)."""
-    __slots__ = ("start", "prev", "sides", "seconds", "asks", "winner", "first_clean", "last_t")
+    __slots__ = ("start", "prev", "sides", "seconds", "asks", "fills", "winner", "first_clean", "last_t")
 
     def __init__(self, start: int):
         self.start = start
@@ -48,6 +52,10 @@ class _Round:
         self.sides: list[str] = []
         self.seconds: list[float] = []
         self.asks: list[float] = []
+        # Second at which a 0.70 limit placed at each firing would fill: the
+        # first row, from the firing on, where that side's ask is <= 0.70
+        # (live: the order rests until a seller comes down to it). None: never.
+        self.fills: list[float | None] = []
         self.winner = None
         self.first_clean = self.last_t = None
 
@@ -63,6 +71,11 @@ class _Round:
             self.winner = "DOWN"
         elif ua is not None and da is not None:
             self.winner = None
+        for index, fill in enumerate(self.fills):
+            if fill is None:
+                ask = ua if self.sides[index] == "UP" else da
+                if ask is not None and ask <= LIMIT + 1e-9:
+                    self.fills[index] = round(t - start, 1)
         if row.get("k") == "o" or ua is None or da is None or ua + da > WIDE_SUM:
             return
         if self.first_clean is None:
@@ -73,6 +86,7 @@ class _Round:
                     self.sides.append(side)
                     self.seconds.append(round(t - start, 1))
                     self.asks.append(now)
+                    self.fills.append(round(t - start, 1) if now <= LIMIT + 1e-9 else None)
         self.prev = (ua, da)
 
     def result(self) -> dict:
@@ -83,7 +97,7 @@ class _Round:
         incomplete = (self.first_clean is None or self.first_clean - start > START_GRACE_SEC
                       or (ends_early and start >= ONE_SIDED_FROM))
         return {"roundId": str(start), "startsAt": start, "firings": len(sides), "reversals": max(0, len(sides) - 1),
-                "sides": sides, "seconds": self.seconds, "asks": self.asks, "winner": self.winner,
+                "sides": sides, "seconds": self.seconds, "asks": self.asks, "fills": self.fills, "winner": self.winner,
                 "firstFiringSide": sides[0] if sides else None,
                 "firstFiringWon": (sides[0] == self.winner) if sides and self.winner else None,
                 "incomplete": incomplete, "partialLastMinute": start < ONE_SIDED_FROM}
@@ -155,31 +169,48 @@ def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float |
     return counted
 
 
-# STRATEGY.md section 6 (2026-10-07): up to 3 rungs at a 0.70 limit. A rung
-# whose ask at the cross is above the limit buys nothing; after rung 3 nothing
-# more is bought and the held shares settle. Fills at the recorded ask with the
-# taker fee; no queue or competition, so live will be somewhat worse.
-LADDER = (5, 13, 60)
-LIMIT = 0.70
-TAKER_FEE = 0.07
+# STRATEGY.md section 6 (2026-10-07): up to 3 rungs at a 0.70 limit, placed
+# like live (see ladder_pnl). No queue or competition, so live will be
+# somewhat worse.
 # Under test (operator 2026-10-07): trade only rounds whose first trigger comes
 # at or after this second; an earlier first trigger means the round is skipped.
 LATE_FROM_SEC = 60
 
 
 def ladder_pnl(item: dict, ladder=LADDER, *, fee: bool = True) -> float | None:
-    """Settled result of one round under the ladder; None if the winner is unknown."""
+    """Settled result of one round under the ladder, placed like live; None if
+    the winner is unknown. Every firing places a 0.70 limit: filled at the
+    cross (at the ask, taker fee) when the ask is <= 0.70, else it rests and
+    fills at 0.70 (maker, no fee) when that side's ask first comes back down;
+    never if it does not. STRATEGY.md 4: while rung 1 has not filled, a cross
+    of the other side cancels it and places rung 1 there. A hedge counts as a
+    rung once placed; nothing is placed after the last rung."""
     winner = item.get("winner")
     if winner not in ("UP", "DOWN"):
         return None
+    sides, asks, seconds = item.get("sides") or [], item.get("asks") or [], item.get("seconds") or []
+    fills = item.get("fills")
+    if fills is None:       # rows counted before resting fills were tracked
+        fills = [second if ask <= LIMIT + 1e-9 else None for second, ask in zip(seconds or [0.0] * len(asks), asks)]
+    orders: list[tuple[str, int, float | None, float, bool]] = []      # side, shares, fill second, ask, at the cross
+    for index, side in enumerate(sides):
+        at = seconds[index] if index < len(seconds) else 0.0
+        fill, ask = fills[index] if index < len(fills) else None, asks[index]
+        order = (side, 0, fill, ask, fill is not None and fill <= at + 1e-9 and ask <= LIMIT + 1e-9)
+        if not any(o[2] is not None and o[2] <= at + 1e-9 for o in orders):
+            orders = [(side, ladder[0], *order[2:])]          # no position yet: (re)place rung 1 here
+        elif len(orders) < len(ladder):
+            orders.append((side, ladder[len(orders)], *order[2:]))
+        else:
+            break
     held = {"UP": 0.0, "DOWN": 0.0}
     cost = 0.0
-    for shares, side, ask in zip(ladder, item.get("sides") or [], item.get("asks") or []):
-        if ask is None or ask > LIMIT + 1e-9:
+    for side, shares, fill, ask, at_cross in orders:
+        if fill is None:
             continue
-        price = ask if fee else LIMIT
+        price = ask if (fee and at_cross) else LIMIT
         held[side] += shares
-        cost += shares * (price + (TAKER_FEE * price * (1 - price) if fee else 0.0))
+        cost += shares * (price + (TAKER_FEE * price * (1 - price) if fee and at_cross else 0.0))
     return round(held[winner] - cost, 4)
 
 

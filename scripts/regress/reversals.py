@@ -157,6 +157,9 @@ class Ladder(unittest.TestCase):
     """STRATEGY.md section 6: up to 3 rungs 5/13/60 at a 0.70 limit; a rung
     whose ask at the cross is above 0.70 buys nothing; no 4th rung."""
 
+    def count(self, rows):
+        return reversals.count_round([json.loads(json.dumps(x)) for x in rows], R)
+
     def round_(self, sides, asks, winner):
         return {"sides": sides, "asks": asks, "winner": winner, "firings": len(sides)}
 
@@ -182,6 +185,30 @@ class Ladder(unittest.TestCase):
         self.assertIn("ladder", stats)
         self.assertEqual(stats["ladder"]["rounds"], 1)
         self.assertGreater(stats["ladder"]["total"], 1.5, "bought at 0.68, cheaper than the limit")
+
+    def test_resting_order_fills_when_price_comes_back(self):
+        """Like live (operator 2026-10-07): an order whose ask at the cross is
+        above 0.70 keeps resting; it fills at 0.70 (maker, no fee) the first
+        time that side's ask comes back to 0.70 or below, else never."""
+        rows = [book(1, 0.50, 0.51), book(10, 0.68, 0.33),            # rung 1 UP at 0.68
+                book(20, 0.50, 0.51), book(21, 0.12, 0.88),           # DOWN jumps to 0.88: rung 2 rests
+                book(40, 0.32, 0.69)]                                  # DOWN back to 0.69: filled at 0.70
+        counted = self.count(full_round(rows))
+        self.assertEqual(counted["fills"], [10.0, 40.0])
+        never = self.count(full_round([book(1, 0.50, 0.51), book(10, 0.68, 0.33), book(20, 0.50, 0.51), book(21, 0.10, 0.88)]))
+        self.assertEqual(never["fills"], [10.0, None], "never back below 0.70: not filled")
+        item = {**counted, "winner": "DOWN"}
+        self.assertAlmostEqual(reversals.ladder_pnl(item), 13 - 13 * 0.70 - 5 * (0.68 + 0.07 * 0.68 * 0.32), places=4)
+
+    def test_unfilled_rung1_moves_to_the_other_side(self):
+        """STRATEGY.md 4: rung 1 not filled when the other side crosses first is
+        cancelled and placed on the other side, still as rung 1 (5 shares)."""
+        item = {"sides": ["UP", "DOWN", "UP"], "asks": [0.80, 0.67, 0.67], "seconds": [10.0, 20.0, 30.0],
+                "fills": [25.0, 20.0, 30.0], "winner": "DOWN"}             # UP would fill at 25 s, after DOWN crossed
+        self.assertAlmostEqual(reversals.ladder_pnl(item, fee=False), 5 - (5 + 13) * 0.70,
+                               msg="DOWN is rung 1 (5), UP rung 2 (13); the cancelled UP order never fills")
+        filled_first = {**item, "fills": [15.0, 20.0, 30.0], "winner": "UP"}  # UP filled at 15 s, before DOWN
+        self.assertAlmostEqual(reversals.ladder_pnl(filled_first, fee=False), 65 - 78 * 0.70)
 
     def test_late_entry_group(self):
         """The operator's test (2026-10-07): only rounds whose first trigger comes

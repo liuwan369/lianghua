@@ -65,7 +65,7 @@
 
       <section class="diagnostic-panel rv-panel" aria-labelledby="rv-ladder-title">
         <div class="panel-heading"><div><p class="eyebrow">按策略测</p><h3 id="rv-ladder-title">阶梯 <span data-ladder-name>5 / 13 / 60</span> 的结果</h3></div><span class="panel-meta">STRATEGY.md 第 6 条</span></div>
-        <p class="rv-hint">每次触发挂 0.70 限价：触发那一刻卖价 ≤ 0.70 才算买到（按当时卖价加手续费），否则这一档没买到；最多 3 档，之后不再加仓，持仓留到收盘。只算录全了最后一分钟、看得出赢家的场次。没算排队和抢单，实盘会差一些。</p>
+        <p class="rv-hint">和实盘一样挂 0.70 限价：触发时卖价 ≤ 0.70 当场成交（按卖价加手续费）；否则单子一直挂着，之后这一边卖价回到 0.70 或以下就按 0.70 成交，到收盘都没回来才算没买到。第 1 档没成交前对面先过线，就撤单改挂对面，仍算第 1 档。最多 3 档，之后不再加仓，持仓留到收盘。只算录全了最后一分钟、看得出赢家的场次。没算排队和抢单，实盘会差一些。</p>
         <div class="rv-cards rv-cards-3">
           <article class="rv-card"><span>合计</span><strong data-ladder-total>--</strong><small data-ladder-rounds></small></article>
           <article class="rv-card"><span>每场平均</span><strong data-ladder-per>--</strong><small>美元</small></article>
