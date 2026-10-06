@@ -210,6 +210,20 @@ class Ladder(unittest.TestCase):
         filled_first = {**item, "fills": [15.0, 20.0, 30.0], "winner": "UP"}  # UP filled at 15 s, before DOWN
         self.assertAlmostEqual(reversals.ladder_pnl(filled_first, fee=False), 65 - 78 * 0.70)
 
+    def test_each_firing_count_on_its_own(self):
+        """After rung 3 nothing more is bought: an odd count ends on the side of
+        rungs 1+3 (65 shares, a profit), an even one on the rung-2 side."""
+        base = {"incomplete": False, "firstFiringWon": True, "partialLastMinute": False, "roundId": "1", "startsAt": 1}
+        def round_n(n):
+            sides = ["UP" if i % 2 == 0 else "DOWN" for i in range(n)]
+            return {**base, "sides": sides, "asks": [0.70] * n, "seconds": [10.0 * (i + 1) for i in range(n)],
+                    "fills": [10.0 * (i + 1) for i in range(n)], "winner": sides[-1], "firings": n}
+        by = reversals._stats([round_n(n) for n in (1, 3, 4, 5, 10)])["ladder"]["byFirings"]
+        self.assertEqual(list(by), ["1", "3", "4", "5", "10"], "every count, in numeric order, no 4+ bucket")
+        self.assertGreater(by["5"]["total"], 0, "5 reversals: the rung 1+3 side wins")
+        self.assertLess(by["4"]["total"], 0)
+        self.assertLess(by["10"]["total"], 0)
+
     def test_late_entry_group(self):
         """The operator's test (2026-10-07): only rounds whose first trigger comes
         at or after 60 s are traded; earlier rounds are skipped (no position)."""

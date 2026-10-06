@@ -249,14 +249,16 @@ def _ladder_stats(complete: list[dict]) -> dict:
     judged = [(item, value) for item, value in judged if value is not None]
     groups: dict[str, list[float]] = {}
     for item, value in judged:
-        key = str(item["firings"]) if item["firings"] < len(LADDER) + 1 else f"{len(LADDER) + 1}+"
-        groups.setdefault(key, []).append(value)
+        # Every count on its own (operator): after rung 3 the side of rungs 1+3
+        # (65 shares) wins on an odd count and the rung-2 side on an even one.
+        groups.setdefault(str(item["firings"]), []).append(value)
     values = [value for _, value in judged]
     return {"ladder": list(LADDER), "limit": LIMIT, "rounds": len(values),
             "total": round(sum(values), 2), "perRound": round(sum(values) / len(values), 3) if values else None,
             "worst": round(min(values), 2) if values else None,
             "byFirings": {key: {"rounds": len(group), "total": round(sum(group), 2),
-                                "perRound": round(sum(group) / len(group), 3)} for key, group in sorted(groups.items())}}
+                                "perRound": round(sum(group) / len(group), 3)}
+                          for key, group in sorted(groups.items(), key=lambda pair: int(pair[0]))}}
 
 
 def warm(history: Path, cache: Path, assets, *, days: int = 10, today: str | None = None) -> None:
