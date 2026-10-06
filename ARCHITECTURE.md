@@ -27,7 +27,7 @@
 |---|---|---|
 | 控制面 | systemd `pm-system-dashboard-dublin`，`MemoryMax=900M` | HTTP API、托管前端、启停引擎、账户检查、SSE 推送 |
 | 交易引擎 | 控制面 `_start_trading`，一次只跑一个 | 行情 → 策略 → 下单 → 成交 → 结算 |
-| 行情采集器 | systemd `pm-clob-market-snapshot`，常驻 | 7 个币（btc,eth,sol,xrp,doge,hype,bnb）的公共盘口，`--stale-after-ms 2000`；同时做全量行情记录（盘口、成交 `k:"t"`、一边无卖价时的盘口 `k:"o"`、币本身价格 `k:"p"`：币安 1 秒 K 线，所有币一个连接，每币每秒一条 `{e 该秒, o 开, p 收}`） |
+| 行情采集器 | systemd `pm-clob-market-snapshot`，常驻 | 7 个币（btc,eth,sol,xrp,doge,hype,bnb）的公共盘口，`--stale-after-ms 2000`；同时做全量行情记录（盘口、成交 `k:"t"`、一边无卖价时的盘口 `k:"o"`、币本身价格 `k:"p"`：币安 1 秒 K 线，所有币一个连接，每币每秒一条 `{e 该秒, o 开, p 收}`；结算用的 Chainlink 价 `k:"c"`：Polymarket RTDS `crypto_prices_chainlink`，免凭证，所有币一个连接，每币约每秒一条 `{e 源时间秒, p}`，场次开始/结束那一秒的值就是官方 openPrice/closePrice） |
 | 账本投影 | 控制面拉起 `scripts/dashboard/projection_worker.py`，约 250 ms 一轮 | 读 journal，写 `results/dashboard/ledger.sqlite3` |
 | 账户读取 | 控制面常驻子进程 `dist/cli/account-data.js`，每 15 s | 余额、挂单、持仓、成交、Data API 平仓结果 |
 

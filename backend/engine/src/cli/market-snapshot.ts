@@ -9,7 +9,7 @@ import { referenceVenueProducts } from "../live/feeds/btc.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
   type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
-import { MarketRecorder, recordedTop, recordedBook, recordedTrade, recordedPrice } from "./market-recorder.js";
+import { MarketRecorder, recordedTop, recordedBook, recordedTrade, recordedPrice, recordedChainlink } from "./market-recorder.js";
 
 const MARKET_WINDOW_SEC = 300;
 // Polymarket publishes 5m up/down markets for these seven; verified live that
@@ -82,6 +82,9 @@ export interface MarketSnapshotDependencies {
   /** The coin's own price for the recording: Binance 1 s klines, one socket for
    * all coins; delivers each parsed message. Recorded only, never traded on. */
   reference: (onMessage: (message: unknown) => void, assets: readonly string[]) => { stop: () => void };
+  /** The Chainlink price the markets settle on: Polymarket RTDS, one socket
+   * for all coins; delivers each parsed message. Recorded only. */
+  chainlink: (onMessage: (message: unknown) => void) => { stop: () => void };
 }
 
 /** One combined Binance stream of 1 s klines for the given coins, reconnecting
@@ -102,12 +105,46 @@ export function runBinanceKlines(onMessage: (message: unknown) => void, assets: 
   return { stop: () => { stopped = true; clearTimeout(retry); socket?.terminate(); } };
 }
 
+/** Polymarket RTDS Chainlink prices (no credentials; ~1 update per coin per
+ * second, every coin on one subscription). Its value at a round's start/end
+ * second equals the venue's openPrice/closePrice exactly (checked 2026-10-07).
+ * The socket can stall while open, so a 15 s silence forces a reconnect. */
+export function runRtdsChainlink(onMessage: (message: unknown) => void): { stop: () => void } {
+  let stopped = false;
+  let socket: WebSocket | undefined;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let ping: ReturnType<typeof setInterval> | undefined;
+  let lastAt = 0;
+  const connect = () => {
+    if (stopped) return;
+    const ws = socket = new WebSocket("wss://ws-live-data.polymarket.com");
+    lastAt = Date.now();
+    ws.on("open", () => ws.send(JSON.stringify({ action: "subscribe",
+      subscriptions: [{ topic: "crypto_prices_chainlink", type: "*", filters: "" }] })));
+    ws.on("message", raw => {
+      lastAt = Date.now();
+      const text = String(raw);
+      if (text.charCodeAt(0) !== 123) return; // PONG and empty frames
+      try { onMessage(JSON.parse(text)); } catch { /* not JSON */ }
+    });
+    ws.on("error", () => ws.terminate());
+    ws.on("close", () => { if (!stopped) retry = setTimeout(connect, 2_000); });
+  };
+  ping = setInterval(() => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastAt > 15_000) socket.terminate(); else socket.send("PING");
+  }, 5_000);
+  connect();
+  return { stop: () => { stopped = true; clearTimeout(retry); clearInterval(ping); socket?.terminate(); } };
+}
+
 const defaults: MarketSnapshotDependencies = {
   now: () => Date.now() / 1000,
   discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, false, directOnly, signal, asset),
   feed: runPolymarketFeed,
   publish: publishSnapshot,
   reference: runBinanceKlines,
+  chainlink: runRtdsChainlink,
 };
 
 /** Runs only public Gamma discovery and the existing public CLOB WS feed. */
@@ -149,6 +186,21 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
         catch { recorder.dropped += 1; }
       }, assets));
     } catch { /* no price recording if the socket cannot be created */ }
+    // The settlement price itself: one row per Chainlink update ("btc/usd").
+    const byChainlink = new Set(assets);
+    try {
+      references.push(deps.chainlink(message => {
+        const m = message as { topic?: string; payload?: { symbol?: string; timestamp?: number; value?: number } };
+        if (m?.topic !== "crypto_prices_chainlink") return;
+        const asset = m.payload?.symbol?.split("/")[0];
+        const ms = m.payload?.timestamp, price = m.payload?.value;
+        if (!asset || !byChainlink.has(asset) || !Number.isFinite(ms) || !(Number(price) > 0)) return;
+        const second = ms! / 1000;
+        const roundId = String(Math.floor(second / MARKET_WINDOW_SEC) * MARKET_WINDOW_SEC);
+        try { recorder.record(recordedChainlink(asset, roundId, second, price!, deps.now())); }
+        catch { recorder.dropped += 1; }
+      }));
+    } catch { /* no Chainlink recording if the socket cannot be created */ }
   }
   const stop = () => {
     stopped = true;

@@ -44,6 +44,16 @@ export function recordedPrice(asset: string, roundId: string, second: number, cl
   return { t: Math.round(receivedAt * 1000) / 1000, a: asset, m: "", r: roundId, k: "p", e: second, o: open, p: close };
 }
 
+/** The Chainlink price the markets settle on (k "c"), from Polymarket RTDS:
+ * e is the source second, p the price. The row at a round's start second is
+ * its openPrice; the row at its end second is its closePrice. */
+export interface RecordedChainlink { t: number; a: string; m: string; r: string; k: "c"; e: number; p: number }
+
+export function recordedChainlink(asset: string, roundId: string, second: number, price: number,
+  receivedAt: number): RecordedChainlink {
+  return { t: Math.round(receivedAt * 1000) / 1000, a: asset, m: "", r: roundId, k: "c", e: second, p: price };
+}
+
 export interface MarketRecorderOptions {
   directory: string;
   retentionDays: number;
@@ -73,7 +83,7 @@ export class MarketRecorder {
     this.prune();
   }
 
-  record(book: RecordedBook | RecordedTrade | RecordedTop | RecordedPrice): void {
+  record(book: RecordedBook | RecordedTrade | RecordedTop | RecordedPrice | RecordedChainlink): void {
     const day = accountDayKey(book.t);
     let entry = this.streams.get(book.a);
     if (!entry || entry.day !== day) {

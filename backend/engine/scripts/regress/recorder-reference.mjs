@@ -6,6 +6,11 @@
 // {t, a, r, k:"p", e (bar open second), p (close), o (open)}, tagged with the
 // round in force at that second.
 //
+// Chainlink price (operator 2026-10-07): the markets settle on Chainlink, and
+// the venue's openPrice/closePrice equal Polymarket RTDS crypto_prices_chainlink
+// at the round's start/end second exactly. One RTDS socket for all coins; each
+// update is one row {t, a, r, k:"c", e (source second), p}.
+//
 // Drives the real runMarketSnapshot with stub feeds.
 // Run after `npm run build`:  node scripts/regress/recorder-reference.mjs
 import assert from "node:assert/strict";
@@ -40,6 +45,17 @@ const run = runMarketSnapshot({ assets: ["btc"], output: join(dir, "snap.json"),
     }, 60);
     return { stop() {} };
   },
+  chainlink: (onMessage) => {
+    const update = (symbol, ms, value) => ({ topic: "crypto_prices_chainlink", type: "update", payload: { symbol, timestamp: ms, value } });
+    setTimeout(() => {
+      onMessage(update("btc/usd", ROUND * 1000, 99999.5));
+      onMessage(update("btc/usd", (ROUND + 1) * 1000, 100001.25));
+      onMessage(update("eth/usd", ROUND * 1000, 2600));                   // a coin not recorded here
+      onMessage({ topic: "crypto_prices", payload: { symbol: "btcusdt", timestamp: ROUND * 1000, value: 1 } });
+      onMessage({ statusCode: 401, body: { message: "x" } });              // error frames are ignored
+    }, 60);
+    return { stop() {} };
+  },
   publish: () => {},
 }, abort.signal);
 await new Promise((resolve) => setTimeout(resolve, 400));
@@ -53,5 +69,9 @@ assert.equal(prices.length, 2, `one row per closed 1 s bar; got ${JSON.stringify
 assert.deepEqual([prices[0].p, prices[0].o, prices[0].e], [100002, 100000, ROUND + 10]);
 assert.equal(prices[1].p, 100010);
 assert.equal(prices[0].r, String(ROUND), "tagged with the round in force at that second");
+const chain = rows.filter((row) => row.k === "c");
+assert.equal(chain.length, 2, `one row per Chainlink update of the coin; got ${JSON.stringify(chain)}`);
+assert.deepEqual([chain[0].e, chain[0].p, chain[0].r], [ROUND, 99999.5, String(ROUND)], "the round's open is the row at its start second");
+assert.deepEqual([chain[1].e, chain[1].p], [ROUND + 1, 100001.25]);
 console.log("recorder-reference OK");
 process.exit(0);

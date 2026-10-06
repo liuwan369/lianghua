@@ -22,7 +22,7 @@ const R = (Math.floor(Date.now() / 1000 / 300) - 3) * 300;
   let sink;
   const run = runMarketSnapshot({ assets: ["btc"], output: join(dir, "snap.json"), durationSec: 0, staleAfterMs: 2000,
     publishMs: 1000, discoveryMs: 50, recordDays: 10, recordDir: join(dir, "rec") }, {
-    now: () => now, discover: async () => market, feed: (s) => { sink = s; return { stop() {} }; }, publish: () => {}, reference: () => ({ stop() {} }),
+    now: () => now, discover: async () => market, feed: (s) => { sink = s; return { stop() {} }; }, publish: () => {}, reference: () => ({ stop() {} }), chainlink: () => ({ stop() {} }),
   }, abort.signal);
   await new Promise((resolve) => setTimeout(resolve, 100));
   sink({ kind: "marketTrade", token: "DOWNTOK", price: 0.7, shares: 12.5, takerSide: "SELL", tsUnix: now });
