@@ -75,10 +75,11 @@
           <thead><tr><th scope="col">触发几次</th><th scope="col">场次</th><th scope="col">合计</th><th scope="col">每场平均</th></tr></thead>
           <tbody data-ladder-body></tbody>
         </table></div>
-        <h4 class="rv-sub">全部场次 对比 只做第 1 次触发在 <span data-late-from>60</span> 秒以后的场次（试验中）</h4>
+        <h4 class="rv-sub">全部场次 对比 只做第 1 次触发在 <span data-late-from>60</span> 秒以后 对比 60 秒后再加"触发前 5 秒的成交里，推涨这边的量超过 55%"（试验中）</h4>
         <div class="rv-scroll"><table class="rv-table">
           <thead><tr><th scope="col">日期（北京）</th><th scope="col">全部：场次</th><th scope="col">全部：合计</th><th scope="col">全部：最差</th>
-            <th scope="col">60 秒后：场次</th><th scope="col">60 秒后：合计</th><th scope="col">60 秒后：最差</th></tr></thead>
+            <th scope="col">60 秒后：场次</th><th scope="col">60 秒后：合计</th><th scope="col">60 秒后：最差</th>
+            <th scope="col">+成交方向：场次</th><th scope="col">+成交方向：合计</th><th scope="col">+成交方向：首次触发那边赢</th></tr></thead>
           <tbody data-late-body></tbody>
         </table></div>
       </section>
@@ -175,11 +176,12 @@
     const late = (total || {}).ladderLate;
     if (late) set("[data-late-from]", late.fromSecond);
     const cell = (value, cls = true) => `<td class="${cls && Number.isFinite(value) ? (value < 0 ? "rv-loss" : "rv-gain") : ""}">${money(value)}</td>`;
-    const row = (label, all, part) => `<tr><td>${label}</td><td>${all?.rounds ?? 0}</td>${cell(all?.total)}${cell(all?.worst, false)}
-      <td>${part?.rounds ?? 0}</td>${cell(part?.total)}${cell(part?.worst, false)}</tr>`;
-    const rows = (days || []).filter((day) => (day.ladder || {}).rounds).map((day) => row(esc(day.date), day.ladder, day.ladderLate));
-    if (total && (total.ladder || {}).rounds) rows.push(row("<b>合计</b>", total.ladder, total.ladderLate));
-    el("[data-late-body]").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="7" class="rv-empty">还没有录全最后一分钟的场次</td></tr>`;
+    const row = (label, all, part, flow) => `<tr><td>${label}</td><td>${all?.rounds ?? 0}</td>${cell(all?.total)}${cell(all?.worst, false)}
+      <td>${part?.rounds ?? 0}</td>${cell(part?.total)}${cell(part?.worst, false)}
+      <td>${flow?.rounds ?? 0}</td>${cell(flow?.total)}<td>${pct(flow?.firstWinPct)}</td></tr>`;
+    const rows = (days || []).filter((day) => (day.ladder || {}).rounds).map((day) => row(esc(day.date), day.ladder, day.ladderLate, day.ladderLateFlow));
+    if (total && (total.ladder || {}).rounds) rows.push(row("<b>合计</b>", total.ladder, total.ladderLate, total.ladderLateFlow));
+    el("[data-late-body]").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="10" class="rv-empty">还没有录全最后一分钟的场次</td></tr>`;
   };
 
   const renderCoins = (coins) => {

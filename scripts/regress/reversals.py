@@ -237,6 +237,31 @@ class Ladder(unittest.TestCase):
         self.assertLess(by["4"]["total"], 0)
         self.assertLess(by["10"]["total"], 0)
 
+    def test_flow_share_at_first_trigger(self):
+        """Operator 2026-10-08: the share of the trades in the 5 s before the first
+        trigger that push the triggered side up (taker BUY of its token or taker
+        SELL of the other token), by volume. Older trades and later ones don't count."""
+        trade = lambda t, tok, side, s: {"t": R + t, "a": "btc", "m": "0xm", "r": str(R), "k": "t", "tok": tok, "p": 0.6, "s": s, "side": side}
+        rows = [book(1, 0.50, 0.51),
+                trade(2, "u", "BUY", 100),                       # 8 s before the trigger: outside the window
+                trade(6, "u", "BUY", 30), trade(7, "d", "SELL", 30), trade(8, "u", "SELL", 20),   # pushes UP: 60 of 80
+                book(10, 0.68, 0.33),                            # first trigger: UP at 10 s
+                trade(11, "d", "BUY", 500)]                      # after the trigger: ignored
+        counted = self.count(full_round(rows))
+        self.assertEqual(counted["sides"], ["UP"])
+        self.assertAlmostEqual(counted["flow5"], 0.75)
+        quiet = self.count(full_round([book(1, 0.50, 0.51), book(10, 0.68, 0.33)]))
+        self.assertIsNone(quiet["flow5"], "no trades in the window: no reading")
+
+    def test_late_flow_group(self):
+        base = {"incomplete": False, "firstFiringWon": True, "partialLastMinute": False, "roundId": "1", "startsAt": 1}
+        late_buy = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [75.0], "flow5": 0.80}
+        late_sell = {**base, **self.round_(["UP"], [0.70], "DOWN"), "seconds": [80.0], "flow5": 0.30}
+        early = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [12.0], "flow5": 0.90}
+        stats = reversals._stats([late_buy, late_sell, early])
+        self.assertEqual(stats["ladderLateFlow"]["rounds"], 1, "after 60 s and flow share > 55%")
+        self.assertEqual(stats["ladderLateFlow"]["flowShare"], 0.55)
+
     def test_late_entry_group(self):
         """The operator's test (2026-10-07): only rounds whose first trigger comes
         at or after 60 s are traded; earlier rounds are skipped (no position)."""

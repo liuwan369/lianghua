@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import time
 import zlib
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -32,7 +33,7 @@ WIN_PRICE = 0.9
 ONE_SIDED_FROM = 1791143400
 LIVE_RECOMPUTE_SEC = 60
 BEIJING = timezone(timedelta(hours=8))
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 # STRATEGY.md section 6: the ladder under test and its limit price.
 LADDER = (5, 13, 60)
 LIMIT = 0.70
@@ -43,7 +44,8 @@ class _Round:
     """Counter state of one round, fed one row at a time (rows are never kept:
     a day of one coin is ~860k rows and holding them got the control plane
     OOM-killed)."""
-    __slots__ = ("start", "prev", "sides", "seconds", "asks", "fills", "winner", "first_clean", "last_t")
+    __slots__ = ("start", "prev", "sides", "seconds", "asks", "fills", "winner", "first_clean", "last_t",
+                 "trades", "flow5")
 
     def __init__(self, start: int):
         self.start = start
@@ -57,10 +59,19 @@ class _Round:
         self.fills: list[float | None] = []
         self.winner = None
         self.first_clean = self.last_t = None
+        # Trades until the first trigger: (t, token, taker side, size).
+        self.trades: deque[tuple[float, str, str, float]] = deque()
+        self.flow5: float | None = None
 
     def feed(self, row: dict) -> None:
         t, start = row.get("t"), self.start
-        if not isinstance(t, (int, float)) or not (start <= t < start + ROUND_SEC) or row.get("k") == "t":
+        if not isinstance(t, (int, float)) or not (start <= t < start + ROUND_SEC):
+            return
+        if row.get("k") == "t":
+            if not self.sides:
+                self.trades.append((t, row.get("tok"), row.get("side"), float(row.get("s") or 0)))
+                while self.trades[0][0] < t - FLOW_WINDOW_SEC - 1:     # only the last window is ever read
+                    self.trades.popleft()
             return
         self.last_t = t
         ua, da, ub, db = row.get("ua"), row.get("da"), row.get("ub"), row.get("db")
@@ -82,11 +93,27 @@ class _Round:
         if self.prev is not None:
             for side, before, now in (("UP", self.prev[0], ua), ("DOWN", self.prev[1], da)):
                 if before < LINE <= now and (not self.sides or self.sides[-1] != side):
+                    if not self.sides:
+                        self.flow5 = self._flow_share(side, t)
+                        self.trades.clear()
                     self.sides.append(side)
                     self.seconds.append(round(t - start, 1))
                     self.asks.append(now)
                     self.fills.append(round(t - start, 1) if now <= LIMIT + 1e-9 else None)
         self.prev = (ua, da)
+
+    def _flow_share(self, side: str, at: float) -> float | None:
+        """Share of the traded volume in the window before `at` that pushed
+        `side` up (taker BUY of its token or taker SELL of the other one)."""
+        mine = "u" if side == "UP" else "d"
+        push = total = 0.0
+        for t, token, taker, size in self.trades:
+            if not (at - FLOW_WINDOW_SEC <= t < at):
+                continue
+            total += size
+            if (token == mine) == (taker == "BUY"):
+                push += size
+        return round(push / total, 4) if total > 0 else None
 
     def result(self) -> dict:
         start, sides = self.start, self.sides
@@ -96,7 +123,7 @@ class _Round:
         incomplete = (self.first_clean is None or self.first_clean - start > START_GRACE_SEC
                       or (ends_early and start >= ONE_SIDED_FROM))
         return {"roundId": str(start), "startsAt": start, "firings": len(sides), "reversals": max(0, len(sides) - 1),
-                "sides": sides, "seconds": self.seconds, "asks": self.asks, "fills": self.fills, "winner": self.winner,
+                "sides": sides, "seconds": self.seconds, "asks": self.asks, "fills": self.fills, "flow5": self.flow5, "winner": self.winner,
                 "firstFiringSide": sides[0] if sides else None,
                 "firstFiringWon": (sides[0] == self.winner) if sides and self.winner else None,
                 "incomplete": incomplete, "partialLastMinute": start < ONE_SIDED_FROM}
@@ -150,8 +177,6 @@ def _count_file(path: Path) -> list[dict]:
     in time order (one collector writes them)."""
     rounds: dict[str, _Round] = {}
     for line in read_lines(path):
-        if '"k":"t"' in line or '"k": "t"' in line:
-            continue
         try:
             row = json.loads(line)
         except ValueError:
@@ -204,6 +229,10 @@ def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float |
 # Under test (operator 2026-10-07): trade only rounds whose first trigger comes
 # at or after this second; an earlier first trigger means the round is skipped.
 LATE_FROM_SEC = 60
+# Under test (operator 2026-10-08): among those, only rounds where most of the
+# trades in the 5 s before the first trigger pushed the triggered side up.
+FLOW_WINDOW_SEC = 5.0
+FLOW_SHARE = 0.55
 
 
 def ladder_pnl(item: dict, ladder=LADDER, *, fee: bool = True) -> float | None:
@@ -268,7 +297,11 @@ def _stats(rounds: list[dict]) -> dict:
             "partialRounds": sum(1 for item in complete if item["partialLastMinute"]),
             "ladder": _ladder_stats(complete),
             "ladderLate": {**_ladder_stats([item for item in complete if item.get("seconds")
-                                            and item["seconds"][0] >= LATE_FROM_SEC]), "fromSecond": LATE_FROM_SEC}}
+                                            and item["seconds"][0] >= LATE_FROM_SEC]), "fromSecond": LATE_FROM_SEC},
+            "ladderLateFlow": {**_ladder_stats([item for item in complete if item.get("seconds")
+                                                and item["seconds"][0] >= LATE_FROM_SEC
+                                                and (item.get("flow5") or 0) > FLOW_SHARE]),
+                               "fromSecond": LATE_FROM_SEC, "flowWindow": FLOW_WINDOW_SEC, "flowShare": FLOW_SHARE}}
 
 
 def _ladder_stats(complete: list[dict]) -> dict:
@@ -282,7 +315,9 @@ def _ladder_stats(complete: list[dict]) -> dict:
         # (65 shares) wins on an odd count and the rung-2 side on an even one.
         groups.setdefault(str(item["firings"]), []).append(value)
     values = [value for _, value in judged]
+    wins = [item["sides"][0] == item["winner"] for item, _ in judged if item.get("sides")]
     return {"ladder": list(LADDER), "limit": LIMIT, "rounds": len(values),
+            "firstWinPct": round(100 * sum(wins) / len(wins), 1) if wins else None,
             "total": round(sum(values), 2), "perRound": round(sum(values) / len(values), 3) if values else None,
             "worst": round(min(values), 2) if values else None,
             "byFirings": {key: {"rounds": len(group), "total": round(sum(group), 2),
