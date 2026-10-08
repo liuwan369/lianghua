@@ -33,8 +33,10 @@ const total = { rounds: 286, incomplete: 2, avgFirings: 1.83, medianFirings: 1, 
   ladder: { ladder: [5, 13, 60], limit: 0.7, rounds: 120, total: 41.3, perRound: 0.344, worst: -45.9,
     byFirings: { "1": { rounds: 60, total: 90, perRound: 1.5 }, "4": { rounds: 5, total: -208, perRound: -41.6 },
       "5": { rounds: 2, total: 20.8, perRound: 10.4 } } } };
-total.ladderLate = { ladder: [5, 13, 60], rounds: 34, total: -43.2, perRound: -1.27, worst: -41.6, fromSecond: 60, byFirings: {} };
-total.ladderLateFlow = { ladder: [5, 13, 60], rounds: 12, total: 17.7, perRound: 1.47, worst: -41.6, firstWinPct: 83.3, byFirings: {} };
+total.ladderLate = { ladder: [5, 13, 60], rounds: 34, total: -43.2, perRound: -1.27, worst: -41.6, fromSecond: 60,
+  byFirings: { "1": { rounds: 20, total: 30.4, perRound: 1.52 }, "4": { rounds: 2, total: -81.6, perRound: -40.8 } } };
+total.ladderLateFlow = { ladder: [5, 13, 60], rounds: 12, total: 17.7, perRound: 1.47, worst: -41.6, firstWinPct: 83.3,
+  byFirings: { "1": { rounds: 9, total: 13.7, perRound: 1.52 }, "2": { rounds: 3, total: 1.2, perRound: 0.4 } } };
 const body = { schemaVersion: 1, assetId: "btc", days: [{ date: "2026-10-02", ...total, partialRounds: 286 }], total,
   rounds: [{ roundId: "1790884500", startsAt: 1790884500, firings: 10, reversals: 9, winner: "UP",
     sides: ["DOWN", "UP"], seconds: [0.6, 236.1], partialLastMinute: true }] };
@@ -69,5 +71,7 @@ assert.ok(all.includes("+41.3") && all.includes("-45.9"), "its total and worst r
 assert.ok(all.includes("4 次") && all.includes("5 次") && !all.includes("4+ 次"), "every firing count on its own");
 assert.ok(all.includes("-43.2") && all.includes("60 秒后"), "the 60 s entry filter is shown next to all rounds, per day");
 assert.ok(all.includes("+17.7") && all.includes("83.3%"), "the 60 s + 5 s flow group shows its total and first-trigger win rate");
+// Each group also splits by firing count (operator: the 60 s groups showed no reversal counts).
+assert.ok(all.includes("-81.6") && all.includes("+13.7"), "the 60 s and the flow group are split by firing count too");
 console.log("reversals page OK");
 process.exit(0);

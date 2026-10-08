@@ -82,6 +82,13 @@
             <th scope="col">+成交方向：场次</th><th scope="col">+成交方向：合计</th><th scope="col">+成交方向：首次触发那边赢</th></tr></thead>
           <tbody data-late-body></tbody>
         </table></div>
+        <h4 class="rv-sub">三组按触发次数分开（第 1 次触发之后的每次反转都算进去）</h4>
+        <div class="rv-scroll"><table class="rv-table">
+          <thead><tr><th scope="col">触发几次</th><th scope="col">全部：场次</th><th scope="col">全部：每场</th><th scope="col">全部：合计</th>
+            <th scope="col">60 秒后：场次</th><th scope="col">60 秒后：每场</th><th scope="col">60 秒后：合计</th>
+            <th scope="col">+成交方向：场次</th><th scope="col">+成交方向：每场</th><th scope="col">+成交方向：合计</th></tr></thead>
+          <tbody data-groups-body></tbody>
+        </table></div>
       </section>
 
       <section class="diagnostic-panel rv-panel" aria-labelledby="rv-coins-title">
@@ -182,6 +189,11 @@
     const rows = (days || []).filter((day) => (day.ladder || {}).rounds).map((day) => row(esc(day.date), day.ladder, day.ladderLate, day.ladderLateFlow));
     if (total && (total.ladder || {}).rounds) rows.push(row("<b>合计</b>", total.ladder, total.ladderLate, total.ladderLateFlow));
     el("[data-late-body]").innerHTML = rows.length ? rows.join("") : `<tr><td colspan="10" class="rv-empty">还没有录全最后一分钟的场次</td></tr>`;
+    const groups = [total?.ladder, total?.ladderLate, total?.ladderLateFlow].map((group) => group?.byFirings || {});
+    const counts = [...new Set(groups.flatMap((group) => Object.keys(group)))].map(Number).sort((a, b) => a - b);
+    const trio = (group, key) => group[key] ? `<td>${group[key].rounds}</td>${cell(group[key].perRound)}${cell(group[key].total)}` : "<td>0</td><td>--</td><td>--</td>";
+    el("[data-groups-body]").innerHTML = counts.length ? counts.map((count) => `<tr><td>${count} 次</td>${trio(groups[0], count)}${trio(groups[1], count)}${trio(groups[2], count)}</tr>`).join("")
+      : `<tr><td colspan="10" class="rv-empty">还没有录全最后一分钟的场次</td></tr>`;
   };
 
   const renderCoins = (coins) => {
