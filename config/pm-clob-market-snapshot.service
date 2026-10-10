@@ -20,7 +20,7 @@ PrivateTmp=true
 ProtectSystem=full
 ReadWritePaths=/root/pm-system/data/dashboard
 # Measured: 89MB total for three feeds, i.e. ~30MB per coin, so seven feeds land
-# near 210MB. 512M keeps roughly 2x headroom; the host has ~1GB available.
+# near 210MB. 512M keeps roughly 2x headroom.
 MemoryMax=512M
 CPUQuota=100%
 

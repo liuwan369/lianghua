@@ -4,7 +4,7 @@
 
 ## 控制台
 
-https://34-242-206-196.sslip.io/console/ （nginx basic auth）。五个页面，都在 `frontend/console/`：
+https://18-201-16-51.sslip.io/console/ （nginx basic auth）。五个页面，都在 `frontend/console/`：
 
 - 自动交易 `auto-trade.html`（首页，`index.html` 跳转到这里）：启动/暂停/停止、当前场盘口、本场持仓与订单、历史订单（按场次）、交易统计、服务器状态、清空数据。
 - 市场 `market.html`：币种目录，选一个币进运行池。
@@ -14,7 +14,7 @@ https://34-242-206-196.sslip.io/console/ （nginx basic auth）。五个页面�
 
 ## 服务器
 
-AWS 都柏林单机 `root@34.242.206.196`，运行目录 `/root/pm-system`。nginx 443 做 basic auth，反代到只监听 `127.0.0.1:18766` 的控制面。交易引擎只能在控制台由人启动。账户秘密只在服务器上。
+AWS 都柏林单机 `root@18.201.16.51`，运行目录 `/root/pm-system`。nginx 443 做 basic auth，反代到只监听 `127.0.0.1:18766` 的控制面。交易引擎只能在控制台由人启动。账户秘密只在服务器上。
 
 ## 目录
 

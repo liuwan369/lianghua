@@ -20,8 +20,8 @@ Polymarket 加密货币 5 分钟涨跌市场的**反转策略实盘系统，真�
 
 ## 3. 服务器与操作
 
-- SSH：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196`，目录 `/root/pm-system`。
-- 控制面只在服务器本机：`curl -s -H "X-PM-Authenticated: probe" http://127.0.0.1:18766/api/...`（GET 只读）。公网是 `https://34-242-206-196.sslip.io`，nginx basic auth。
+- SSH：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@18.201.16.51`，目录 `/root/pm-system`（Lightsail 4 核 16G，Ubuntu 22.04，2026-10-10 从旧机 34.242.206.196 整套迁来，数据全带）。旧机保留不动、引擎停着、不再部署；两台共用一个钱包，**只能在新机启动交易**。
+- 控制面只在服务器本机：`curl -s -H "X-PM-Authenticated: probe" http://127.0.0.1:18766/api/...`（GET 只读）。公网是 `https://18-201-16-51.sslip.io`，nginx basic auth。
 - 服务：`pm-system-dashboard-dublin`（控制面，内存上限 900M）、`pm-clob-market-snapshot`（行情采集 + 录制，7 个币）、nginx。引擎由控制面按需启动在独立 scope `pm-engine-<run_id>`。
 - 构建/测试/部署见 AGENTS.md。部署：`python scripts/deploy-reversal-release.py`（部署已提交的 HEAD，交易必须停着）。
 - 推送：`git push origin main`；连不上时用 `git -c http.proxy=socks5h://127.0.0.1:10808 push -q origin main`。

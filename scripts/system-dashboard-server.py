@@ -156,7 +156,7 @@ def _live_config() -> dict:
                 str(Path.home() / ".ssh" / "id_ed25519_dublin_pm"),
             )
         ),
-        "remote_host": os.environ.get("PM_REMOTE_HOST", "root@34.242.206.196"),
+        "remote_host": os.environ.get("PM_REMOTE_HOST", "root@18.201.16.51"),
         "remote_port": os.environ.get("PM_REMOTE_PORT", "22"),
         "connect_timeout": os.environ.get("PM_REMOTE_CONNECT_TIMEOUT", "5"),
         "snapshot_path": snapshot_path,

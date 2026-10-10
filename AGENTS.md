@@ -22,5 +22,5 @@
 - 构建：`cd backend/engine && npm run typecheck && npm run build`
 - 测试：`node backend/engine/scripts/regress/*.mjs`（先 build）、`node backend/engine/scripts/check-*.mjs`、`python scripts/regress/*.py`、`node frontend/console/regress/*.mjs`。逐个运行，退出码 0 即通过。
 - 部署：提交后 `python scripts/deploy-reversal-release.py`，部署的是 HEAD，交易必须已停止。
-- 服务器：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196`，运行目录 `/root/pm-system`；控制面只在服务器本机可直连，如 `curl -s http://127.0.0.1:18766/api/runtime/status`。
+- 服务器：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@18.201.16.51`，运行目录 `/root/pm-system`；控制面只在服务器本机可直连，如 `curl -s http://127.0.0.1:18766/api/runtime/status`。
 - 去哪看：策略 `backend/engine/src/strategies/btc-reversal.ts`；下单与风控 `backend/engine/src/platform/core.ts`、`platform/polymarket.ts`、`live/clob/client.ts`；入口 `backend/engine/src/cli/platform.ts`；控制面 `scripts/system-dashboard-server.py`；账本 `scripts/dashboard/ledger.py`；前端 `frontend/console/`。

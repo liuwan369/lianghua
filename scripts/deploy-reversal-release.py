@@ -416,7 +416,7 @@ print(json.dumps(result))
 
 client = paramiko.SSHClient()
 client.load_system_host_keys()
-client.connect("34.242.206.196", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
+client.connect("18.201.16.51", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
 try:
     directory = "/root/.pm-releases/" + RELEASE
     with client.open_sftp() as sftp:
@@ -442,7 +442,7 @@ try:
         for _ in range(60):
             time.sleep(10)
             try:
-                client.connect("34.242.206.196", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
+                client.connect("18.201.16.51", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
                 with client.open_sftp() as sftp, sftp.open(directory + "/result.json") as handle:
                     output = handle.read().decode()
                 break
