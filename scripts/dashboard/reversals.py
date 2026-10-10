@@ -228,7 +228,9 @@ def day_rounds(history: Path, cache: Path, asset: str, day: str, *, now: float |
 # somewhat worse.
 # Under test (operator 2026-10-07): trade only rounds whose first trigger comes
 # at or after this second; an earlier first trigger means the round is skipped.
-LATE_FROM_SEC = 60
+# Each coin has its own second (operator 2026-10-10), picked on 10-05/06 and
+# checked on 10-07..09.
+LATE_FROM_SEC = {"btc": 10, "eth": 60, "sol": 30, "xrp": 120, "doge": 45, "hype": 120, "bnb": 120}
 # Under test (operator 2026-10-08): among those, only rounds where most of the
 # trades in the 5 s before the first trigger pushed the triggered side up.
 FLOW_WINDOW_SEC = 5.0
@@ -272,8 +274,9 @@ def ladder_pnl(item: dict, ladder=LADDER, *, fee: bool = True) -> float | None:
     return round(held[winner] - cost, 4)
 
 
-def _stats(rounds: list[dict]) -> dict:
+def _stats(rounds: list[dict], asset: str) -> dict:
     complete = [item for item in rounds if not item["incomplete"]]
+    late = LATE_FROM_SEC[asset]
     firings = sorted(item["firings"] for item in complete)
     top = max(firings, default=0)
     distribution = {str(value): 0 for value in range(top + 1)}
@@ -297,11 +300,11 @@ def _stats(rounds: list[dict]) -> dict:
             "partialRounds": sum(1 for item in complete if item["partialLastMinute"]),
             "ladder": _ladder_stats(complete),
             "ladderLate": {**_ladder_stats([item for item in complete if item.get("seconds")
-                                            and item["seconds"][0] >= LATE_FROM_SEC]), "fromSecond": LATE_FROM_SEC},
+                                            and item["seconds"][0] >= late]), "fromSecond": late},
             "ladderLateFlow": {**_ladder_stats([item for item in complete if item.get("seconds")
-                                                and item["seconds"][0] >= LATE_FROM_SEC
+                                                and item["seconds"][0] >= late
                                                 and (item.get("flow5") or 0) > FLOW_SHARE]),
-                               "fromSecond": LATE_FROM_SEC, "flowWindow": FLOW_WINDOW_SEC, "flowShare": FLOW_SHARE}}
+                               "fromSecond": late, "flowWindow": FLOW_WINDOW_SEC, "flowShare": FLOW_SHARE}}
 
 
 def _ladder_stats(complete: list[dict]) -> dict:
@@ -347,11 +350,11 @@ def summary(history: Path, cache: Path, asset: str, *, days: int, today: str | N
         if not rounds:
             continue
         everything.extend(rounds)
-        per_day.append({"date": date, **_stats(rounds)})
+        per_day.append({"date": date, **_stats(rounds, asset)})
     latest = sorted((item for item in everything if not item["incomplete"]),
                     key=lambda item: item["startsAt"], reverse=True)[:300]
     return {"schemaVersion": 1, "assetId": asset, "asOf": time.time(), "days": per_day,
-            "total": _stats(everything), "rounds": latest}
+            "total": _stats(everything, asset), "rounds": latest}
 
 
 if __name__ == "__main__":

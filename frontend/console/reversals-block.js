@@ -75,17 +75,17 @@
           <thead><tr><th scope="col">触发几次</th><th scope="col">场次</th><th scope="col">合计</th><th scope="col">每场平均</th></tr></thead>
           <tbody data-ladder-body></tbody>
         </table></div>
-        <h4 class="rv-sub">全部场次 对比 只做第 1 次触发在 <span data-late-from>60</span> 秒以后 对比 60 秒后再加"触发前 5 秒的成交里，推涨这边的量超过 55%"（试验中）</h4>
+        <h4 class="rv-sub">全部场次 对比 只做第 1 次触发在 <span data-late-from>--</span> 秒以后（每个币各自的秒数：BTC 10、ETH 60、SOL 30、XRP 120、DOGE 45、HYPE 120、BNB 120，用 10-05/06 选出） 对比 再加"触发前 5 秒的成交里，推涨这边的量超过 55%"（试验中）</h4>
         <div class="rv-scroll"><table class="rv-table">
           <thead><tr><th scope="col">日期（北京）</th><th scope="col">全部：场次</th><th scope="col">全部：合计</th><th scope="col">全部：最差</th>
-            <th scope="col">60 秒后：场次</th><th scope="col">60 秒后：合计</th><th scope="col">60 秒后：最差</th>
+            <th scope="col"><span data-late-col>--</span> 秒后：场次</th><th scope="col">秒后：合计</th><th scope="col">秒后：最差</th>
             <th scope="col">+成交方向：场次</th><th scope="col">+成交方向：合计</th><th scope="col">+成交方向：首次触发那边赢</th></tr></thead>
           <tbody data-late-body></tbody>
         </table></div>
         <h4 class="rv-sub">三组按触发次数分开（第 1 次触发之后的每次反转都算进去）</h4>
         <div class="rv-scroll"><table class="rv-table">
           <thead><tr><th scope="col">触发几次</th><th scope="col">全部：场次</th><th scope="col">全部：每场</th><th scope="col">全部：合计</th>
-            <th scope="col">60 秒后：场次</th><th scope="col">60 秒后：每场</th><th scope="col">60 秒后：合计</th>
+            <th scope="col"><span data-late-col2>--</span> 秒后：场次</th><th scope="col">秒后：每场</th><th scope="col">秒后：合计</th>
             <th scope="col">+成交方向：场次</th><th scope="col">+成交方向：每场</th><th scope="col">+成交方向：合计</th></tr></thead>
           <tbody data-groups-body></tbody>
         </table></div>
@@ -181,7 +181,12 @@
 
   const renderLate = (days, total) => {
     const late = (total || {}).ladderLate;
-    if (late) set("[data-late-from]", late.fromSecond);
+    if (late) {
+      const label = `${assetId.toUpperCase()} ${late.fromSecond}`;
+      set("[data-late-from]", label);
+      set("[data-late-col]", label);
+      set("[data-late-col2]", label);
+    }
     const cell = (value, cls = true) => `<td class="${cls && Number.isFinite(value) ? (value < 0 ? "rv-loss" : "rv-gain") : ""}">${money(value)}</td>`;
     const row = (label, all, part, flow) => `<tr><td>${label}</td><td>${all?.rounds ?? 0}</td>${cell(all?.total)}${cell(all?.worst, false)}
       <td>${part?.rounds ?? 0}</td>${cell(part?.total)}${cell(part?.worst, false)}

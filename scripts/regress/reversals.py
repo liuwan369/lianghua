@@ -194,7 +194,7 @@ class Ladder(unittest.TestCase):
     def test_summary_has_ladder(self):
         rounds = [{**self.round_(["UP"], [0.68], "UP"), "incomplete": False, "firstFiringWon": True,
                    "partialLastMinute": False, "roundId": "1", "startsAt": 1}]
-        stats = reversals._stats(rounds)
+        stats = reversals._stats(rounds, "btc")
         self.assertIn("ladder", stats)
         self.assertEqual(stats["ladder"]["rounds"], 1)
         self.assertGreater(stats["ladder"]["total"], 1.5, "bought at 0.68, cheaper than the limit")
@@ -231,7 +231,7 @@ class Ladder(unittest.TestCase):
             sides = ["UP" if i % 2 == 0 else "DOWN" for i in range(n)]
             return {**base, "sides": sides, "asks": [0.70] * n, "seconds": [10.0 * (i + 1) for i in range(n)],
                     "fills": [10.0 * (i + 1) for i in range(n)], "winner": sides[-1], "firings": n}
-        by = reversals._stats([round_n(n) for n in (1, 3, 4, 5, 10)])["ladder"]["byFirings"]
+        by = reversals._stats([round_n(n) for n in (1, 3, 4, 5, 10)], "btc")["ladder"]["byFirings"]
         self.assertEqual(list(by), ["1", "3", "4", "5", "10"], "every count, in numeric order, no 4+ bucket")
         self.assertGreater(by["5"]["total"], 0, "5 reversals: the rung 1+3 side wins")
         self.assertLess(by["4"]["total"], 0)
@@ -258,7 +258,7 @@ class Ladder(unittest.TestCase):
         late_buy = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [75.0], "flow5": 0.80}
         late_sell = {**base, **self.round_(["UP"], [0.70], "DOWN"), "seconds": [80.0], "flow5": 0.30}
         early = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [12.0], "flow5": 0.90}
-        stats = reversals._stats([late_buy, late_sell, early])
+        stats = reversals._stats([late_buy, late_sell, early], "eth")
         self.assertEqual(stats["ladderLateFlow"]["rounds"], 1, "after 60 s and flow share > 55%")
         self.assertEqual(stats["ladderLateFlow"]["flowShare"], 0.55)
 
@@ -268,11 +268,25 @@ class Ladder(unittest.TestCase):
         base = {"incomplete": False, "firstFiringWon": True, "partialLastMinute": False, "roundId": "1", "startsAt": 1}
         early = {**base, **self.round_(["UP"], [0.70], "DOWN"), "seconds": [12.0]}     # would lose 3.5
         late = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [75.0]}        # wins
-        stats = reversals._stats([early, late])
+        stats = reversals._stats([early, late], "eth")
         self.assertEqual(stats["ladder"]["rounds"], 2)
         self.assertEqual(stats["ladderLate"]["rounds"], 1, "only the round triggered at or after 60 s")
         self.assertGreater(stats["ladderLate"]["total"], 0)
         self.assertEqual(stats["ladderLate"]["fromSecond"], 60)
+
+    def test_late_entry_second_per_coin(self):
+        """Operator 2026-10-10: each coin has its own second (picked on
+        10-05/06): BTC 10, ETH 60, SOL 30, XRP 120, DOGE 45, HYPE 120, BNB 120."""
+        base = {"incomplete": False, "firstFiringWon": True, "partialLastMinute": False, "roundId": "1", "startsAt": 1}
+        at_12 = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [12.0]}
+        at_50 = {**base, **self.round_(["UP"], [0.70], "UP"), "seconds": [50.0]}
+        btc = reversals._stats([at_12, at_50], "btc")["ladderLate"]
+        self.assertEqual((btc["fromSecond"], btc["rounds"]), (10, 2), "BTC: 10 s, both rounds count")
+        xrp = reversals._stats([at_12, at_50], "xrp")["ladderLate"]
+        self.assertEqual((xrp["fromSecond"], xrp["rounds"]), (120, 0), "XRP: 120 s, neither counts")
+        self.assertEqual(reversals._stats([at_12, at_50], "sol")["ladderLateFlow"]["fromSecond"], 30,
+                         "the flow group uses the same per-coin second")
+        self.assertEqual(set(reversals.LATE_FROM_SEC), {"btc", "eth", "sol", "xrp", "doge", "hype", "bnb"})
 
 
 if __name__ == "__main__":

@@ -69,7 +69,9 @@ assert.ok(all.includes("HYPE") && all.includes("BNB"), "the 7-coin table renders
 assert.ok(all.includes("5 / 13 / 60"), "the strategy ladder under test is named");
 assert.ok(all.includes("+41.3") && all.includes("-45.9"), "its total and worst round are shown");
 assert.ok(all.includes("4 次") && all.includes("5 次") && !all.includes("4+ 次"), "every firing count on its own");
-assert.ok(all.includes("-43.2") && all.includes("60 秒后"), "the 60 s entry filter is shown next to all rounds, per day");
+assert.ok(all.includes("-43.2") && all.includes("秒后"), "the late entry filter is shown next to all rounds, per day");
+assert.equal(html.get("[data-late-from]"), "BTC 60", "the coin's own second is named (from the server)");
+assert.ok(all.includes("ETH 60") && all.includes("XRP 120"), "every coin's second is listed");
 assert.ok(all.includes("+17.7") && all.includes("83.3%"), "the 60 s + 5 s flow group shows its total and first-trigger win rate");
 // Each group also splits by firing count (operator: the 60 s groups showed no reversal counts).
 assert.ok(all.includes("-81.6") && all.includes("+13.7"), "the 60 s and the flow group are split by firing count too");
