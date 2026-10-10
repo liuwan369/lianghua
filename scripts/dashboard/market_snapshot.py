@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import datetime
+
+from dashboard.timestamps import parse_iso
 
 DEFAULT_STALE_AFTER_MS = 2_000.0
 MAX_STALE_AFTER_MS = 15_000.0
@@ -93,7 +94,7 @@ def _legacy_row_fresh(row: dict, now: float, limit: float) -> bool:
                 and row["up_bid"] <= row["up_ask"]
                 and row["down_bid"] <= row["down_ask"]
                 and isinstance(row.get("quote_at"), str)
-                and -1_000 <= (now - datetime.fromisoformat(row["quote_at"]).timestamp()) * 1000 <= limit)
+                and -1_000 <= (now - parse_iso(row["quote_at"])) * 1000 <= limit)
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
 
@@ -123,7 +124,7 @@ def validate_snapshot(value: dict, now: float | None = None) -> dict:
     value = dict(value)
     now = time.time() if now is None else now
     try:
-        age = now - datetime.fromisoformat(value["checked_at"]).timestamp()
+        age = now - parse_iso(value["checked_at"])
         fresh = -5 <= age <= 15
     except (KeyError, TypeError, ValueError):
         fresh = False

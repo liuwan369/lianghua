@@ -9,10 +9,10 @@ import shutil
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from dashboard_account import child_environment, contains_secret
+from dashboard.timestamps import parse_iso
 
 
 class _ReaderError(RuntimeError):
@@ -155,7 +155,7 @@ class AccountData:
                     raise _ReaderError("account_data_fetch_failed")
                 if not isinstance(result, dict) or contains_secret(result, values) or str(result.get("wallet", "")).lower() != wallet.lower():
                     raise ValueError("invalid response")
-                source_age = time.time()-datetime.fromisoformat(result["checked_at"]).timestamp()
+                source_age = time.time()-parse_iso(result["checked_at"])
                 if not (-5 <= source_age <= self.timeout+5) or result.get("read_only") is not True:
                     raise ValueError("invalid source clock")
                 for key in _SECTIONS:
