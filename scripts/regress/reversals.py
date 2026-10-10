@@ -27,15 +27,33 @@ import dashboard.reversals as reversals  # noqa: E402
 R = 1_800_000_000
 
 
-def book(t, ua, da, ub=None, db=None, r=R):
+def book(t, ua, da, ub=None, db=None, r=R, ue=None, de=None):
+    """A recorded book row; exchange times default to the receive time (fresh)."""
     return {"t": r + t, "a": "btc", "m": "0xm", "r": str(r), "ua": ua, "da": da,
-            "ub": ua - 0.01 if ub is None else ub, "db": da - 0.01 if db is None else db}
+            "ub": ua - 0.01 if ub is None else ub, "db": da - 0.01 if db is None else db,
+            "ue": r + t if ue is None else r + ue, "de": r + t if de is None else r + de}
+
+
+def dense(rows, r=R):
+    """An active book: between two book rows, a fresh frame every second with
+    the earlier asks (live drops its baseline after 2 s without one)."""
+    out, last = [], None
+    for row in rows:
+        if row.get("k") is None and "ua" in row:
+            if last is not None:
+                second = int(last["t"] - r) + 1
+                while r + second < row["t"]:
+                    out.append(book(second, last["ua"], last["da"], r=r))
+                    second += 1
+            last = row
+        out.append(row)
+    return out
 
 
 def full_round(rows, r=R):
-    """Pad a round so it counts as complete: a frame at +250 s keeps the last asks."""
+    """Pad a round so it counts as complete: fresh frames up to +250 s keep the last asks."""
     last = [x for x in rows if "ua" in x and x.get("k") is None][-1]
-    return rows + [book(250, last["ua"], last["da"], r=r)]
+    return dense(rows + [book(250, last["ua"], last["da"], r=r)], r=r)
 
 
 class Count(unittest.TestCase):
@@ -81,14 +99,66 @@ class Count(unittest.TestCase):
                 book(1, 0.70, 0.31), book(2, 0.71, 0.30)]
         self.assertEqual(self.count(full_round(rows))["firings"], 0, "pre-open quotes never count")
 
+    # --- Freshness like live (operator 2026-10-11): the engine trusts a pair
+    # only if each side's exchange time is at most 2 s old when it arrives and
+    # the two are at most 1.5 s apart; otherwise its starting point is dropped
+    # and the next usable pair is a new starting point, never a cross. The page
+    # counted these and showed ~11-35% more firings than live would trade.
+
+    def test_late_quotes_drop_the_baseline(self):
+        """Data arriving late (exchange time 5.7 s old, as on 10-07..09) is not
+        trusted: no cross from it, and the next fresh pair only restarts."""
+        rows = [book(1, 0.50, 0.51), book(2, 0.60, 0.41),
+                book(8, 0.68, 0.33, ue=2.3, de=2.3),     # 5.7 s old on arrival: unusable
+                book(8.5, 0.69, 0.32)]                   # fresh, but only a new baseline
+        self.assertEqual(self.count(full_round(rows))["firings"], 0)
+
+    def test_silence_over_two_seconds_restarts(self):
+        """Nothing usable for more than 2 s: live's feed reports a stale book and
+        the strategy restarts, so the jump across the silence is not a cross."""
+        rows = [book(1, 0.50, 0.51), book(4, 0.33, 0.72)]          # 3 s with no frame
+        self.assertEqual(self.count(rows + [book(250, 0.33, 0.72)])["firings"], 0)
+        self.assertEqual(self.count(full_round([book(1, 0.50, 0.51), book(2, 0.33, 0.72)]))["firings"], 1,
+                         "control: the same move 1 s later is a cross")
+
+    def test_skewed_sides_are_not_used(self):
+        """The two sides' exchange times more than 1.5 s apart: not a usable pair."""
+        rows = [book(1, 0.50, 0.51), book(2, 0.68, 0.33, ue=2.0, de=0.4), book(2.5, 0.60, 0.41)]
+        self.assertEqual(self.count(full_round(rows))["firings"], 0)
+
+    def test_one_sided_book_restarts(self):
+        """A one-sided book is no usable pair either: live restarts after it."""
+        one_sided = {"t": R + 1.5, "a": "btc", "m": "0xm", "r": str(R), "k": "o", "ub": 0.49, "ua": 0.50, "db": 0.50}
+        rows = [book(1, 0.50, 0.51), one_sided, book(1.8, 0.68, 0.33)]
+        self.assertEqual(self.count(full_round(rows))["firings"], 0)
+        self.assertEqual(self.count(full_round([book(1, 0.50, 0.51), book(1.8, 0.68, 0.33)]))["firings"], 1,
+                         "control: without the one-sided frame it is a cross")
+
+    def test_wide_frame_keeps_the_baseline(self):
+        """STRATEGY rule 2: a wide frame (> 1.05) is skipped, the baseline stays."""
+        rows = [book(1, 0.50, 0.51), book(1.5, 0.70, 0.60), book(2, 0.68, 0.33)]
+        self.assertEqual(self.count(full_round(rows))["firings"], 1)
+
+    def test_exchange_time_going_back_restarts(self):
+        rows = [book(1, 0.50, 0.51, ue=1.0, de=1.0), book(1.5, 0.52, 0.49, ue=0.8, de=1.5), book(2, 0.68, 0.33)]
+        self.assertEqual(self.count(full_round(rows))["firings"], 0)
+
     def test_incomplete_round(self):
         late_start = self.count([book(30, 0.50, 0.51), book(250, 0.50, 0.51)])
         self.assertTrue(late_start["incomplete"], "no clean frame in the first 10 s")
         r2 = reversals.ONE_SIDED_FROM // 300 * 300 + 300                  # a round recorded with one-sided rows
         short = reversals.count_round([book(1, 0.50, 0.51, r=r2), book(100, 0.68, 0.33, r=r2)], r2)
         self.assertTrue(short["incomplete"], "a new-era recording that stopped before 240 s")
-        old = self.count([book(1, 0.50, 0.51), book(100, 0.68, 0.33)])      # R is before ONE_SIDED_FROM? not here
+        old = self.count(dense([book(1, 0.50, 0.51), book(100, 0.68, 0.33)]))  # R is before ONE_SIDED_FROM
         self.assertEqual(old["firings"], 1)
+
+    def test_price_rows_do_not_extend_the_book(self):
+        """Coin (k "p") and Chainlink (k "c") rows arrive every second to the
+        end of the round; a book cut off at 100 s is still incomplete."""
+        r2 = reversals.ONE_SIDED_FROM // 300 * 300 + 300
+        rows = dense([book(1, 0.50, 0.51, r=r2), book(100, 0.68, 0.33, r=r2)], r=r2)
+        rows += [{"t": r2 + s, "a": "btc", "r": str(r2), "k": k, "e": r2 + s, "p": 1.0} for s in range(101, 300) for k in ("p", "c")]
+        self.assertTrue(reversals.count_round(rows, r2)["incomplete"])
 
 
 class Files(unittest.TestCase):
@@ -124,8 +194,9 @@ class Files(unittest.TestCase):
         """2026-10-07: a collector restart left an unfinished member in the
         middle of every day file; gzip.open stopped there and lost the rest of
         the day. Reading resumes at the next member."""
-        first = full_round([book(1, 0.50, 0.51), book(2, 0.68, 0.33)])
-        second = full_round([book(1, 0.50, 0.51, r=R + 300), book(2, 0.33, 0.68, r=R + 300)], r=R + 300)
+        # Three rows per member, as before: this checks the reader, not the counter.
+        first = [book(1, 0.50, 0.51), book(2, 0.68, 0.33), book(250, 0.68, 0.33)]
+        second = [book(1, 0.50, 0.51, r=R + 300), book(2, 0.33, 0.68, r=R + 300), book(250, 0.33, 0.68, r=R + 300)]
         path = self.history / "btc" / "2027-01-15.jsonl.gz"
         broken = gzip.compress("".join(json.dumps(x) + "\n" for x in first).encode())[:-30]
         whole = gzip.compress("".join(json.dumps(x) + "\n" for x in second).encode())

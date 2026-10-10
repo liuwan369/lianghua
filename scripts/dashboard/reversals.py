@@ -4,6 +4,12 @@ market recordings (data/market-history/<asset>/<UTC+8 date>.jsonl.gz).
 Definition (REVERSAL.md, confirmed with the operator 2026-10-05):
 - price is each side's ask; only rows inside the round (R <= t < R+300);
 - a clean frame has both asks and ask sum <= 1.05; only clean frames cross;
+- freshness like live (operator 2026-10-11): a frame is usable only if each
+  side's exchange time is at most 2 s old when received and the two are at
+  most 1.5 s apart; an unusable or one-sided frame, more than 2 s without a
+  usable one, or an exchange time going back, drops the starting point, and
+  the next usable clean frame is a new starting point only (a wide frame is
+  skipped and keeps it);
 - the first clean frame of a round is the baseline only;
 - a side crosses when its previous clean ask < 0.67 and this one >= 0.67;
 - firing 1 is the first cross; afterwards only the side opposite the last
@@ -24,6 +30,10 @@ from pathlib import Path
 
 LINE = 0.67
 WIDE_SUM = 1.05
+# Live freshness (btc-reversal maxQuoteAgeSeconds / maxQuoteSkewSeconds, feed
+# PM_WS_SOURCE_FRESH_MAX_MS): what the engine trusts, so what can be traded.
+MAX_AGE_SEC = 2.0
+MAX_SKEW_SEC = 1.5
 ROUND_SEC = 300
 START_GRACE_SEC = 10
 MIN_END_SEC = 240
@@ -33,7 +43,7 @@ WIN_PRICE = 0.9
 ONE_SIDED_FROM = 1791143400
 LIVE_RECOMPUTE_SEC = 60
 BEIJING = timezone(timedelta(hours=8))
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 # STRATEGY.md section 6: the ladder under test and its limit price.
 LADDER = (5, 13, 60)
 LIMIT = 0.70
@@ -44,12 +54,17 @@ class _Round:
     """Counter state of one round, fed one row at a time (rows are never kept:
     a day of one coin is ~860k rows and holding them got the control plane
     OOM-killed)."""
-    __slots__ = ("start", "prev", "sides", "seconds", "asks", "fills", "winner", "first_clean", "last_t",
-                 "trades", "flow5")
+    __slots__ = ("start", "prev", "floor", "last_fresh", "sides", "seconds", "asks", "fills", "winner",
+                 "first_clean", "last_t", "trades", "flow5")
 
     def __init__(self, start: int):
         self.start = start
-        self.prev: tuple[float, float] | None = None
+        # Starting point: (up ask, down ask, up exchange time, down exchange time).
+        self.prev: tuple[float, float, float, float] | None = None
+        # Exchange times of a dropped starting point: the next one must be newer
+        # on both sides (live referenceFloor).
+        self.floor: tuple[float, float] | None = None
+        self.last_fresh: float | None = None
         self.sides: list[str] = []
         self.seconds: list[float] = []
         self.asks: list[float] = []
@@ -73,6 +88,8 @@ class _Round:
                 while self.trades[0][0] < t - FLOW_WINDOW_SEC - 1:     # only the last window is ever read
                     self.trades.popleft()
             return
+        if row.get("k") in ("p", "c"):
+            return      # coin and settlement prices: no book (they kept a cut-off book looking complete)
         self.last_t = t
         ua, da, ub, db = row.get("ua"), row.get("da"), row.get("ub"), row.get("db")
         if (ua or 0) >= WIN_PRICE or (ub or 0) >= WIN_PRICE:
@@ -86,21 +103,47 @@ class _Round:
                 ask = ua if self.sides[index] == "UP" else da
                 if ask is not None and ask <= LIMIT + 1e-9:
                     self.fills[index] = round(t - start, 1)
-        if row.get("k") == "o" or ua is None or da is None or ua + da > WIDE_SUM:
+        ue, de = row.get("ue"), row.get("de")
+        usable = (row.get("k") != "o" and ua is not None and da is not None and 0 < ua < 1 and 0 < da < 1
+                  and isinstance(ue, (int, float)) and isinstance(de, (int, float))
+                  and t - min(ue, de) <= MAX_AGE_SEC and abs(ue - de) <= MAX_SKEW_SEC)
+        if not usable:
+            self._drop()
             return
+        if self.last_fresh is not None and t - self.last_fresh > MAX_AGE_SEC:
+            self._drop()                      # live: the feed reports a stale book in between
+        self.last_fresh = min(t, ue, de)
+        if ua + da > WIDE_SUM:
+            return                            # rule 2: skipped, the starting point stays
         if self.first_clean is None:
             self.first_clean = t
+        if self.floor is not None and not (ue > self.floor[0] and de > self.floor[1]):
+            return
+        if self.prev is None:
+            self.prev, self.floor = (ua, da, ue, de), None
+            return
+        if ue < self.prev[2] or de < self.prev[3]:
+            self._drop()
+            return
+        if ue - self.prev[2] > MAX_AGE_SEC or de - self.prev[3] > MAX_AGE_SEC:
+            self.prev = (ua, da, ue, de)      # a side jumped more than 2 s: a new starting point only
+            return
+        for side, before, now in (("UP", self.prev[0], ua), ("DOWN", self.prev[1], da)):
+            if before < LINE <= now and (not self.sides or self.sides[-1] != side):
+                if not self.sides:
+                    self.flow5 = self._flow_share(side, t)
+                    self.trades.clear()
+                self.sides.append(side)
+                self.seconds.append(round(t - start, 1))
+                self.asks.append(now)
+                self.fills.append(round(t - start, 1) if now <= LIMIT + 1e-9 else None)
+                break                         # live takes one direction per frame
+        self.prev = (ua, da, ue, de)
+
+    def _drop(self) -> None:
         if self.prev is not None:
-            for side, before, now in (("UP", self.prev[0], ua), ("DOWN", self.prev[1], da)):
-                if before < LINE <= now and (not self.sides or self.sides[-1] != side):
-                    if not self.sides:
-                        self.flow5 = self._flow_share(side, t)
-                        self.trades.clear()
-                    self.sides.append(side)
-                    self.seconds.append(round(t - start, 1))
-                    self.asks.append(now)
-                    self.fills.append(round(t - start, 1) if now <= LIMIT + 1e-9 else None)
-        self.prev = (ua, da)
+            self.floor = (self.prev[2], self.prev[3])
+        self.prev = None
 
     def _flow_share(self, side: str, at: float) -> float | None:
         """Share of the traded volume in the window before `at` that pushed
