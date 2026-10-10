@@ -341,6 +341,35 @@
     var previousSequence = snapshotWatermarks.get(watermarkKey);
     var valid = Boolean(marketId && roundId) && vm.hasFreshBbo(source) && source.stale !== true && raw.stale !== true
       && (previousSequence == null || sequence >= previousSequence);
+    // Near the close one side of the book is empty (the winner has no asks).
+    // The server sends that top as oneSided: show it as it is instead of
+    // freezing on the last two-sided quote as "expired". Display only — the
+    // snapshot stays invalid, so the start gate is unchanged.
+    var oneSided = !valid && source.oneSided && typeof source.oneSided === "object" ? source.oneSided : null;
+    if (oneSided && marketId && roundId) {
+      lastSnapshotValid = false;
+      if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
+      snapshotExpiryTimer = null;
+      var sides = { "yes-bid": ["YES 买一", oneSided.yesBid], "yes-ask": ["YES 卖一", oneSided.yesAsk], "no-bid": ["NO 买一", oneSided.noBid], "no-ask": ["NO 卖一", oneSided.noAsk] };
+      var empty = [];
+      Object.keys(sides).forEach(function(key) {
+        var value = Number(sides[key][1]);
+        var present = sides[key][1] != null && Number.isFinite(value);
+        if (!present) empty.push(sides[key][0]);
+        text(`[data-quote="${key}"]`, present ? value.toFixed(3) : "无");
+      });
+      var oneSidedAt = timestampMs(oneSided.at);
+      var label = `单边盘口${empty.length ? ` · ${empty.join("、")}：无` : ""}`;
+      text("[data-book-live-state]", label);
+      text("[data-book-age]", window.PolyPreview.format.time(oneSidedAt));
+      text("[data-book-source]", `${fromStream ? "实时行情" : "后端快照"} · ${window.PolyPreview.format.time(oneSidedAt)} · 单边盘口，暂不触发交易`);
+      text("[data-depth-availability]", "单边盘口 · 五档暂不显示");
+      ["up", "down"].forEach(function(side) {
+        html(document.querySelector(`[data-depth="${side}"]`), '<tr><td colspan="4" class="depth-unavailable">单边盘口</td></tr>');
+        html(document.querySelector(`[data-depth-asks="${side}"]`), '<tr><td colspan="4" class="depth-unavailable">单边盘口</td></tr>');
+      });
+      return false;
+    }
     var staleBook = !valid && hasDepth;
     if (!valid && !staleBook) {
       markSnapshotStale(raw.stale === true || source.stale === true ? "行情源报告数据过期 · 保留最近快照" : !vm.hasFreshBbo(source) ? "买卖报价已过期或未接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");

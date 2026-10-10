@@ -25,7 +25,7 @@
 | `/console/*` 静态文件（`frontend/console/`） | HTML 不缓存并注入 `window.__POLY_PREVIEW_CONFIG__`；JS/CSS 用 ETag 协商 |
 | `/api/bootstrap` | 应用信息、`capabilityDetails`、`streams`（SSE 端点）、`runtime` |
 | `/api/stream?p=<GET 路径>&p=…` | SSE 推送，见下文 |
-| `/api/markets?assetId=` | 币种目录 `items[]`：`assetId/marketId/roundId/startAt/endAt/yesBid/yesAsk/noBid/noAsk/orderBook/quoteAt/stale/strategyEligible/supported/canEnable/current` |
+| `/api/markets?assetId=` | 币种目录 `items[]`：`assetId/marketId/roundId/startAt/endAt/yesBid/yesAsk/noBid/noAsk/orderBook/quoteAt/stale/strategyEligible/supported/canEnable/current/oneSided`。`oneSided`：一边没有挂单时（快收盘赢的那边没人卖）交易所当前的盘口 `{at, yesBid, yesAsk, noBid, noAsk}`，空的一边为 null；只用于展示，有它时 `stale` 仍为 true，不能交易；比双边价旧或超过 15 秒则为 null |
 | `/api/markets/{marketId}/snapshot?roundId=&marketId=` | 单市场盘口，找不到 404 |
 | `/api/runtime/status` | 引擎状态：`status`、`processRunning`、风控、资金、当前场次、停止结果 |
 | `/api/runtime/market-pool` | 运行池：`desiredIds`、`currentIds`、`effectiveRoundId` |

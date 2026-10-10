@@ -55,7 +55,18 @@ export interface MarketProjectionRow {
   down_quote_age_ms: number | null;
   book_depth_ready: boolean;
   quote_fresh: boolean;
+  /** Display only: the venue's top while one side is empty (near the close the
+   * winner has no asks). Newer than the paired quote; never a trading input. */
+  one_sided?: OneSidedTop | null;
   source: "polymarket-ws";
+}
+
+export interface OneSidedTop {
+  at: number;
+  up_bid: number | null;
+  up_ask: number | null;
+  down_bid: number | null;
+  down_ask: number | null;
 }
 
 export interface MarketProjectionSnapshot {
@@ -141,6 +152,7 @@ export class ClobMarketProjection {
   private bookReady = false;
   private upTickSize: number | undefined;
   private downTickSize: number | undefined;
+  private oneSided: OneSidedTop | undefined;
 
   constructor(config: MarketProjectionConfig) {
     if (!config.upToken || !config.downToken || config.upToken === config.downToken) throw new Error("upToken and downToken must be distinct");
@@ -186,6 +198,20 @@ export class ClobMarketProjection {
     this.bookReady = true;
     this.upTickSize = finite(snapshot.upTickSize) ?? undefined;
     this.downTickSize = finite(snapshot.downTickSize) ?? undefined;
+    if (this.oneSided && this.oneSided.at <= Math.max(paired.YES.sourceAt!, paired.NO.sourceAt!)) this.oneSided = undefined;
+    return true;
+  }
+
+  /** Keep the venue's one-sided top for display. It never touches the paired
+   * quote, its freshness or health, so it cannot become a trading input. */
+  applyOneSidedTop(top: { roundId?: string; tsUnix: number; upBid?: number; upAsk?: number; downBid?: number; downAsk?: number }): boolean {
+    if (!Number.isFinite(top.tsUnix) || top.tsUnix <= 0
+      || (this.start != null && top.roundId != null && top.roundId !== String(this.start))
+      || (this.oneSided && top.tsUnix < this.oneSided.at)
+      || (this.accepted && top.tsUnix < Math.max(this.accepted.YES.sourceAt!, this.accepted.NO.sourceAt!))) return false;
+    const price = (value: number | undefined) => value != null && Number.isFinite(value) && value > 0 && value < 1 ? value : null;
+    this.oneSided = { at: top.tsUnix, up_bid: price(top.upBid), up_ask: price(top.upAsk),
+      down_bid: price(top.downBid), down_ask: price(top.downAsk) };
     return true;
   }
 
@@ -226,7 +252,9 @@ export class ClobMarketProjection {
       up_quote_age_ms: yesQuoteAge, down_quote_age_ms: noQuoteAge,
       book_depth_ready: Boolean(yes?.bids && yes.bids.length >= 5 && yes.asks && yes.asks.length >= 5
         && no?.bids && no.bids.length >= 5 && no.asks && no.asks.length >= 5),
-      quote_fresh: fresh, source: "polymarket-ws",
+      quote_fresh: fresh,
+      one_sided: !fresh && this.oneSided ? { ...this.oneSided } : null,
+      source: "polymarket-ws",
     };
   }
 

@@ -284,8 +284,10 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
             catch { if (recorder) recorder.dropped += 1; }
           }
           else if (event.kind === "bookTop") {
-            // One side empty (near the close): record it; the strategy and the
-            // published snapshot keep requiring both sides.
+            // One side empty (near the close): record it and show it as
+            // one_sided; the strategy and the paired snapshot keep requiring
+            // both sides.
+            projection.applyOneSidedTop(event);
             try { recorder?.record(recordedTop(asset, event, deps.now())); }
             catch { if (recorder) recorder.dropped += 1; }
           }
