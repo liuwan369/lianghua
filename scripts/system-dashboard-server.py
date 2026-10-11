@@ -1903,6 +1903,18 @@ def _one_sided(value, paired_at, now: float):
     return {"at": at, **prices} if any(price is not None for price in prices.values()) else None
 
 
+QUIET_CONFIRM_MAX_AGE_SEC = 3
+
+
+def _quiet_confirmed(value, paired_at, now: float):
+    """When the venue's REST book last confirmed a quiet book unchanged (the
+    collector's quiet_confirmed_at). Display only: the row stays stale."""
+    at = _epoch(value)
+    if at is None or at > now + 1 or now - at > QUIET_CONFIRM_MAX_AGE_SEC or (paired_at is not None and at <= paired_at):
+        return None
+    return at
+
+
 def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float | None = None,
                    pool_desired: set[str] | None = None) -> dict:
     # `enabled` was hardcoded True for every asset, so the DTO claimed all seven
@@ -2016,6 +2028,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
     supported = asset_id in SUPPORTED_ASSET_IDS
     return {
         "oneSided": _one_sided(row.get("one_sided"), source_at, now) if stale else None,
+        "quietConfirmedAt": _quiet_confirmed(row.get("quiet_confirmed_at"), source_at, now) if stale else None,
         "assetId": asset_id,
         "symbol": symbol,
         "supported": supported,
@@ -2112,7 +2125,8 @@ def _modern_markets(query: dict | None = None) -> dict:
             if old and (item["stale"] or regressed):
                 # The retained pair is old; a newer one-sided top still shows.
                 items[index] = {**failed(old, item.get("error") or "market_snapshot_regressed"),
-                                "oneSided": item.get("oneSided") if not regressed else None}
+                                "oneSided": item.get("oneSided") if not regressed else None,
+                                "quietConfirmedAt": item.get("quietConfirmedAt") if not regressed else None}
                 next_cache[key(old)] = old
             elif not item["stale"]:
                 next_cache[key(item)] = item

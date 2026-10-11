@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import { referenceVenueProducts } from "../live/feeds/btc.js";
 import type { FeedMarketIdentity, FeedSink } from "../live/feeds/index.js";
 import { ClobMarketProjection, publishSnapshot, readPublishedSnapshot, stalePublishedSnapshot,
-  type MarketProjectionSnapshot } from "../dashboard/market-projection.js";
+  type MarketProjectionSnapshot, type RestTop } from "../dashboard/market-projection.js";
 import { MarketRecorder, recordedTop, recordedBook, recordedTrade, recordedPrice, recordedChainlink } from "./market-recorder.js";
 
 const MARKET_WINDOW_SEC = 300;
@@ -79,6 +79,8 @@ export interface MarketSnapshotDependencies {
   discover: (at: number, directOnly?: boolean, signal?: AbortSignal, asset?: string) => Promise<Market | undefined>;
   feed: (sink: FeedSink, upToken: string, downToken: string, deadline: number, identity?: FeedMarketIdentity) => { stop: () => void };
   publish: (path: string, value: MarketProjectionSnapshot) => void;
+  /** Public REST books (POST /books) for display checks; best bid/ask per token. */
+  restBooks?: (tokens: string[], signal?: AbortSignal) => Promise<Map<string, RestTop>>;
   /** The coin's own price for the recording: Binance 1 s klines, one socket for
    * all coins; delivers each parsed message. Recorded only, never traded on. */
   reference: (onMessage: (message: unknown) => void, assets: readonly string[]) => { stop: () => void };
@@ -138,6 +140,30 @@ export function runRtdsChainlink(onMessage: (message: unknown) => void): { stop:
   return { stop: () => { stopped = true; clearTimeout(retry); clearInterval(ping); socket?.terminate(); } };
 }
 
+/** Best bid/ask of each token from the venue's public REST books, one request
+ * for all of them. Display only: never a trading input. */
+export async function fetchRestBooks(tokens: string[], signal?: AbortSignal): Promise<Map<string, RestTop>> {
+  const timeout = AbortSignal.timeout(3000);
+  const response = await fetch("https://clob.polymarket.com/books", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify(tokens.map(token => ({ token_id: token }))),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  });
+  if (!response.ok) throw new Error("rest books unavailable");
+  const books = await response.json() as Array<{ asset_id?: string; timestamp?: string;
+    bids?: Array<{ price: string }>; asks?: Array<{ price: string }> }>;
+  const tops = new Map<string, RestTop>();
+  for (const book of Array.isArray(books) ? books : []) {
+    const prices = (levels: Array<{ price: string }> | undefined) => (levels ?? []).map(level => Number(level.price)).filter(Number.isFinite);
+    const bids = prices(book.bids), asks = prices(book.asks);
+    const at = Number(book.timestamp) / 1000;
+    if (typeof book.asset_id !== "string" || !Number.isFinite(at)) continue;
+    tops.set(book.asset_id, { bid: bids.length ? Math.max(...bids) : undefined,
+      ask: asks.length ? Math.min(...asks) : undefined, at });
+  }
+  return tops;
+}
+
 const defaults: MarketSnapshotDependencies = {
   now: () => Date.now() / 1000,
   discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, false, directOnly, signal, asset),
@@ -145,7 +171,11 @@ const defaults: MarketSnapshotDependencies = {
   publish: publishSnapshot,
   reference: runBinanceKlines,
   chainlink: runRtdsChainlink,
+  restBooks: fetchRestBooks,
 };
+// A quiet two-sided book (nobody changed a price) goes stale after 2 s; at most
+// this often the collector asks the venue's REST book whether it really is unchanged.
+const QUIET_CHECK_MS = 2_000;
 
 /** Runs only public Gamma discovery and the existing public CLOB WS feed. */
 export async function runMarketSnapshot(options: MarketSnapshotOptions, dependencies: Partial<MarketSnapshotDependencies> = {}, signal?: AbortSignal): Promise<void> {
@@ -158,6 +188,7 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   let failure: unknown;
   const discoveryJobs = new Map<string, Promise<void>>();
   let publishTimer: ReturnType<typeof setInterval> | undefined;
+  let quietCheckTimer: ReturnType<typeof setInterval> | undefined;
   let discoveryTimer: ReturnType<typeof setInterval> | undefined;
   let discoveryPrewarmStartTimer: ReturnType<typeof setTimeout> | undefined;
   let discoveryBoundaryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -251,6 +282,20 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
   };
   const safePublish = () => {
     try { publish(); } catch (error) { failure ??= error; stop(); }
+  };
+  // Display only: ask the venue whether a stale two-sided book is just quiet.
+  let quietCheckInFlight = false;
+  const quietCheck = () => {
+    if (stopped || quietCheckInFlight || !deps.restBooks) return;
+    const now = deps.now();
+    const due = [...active.values()].filter(item => item.market.start <= now && now < item.market.end
+      && item.projection.needsQuietCheck(now));
+    if (!due.length) return;
+    quietCheckInFlight = true;
+    deps.restBooks(due.flatMap(item => [item.market.upToken, item.market.downToken]), discoveryAbort.signal)
+      .then(tops => { for (const item of due) item.projection.applyRestCheck(tops.get(item.market.upToken), tops.get(item.market.downToken)); })
+      .catch(() => { /* a failed check shows nothing; the next tick retries */ })
+      .finally(() => { quietCheckInFlight = false; });
   };
   const discover = (target?: number, directOnly = false): Promise<void> => {
     if (stopped) return Promise.resolve();
@@ -352,6 +397,7 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     if (!stopped) {
       safePublish();
       publishTimer = setInterval(safePublish, options.publishMs);
+      quietCheckTimer = setInterval(quietCheck, QUIET_CHECK_MS);
       discoveryTimer = setInterval(() => { void discover(); }, options.discoveryMs);
       scheduleBoundaryDiscovery();
       if (options.durationSec > 0) durationTimer = setTimeout(stop, options.durationSec * 1000);
@@ -359,7 +405,7 @@ export async function runMarketSnapshot(options: MarketSnapshotOptions, dependen
     }
     await finished;
   } finally {
-    clearInterval(publishTimer); clearInterval(discoveryTimer); clearTimeout(durationTimer);
+    clearInterval(publishTimer); clearInterval(quietCheckTimer); clearInterval(discoveryTimer); clearTimeout(durationTimer);
     clearTimeout(discoveryPrewarmStartTimer); clearTimeout(discoveryBoundaryTimer);
     clearInterval(discoveryPrewarmTimer); clearTimeout(discoveryPrewarmStopTimer);
     for (const item of active.values()) { item.stop(); item.projection.disconnect(); }

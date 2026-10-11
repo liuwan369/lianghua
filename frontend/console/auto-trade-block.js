@@ -370,6 +370,23 @@
       });
       return false;
     }
+    // A quiet two-sided book: nobody changed a price for over 2 s, and the
+    // server checked the venue's own book and found it unchanged. The prices
+    // shown are current, so say so instead of "expired". Display only — the
+    // snapshot stays invalid (live still waits for a fresh quote to trade).
+    var quietAt = !valid ? timestampMs(source.quietConfirmedAt) : null;
+    if (quietAt != null && marketId && roundId && vm.hasFreshBbo({ ...source, stale: false })) {
+      lastSnapshotValid = false;
+      if (snapshotExpiryTimer) window.clearTimeout(snapshotExpiryTimer);
+      snapshotExpiryTimer = null;
+      var quietQuote = function(key, value) { text(`[data-quote="${key}"]`, Number.isFinite(value) ? value.toFixed(3) : "--"); };
+      quietQuote("yes-bid", model.yesBid); quietQuote("yes-ask", model.yesAsk); quietQuote("no-bid", model.noBid); quietQuote("no-ask", model.noAsk);
+      var unchangedFor = sourceAt != null ? Math.max(0, Math.round((quietAt - sourceAt) / 1000)) : null;
+      text("[data-book-live-state]", `盘口无变动${unchangedFor != null ? ` ${unchangedFor} 秒` : ""} · 已向交易所核对`);
+      text("[data-book-age]", window.PolyPreview.format.time(quietAt));
+      text("[data-book-source]", `${fromStream ? "实时行情" : "后端快照"} · ${window.PolyPreview.format.time(quietAt)} 核对 · 价格未变，等有人改价后才会触发交易`);
+      return false;
+    }
     var staleBook = !valid && hasDepth;
     if (!valid && !staleBook) {
       markSnapshotStale(raw.stale === true || source.stale === true ? "行情源报告数据过期 · 保留最近快照" : !vm.hasFreshBbo(source) ? "买卖报价已过期或未接入 · 保留最近快照" : "行情序列落后 · 保留最近快照");

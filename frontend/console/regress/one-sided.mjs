@@ -25,9 +25,17 @@ const element = (selector) => new Proxy({ dataset: {}, style: {}, classList: { a
 const nodes = new Map();
 const lookup = (selector) => { if (!nodes.has(selector)) nodes.set(selector, element(selector)); return nodes.get(selector); };
 
-let oneSided = false;
+let oneSided = false, quiet = false;
 const market = () => {
-  const start = roundStart(), pairedAt = now() - (oneSided ? 20 : 0);
+  const start = roundStart(), pairedAt = now() - (oneSided ? 20 : quiet ? 6 : 0);
+  if (quiet) {
+    const side = (bid, ask) => ({ bid, ask, sourceAt: pairedAt, expiresAt: pairedAt + 2 });
+    return { assetId: "sol", symbol: "SOL", supported: true, canEnable: true, cycle: "5m", marketId: "0xm",
+      roundId: String(start), startAt: start, endAt: start + 300, current: true, sequence: 9,
+      sourceAt: pairedAt, expiresAt: pairedAt + 2, stale: true, error: "market_snapshot_unhealthy",
+      yes: side(0.55, 0.56), no: side(0.44, 0.45), yesBid: 0.55, yesAsk: 0.56, noBid: 0.44, noAsk: 0.45,
+      oneSided: null, quietConfirmedAt: now() - 0.5 };
+  }
   const side = (bid, ask) => ({ bid, ask, sourceAt: pairedAt, expiresAt: pairedAt + 2 });
   return { assetId: "sol", symbol: "SOL", supported: true, canEnable: true, cycle: "5m", marketId: "0xm",
     roundId: String(start), startAt: start, endAt: start + 300, current: true, sequence: 7,
@@ -69,5 +77,14 @@ assert.equal(written.get('[data-quote="yes-bid"]'), "0.980", "the live bid is th
 assert.equal(written.get('[data-quote="no-bid"]'), "无");
 assert.equal(written.get('[data-quote="no-ask"]'), "0.020");
 assert.ok(!(written.get("[data-book-source]") || "").includes("已过期"), "the source line does not say expired either");
+
+// Quiet two-sided book confirmed against the venue: prices shown, not "expired".
+oneSided = false; quiet = true;
+await wait(1500);
+const quietState = written.get("[data-book-live-state]") || "";
+assert.ok(quietState.includes("盘口无变动") && quietState.includes("已向交易所核对"), `quiet book is named; got "${quietState}"`);
+assert.ok(!quietState.includes("已过期"));
+assert.equal(written.get('[data-quote="yes-ask"]'), "0.560", "the confirmed price is shown");
+assert.equal(written.get('[data-quote="no-bid"]'), "0.440");
 console.log("one-sided OK");
 process.exit(0);

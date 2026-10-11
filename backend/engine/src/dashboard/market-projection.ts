@@ -5,6 +5,9 @@ import type { BookSnapshot, MarketAssetSnapshot } from "../live/feeds/index.js";
 
 export const DEFAULT_STALE_AFTER_MS = 2_000;
 const MAX_CLOCK_SKEW_MS = 1_000;
+/** A REST confirmation of a quiet book is shown for at most this long (one
+ * check every 2 s plus the request time). */
+export const QUIET_CONFIRM_MAX_AGE_SEC = 3;
 
 export interface MarketProjectionConfig {
   asset?: string;
@@ -58,8 +61,15 @@ export interface MarketProjectionRow {
   /** Display only: the venue's top while one side is empty (near the close the
    * winner has no asks). Newer than the paired quote; never a trading input. */
   one_sided?: OneSidedTop | null;
+  /** Display only: when the paired quote is stale because nobody changed a
+   * price, the venue's REST book confirmed this unix second that both tops
+   * are still the same. Never makes the row fresh or tradable. */
+  quiet_confirmed_at?: number | null;
   source: "polymarket-ws";
 }
+
+/** A token's best bid/ask from the venue's public REST book. */
+export interface RestTop { bid?: number; ask?: number; at: number }
 
 export interface OneSidedTop {
   at: number;
@@ -153,6 +163,7 @@ export class ClobMarketProjection {
   private upTickSize: number | undefined;
   private downTickSize: number | undefined;
   private oneSided: OneSidedTop | undefined;
+  private quietConfirmedAt: number | undefined;
 
   constructor(config: MarketProjectionConfig) {
     if (!config.upToken || !config.downToken || config.upToken === config.downToken) throw new Error("upToken and downToken must be distinct");
@@ -199,7 +210,31 @@ export class ClobMarketProjection {
     this.upTickSize = finite(snapshot.upTickSize) ?? undefined;
     this.downTickSize = finite(snapshot.downTickSize) ?? undefined;
     if (this.oneSided && this.oneSided.at <= Math.max(paired.YES.sourceAt!, paired.NO.sourceAt!)) this.oneSided = undefined;
+    this.quietConfirmedAt = undefined;
     return true;
+  }
+
+  /** The venue's REST tops for both tokens. Kept only if they equal the paired
+   * quote exactly and are newer than it: the book is quiet, not lost. */
+  applyRestCheck(up: RestTop | undefined, down: RestTop | undefined): boolean {
+    const quote = this.accepted;
+    if (!quote || !up || !down || this.oneSided) return false;
+    const same = (rest: RestTop, side: MarketAssetSnapshot) => rest.bid === side.bid && rest.ask === side.ask;
+    const at = Math.min(up.at, down.at);
+    if (!same(up, quote.YES) || !same(down, quote.NO) || at <= Math.max(quote.YES.sourceAt!, quote.NO.sourceAt!)) {
+      this.quietConfirmedAt = undefined;
+      return false;
+    }
+    this.quietConfirmedAt = at;
+    return true;
+  }
+
+  /** Paired quote stale and not one-sided: re-check on every tick, so a venue
+   * change our feed missed clears the confirmation at the next check. */
+  needsQuietCheck(now: number): boolean {
+    const quote = this.accepted;
+    if (!quote || this.oneSided || !this.connected) return false;
+    return Math.min(quote.YES.sourceAt!, quote.NO.sourceAt!) + this.staleAfterMs / 1000 <= now;
   }
 
   /** Keep the venue's one-sided top for display. It never touches the paired
@@ -254,6 +289,8 @@ export class ClobMarketProjection {
         && no?.bids && no.bids.length >= 5 && no.asks && no.asks.length >= 5),
       quote_fresh: fresh,
       one_sided: !fresh && this.oneSided ? { ...this.oneSided } : null,
+      quiet_confirmed_at: !fresh && !this.oneSided && this.connected && this.quietConfirmedAt !== undefined
+        && now - this.quietConfirmedAt <= QUIET_CONFIRM_MAX_AGE_SEC ? this.quietConfirmedAt : null,
       source: "polymarket-ws",
     };
   }

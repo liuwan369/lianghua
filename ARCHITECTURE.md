@@ -19,6 +19,7 @@
 
         行情采集器 node dist/cli/market-snapshot.js (systemd: pm-clob-market-snapshot)
           ├─ 每 250 ms 写 data/dashboard/market-snapshot.json（控制台展示用；一边无挂单时另带 one_sided，只展示不交易）
+          ├─ 双边报价超过 2 秒没变时，每 2 秒向交易所 REST POST /books 核对一次，价格一样就写 quiet_confirmed_at（只展示不交易）
           ├─ 记录器 market-recorder → data/market-history/
           └─ 反转统计：控制面读 data/market-history，按天缓存到 data/reversals/
 ```

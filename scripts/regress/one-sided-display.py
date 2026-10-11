@@ -72,5 +72,23 @@ class OneSided(unittest.TestCase):
         self.assertEqual(item["oneSided"]["noAsk"], 0.02)
 
 
+class QuietBook(unittest.TestCase):
+    """2026-10-11: a quiet two-sided book (nobody changed a price) went stale
+    after 2 s. The collector confirms it against the venue's REST book; the API
+    passes the time on as quietConfirmedAt for display, still stale."""
+
+    def test_confirmed_quiet_book_is_shown_but_not_tradable(self):
+        now = time.time()
+        item = server._modern_market({**collector_row(now, None), "quiet_confirmed_at": now - 0.4}, now=now)
+        self.assertAlmostEqual(item["quietConfirmedAt"], now - 0.4)
+        self.assertTrue(item["stale"], "the quote is still stale for trading")
+        self.assertFalse(item["strategyEligible"])
+
+    def test_old_confirmation_is_dropped(self):
+        now = time.time()
+        item = server._modern_market({**collector_row(now, None), "quiet_confirmed_at": now - 10}, now=now)
+        self.assertIsNone(item["quietConfirmedAt"], "a check older than 3 s says nothing about now")
+
+
 if __name__ == "__main__":
     unittest.main()
