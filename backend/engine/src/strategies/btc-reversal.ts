@@ -87,6 +87,9 @@ const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts (the
  * console's "current and pre-warmed rounds keep their config"). */
 const CONFIG_FREEZE_SEC = 10;
+/** STRATEGY.md rule 2: a frame whose two asks sum above this is a thin book
+ * and judges nothing; the baseline stays (same as scripts/dashboard/reversals.py). */
+const WIDE_SUM = 1.05;
 const clone = <T>(value: T): T => structuredClone(value);
 const positive = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n > 0;
 const validDirection = (value: unknown): value is ReversalDirection => value === "UP" || value === "DOWN";
@@ -325,6 +328,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
         if (!this.replayIntents.delete(stage.clientOrderId) || stage.status !== "CREATED") continue;
         actions.push({ kind: "submit", order: this.orderIntent(round, stage, round.config) });
       }
+      // Rule 2: skipped before it can become a baseline or a crossing. Resting
+      // orders are untouched; they still fill on the venue.
+      if (pair.upAsk + pair.downAsk > WIDE_SUM) { round.reason = "盘口太薄，等待正常报价"; continue; }
       const previous = round.reference;
       if (previous && pair.upTs === previous.upTs && pair.downTs === previous.downTs
         && pair.upAsk === previous.upAsk && pair.downAsk === previous.downAsk) continue;
