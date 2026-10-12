@@ -58,7 +58,6 @@ export interface ReversalRound {
   reference?: QuoteReference;
   referenceFloor?: { upTs: number; downTs: number };
   rebuildingReference: boolean;
-  pendingAmbiguity?: boolean;
   lastStageDirection?: ReversalDirection;
   lastConfirmedDirection?: ReversalDirection;
   confirmationCount: number;
@@ -356,46 +355,24 @@ export class BtcReversalStrategy implements StrategyPlugin {
       }
       if (round.rebuildingReference) {
         round.reference = pair; round.rebuildingReference = false; round.referenceFloor = undefined;
-        round.pendingAmbiguity = false;
         if (confirming) round.lastConfirmedDirection = confirming;
         round.reason = "行情已恢复，等待下一次跨价";
         changed = true;
         continue;
       }
-      // Both asks above the trigger are ambiguous only when there is no
-      // directional baseline. If one side was already above the trigger and
-      // the other side newly crosses it, that is a clear reversal and must
-      // produce the opposite stage immediately.
-      const bothAbove = pair.upAsk >= threshold && pair.downAsk >= threshold;
-      const previousBothBelow = previous !== undefined
-        && previous.upAsk < threshold && previous.downAsk < threshold;
-      const previousBothAbove = previous !== undefined
-        && previous.upAsk >= threshold && previous.downAsk >= threshold;
-      const baselineAlsoBothAbove = previousBothBelow || previousBothAbove;
-      if (bothAbove && baselineAlsoBothAbove) {
-        round.pendingAmbiguity = true;
-        round.reference = pair;
-        round.reason = "双边价格冲突，等待明确方向"; changed = true; continue;
-      }
       if (confirming && confirming !== round.lastConfirmedDirection) {
         if (round.lastConfirmedDirection) round.confirmationCount += 1;
         round.lastConfirmedDirection = confirming; changed = true;
       }
-      const resolvingAmbiguity = round.pendingAmbiguity === true;
-      if (resolvingAmbiguity) { round.pendingAmbiguity = false; changed = true; }
-      const upCross = resolvingAmbiguity ? pair.upAsk >= threshold
-        : previous !== undefined && previous.upAsk < threshold && pair.upAsk >= threshold;
-      const downCross = resolvingAmbiguity ? pair.downAsk >= threshold
-        : previous !== undefined && previous.downAsk < threshold && pair.downAsk >= threshold;
+      // Rule 5: a crossing is an ask going from below the trigger to at or
+      // above it; both sides crossing on one frame is no direction.
+      const upCross = previous !== undefined && previous.upAsk < threshold && pair.upAsk >= threshold;
+      const downCross = previous !== undefined && previous.downAsk < threshold && pair.downAsk >= threshold;
       round.reference = pair;
       const direction = this.uniqueDirection(upCross, downCross);
       const consumed = BtcReversalStrategy.consumedRungs(round);
       if (consumed >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
-      if (!direction) {
-        round.reason = resolvingAmbiguity ? "双边均已回落，本次冲突信号作废"
-          : consumed ? "等待相反方向跨价" : "等待触发跨价";
-        continue;
-      }
+      if (!direction) { round.reason = consumed ? "等待相反方向跨价" : "等待触发跨价"; continue; }
       // Compare against the last rung that survived. A rejected stage committed
       // nothing, so it must not lock its direction out of being retried.
       if (direction === BtcReversalStrategy.lastLiveDirection(round)) {
@@ -457,7 +434,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const round: ReversalRound = { assetId: market.assetId ?? this.state.config.assetId, marketId: market.id, roundId: market.roundId, name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
         upTokenId: instruments.UP.tokenId, downTokenId: instruments.DOWN.tokenId, config: clone(this.state.config),
         status: eligible ? "waiting_start" : "waiting_next_round", firstSampleSeen: false, rebuildingReference: false,
-        pendingAmbiguity: false, confirmationCount: 0, stages: [], reason: eligible ? "等待本场开始" : "中途启动，等待下一场" };
+        confirmationCount: 0, stages: [], reason: eligible ? "等待本场开始" : "中途启动，等待下一场" };
       this.state.rounds.push(round);
       this.indexRound(round);
       changed = true;
@@ -506,7 +483,6 @@ export class BtcReversalStrategy implements StrategyPlugin {
   private invalidateReference(round: ReversalRound): void {
     if (round.reference) round.referenceFloor = { upTs: round.reference.upTs, downTs: round.reference.downTs };
     round.reference = undefined; round.rebuildingReference = true;
-    round.pendingAmbiguity = false;
   }
   private validSizeAndPrice(instrument: Instrument, shares: number, price: number): boolean {
     return positive(instrument.tickSize) && positive(instrument.minOrderSize) && shares + EPS >= instrument.minOrderSize
@@ -589,11 +565,10 @@ export class BtcReversalStrategy implements StrategyPlugin {
         || !Number.isSafeInteger(round.confirmationCount) || round.confirmationCount < 0
         || !["waiting_start", "waiting_next_round", "running", "ended"].includes(round.status)
         || typeof round.firstSampleSeen !== "boolean" || typeof round.rebuildingReference !== "boolean"
-        || (round.pendingAmbiguity !== undefined && typeof round.pendingAmbiguity !== "boolean")
         || (round.lastConfirmedDirection !== undefined && !validDirection(round.lastConfirmedDirection))) {
         throw new Error("invalid persisted reversal round");
       }
-      round.pendingAmbiguity ??= false;
+      delete (round as { pendingAmbiguity?: boolean }).pendingAmbiguity;   // dropped field of older state files
       markets.add(round.marketId);
       // Validate stages by the same rule the creation path uses. A stage's size
       // is stageShares[rungs consumed BEFORE it], not stageShares[array index]:
