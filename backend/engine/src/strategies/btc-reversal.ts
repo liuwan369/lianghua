@@ -79,7 +79,7 @@ export interface BtcReversalOptions {
 
 export const BTC_REVERSAL_DEFAULTS: Readonly<BtcReversalConfig> = Object.freeze({
   instanceId: "btc-reversal", assetId: "btc", revision: "1", triggerPrice: 0.67, confirmationPrice: 0.70,
-  maxBuyPrice: 0.70, stageShares: [5, 20, 60, 140], maxStages: 4,
+  maxBuyPrice: 0.70, stageShares: [5, 13, 60], maxStages: 3,     // STRATEGY.md rule 6
   maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 const EPS = 1e-8;
@@ -506,7 +506,7 @@ export class BtcReversalStrategy implements StrategyPlugin {
   /** Ladder rungs actually consumed. A REJECTED/ABANDONED stage never reached the
    * venue and committed no capital, so it must not advance the ladder: sizing off
    * `stages.length` turned a rejected first rung into an 18-share entry where 5
-   * was intended (stageShares default [5, 20, 60, 140]). */
+   * was intended (stageShares [5, 18, 54, 130] then). */
   private static consumedRungs(round: ReversalRound): number {
     return round.stages.filter(stage => BtcReversalStrategy.consumedRung(stage)).length;
   }
