@@ -45,4 +45,12 @@ assert.equal(draft.body.config.maxRounds, 3, "maxRounds is part of the saved con
 sent.length = 0;
 await adapter.saveStrategy({ ...form, maxRounds: 0 });
 assert.equal(sent.find((item) => item.url.includes("/api/strategy/drafts")).body.config.maxRounds, 0);
+// --- the same whitelist must carry the entry second (STRATEGY.md 3, 2026-10-13) ---
+sent.length = 0;
+await adapter.saveStrategy({ ...form, maxRounds: 0, firstTriggerFromSec: 60 });
+assert.equal(sent.find((item) => item.url.includes("/api/strategy/drafts")).body.config.firstTriggerFromSec, 60,
+  "firstTriggerFromSec is part of the saved config");
+sent.length = 0;
+await adapter.saveStrategy({ ...form, maxRounds: 0 });
+assert.equal(sent.find((item) => item.url.includes("/api/strategy/drafts")).body.config.firstTriggerFromSec, 0, "missing means 0");
 console.log("P1-1 OK");

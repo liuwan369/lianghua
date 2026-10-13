@@ -130,10 +130,11 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 
 > 规则以 [STRATEGY.md](STRATEGY.md) 为准，"怎么判过线"见 [REVERSAL.md](REVERSAL.md)；回测用 `scripts/backtest.py`（STRATEGY.md 文末"回测口径"）。
 
-默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,13,60]`、`maxStages 3`（STRATEGY.md 第 6 条；控制面 `strategy_config.default_config()` 同值）、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
+默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,13,60]`、`maxStages 3`（STRATEGY.md 第 6 条；控制面 `strategy_config.default_config()` 同值）、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`、`firstTriggerFromSec 0`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结，本场到结束都用这份。
 - 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
+- `firstTriggerFromSec`（默认 0）：本场第一次穿越早于开盘后这么多秒，本场转为 `waiting_next_round` 整场不做（之后的穿越也不做），不计入运行场次。
 - 双边报价门：未过期、年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、时间戳不倒退。
 - 第一对报价只做基线。行情断线、暂停、账户恢复后基线作废，重建基线后才认新的穿越。
 - 两边卖价之和 > 1.05 的帧跳过，不当基线也不判穿越，基线保留（`WIDE_SUM`）。

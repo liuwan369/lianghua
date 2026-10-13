@@ -27,7 +27,8 @@ def default_config() -> dict:
             "stageShares": [5, 13, 60], "maxStages": 3,      # STRATEGY.md rule 6
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live",
-            "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5}
+            "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
+            "firstTriggerFromSec": 0}                          # STRATEGY.md rule 3
 
 
 def validate_config(config: dict) -> dict:
@@ -39,7 +40,7 @@ def validate_config(config: dict) -> dict:
     # makes the already-saved revision unreadable. Backfill only these known
     # additions from their defaults; any other key mismatch is still rejected.
     defaults = default_config()
-    for added in ("assetId", "maxRounds"):
+    for added in ("assetId", "maxRounds", "firstTriggerFromSec"):
         if added not in result and not (set(result) - expected):
             result[added] = defaults[added]
     if set(result) != expected:
@@ -95,6 +96,9 @@ def validate_config(config: dict) -> dict:
     result["maxRounds"] = int(rounds)
     for key in ("maxQuoteAgeSeconds", "maxQuoteSkewSeconds"):
         number(result[key], key)
+    # A round whose first crossing comes earlier than this is skipped whole.
+    if number(result["firstTriggerFromSec"], "起始秒", positive=False) >= 300:
+        raise ConfigValidationError("起始秒必须在0到299之间；不限制填0")
     if result["mode"] != "live":
         raise ConfigValidationError("新版策略配置只支持live模式")
     return result

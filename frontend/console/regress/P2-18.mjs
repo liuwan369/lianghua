@@ -32,7 +32,8 @@ const lookup = (s) => { if (!nodes.has(s)) nodes.set(s, element(s)); return node
 // A filled-in form, as the operator would leave it.
 const formValues = { '[data-field="trigger"]': "67", '[data-field="confirm"]': "70", '[data-field="maxPrice"]': "70",
   "[data-stage-count]": "1", "[data-max-stages]": "1", '[data-runtime-field="roundBudget"]': "5",
-  '[data-runtime-field="totalBudget"]': "10", '[data-runtime-field="lossLimit"]': "10", '[data-runtime-field="rounds"]': "3" };
+  '[data-runtime-field="totalBudget"]': "10", '[data-runtime-field="lossLimit"]': "10", '[data-runtime-field="rounds"]': "3",
+  "[data-entry-from]": "60" };
 const stage = element("stage0");
 const window = { location: { search: "?assetId=eth", origin: "http://x", href: "http://x/strategy.html?assetId=eth", pathname: "/strategy.html" },
   addEventListener() {}, removeEventListener() {}, setTimeout, clearTimeout, setInterval, clearInterval, console, URLSearchParams, URL,
@@ -70,5 +71,7 @@ switchHandler();
 await saveHandler();
 await new Promise((r) => setTimeout(r, 50));
 assert.equal(posted.at(-1)?.body?.config?.assetId, "eth", "P2-18: after 切换为 ETH the draft submits ETH");
+// STRATEGY.md 3 (2026-10-13): the page's 起始秒 input reaches the draft.
+assert.equal(posted.at(-1)?.body?.config?.firstTriggerFromSec, 60, "the entry second typed on the page is saved");
 console.log("P2-18 OK");
 process.exit(0);

@@ -18,6 +18,9 @@ export interface BtcReversalConfig {
   dailyLossUsd?: number | null;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
+  /** STRATEGY.md 3: a round whose first crossing comes before this many seconds
+   * after the open is not traded at all; 0 trades from the open. */
+  firstTriggerFromSec: number;
 }
 export interface ReversalStage {
   stage: number;
@@ -80,7 +83,7 @@ export interface BtcReversalOptions {
 export const BTC_REVERSAL_DEFAULTS: Readonly<BtcReversalConfig> = Object.freeze({
   instanceId: "btc-reversal", assetId: "btc", revision: "1", triggerPrice: 0.67, confirmationPrice: 0.70,
   maxBuyPrice: 0.70, stageShares: [5, 13, 60], maxStages: 3,     // STRATEGY.md rule 6
-  maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, firstTriggerFromSec: 0,
 });
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts (the
@@ -119,6 +122,8 @@ export function normalizeBtcReversalConfig(input: Partial<BtcReversalConfig> = {
     throw new Error("dailyLossUsd must be positive or null");
   }
   if (!positive(config.maxQuoteAgeSeconds) || !positive(config.maxQuoteSkewSeconds)) throw new Error("invalid quote freshness limits");
+  if (typeof config.firstTriggerFromSec !== "number" || !Number.isFinite(config.firstTriggerFromSec)
+    || config.firstTriggerFromSec < 0 || config.firstTriggerFromSec >= 300) throw new Error("firstTriggerFromSec must be in [0, 300)");
   return config;
 }
 
@@ -370,6 +375,16 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const downCross = previous !== undefined && previous.downAsk < threshold && pair.downAsk >= threshold;
       round.reference = pair;
       const direction = this.uniqueDirection(upCross, downCross);
+      // Rule 3: the round's first crossing came too early, so the whole round is
+      // skipped (later crossings included), as the backtest's --first-after.
+      // Parked like a round joined mid-way. A skipped round does not count toward
+      // --max-rounds (countsTowardRoundLimit): "run N rounds" means N traded ones.
+      if (direction && !round.stages.length && context.now - round.startsAt < round.config.firstTriggerFromSec) {
+        round.status = "waiting_next_round";
+        round.reason = `第一次触发在开盘后 ${Math.floor(context.now - round.startsAt)} 秒，早于 ${round.config.firstTriggerFromSec} 秒，本场不做`;
+        changed = true;
+        continue;
+      }
       const consumed = BtcReversalStrategy.consumedRungs(round);
       if (consumed >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
       if (!direction) { round.reason = consumed ? "等待相反方向跨价" : "等待触发跨价"; continue; }

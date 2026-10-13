@@ -454,6 +454,7 @@
         mode: values.mode || "live",
         maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
         maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
+        firstTriggerFromSec: values.firstTriggerFromSec ?? 0,
         assetId: String(assetId).trim()
       };
       const strategyId = payload?.strategyId || strategyData?.strategyId || core.config.strategyId;

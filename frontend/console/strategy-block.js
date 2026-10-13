@@ -40,6 +40,7 @@
               <label class="strategy-field"><span>\u89E6\u53D1\u4EF7</span><div><input type="number" step="1" placeholder="--" data-field="trigger"><b>\xA2</b></div><small>\u5356\u4E00\u4ECE\u4E0B\u65B9\u8DE8\u8FC7\u6B64\u4EF7\u683C\u65F6\u89E6\u53D1\u3002</small></label>
               <label class="strategy-field"><span>\u53CD\u8F6C\u786E\u8BA4\u4EF7</span><div><input type="number" step="1" placeholder="--" data-field="confirm"><b>\xA2</b></div><small class="field-inert" title="\u4E0B\u5355\u65F6\u673A\u7531\u89E6\u53D1\u4EF7\u51B3\u5B9A\uFF0C\u4E0B\u5355\u4EF7\u683C\u7531\u6700\u9AD8\u4E70\u5165\u4EF7\u51B3\u5B9A\uFF1B\u672C\u53C2\u6570\u53EA\u5F71\u54CD\u201C\u786E\u8BA4\u53CD\u8F6C N \u6B21\u201D\u8FD9\u4E2A\u8BA1\u6570\u663E\u793A">\u26A0 \u4E0D\u53C2\u4E0E\u4E0B\u5355\u5224\u65AD\uFF1A\u53EA\u7EDF\u8BA1\u786E\u8BA4\u6B21\u6570\uFF0C\u4E0D\u5F71\u54CD\u4F55\u65F6\u4E0B\u5355\u6216\u4EE5\u4EC0\u4E48\u4EF7\u683C\u4E0B\u5355\u3002</small></label>
               <label class="strategy-field"><span>\u6700\u9AD8\u4E70\u5165\u4EF7</span><div><input type="number" step="1" placeholder="--" data-field="maxPrice"><b>\xA2</b></div><small>\u9650\u4EF7\u4E0D\u8FFD\u9AD8\uFF0C\u672A\u6210\u4EA4\u4F59\u91CF\u7EE7\u7EED\u6302\u5355\u3002</small></label>
+              <label class="strategy-field"><span>\u8D77\u59CB\u79D2</span><div><input type="number" min="0" max="299" step="1" placeholder="0" data-entry-from><b>\u79D2</b></div><small>\u672C\u573A\u7B2C\u4E00\u6B21\u89E6\u53D1\u65E9\u4E8E\u5F00\u76D8\u540E\u8FD9\u4E48\u591A\u79D2\uFF0C\u6574\u573A\u4E0D\u505A\uFF1B0 \u8868\u793A\u4E0D\u9650\u5236\u3002</small></label>
             </div></div>
 
             <div class="config-section stages-config"><div class="config-section-heading"><div><span class="section-number">02</span><div><h3>\u6BCF\u9636\u6BB5\u65B0\u589E\u4EFD\u989D</h3><p>\u65B0\u65B9\u5411\u53CD\u8F6C\u65F6\u8FDB\u5165\u4E0B\u4E00\u9636\u6BB5\uFF0C\u540C\u65B9\u5411\u4E0D\u91CD\u590D\u52A0\u4ED3\u3002</p></div></div><label class="stage-count"><span>\u9636\u6BB5\u6570</span><input type="number" min="1" max="100" step="1" placeholder="--" data-stage-count></label></div><label class="stage-count"><span>执行阶段上限</span><input type="number" min="1" max="100" step="1" placeholder="--" data-max-stages></label><div class="stage-input-grid" data-stage-inputs>
@@ -140,7 +141,7 @@
   const setMessage = (message) => text("[data-save-state]", message);
   const controls = () => {
     const available = hasPublished();
-    root.querySelectorAll("[data-field], [data-stage], [data-stage-count], [data-max-stages], [data-runtime-field]")
+    root.querySelectorAll("[data-field], [data-stage], [data-stage-count], [data-max-stages], [data-entry-from], [data-runtime-field]")
       .forEach((input) => { input.disabled = busy || !available; });
     root.querySelector("[data-save]").disabled = busy || !available;
     root.querySelector("[data-reset]").disabled = busy || !available;
@@ -188,6 +189,7 @@
     }
     renderStages(config.stageShares);
     root.querySelector("[data-max-stages]").value = String(config.maxStages ?? config.stageShares.length);
+    root.querySelector("[data-entry-from]").value = String(config.firstTriggerFromSec ?? 0);
     for (const [key, name] of Object.entries({ roundBudget: "roundBudgetUsd", totalBudget: "totalBudgetUsd", lossLimit: "dailyLossUsd", rounds: "maxRounds" })) {
       root.querySelector(`[data-runtime-field="${key}"]`).value = config[name] == null ? "" : String(config[name]);
     }
@@ -240,6 +242,7 @@
       renderStages([]);
       root.querySelector("[data-stage-count]").value = "";
       root.querySelector("[data-max-stages]").value = "";
+      root.querySelector("[data-entry-from]").value = "";
       root.querySelectorAll("[data-runtime-field]").forEach((input) => { input.value = ""; });
       formConfig = null;
       formKey = "unavailable";
@@ -256,8 +259,8 @@
     root.querySelector("[data-max-stages]").value = String(oldLimit === previous.length ? count : Math.min(count, oldLimit));
     markDirty();
   });
-  root.querySelectorAll("[data-field], [data-stage], [data-runtime-field], [data-max-stages]").forEach((input) => {
-    input.step = input.hasAttribute("data-max-stages") ? "1" : "any";
+  root.querySelectorAll("[data-field], [data-stage], [data-runtime-field], [data-max-stages], [data-entry-from]").forEach((input) => {
+    input.step = input.hasAttribute("data-max-stages") || input.hasAttribute("data-entry-from") ? "1" : "any";
     input.addEventListener("input", markDirty);
   });
   root.querySelectorAll("[data-preset], [data-remove-preset], [data-add-preset], [data-create-preset]").forEach((button) => {
@@ -302,13 +305,16 @@
     if (budgets.some((value) => value !== null && (!Number.isFinite(value) || value <= 0))) throw new Error("资金上限和亏损线必须为空或正数。");
     const rounds = optional("rounds") ?? 0;
     if (!Number.isInteger(rounds) || rounds < 0 || rounds > 10000) throw new Error("运行场次须为 0 到 10000 之间的整数；持续运行请填 0。");
+    const entryText = root.querySelector("[data-entry-from]").value.trim();
+    const entryFrom = entryText === "" ? 0 : Number(entryText);
+    if (!Number.isFinite(entryFrom) || entryFrom < 0 || entryFrom >= 300) throw new Error("起始秒须在 0 到 299 之间；不限制请填 0。");
     return { strategyId: core.config.strategyId, assetId: selectedAsset(), expectedRevision: baselineRevision,
       triggerPrice: trigger / 100, confirmationPrice: confirmation / 100, maxBuyPrice: maximum / 100,
       stageShares: stages, maxStages, roundBudgetUsd: budgets[0], totalBudgetUsd: budgets[1], dailyLossUsd: budgets[2],
       // Rounds are the operator's unit; keep durationMinutes at 0 so the wall
       // clock cannot cut a round short behind the round limit's back.
       maxRounds: rounds, durationMinutes: 0, mode: "live", maxQuoteAgeSeconds: formConfig?.maxQuoteAgeSeconds ?? 2,
-      maxQuoteSkewSeconds: formConfig?.maxQuoteSkewSeconds ?? 1.5 };
+      maxQuoteSkewSeconds: formConfig?.maxQuoteSkewSeconds ?? 1.5, firstTriggerFromSec: entryFrom };
   };
   root.querySelector("[data-save]").addEventListener("click", async () => {
     if (busy) return;
