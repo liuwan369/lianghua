@@ -66,4 +66,31 @@ with tempfile.TemporaryDirectory() as tmp:
     with led._connect() as db:
         db.execute("UPDATE runs SET source_error='x' WHERE run_id='run1'")
     assert all(stale_views(led).values()), "a source error is always stale"
+
+# --- 2026-10-10 server move: a journal copied to a new disk keeps its bytes but
+# gets a new inode. It was flagged "replaced or rewritten" for good, so the
+# account statistics read 统计待核对 ever since. Same content is the same journal. ---
+with tempfile.TemporaryDirectory() as tmp:
+    journal, led = setup(tmp)
+    data = journal.read_bytes()
+    journal.unlink()
+    journal.write_bytes(data)                      # same bytes, new inode
+    led.ingest("run1")
+    with led._connect() as db:
+        error = db.execute("SELECT source_error FROM runs WHERE run_id='run1'").fetchone()[0]
+    assert error is None, f"a copied journal is not a rewrite: {error}"
+    assert not any(stale_views(led).values()), "and its statistics are current"
+
+    # --- an already flagged copy (the server's 10-02 run) is cleared on the next read ---
+    with led._connect() as db:
+        db.execute("UPDATE runs SET source_error=?, source_identity='1:1' WHERE run_id='run1'", (ledger_module.JOURNAL_REWRITTEN,))
+    led.ingest("run1")
+    assert not any(stale_views(led).values()), "a stale rewrite flag on unchanged content clears"
+
+    # --- a real rewrite is still caught ---
+    journal.write_bytes(b"x" * len(data))
+    led.ingest("run1")
+    with led._connect() as db:
+        error = db.execute("SELECT source_error FROM runs WHERE run_id='run1'").fetchone()[0]
+    assert error == ledger_module.JOURNAL_REWRITTEN, f"different content is a rewrite: {error}"
 print("projection-lag OK")

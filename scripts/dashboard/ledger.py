@@ -122,6 +122,7 @@ RUNTIME_MAX_AGE = 10
 # have waited past RUNTIME_MAX_AGE. Counting any unread byte as stale blanked
 # the console's rounds, fills and settlements every few seconds (2026-10-13).
 CURRENT_LAG_BYTES = 262_144
+JOURNAL_REWRITTEN = "Journal replaced, truncated, or rewritten; register a new run"
 
 
 def _journal_lag(run) -> tuple[int | None, bool]:
@@ -1111,7 +1112,7 @@ class Ledger:
             result = {"run_id": run_id, "records": 0, "inserted": 0, "bytes": 0,
                       "byte_offset": offset, "pending": False, "error": run["source_error"]}
             pruned_latency_runs = False
-            if run["source_error"]:
+            if run["source_error"] and run["source_error"] != JOURNAL_REWRITTEN:
                 return result
             try:
                 source = open(run["path"], "rb")
@@ -1123,13 +1124,18 @@ class Ledger:
                 result.update(source_bytes=stat.st_size, lag_bytes=max(0, stat.st_size-offset))
                 identity = f"{stat.st_dev}:{stat.st_ino}"
                 prefix, tail = self._fingerprints(source, offset, run["prefix_length"])
-                if ((run["source_identity"] is not None and identity != run["source_identity"])
-                        or stat.st_size < offset
-                        or (offset and (prefix != run["prefix_hash"] or tail != run["tail_hash"]))):
-                    result["error"] = "Journal replaced, truncated, or rewritten; register a new run"
+                # The content fingerprints decide. A new inode with the same bytes
+                # is the same journal copied (the 2026-10-10 server move); it was
+                # flagged for good and the statistics read 统计待核对 ever since.
+                same_content = stat.st_size >= offset and (
+                    not offset or (prefix == run["prefix_hash"] and tail == run["tail_hash"]))
+                if not same_content or (run["source_identity"] is not None and identity != run["source_identity"]
+                                        and not offset):
+                    result["error"] = JOURNAL_REWRITTEN
                     db.execute("UPDATE runs SET source_error=? WHERE run_id=?", (result["error"], run_id))
                     return result
-                db.execute("UPDATE runs SET source_identity=? WHERE run_id=?", (identity, run_id))
+                result["error"] = None
+                db.execute("UPDATE runs SET source_identity=?, source_error=NULL WHERE run_id=?", (identity, run_id))
                 source.seek(offset)
                 block = source.read(max_bytes)
                 cursor = 0
