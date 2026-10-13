@@ -83,7 +83,7 @@ export const STATUS_RECENT_ROUNDS = 8;
  * so no pending redemption is ever dropped. */
 export function summaryView<R extends { marketId: string }, M extends { id: string; endsAt: number }>(input: {
   rounds: R[]; currentRound?: R | null; markets: M[]; now: number; needsWork: (marketId: string) => boolean;
-}): { rounds: R[]; markets: M[] } {
+}): { rounds: R[]; markets: M[]; quotedMarketIds: string[] } {
   const recent = new Set(input.rounds.slice(-STATUS_RECENT_ROUNDS).map(round => round.marketId));
   if (input.currentRound) recent.add(input.currentRound.marketId);
   const keepRound = (round: R) => recent.has(round.marketId) || input.needsWork(round.marketId);
@@ -92,7 +92,11 @@ export function summaryView<R extends { marketId: string }, M extends { id: stri
   // A market stays while it is live or upcoming, or while its round is kept.
   const markets = input.markets.filter(market => market.endsAt > input.now
     || keptRoundIds.has(market.id) || input.needsWork(market.id));
-  return { rounds, markets };
+  // Books and paired snapshots only for markets not yet ended: an ended market's
+  // last quote is never traded or shown, and 8 recent ones made it 25 KB of a
+  // 41 KB line every 2 s (217 MB of journal in 2.7 h, 2026-10-13).
+  const quotedMarketIds = markets.filter(market => market.endsAt > input.now).map(market => market.id);
+  return { rounds, markets, quotedMarketIds };
 }
 
 /** Should this settlement pass look at the market at all? Not before it ends,
@@ -783,8 +787,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       rounds: strategyStatus?.rounds ?? [], currentRound: strategyStatus?.currentRound ?? null,
       markets: allMarkets, now, needsWork: marketId => workMarkets.has(marketId),
     });
-    const viewMarketIds = new Set(view.markets.map(market => market.id));
-    const viewTokens = new Set(view.markets.flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
+    const viewMarketIds = new Set(view.quotedMarketIds);
+    const viewTokens = new Set(view.markets.filter(market => viewMarketIds.has(market.id))
+      .flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
     const strategyRuntime = strategyStatus ? { ...strategyStatus,
       rounds: view.rounds.map(enrichRound),
       currentRound: strategyStatus.currentRound ? enrichRound(strategyStatus.currentRound) : null } : null;
@@ -831,7 +836,6 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       strategy: strategy?.id ?? null, markets: runtime.markets.map(market => market.id),
       cashUsd: runtime.cash_usd, positions: runtime.positions_count, orders: runtime.orders_count,
       activeOrders: runtime.active_orders, fills: runtime.fills_count, risk: runtime.risk,
-      snapshots: runtime.snapshots,
       currentMarket: runtime.current_market,
       currentMarketId: runtime.current_market_id,
       currentRoundId: runtime.current_round_id,

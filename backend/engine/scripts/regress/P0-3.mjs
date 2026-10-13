@@ -53,5 +53,13 @@ const mids = new Set(view.markets.map((m) => m.id));
 assert.ok(mids.has(markets[N].id), "the current market is kept");
 assert.ok(mids.has(markets[5].id), "a market still needing settlement is kept");
 assert.ok(!mids.has(markets[100].id), "an ended, resolved market is dropped");
+// --- 2026-10-13: books follow only markets not yet ended. The recent rounds'
+// ended markets stayed in view, so their old snapshots and five-level books rode
+// along in every 2 s line: 25 KB of 41 KB, 217 MB of journal in 2.7 h. ---
+const quoted = new Set(view.quotedMarketIds);
+assert.ok(quoted.has(markets[N].id), "the running market's book is kept");
+assert.ok(!quoted.has(markets[N - 1].id), "a recent but ended market keeps its round, not its book");
+assert.ok(mids.has(markets[N - 1].id), "... its market identity stays for settlement");
+assert.ok(!quoted.has(markets[5].id), "an ended market still settling needs no book either");
 console.log(`P0-3: ${N} rounds -> status line ${size} bytes, ${view.rounds.length} rounds, ${view.markets.length} markets`);
 console.log("P0-3 OK");
