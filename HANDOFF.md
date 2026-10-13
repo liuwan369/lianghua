@@ -28,12 +28,29 @@ Polymarket 加密货币 5 分钟涨跌市场的**反转策略实盘系统，真�
 - 从服务器命令行启动实盘：见记忆 `live-run-start-from-shell`（需要 UUID requestId、当前 marketIds、走 nginx 认证；**必须先得到用户同意**）。
 - 在服务器上跑脚本：写成本地文件 `scp` 过去再执行，跑完删掉。长任务用 `setsid nohup ... &`，**不要用 `pkill -f <名字>`**（会连 ssh 自己一起杀掉）。大文件要**流式**读，别把一天 ~86 万行全放内存（曾把控制面 OOM 掉）。
 
+### 换服务器（2026-10-14 备份好，随时可搬）
+
+本机备份 `C:\Users\Administrator\Desktop\pm-backup-20261014\`（不进 git）：
+- `pm-run-data.tgz`（55MB）：`backend/engine/results`（账本、结算记录、实盘状态、策略配置、journal）+ `data/dashboard`。**结算记录和实盘状态里可能有未完成的赎回，不能丢。**
+- `pm-secrets.tgz`（10KB，含私钥等秘密，别外传）：`/root/.config/pm-system`（钱包、控制密码）、nginx basic auth、systemd drop-in（`PM_TRADING_LIVE_UNLOCK=1` 等）、`/etc/letsencrypt`。
+- `market-history.tar`（2.4G）：行情录制，回测要用。
+
+步骤（新机 Ubuntu 22.04，root，先确认**旧机交易已停**，两台共用一个钱包）：
+1. 装 Node 24、Python 3.10、nginx、certbot。
+2. 改 IP/域名，共 4 个文件：`scripts/deploy-reversal-release.py`（两处 `client.connect`）、`scripts/system-dashboard-server.py`（`PM_REMOTE_HOST` 默认值）、`config/pm-system-dashboard-dublin-public.conf`（server_name、证书路径、跳转）、`config/pm-system-dashboard-dublin-public-account.conf`（`PM_ACCOUNT_PUBLIC_ORIGIN`）。sslip 域名就是 IP 把点换成横线。提交。
+3. 新机放 SSH 公钥 `~/.ssh/id_ed25519_dublin_pm.pub`。
+4. 解开 `pm-secrets.tgz` 到 `/`；解开 `pm-run-data.tgz` 和 `market-history.tar` 到 `/root/pm-system/`。
+5. 证书：`certbot certonly --nginx -d <新域名>`（旧证书只认旧域名；80 端口要对所有人开放）。
+6. 本机跑 `python scripts/deploy-reversal-release.py`：它装 systemd 单元和 nginx 配置、启动采集器和控制面。
+7. 验证：`systemctl is-active pm-system-dashboard-dublin pm-clob-market-snapshot nginx`，控制台能打开，"设置"页账户检查通过，`/api/strategy/config` 是 revision 23。之后再由用户在控制台启动。
+
 ## 4. 当前状态
 
 - **eth 60 秒实盘实验**（用户 2026-10-13 同意）：配置 revision 23：eth、起始秒 60、阶梯 5/13/60、单场 60、总资金 60、每日亏损 45 USDC。目的：真钱验证 eth 60 秒，并量实际成交比回测差多少。
   - 第一次 run `20261013-045948-9cbed255b537`（我从服务器命令行启动，北京 12:59–15:40）：33 场，下单 4 场，每档都买满，没到第 3 档；4 场官方结算合计 +2.77（+0.42、+0.44、+0.41、+1.50）。用户要求停掉，**改由用户在控制台手动启动**，顺便检查前端。
   - 这次 run 2.7 小时 journal 217MB（约 1.9GB/天）：92% 是每 2 秒一行的 platform_status，其中一大半是已结束场次的盘口。`625a67e` 只带未结束场次的盘口，降到约 1.3GB/天；85% 的 status 行和上一行一样，要再降就得改成"变了才写"（未做）。硬盘 304G 空闲，journal 只留最近 20 个 run。账本投影读得过来（每秒 3.7MB，写入只有 22KB/s）；`ledger_projection_incomplete` 是读到 journal 末尾前的正常状态，停止后已追平。
-- 部署版本 `9df2ee2`（含 10-12～13 的 3 处实盘修复、起始秒规则、30 天录制）。
+- 部署版本 `7ec5fdd`；本地和 GitHub 已到 `0a47d3c`（账本：搬机复制的 journal 不再误判为改写，10-02 那次 run 让统计一直显示"待核对"），**交易在跑没部署**，下次停下来时部署。
+- 用户 2026-10-13 21:18 起在控制台手动跑 run `20261013-131839-77a945cc132d`（同一份 revision 23）。
 - **策略重新开始测**（2026-10-13）：反转统计页和 `STRATEGY-RESEARCH.md` 已删，以前的统计数字作废。回测只用 `scripts/backtest.py`（口径见 STRATEGY.md 文末，测试 `scripts/regress/backtest.py`）。
 - 行情录制：`data/market-history/<币>/<北京日期>.jsonl.gz`，7 个币，**保留 30 天**（每 10 天约 2.2G，硬盘 310G）。行格式：
   - 盘口（无 k）：`ub/ua/db/da` 最优买卖价，`ubl/ual/dbl/dal` 前五档，`ue/de` 两边交易所时间。
