@@ -755,17 +755,19 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         }
       }));
       const lookupOrder = async (order: OrderRecord) => {
-        if (platform.core.isOrderQuarantined(order.orderId!)) return { order, quarantined: true };
+        // A quarantined order is still looked up: a MATCHED answer can end it
+        // below (closeMatched); any other answer leaves it quarantined.
+        const quarantined = platform.core.isOrderQuarantined(order.orderId!);
         try {
           const detail = row(await client!.getOrder(order.orderId!));
-          return { order, detail: Object.keys(detail).length ? detail : undefined, quarantined: false };
+          return { order, detail: Object.keys(detail).length ? detail : undefined, quarantined };
         } catch (error) {
           const failure = row(error), response = row(failure.response);
           if (numeric(failure.status ?? response.status) === 404) return { order, detail: { status: "NOT_FOUND" } as Row };
           // A complete authenticated open-order snapshot is still useful
           // when the point lookup times out. Preserve UNKNOWN and its
           // reservation, then quarantine only that bounded ambiguity.
-          return { order, unavailable: true, quarantined: false };
+          return { order, unavailable: true, quarantined };
         }
       };
       // UNKNOWN is already sufficient evidence that its point status is
@@ -833,6 +835,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         if (openIds.has(order.orderId!)) continue;
         if (earlyDetailIds.has(order.orderId!) && currentOrder?.status !== "UNKNOWN") continue;
         const effectiveOrder = currentOrder ?? order;
+        // MATCHED and absent from this complete open-order read: finished on
+        // the venue, which refuses to cancel it. End it at its matched size
+        // (core checks that equals our settled fills) instead of retrying.
+        if (detail && String(detail.status ?? "").toUpperCase() === "MATCHED"
+          && platform.core.closeMatched(order.orderId!, numeric(detail.size_matched))) continue;
         if (quarantined) {
           if (effectiveOrder.status === "UNKNOWN" && !effectiveOrder.venueStatus) missingUnknown.add(order.orderId!);
           continue;

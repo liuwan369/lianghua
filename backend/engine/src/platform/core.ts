@@ -454,6 +454,36 @@ export class TradingCore {
     this.emit({ kind: "error", strategyId, clientOrderId, orderId, code: "order_abandoned", message: reason });
     return true;
   }
+  /**
+   * End an order the venue reports MATCHED that a complete open-order read no
+   * longer lists. The venue refuses to cancel such an order (2026-10-14: a GTC
+   * hedge filled 9 of 13 at the round's end; the cancel came back without it,
+   * the order went UNKNOWN and was retried every second with its reservation
+   * held and its market blocked). It is finished: the matched part is filled
+   * and the rest never trades. Only when the venue's matched size equals the
+   * fills we hold and every one of them is settled; otherwise a fill is still
+   * on its way and the order stays open. The caller supplies the venue detail.
+   */
+  closeMatched(id: string, venueMatchedShares: number): boolean {
+    const order = this.find(id);
+    if (!order?.orderId || !["UNKNOWN", "OPEN", "PARTIAL"].includes(order.status)
+      || !finite(venueMatchedShares) || Math.abs(venueMatchedShares - order.filledShares) > EPS) return false;
+    const fills = this.state.fills.filter(fill => fill.orderId === order.orderId && fill.shares > EPS);
+    if (fills.some(fill => fill.status !== undefined && fill.status !== "CONFIRMED")) return false;
+    order.status = order.filledShares >= order.shares - EPS ? "FILLED" : "CANCELLED";
+    order.venueStatus = "matched";
+    order.venueStatusSource = "account_read";
+    order.venueStatusAt = this.clock();
+    order.reconciliationPending = false;
+    order.reservedUsd = 0; order.reservedShares = 0;
+    order.error = "venue reports matched and no longer open; unfilled rest is void";
+    order.updatedAt = Math.max(order.updatedAt, this.clock());
+    this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
+    this.refreshReconciliationRisk();
+    this.updateRisk();
+    this.notify(order, true);
+    return true;
+  }
   /** Flush a state mutation that was intentionally held until synchronous observers updated their state. */
   commit(): void { this.persist(true); }
   /** Background funding scans do not replace the live cash/position ledger.
