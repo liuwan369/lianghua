@@ -1,5 +1,5 @@
 // A crossing is a side's ask going from below the trigger to at or above it,
-// nothing else (STRATEGY.md rule 5, same as scripts/dashboard/reversals.py).
+// nothing else (STRATEGY.md rule 5, same as scripts/backtest.py).
 // The old "both above the trigger" ambiguity path resolved a later frame by
 // "ask >= trigger" alone, so a side that never was below the line counted as
 // a crossing. At trigger 0.67 such frames sum >= 1.34 and rule 2 skips them;

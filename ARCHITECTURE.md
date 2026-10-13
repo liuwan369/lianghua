@@ -20,8 +20,7 @@
         行情采集器 node dist/cli/market-snapshot.js (systemd: pm-clob-market-snapshot)
           ├─ 每 250 ms 写 data/dashboard/market-snapshot.json（控制台展示用；一边无挂单时另带 one_sided，只展示不交易）
           ├─ 双边报价超过 2 秒没变时，每 2 秒向交易所 REST POST /books 核对一次，价格一样就写 quiet_confirmed_at（只展示不交易）
-          ├─ 记录器 market-recorder → data/market-history/
-          └─ 反转统计：控制面读 data/market-history，按天缓存到 data/reversals/
+          └─ 记录器 market-recorder → data/market-history/（回测 scripts/backtest.py 只读它，手动在服务器上跑）
 ```
 
 | 进程 | 启动方式 | 职责 |
@@ -106,7 +105,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
-| `*.html` + `*-block.js/css` | 五个页面：自动交易、市场、策略、反转统计（`reversals.html`，读 `/api/reversals`）、设置 |
+| `*.html` + `*-block.js/css` | 四个页面：自动交易、市场、策略、设置 |
 | `stats-panel.js` | 自动交易页的交易统计、服务器状态、清空数据 |
 | `event-log.js` | 设置页的运行日志 |
 | `shared/preview-core.js` | 请求、侧栏、格式化 |
@@ -129,7 +128,7 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 
 ## 策略 `btc-reversal`
 
-> 改策略参数或逻辑前，先读 [STRATEGY-RESEARCH.md](STRATEGY-RESEARCH.md)：回测结论（现有规则在录制数据上没有优势）和回测踩过的坑。
+> 规则以 [STRATEGY.md](STRATEGY.md) 为准，"怎么判过线"见 [REVERSAL.md](REVERSAL.md)；回测用 `scripts/backtest.py`（STRATEGY.md 文末"回测口径"）。
 
 默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,13,60]`、`maxStages 3`（STRATEGY.md 第 6 条；控制面 `strategy_config.default_config()` 同值）、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
@@ -137,7 +136,8 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 - 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
 - 双边报价门：未过期、年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、时间戳不倒退。
 - 第一对报价只做基线。行情断线、暂停、账户恢复后基线作废，重建基线后才认新的穿越。
-- 触发：某一边卖一价 `prev < triggerPrice` 且 `now ≥ triggerPrice`，只有一边穿越。从两边都在下方或都在上方同时变成两边都在上方属歧义，等下一帧明确方向。
+- 两边卖价之和 > 1.05 的帧跳过，不当基线也不判穿越，基线保留（`WIDE_SUM`）。
+- 触发：某一边卖一价 `prev < triggerPrice` 且 `now ≥ triggerPrice`，只有一边穿越；两边同一帧都穿越不算方向。
 - 下单：买穿越的那一边，GTC 限价 `maxBuyPrice`，股数 `stageShares[已用级数]`，`clientOrderId = <instanceId>:<marketId>:<阶段号>`。
 - 阶梯：与上一级同方向不加仓，所以各级 UP/DOWN 交替。被拒、放弃或撤单时 0 成交的阶段不占级数。
 - `confirmationPrice` 只更新确认方向和 `confirmationCount`，不是下单条件。
@@ -185,8 +185,7 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 | `E/results/dashboard-state.json` | 控制面当前 run 信息 |
 | `/root/pm-system/data/dashboard/market-snapshot.json` | 采集器快照 |
 | `/root/pm-system/data/dashboard/deployment.lock` | 部署与启动共用的 flock |
-| `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz` | 全量行情记录，保留 10 天 |
-| `/root/pm-system/data/reversals/<币>/<日期>.json` | 反转统计的按天缓存（录制文件大小或时间变了才重算，当天的最多每 60 秒重算一次） |
+| `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz` | 全量行情记录，保留 30 天（`config/pm-clob-market-snapshot.service` 的 `--record-days`） |
 
 行情记录每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。同一文件里还有成交行（feed 的 `last_trade_price`）：`{t,a,m,r,k:"t",tok:"u"|"d",p 价,s 量,side 吃单方向 BUY|SELL}`，盘口行没有 `k`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
 

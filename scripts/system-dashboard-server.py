@@ -41,7 +41,6 @@ from dashboard.market_snapshot import (canonical_snapshot, normalize_stale_after
                                        validate_snapshot)
 from dashboard.account_data import AccountData
 from dashboard.push import PushHub
-from dashboard import reversals
 from dashboard import official_pnl
 from dashboard.system_metrics import SystemMetrics
 
@@ -2457,43 +2456,6 @@ def _api_ledger() -> Ledger:
     return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
 
 
-# 反转统计: firings per round counted from the market recordings (REVERSAL.md).
-# Read-only; caches per recording day under data/reversals.
-REVERSAL_HISTORY = DEPLOYMENT_LOCK_PATH.parents[1] / "market-history"
-REVERSAL_CACHE = DEPLOYMENT_LOCK_PATH.parents[1] / "reversals"
-
-
-def _api_reversals(asset_id: str, days: int) -> dict:
-    asset = str(asset_id or "").strip().lower()
-    if asset not in SUPPORTED_ASSET_IDS:
-        raise ValueError("invalid assetId")
-    return reversals.summary(REVERSAL_HISTORY, REVERSAL_CACHE, asset, days=max(1, min(int(days), 10)), cached_only=True)
-
-
-def warm_reversals(stop: threading.Event) -> None:
-    """Keep the reversal cache current: a nice'd child process recounts stale
-    day files every minute, so a request only ever reads the cache."""
-    script = Path(__file__).with_name("dashboard") / "reversals.py"
-    while not stop.is_set():
-        try:
-            subprocess.run(["nice", "-n", "15", sys.executable, str(script), "--history", str(REVERSAL_HISTORY),
-                            "--cache", str(REVERSAL_CACHE)] if shutil.which("nice") else
-                           [sys.executable, str(script), "--history", str(REVERSAL_HISTORY), "--cache", str(REVERSAL_CACHE)],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3600)
-        except (OSError, subprocess.SubprocessError):
-            pass
-        stop.wait(reversals.LIVE_RECOMPUTE_SEC)
-
-
-def _api_reversals_overview(days: int) -> dict:
-    coins = []
-    for asset in sorted(SUPPORTED_ASSET_IDS, key=["btc", "eth", "sol", "xrp", "doge", "hype", "bnb"].index):
-        total = _api_reversals(asset, days)["total"]
-        coins.append({"assetId": asset, **{key: total[key] for key in (
-            "rounds", "avgFirings", "medianFirings", "maxFirings", "over4", "over4Pct", "firstFiringWinPct")}})
-    return {"schemaVersion": 1, "days": max(1, min(int(days), 10)), "asOf": time.time(), "coins": coins}
-
-
 RUN_JOURNALS_KEPT = 20
 
 
@@ -2979,15 +2941,6 @@ def make_handler(root: Path):
                 except (ValueError, TypeError):
                     self._send_json(b'{"error":"invalid_event_query","stale":true}', 400)
                 return
-            if path in ("/api/reversals", "/api/reversals/overview"):
-                try:
-                    days = int((query.get("days") or ["7"])[0])
-                except (ValueError, TypeError):
-                    days = 7
-                value = (_api_reversals_overview(days) if path == "/api/reversals/overview"
-                         else _api_reversals((query.get("assetId") or ["btc"])[0], days))
-                self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
-                return
             if path == "/api/rounds":
                 run_id = (_scoped_run_id(query["runId"][0]) if query.get("runId") else _api_run_id())
                 if not run_id:
@@ -3465,7 +3418,6 @@ def main() -> int:
     threading.Thread(target=supervise_projection, args=(stop,), daemon=True).start()
     threading.Thread(target=account_data().run, args=(stop,), daemon=True).start()
     threading.Thread(target=refresh_system_metrics, args=(stop,), daemon=True).start()
-    threading.Thread(target=warm_reversals, args=(stop,), name="reversals-warm", daemon=True).start()
     threading.Thread(target=account_check_background, args=(stop,),
                      name="account-check-background", daemon=True).start()
     threading.Thread(target=server.RequestHandlerClass.push_hub.run, args=(stop,),

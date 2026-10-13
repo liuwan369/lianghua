@@ -4,12 +4,11 @@
 
 ## 控制台
 
-https://18-201-16-51.sslip.io/console/ （nginx basic auth）。五个页面，都在 `frontend/console/`：
+https://18-201-16-51.sslip.io/console/ （nginx basic auth）。四个页面，都在 `frontend/console/`：
 
 - 自动交易 `auto-trade.html`（首页，`index.html` 跳转到这里）：启动/暂停/停止、当前场盘口、本场持仓与订单、历史订单（按场次）、交易统计、服务器状态、清空数据。
 - 市场 `market.html`：币种目录，选一个币进运行池。
 - 策略 `strategy.html`：策略参数，保存草稿、发布。
-- 反转统计 `reversals.html`：用录下来的真实行情，按 `REVERSAL.md` 的定义数每场反转了几次（每天多少、分布、7 个币对比、每场明细）。只数次数，不下单。
 - 设置 `settings.html`：连接诊断、账户检查与保存、控制密码、运行日志。
 
 ## 服务器
@@ -19,7 +18,7 @@ AWS 都柏林单机 `root@18.201.16.51`，运行目录 `/root/pm-system`。nginx
 ## 目录
 
 - `backend/engine/`：TypeScript 交易引擎、行情采集器、账户读取器（Node ≥ 24）。
-- `scripts/`：Python 控制面 `system-dashboard-server.py`、`dashboard/` 读模型、部署脚本。
+- `scripts/`：Python 控制面 `system-dashboard-server.py`、`dashboard/` 读模型、部署脚本、回测 `backtest.py`（只读录制行情，在服务器上手动跑）。
 - `frontend/console/`：静态控制台，由控制面托管。
 - `config/`：systemd 单元和 nginx 配置。
 
@@ -47,3 +46,4 @@ node frontend/console/regress/<名字>.mjs
 - [ARCHITECTURE.md](ARCHITECTURE.md)：进程、模块、数据流、策略、风控、结算、文件、部署、已知限制。
 - [API.md](API.md)：控制面 HTTP 接口和推送。
 - [AGENTS.md](AGENTS.md)：铁律和工作方式。
+- [STRATEGY.md](STRATEGY.md)：已确认的策略规则和回测口径；[REVERSAL.md](REVERSAL.md)：怎么判过线、谁赢。

@@ -1,7 +1,7 @@
 // STRATEGY.md rule 2: a frame whose two asks sum to more than 1.05 is a thin
 // book (a wide spread the price jumps across) and must not be used to judge a
 // crossing. Such a frame is skipped; the baseline stays and the next clean
-// frame (sum <= 1.05) judges. Matches the backtest (scripts/dashboard/reversals.py
+// frame (sum <= 1.05) judges. Matches the backtest (scripts/backtest.py
 // "if ua + da > WIDE_SUM: return # the starting point stays").
 //
 // Drives the real compiled strategy. Run after `npm run build`:

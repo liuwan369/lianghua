@@ -149,7 +149,6 @@
     { key: "market", icon: "◇", label: "市场", target: "market.html" },
     { key: "auto-trade", icon: "↗", label: "自动交易", target: "auto-trade.html" },
     { key: "strategy", icon: "◒", label: "策略", target: "strategy.html" },
-    { key: "reversals", icon: "⇅", label: "反转统计", target: "reversals.html" },
     { key: "settings", icon: "⚙", label: "设置", target: "settings.html" }
   ];
   const navMarkup = (activeKey) => NAV_ITEMS.map((item) => {
