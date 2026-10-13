@@ -116,6 +116,26 @@ LATENCY_LIMIT = 5000
 # per run forever and dominates the database (243k of 250k rows at 70 MB).
 LATENCY_RUN_RETENTION = 5
 RUNTIME_MAX_AGE = 10
+# The engine appends a status line every 2 s and the projection reads every
+# 0.25 s, so it is a line behind ~14 % of the time. That is current, not stale:
+# stale means more than one read pass (256 KiB) behind, or unread bytes that
+# have waited past RUNTIME_MAX_AGE. Counting any unread byte as stale blanked
+# the console's rounds, fills and settlements every few seconds (2026-10-13).
+CURRENT_LAG_BYTES = 262_144
+
+
+def _journal_lag(run) -> tuple[int | None, bool]:
+    """(unread bytes, stale) of a run's journal. A journal pruned by retention
+    was fully read before it went (retention never removes the newest runs)."""
+    try:
+        stat = Path(run["path"]).stat()
+    except FileNotFoundError:
+        return 0, False
+    except OSError:
+        return None, True
+    lag = max(0, stat.st_size - run["byte_offset"])
+    waited = time.time() - stat.st_mtime > RUNTIME_MAX_AGE
+    return lag, bool(lag and (lag > CURRENT_LAG_BYTES or waited))
 ORDER_STATUSES = frozenset({"SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN"})
 ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 
@@ -1820,11 +1840,7 @@ class Ledger:
                 or {**unavailable, "error": "position projection invalid"}
         now, at = time.time(), row["source_at"]
         error = "position snapshot expired" if now - at > RUNTIME_MAX_AGE or at > now + 1 else None
-        try:
-            caught_up = Path(run["path"]).stat().st_size == run["byte_offset"]
-        except OSError:
-            caught_up = False
-        if run["source_error"] or run["invalid_records"] or not caught_up:
+        if run["source_error"] or run["invalid_records"] or _journal_lag(run)[1]:
             error = "position projection incomplete"
         if runtime.get("status") != "running":
             error = "runtime is not running"
@@ -2014,12 +2030,12 @@ class Ledger:
                           exposed_pnl=_exposed_pnl(settled_pnl, unsettled_cost, unsettled_rounds))
             try:
                 source_bytes = Path(run["path"]).stat().st_size
-                lag = max(0, source_bytes - run["byte_offset"])
             except OSError:
-                source_bytes, lag = None, None
+                source_bytes = None
+            lag, behind = _journal_lag(run)
             result.update(source_bytes=source_bytes, lag_bytes=lag,
                           completeness=("incomplete" if run["source_error"] or run["invalid_records"]
-                                        else "waiting" if lag is None else "catching_up" if lag else "caught_up"))
+                                        else "waiting" if lag is None else "catching_up" if behind else "caught_up"))
             now = time.time()
             grouped = {}
             for row in db.execute("""SELECT metric,time,duration_ms FROM latency_samples
@@ -2288,16 +2304,8 @@ class Ledger:
             missing_pnl = sum(value is None for value in pnl_values)
             stale, lag = False, 0
             for run in runs:
-                try:
-                    pending = max(0, Path(run["path"]).stat().st_size - run["byte_offset"])
-                except FileNotFoundError:
-                    # An old run's journal pruned by retention: its rows are
-                    # final, not stale. Retention never removes the newest
-                    # runs, so a missing file is never a run still being read.
-                    pending = 0
-                except OSError:
-                    pending = None
-                stale |= bool(run["source_error"] or run["invalid_records"] or pending is None or pending)
+                pending, behind = _journal_lag(run)
+                stale |= bool(run["source_error"] or run["invalid_records"] or behind)
                 lag += pending or 0
             return {"run_id": run_id, "mode": "live", "account_id": selected["account_id"], "range": range,
                     "from": start, "to": now, "as_of": now, "run_count": len(runs),
@@ -2518,12 +2526,8 @@ class Ledger:
                 if self._has_table(db, "platform_runtime") else None
             latest_event = db.execute("SELECT MAX(COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))) "
                                       "FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
-        try:
-            pending = max(0, Path(run["path"]).stat().st_size - run["byte_offset"])
-        except OSError:
-            pending = None
         as_of = runtime["source_at"] if runtime else latest_event
-        stale = bool(run["source_error"] or run["invalid_records"] or pending is None or pending or as_of is None)
+        stale = bool(run["source_error"] or run["invalid_records"] or _journal_lag(run)[1] or as_of is None)
         return {"source": "ledger", "asOf": as_of,
                 "stale": stale, "error": "ledger_projection_incomplete" if stale else None,
                 "runId": run_id}
