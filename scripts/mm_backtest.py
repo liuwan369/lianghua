@@ -52,6 +52,7 @@ from backtest import BEIJING, HISTORY, ONE_SIDED_FROM, ROUND_SEC, WIN_PRICE, rea
 
 EPS = 1e-9
 INF = float("inf")
+FEE_RATE = 0.07         # taker fee curve C x 0.07 x p (1-p); the rebate is a share of it
 
 
 def _qty(levels, c: int) -> float:
@@ -83,6 +84,7 @@ class Round:
         self.levels = {"UP": [], "DOWN": []}
         self.winner: str | None = None
         self.stopped = False
+        self.rebate = 0.0
 
     def feed(self, row: dict) -> None:
         t, kind = row.get("t"), row.get("k")
@@ -158,6 +160,8 @@ class Round:
                 o.rem -= fill
                 self.held[side] += fill
                 self.cost[side] += fill * o.c / 100
+                p = o.c / 100
+                self.rebate += fill * self.a.rebate * FEE_RATE * p * (1 - p)
 
     def _quote(self, t: float) -> None:
         a = self.a
@@ -188,7 +192,8 @@ class Round:
 
     def result(self) -> tuple:
         up, dn = self.held["UP"], self.held["DOWN"]
-        pnl = None if self.winner is None else self.held[self.winner] - self.cost["UP"] - self.cost["DOWN"]
+        pnl = (None if self.winner is None
+               else self.held[self.winner] - self.cost["UP"] - self.cost["DOWN"] + self.rebate)
         return (self.start, up, self.cost["UP"] / up if up else 0.0,
                 dn, self.cost["DOWN"] / dn if dn else 0.0, self.winner, pnl)
 
@@ -229,7 +234,7 @@ def _stat(label: str, rows: list[tuple]) -> str:
 
 def selftest() -> None:
     a = argparse.Namespace(size=10.0, begin=10.0, end=240.0, latency=0.3, max_sum=99, inventory=30.0,
-                           offset=0, pair_cap=None)
+                           offset=0, pair_cap=None, rebate=0.0)
     R = 1_800_000_000
 
     def book(r, s, ub, db, ubl, dbl, ua=None, da=None):
@@ -363,6 +368,11 @@ def selftest() -> None:
     assert abs(r.held["DOWN"] - 10) < EPS
     book(r, 11, 0.50, 0.48, [[0.50, 0]], [[0.48, 0]])
     assert r.orders["UP"][-1].c == 50
+    # rebate 0.20: 10 shares filled at 0.50 earn 10 x 0.2 x 0.07 x 0.25 = 0.035
+    r = Round(R, argparse.Namespace(**{**vars(a), "rebate": 0.2}))
+    book(r, 10, 0.50, 0.48, [[0.50, 0]], [[0.48, 0]])
+    trade(r, 10.5, "u", "SELL", 0.49, 10)
+    assert abs(r.held["UP"] - 10) < EPS and abs(r.rebate - 0.035) < 1e-12
     # rounds outside the Beijing day are dropped
     d = date(2026, 10, 5)
     lo = int(datetime(d.year, d.month, d.day, tzinfo=BEIJING).timestamp())
@@ -384,6 +394,8 @@ def main() -> None:
     p.add_argument("--offset", type=int, default=0, help="quote this many cents below the best bid")
     p.add_argument("--pair-cap", dest="pair_cap", type=float, default=None,
                    help="cents; quote <= cap - other side's average cost (its bid if none held)")
+    p.add_argument("--rebate", type=float, default=0.0,
+                   help="maker rebate as a share of the fee curve 0.07 p (1-p); crypto pays 0.20")
     p.add_argument("--procs", type=int, default=4)
     p.add_argument("--out", type=Path)
     p.add_argument("--selftest", action="store_true")
