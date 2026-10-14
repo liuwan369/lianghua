@@ -388,6 +388,16 @@ export class BtcReversalStrategy implements StrategyPlugin {
       const consumed = BtcReversalStrategy.consumedRungs(round);
       if (consumed >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
       if (!direction) { round.reason = consumed ? "等待相反方向跨价" : "等待触发跨价"; continue; }
+      // Rule 4: rung 1 not yet filled when the other side crosses → cancel the
+      // old order, place rung 1 on the new side (same 5 shares). Only when no
+      // rung has been consumed (no capital committed).
+      if (!consumed && round.stages.length > 0) {
+        for (const stage of round.stages) {
+          if (activeOrder(stage.status) && stage.orderId && stage.filledShares <= EPS) {
+            actions.push({ kind: "cancel", orderId: stage.orderId });
+          }
+        }
+      }
       // Compare against the last rung that survived. A rejected stage committed
       // nothing, so it must not lock its direction out of being retried.
       if (direction === BtcReversalStrategy.lastLiveDirection(round)) {
@@ -525,15 +535,15 @@ export class BtcReversalStrategy implements StrategyPlugin {
   private static consumedRungs(round: ReversalRound): number {
     return round.stages.filter(stage => BtcReversalStrategy.consumedRung(stage)).length;
   }
-  /** A rung is consumed only if it actually bought something. A stage that ended
-   * REJECTED/ABANDONED, or was CANCELLED with nothing filled, committed no capital,
-   * so advancing the ladder past it skips a rung: stage 1 cancelled at 0 filled
-   * made the next entry buy the 18-share rung where 5 was intended. */
+  /** A rung is consumed only if it actually bought something. A stage that has
+   * not filled at all — whether it ended (REJECTED/ABANDONED/CANCELLED at 0) or
+   * is still open (OPEN/SUBMITTING at 0) — committed no capital. Counting an
+   * OPEN/0-fill stage as consumed made the opposite crossing place rung 2 (13
+   * shares) instead of cancelling and re-placing rung 1 (5 shares). */
   private static consumedRung(stage: ReversalStage): boolean {
     if (stage.status === "REJECTED" || stage.status === "ABANDONED") return false;
     const filled = Number(stage.filledShares) || 0;
-    const terminal = ["CANCELLED", "REJECTED", "ABANDONED", "FAILED"].includes(String(stage.status));
-    return !(terminal && filled <= EPS);
+    return filled > EPS;
   }
   /** Direction of the last rung that survived, so a rejection does not lock out
    * the direction it was going to take. */

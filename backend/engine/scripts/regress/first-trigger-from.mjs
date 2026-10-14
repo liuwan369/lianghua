@@ -50,6 +50,10 @@ const begin = () => { const s = createStrategy(config); const t = START - 8; s.o
   const first = drive(s, 65, 65, 0.68, 0.33);
   assert.ok(first, "the first crossing at 65 s is traded");
   assert.equal([first.tokenId, first.shares].join(), [UP, 5].join());
+  // Simulate the fill so rung 1 is consumed before the hedge
+  s.onEvent({ kind: "order", order: { ...first, strategyId: "btc-reversal", orderId: "0xfill",
+    status: "FILLED", filledShares: 5, reservedUsd: 0, reservedShares: 0,
+    createdAt: START + 65, updatedAt: START + 66 } }, ctx(START + 66));
   drive(s, 66, 90, 0.60, 0.41);
   const hedge = drive(s, 91, 91, 0.33, 0.68);
   assert.ok(hedge, "the reversal after it is hedged");
