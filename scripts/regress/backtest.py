@@ -163,6 +163,27 @@ class Fill(unittest.TestCase):
         self.assertEqual([(o.side, o.shares, o.live) for o in item.orders], [("UP", 5, True), ("DOWN", 13, True)])
         self.assertAlmostEqual(item.orders[0].filled()[0], 5)
 
+    def test_rest_fills_from_trades_the_book_missed(self):
+        """2026-10-15 audit: the price can jump through 0.70 between two recorded
+        frames, or the five levels can be missing while the best ask is <= 0.70;
+        the frames then show nothing <= 0.70 though real trades printed there.
+        A resting 0.70 buy also fills from the tape: a taker SELL of this token at
+        <= 0.70, or a taker BUY of the other token at >= 0.30 (minted against it)."""
+        trade = lambda t, tok, p, s, side: {"t": R + t, "r": str(R), "k": "t", "tok": tok, "p": p, "s": s, "side": side}
+        base = [book(1, 0.50, 0.51), book(2, 0.68, 0.33, ual=[[0.68, 1]]), book(3, 0.75, 0.26, ual=[[0.75, 9]])]
+        sold = run(base + [trade(3.5, "u", 0.69, 3, "SELL"), book(4, 0.75, 0.26, ual=[[0.75, 9]])], end=(0.95, 0.05))
+        self.assertAlmostEqual(sold.orders[0].filled()[0], 1 + 3, msg="a SELL of UP at 0.69 fills 3 of the resting rest")
+        minted = run(base + [trade(3.5, "d", 0.31, 2, "BUY"), book(4, 0.75, 0.26, ual=[[0.75, 9]])], end=(0.95, 0.05))
+        self.assertAlmostEqual(minted.orders[0].filled()[0], 1 + 2, msg="a BUY of DOWN at 0.31 is a match against UP at 0.69")
+        above = run(base + [trade(3.5, "u", 0.72, 9, "SELL"), trade(3.6, "d", 0.27, 9, "BUY"),
+                            book(4, 0.75, 0.26, ual=[[0.75, 9]])], end=(0.95, 0.05))
+        self.assertAlmostEqual(above.orders[0].filled()[0], 1, msg="trades above the limit fill nothing")
+        before = run([book(1, 0.50, 0.51), trade(1.5, "u", 0.60, 9, "SELL"), book(2, 0.68, 0.33, ual=[[0.68, 1]]),
+                      book(3, 0.75, 0.26, ual=[[0.75, 9]])], end=(0.95, 0.05))
+        self.assertAlmostEqual(before.orders[0].filled()[0], 1, msg="a trade before the order was placed does not fill it")
+        capped = run(base + [trade(3.5, "u", 0.69, 50, "SELL")], end=(0.95, 0.05))
+        self.assertAlmostEqual(capped.orders[0].filled()[0], 5, msg="never more than the order's size")
+
     def test_unfilled_rung1_moves(self):
         """STRATEGY.md 4: rung 1 with nothing filled when the other side crosses
         is cancelled and placed there as rung 1 (5 shares)."""

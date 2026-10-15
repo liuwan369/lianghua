@@ -58,12 +58,12 @@ def _under(levels) -> list[tuple[float, float]]:
 
 
 class Order:
-    """One 0.70 limit, filled by depth."""
-    __slots__ = ("side", "shares", "at", "live", "taken", "cost", "rest")
+    """One 0.70 limit, filled by depth and by the trade tape."""
+    __slots__ = ("side", "shares", "at", "live", "taken", "cost", "rest", "traded")
 
     def __init__(self, side: str, shares: int, levels, at: float):
         self.side, self.shares, self.at, self.live = side, shares, at, True
-        self.taken = self.cost = self.rest = 0.0
+        self.taken = self.cost = self.rest = self.traded = 0.0
         for price, qty in _under(levels):
             take = min(shares - self.taken, qty)
             if take <= EPS:
@@ -74,10 +74,24 @@ class Order:
     def frame(self, levels) -> None:
         self.rest = max(self.rest, sum(q for _, q in _under(levels)))
 
+    def trade(self, row: dict) -> None:
+        """A trade that would have matched this resting buy: a taker SELL of this
+        token at <= LIMIT, or a taker BUY of the other token at >= 1 - LIMIT (the
+        venue mints a pair against it). Each trade is its own match, so they add
+        up, unlike a book level that shows the same resting quantity frame after
+        frame (2026-10-15 audit: the five levels missed jumps through the limit)."""
+        price, size = row.get("p"), row.get("s")
+        if not isinstance(price, (int, float)) or not isinstance(size, (int, float)):
+            return
+        mine = row.get("tok") == ("u" if self.side == "UP" else "d")
+        if (mine and row.get("side") == "SELL" and price <= LIMIT + EPS) or \
+                (not mine and row.get("side") == "BUY" and price >= 1 - LIMIT - EPS):
+            self.traded += size
+
     def filled(self) -> tuple[float, float]:
         if not self.live:
             return self.taken, self.cost
-        more = min(self.shares - self.taken, self.rest)
+        more = min(self.shares - self.taken, max(self.rest, self.traded))
         return self.taken + more, self.cost + more * LIMIT
 
 
@@ -98,8 +112,15 @@ class Round:
 
     def feed(self, row: dict) -> None:
         t, start, kind = row.get("t"), self.start, row.get("k")
-        if kind not in (None, "o") or not isinstance(t, (int, float)) or not (start <= t < start + ROUND_SEC):
-            return      # trades, coin and settlement prices: no book
+        if not isinstance(t, (int, float)) or not (start <= t < start + ROUND_SEC):
+            return
+        if kind == "t":
+            for order in self.orders:
+                if order.live and t > order.at:
+                    order.trade(row)
+            return
+        if kind not in (None, "o"):
+            return      # coin and settlement prices: no book
         self.last_t = t
         ua, da, ub, db = row.get("ua"), row.get("da"), row.get("ub"), row.get("db")
         if (ua or 0) >= WIN_PRICE or (ub or 0) >= WIN_PRICE:
