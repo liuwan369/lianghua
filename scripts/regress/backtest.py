@@ -119,6 +119,15 @@ class Count(unittest.TestCase):
             short.feed(row)
         self.assertFalse(short.complete(), "the recording stopped before 240 s")
 
+    def test_before_one_sided_recording(self):
+        # The first k:"o" row of every coin is at 1791179393 (2026-10-05 05:49:53
+        # UTC); a round ten hours earlier lacks its last ~50 s and is not used.
+        early = bt.Round(1791150000, LADDER)
+        for second in range(1, 251):
+            early.feed({"t": 1791150000 + second, "r": "1791150000", "ua": 0.50, "da": 0.51,
+                        "ue": 1791150000 + second, "de": 1791150000 + second})
+        self.assertFalse(early.complete())
+
 
 class Fill(unittest.TestCase):
     def test_rungs_at_070(self):

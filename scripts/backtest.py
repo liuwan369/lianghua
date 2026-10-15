@@ -45,9 +45,10 @@ WIN_PRICE = 0.9
 LIMIT = 0.70
 TAKER_FEE = 0.07
 EPS = 1e-9
-# One-sided books near the close are recorded from here on (2026-10-05 05:50
-# UTC); earlier rounds lack about their last 50 seconds and are not used.
-ONE_SIDED_FROM = 1791143400
+# One-sided books near the close are recorded from the round 1791179100 on (the
+# first k:"o" row of every coin, 2026-10-05 05:49:53 UTC); earlier rounds lack
+# about their last 50 seconds and are not used.
+ONE_SIDED_FROM = 1791179100
 HISTORY = Path("/root/pm-system/data/market-history")
 COINS = ("btc", "eth", "sol", "xrp", "doge", "hype", "bnb")
 BEIJING = timezone(timedelta(hours=8))
