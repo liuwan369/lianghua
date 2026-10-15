@@ -36,7 +36,7 @@ Polymarket 的加密货币 5 分钟涨跌盘。每 5 分钟开一场，赌某个
 
 `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz`
 
-SSH：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@18.201.16.51`，目录 `/root/pm-system`。
+SSH：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196`，目录 `/root/pm-system`。
 
 ### 本地备份
 
@@ -130,7 +130,7 @@ python scripts/backtest.py --history E:/pm-backup/market-history --coins eth --f
 ## 6. 系统能力（已经做好的，可以直接用）
 
 - **实盘引擎**：判断过线 → 按阶梯下单 → 成交 → 结算，全自动。起始秒、阶梯、亏损上限都是可配置参数，在控制台里填就行。
-- **控制台**：https://18-201-16-51.sslip.io/console/，nginx basic auth。可以启动/暂停/停止、看盘口、看持仓和成交、改策略参数。
+- **控制台**：https://34-242-206-196.sslip.io/console/，nginx basic auth。可以启动/暂停/停止、看盘口、看持仓和成交、改策略参数。
 - **行情采集器**：7 个币，全量录制盘口五档、成交、币价、Chainlink，保留 30 天。
 - **回测脚本**：口径和实盘一致，2026-10-14 验证过。
 
