@@ -184,6 +184,22 @@ class Fill(unittest.TestCase):
         capped = run(base + [trade(3.5, "u", 0.69, 50, "SELL")], end=(0.95, 0.05))
         self.assertAlmostEqual(capped.orders[0].filled()[0], 5, msg="never more than the order's size")
 
+    def test_from_trigger_k(self):
+        """--from-trigger K: the first K-1 crossings are counted, not traded; the
+        K-th places rung 1, then the ladder goes on as usual."""
+        rows = [book(1, 0.50, 0.51)] + [book(10 + 10 * i, *((0.70, 0.31) if i % 2 == 0 else (0.31, 0.70))) for i in range(4)]
+        item = bt.Round(R, LADDER, from_trigger=3)
+        for row in dense(rows + [book(250, 0.05, 0.95)]):
+            item.feed(json.loads(json.dumps(row)))
+        self.assertEqual(item.sides, ["UP", "DOWN", "UP", "DOWN"], "all crossings still counted and alternating")
+        self.assertEqual([(o.side, o.shares) for o in item.orders], [("UP", 5), ("DOWN", 13)])
+        maker = lambda s: s * 0.70 + s * 0.07 * 0.70 * 0.30
+        self.assertAlmostEqual(item.pnl(), 13 - maker(18), places=6)
+        early = bt.Round(R, LADDER, from_trigger=5)
+        for row in dense(rows + [book(250, 0.05, 0.95)]):
+            early.feed(json.loads(json.dumps(row)))
+        self.assertEqual(early.orders, [], "never reached the 5th crossing: nothing bought")
+
     def test_unfilled_rung1_moves(self):
         """STRATEGY.md 4: rung 1 with nothing filled when the other side crosses
         is cancelled and placed there as rung 1 (5 shares)."""

@@ -99,8 +99,8 @@ class Round:
     """Counter and ladder of one round, fed one row at a time (a day of one
     coin is ~860k rows: never hold them)."""
 
-    def __init__(self, start: int, ladder: tuple[int, ...]):
-        self.start, self.ladder = start, ladder
+    def __init__(self, start: int, ladder: tuple[int, ...], from_trigger: int = 1):
+        self.start, self.ladder, self.from_trigger = start, ladder, from_trigger
         self.prev: tuple[float, float, float, float] | None = None   # up ask, down ask, up time, down time
         self.floor: tuple[float, float] | None = None                # times of a dropped starting point
         self.last_fresh: float | None = None
@@ -161,7 +161,8 @@ class Round:
             if before < LINE <= now and (not self.sides or self.sides[-1] != side):
                 self.sides.append(side)
                 self.seconds.append(round(t - start, 1))
-                self._place(side, row, t)
+                if len(self.sides) >= self.from_trigger:
+                    self._place(side, row, t)  # crossings before the K-th: counted, not traded
                 break                         # live takes one direction per frame
         self.prev = (ua, da, ue, de)
 
@@ -231,7 +232,7 @@ def read_lines(path: Path):
             pos += len(piece)
 
 
-def day_rounds(path: Path, ladder: tuple[int, ...]) -> list[Round]:
+def day_rounds(path: Path, ladder: tuple[int, ...], from_trigger: int = 1) -> list[Round]:
     rounds: dict[str, Round] = {}
     for line in read_lines(path):
         try:
@@ -243,17 +244,17 @@ def day_rounds(path: Path, ladder: tuple[int, ...]) -> list[Round]:
             continue
         counter = rounds.get(round_id)
         if counter is None:
-            counter = rounds[round_id] = Round(int(round_id), ladder)
+            counter = rounds[round_id] = Round(int(round_id), ladder, from_trigger)
         counter.feed(row)
     return sorted(rounds.values(), key=lambda item: item.start)
 
 
-def _work(job: tuple[Path, str, str, tuple[int, ...]]) -> list[tuple]:
-    history, coin, day, ladder = job
+def _work(job: tuple[Path, str, str, tuple[int, ...], int]) -> list[tuple]:
+    history, coin, day, ladder, from_trigger = job
     out = []
-    for item in day_rounds(history / coin / f"{day}.jsonl.gz", ladder):
+    for item in day_rounds(history / coin / f"{day}.jsonl.gz", ladder, from_trigger):
         pnl = item.pnl()
-        if item.complete() and pnl is not None and item.sides:
+        if item.complete() and pnl is not None and len(item.sides) >= from_trigger:
             out.append((coin, day, item.seconds[0], len(item.sides), item.sides[0] == item.winner, pnl))
     return out
 
@@ -277,17 +278,22 @@ def main() -> None:
     parser.add_argument("--ladder", default="5,13,60")
     parser.add_argument("--first-after", type=float, default=0.0,
                         help="trade only rounds whose first trigger is at or after this second")
+    parser.add_argument("--from-trigger", type=int, default=1,
+                        help="count the first K-1 triggers without trading; rung 1 at the K-th")
+    parser.add_argument("--jobs", type=int, default=3)
     args = parser.parse_args()
     ladder = tuple(int(x) for x in args.ladder.split(","))
     first = date.fromisoformat(args.first or "2026-10-05")
     last = date.fromisoformat(args.last) if args.last else datetime.now(BEIJING).date() - timedelta(days=1)
     days = [(first + timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
     coins = args.coins.split(",")
-    with Pool(3) as pool:
-        rows = [row for chunk in pool.imap_unordered(_work, [(args.history, c, d, ladder) for c in coins for d in days])
+    with Pool(args.jobs) as pool:
+        jobs = [(args.history, c, d, ladder, args.from_trigger) for c in coins for d in days]
+        rows = [row for chunk in pool.imap_unordered(_work, jobs)
                 for row in chunk]
     rows = [row for row in rows if row[2] >= args.first_after]
-    print(f"阶梯 {'/'.join(map(str, ladder))}，第一次触发 >= {args.first_after:g} 秒，{days[0]} ~ {days[-1]}")
+    print(f"阶梯 {'/'.join(map(str, ladder))}，第一次触发 >= {args.first_after:g} 秒，"
+          f"从第 {args.from_trigger} 次触发开始，{days[0]} ~ {days[-1]}")
     for coin in coins:
         mine = [row for row in rows if row[0] == coin]
         win = sum(row[4] for row in mine) / len(mine) if mine else float("nan")
