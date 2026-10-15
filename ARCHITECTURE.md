@@ -140,7 +140,7 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 - 两边卖价之和 > 1.05 的帧跳过，不当基线也不判穿越，基线保留（`WIDE_SUM`）。
 - 触发：某一边卖一价 `prev < triggerPrice` 且 `now ≥ triggerPrice`，只有一边穿越；两边同一帧都穿越不算方向。
 - 下单：买穿越的那一边，GTC 限价 `maxBuyPrice`，股数 `stageShares[已用级数]`，`clientOrderId = <instanceId>:<marketId>:<阶段号>`。
-- 阶梯：与上一级同方向不加仓，所以各级 UP/DOWN 交替。被拒、放弃或撤单时 0 成交的阶段不占级数。
+- 阶梯："我们这边"是最后挂出的那一档的方向，还在路上（没回执）或挂着没成交的也算，和回测 `sides[-1]` 一样；只有对面过线才下一档，所以各级 UP/DOWN 交替。一档都还没成交时对面过线：撤掉第 1 档（`replaced`），在对面挂第 1 档；还在路上的那张等拿到订单号再撤。被拒、放弃、被换掉、撤单时 0 成交的阶段不占级数。每个阶段记下自己是第几档（`rung`），旧状态文件没有这个字段，按以前的规则推算。
 - `confirmationPrice` 只更新确认方向和 `confirmationCount`，不是下单条件。
 - 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
 - 收盘时撤掉未成交的余单；未提交的 `CREATED` 意图标为 `ABANDONED`。

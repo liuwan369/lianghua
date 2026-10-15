@@ -38,6 +38,11 @@ export interface ReversalStage {
   feeReserveUsd?: number;
   error?: string;
   cancelRequestedAt?: number;
+  /** Ladder index (0-based) the stage was sized for; older state files lack it. */
+  rung?: number;
+  /** Rung 1 given up for rung 1 on the other side (STRATEGY.md 4); it holds
+   * nothing unless a fill raced the cancel. */
+  replaced?: boolean;
 }
 interface QuoteReference {
   upAsk: number;
@@ -176,8 +181,8 @@ export class BtcReversalStrategy implements StrategyPlugin {
       // Report the ladder position actually consumed, so a rejected stage does
       // not advertise a rung the next entry will not use.
       consumedStages: BtcReversalStrategy.consumedRungs(round),
-      nextStage: BtcReversalStrategy.consumedRungs(round) < round.config.maxStages ? BtcReversalStrategy.consumedRungs(round) + 1 : null,
-      nextShares: BtcReversalStrategy.consumedRungs(round) < round.config.maxStages ? round.config.stageShares[BtcReversalStrategy.consumedRungs(round)] : null,
+      nextStage: BtcReversalStrategy.nextRung(round) < round.config.maxStages ? BtcReversalStrategy.nextRung(round) + 1 : null,
+      nextShares: BtcReversalStrategy.nextRung(round) < round.config.maxStages ? round.config.stageShares[BtcReversalStrategy.nextRung(round)] : null,
       nextDirection: BtcReversalStrategy.lastLiveDirection(round) === "UP" ? "DOWN"
         : BtcReversalStrategy.lastLiveDirection(round) === "DOWN" ? "UP" : null }));
     const currentRound = [...rounds].sort((a, b) => b.startsAt - a.startsAt).find(round =>
@@ -304,6 +309,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
         // The config is frozen by updateConfig's warm-window rule (BUGS P2-12).
         round.status = "running"; changed = true;
       }
+      // A replaced rung 1 is cancelled as soon as it has a venue identity: one
+      // still in flight at the switch gets its cancel when its ID arrives.
+      changed = this.cancelReplaced(round, context, actions) || changed;
       const marketBlocked = context.account.risk.blockedMarketIds?.includes(round.marketId) === true;
       if (this.state.paused || context.account.risk.halted || marketBlocked) {
         round.reason = this.state.paused ? "已暂停新增交易"
@@ -385,28 +393,25 @@ export class BtcReversalStrategy implements StrategyPlugin {
         changed = true;
         continue;
       }
-      const consumed = BtcReversalStrategy.consumedRungs(round);
-      if (consumed >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
-      if (!direction) { round.reason = consumed ? "等待相反方向跨价" : "等待触发跨价"; continue; }
-      // Rule 4: rung 1 not yet filled when the other side crosses → cancel the
-      // old order, place rung 1 on the new side (same 5 shares). Only when no
-      // rung has been consumed (no capital committed).
-      if (!consumed && round.stages.length > 0) {
-        for (const stage of round.stages) {
-          if (activeOrder(stage.status) && stage.orderId && stage.filledShares <= EPS) {
-            actions.push({ kind: "cancel", orderId: stage.orderId });
-          }
-        }
-      }
-      // Compare against the last rung that survived. A rejected stage committed
-      // nothing, so it must not lock its direction out of being retried.
-      if (direction === BtcReversalStrategy.lastLiveDirection(round)) {
+      // "Our side" is the last rung placed, in flight or resting unfilled
+      // included (STRATEGY.md 5, backtest `sides[-1]`): only the other side
+      // crossing is a reversal. Taking it from filled rungs only re-placed the
+      // same rung while one was still on its way (240 of 2.5k btc rounds).
+      const placed = BtcReversalStrategy.placedStages(round);
+      if (!direction) { round.reason = placed.length ? "等待相反方向跨价" : "等待触发跨价"; continue; }
+      if (direction === placed[placed.length - 1]?.direction) {
         round.reason = "方向明确但与上一阶段同向，等待相反方向跨价"; continue;
       }
+      // Rule 4: nothing bought yet when the other side crosses → give up rung 1
+      // there and place rung 1 here (before the ladder limit: a 1-rung ladder
+      // switches sides too, as the backtest does).
+      const switchSides = placed.length > 0 && placed.every(stage => stage.filledShares <= EPS);
+      const rung = switchSides ? 0 : placed.length;
+      if (rung >= round.config.maxStages) { round.reason = "已达到设置的阶段上限"; continue; }
       const market = context.markets.find(m => m.id === round.marketId);
       const tokenId = direction === "UP" ? round.upTokenId : round.downTokenId;
       const instrument = market?.instruments.find(i => i.tokenId === tokenId);
-      const shares = round.config.stageShares[consumed];
+      const shares = round.config.stageShares[rung];
       if (!instrument || !this.validSizeAndPrice(instrument, shares, round.config.maxBuyPrice)) {
         round.reason = "当前阶段数量或价格不符合交易所规则"; continue;
       }
@@ -439,9 +444,12 @@ export class BtcReversalStrategy implements StrategyPlugin {
       if (cost + unreserved > context.account.risk.availableUsd + EPS) {
         round.reason = "可用余额不足以提交该阶段"; continue;
       }
+      if (switchSides) for (const stage of placed) stage.replaced = true;
+      candidate.rung = rung;
       round.stages.push(candidate); round.lastStageDirection = direction; round.reason = "已触发，等待真实订单回报";
       this.indexStage(round, candidate);
       changed = true;
+      if (switchSides) this.cancelReplaced(round, context, actions);
       actions.push({ kind: "submit", order: this.orderIntent(round, candidate, round.config) });
     }
     // Write the economic stage key before returning an action to the execution layer.
@@ -532,27 +540,38 @@ export class BtcReversalStrategy implements StrategyPlugin {
    * venue and committed no capital, so it must not advance the ladder: sizing off
    * `stages.length` turned a rejected first rung into an 18-share entry where 5
    * was intended (stageShares [5, 18, 54, 130] then). */
-  private static consumedRungs(round: ReversalRound): number {
-    return round.stages.filter(stage => BtcReversalStrategy.consumedRung(stage)).length;
-  }
-  /** A rung is consumed only if it actually bought something. A stage that has
-   * not filled at all — whether it ended (REJECTED/ABANDONED/CANCELLED at 0) or
-   * is still open (OPEN/SUBMITTING at 0) — committed no capital. Counting an
-   * OPEN/0-fill stage as consumed made the opposite crossing place rung 2 (13
-   * shares) instead of cancelling and re-placing rung 1 (5 shares). */
-  private static consumedRung(stage: ReversalStage): boolean {
-    if (stage.status === "REJECTED" || stage.status === "ABANDONED") return false;
-    const filled = Number(stage.filledShares) || 0;
-    return filled > EPS;
-  }
-  /** Direction of the last rung that survived, so a rejection does not lock out
-   * the direction it was going to take. */
-  private static lastLiveDirection(round: ReversalRound): "UP" | "DOWN" | undefined {
-    for (let index = round.stages.length - 1; index >= 0; index -= 1) {
-      const stage = round.stages[index]!;
-      if (BtcReversalStrategy.consumedRung(stage)) return stage.direction;
+  private cancelReplaced(round: ReversalRound, context: StrategyContext, actions: StrategyAction[]): boolean {
+    let changed = false;
+    const quarantined = context.account.quarantinedOrderIds ?? [];
+    for (const stage of round.stages) {
+      if (!stage.replaced || !activeOrder(stage.status) || !stage.orderId || stage.filledShares >= stage.shares - EPS
+        || quarantined.includes(stage.orderId)) continue;
+      if (stage.cancelRequestedAt !== undefined && context.now - stage.cancelRequestedAt < 1) continue;
+      stage.cancelRequestedAt = context.now; changed = true;
+      actions.push({ kind: "cancel", orderId: stage.orderId });
     }
-    return undefined;
+    return changed;
+  }
+  private static consumedRungs(round: ReversalRound): number {
+    return BtcReversalStrategy.placedStages(round).length;
+  }
+  /** The rungs on the ladder: placed and not given up. In flight (CREATED,
+   * SUBMITTING) and resting unfilled (OPEN at 0) count, as the backtest's live
+   * orders do. A stage that never reached the venue (REJECTED/ABANDONED), a rung
+   * 1 replaced on the other side, or one cancelled with nothing bought holds no
+   * rung, so the ladder retries it. */
+  private static placedStages(round: ReversalRound): ReversalStage[] {
+    return round.stages.filter(stage => stage.status !== "REJECTED" && stage.status !== "ABANDONED" && !stage.replaced
+      && !(stage.status === "CANCELLED" && stage.filledShares <= EPS));
+  }
+  /** Ladder index the next reversal would place (for the console). */
+  private static nextRung(round: ReversalRound): number {
+    const placed = BtcReversalStrategy.placedStages(round);
+    return placed.length && placed.every(stage => stage.filledShares <= EPS) ? 0 : placed.length;
+  }
+  private static lastLiveDirection(round: ReversalRound): "UP" | "DOWN" | undefined {
+    const placed = BtcReversalStrategy.placedStages(round);
+    return placed[placed.length - 1]?.direction;
   }
   private indexStage(round: ReversalRound, stage: ReversalStage): void {
     this.stagesByClient.set(stage.clientOrderId, { round, stage });
@@ -582,11 +601,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
         || typeof round.roundId !== "string" || !round.roundId.trim()
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
         || !Array.isArray(round.stages)
-        // Bound the CONSUMED rungs, not the array length. A rejected or
-        // 0-fill-cancelled stage commits nothing and does not advance the
-        // ladder, so a round can hold more stage records than maxStages while
-        // still having consumed <= maxStages rungs (BUGS P0-1).
-        || BtcReversalStrategy.consumedRungs(round) > round.config.maxStages
+        // A round can hold more stage records than maxStages (rejected,
+        // replaced or 0-fill-cancelled ones hold no rung, BUGS P0-1); each
+        // stage's own rung is bounded below.
         || !Number.isSafeInteger(round.confirmationCount) || round.confirmationCount < 0
         || !["waiting_start", "waiting_next_round", "running", "ended"].includes(round.status)
         || typeof round.firstSampleSeen !== "boolean" || typeof round.rebuildingReference !== "boolean"
@@ -599,15 +616,21 @@ export class BtcReversalStrategy implements StrategyPlugin {
       // is stageShares[rungs consumed BEFORE it], not stageShares[array index]:
       // a rejected/0-fill-cancelled stage consumes no rung, so the next stage
       // reuses the same size and may repeat the same direction (BUGS P0-1).
-      let direction: ReversalDirection | undefined;      // last LIVE (consumed) direction
+      // A stage records the rung it was sized for. Older files lack it: derive
+      // it from the filled rungs before it, the rule they were written under.
+      let direction: ReversalDirection | undefined;      // last filled direction (older files)
       let lastStageDir: ReversalDirection | undefined;    // direction of the last stage record
       let consumed = 0;
       for (const [index, stage] of round.stages.entries()) {
         const expectedId = `${state.instanceId}:${round.marketId}:${index + 1}`;
+        const legacy = stage.rung === undefined;
+        const rung = stage.rung ?? consumed;
         if (stage.stage !== index + 1 || stage.clientOrderId !== expectedId || clients.has(stage.clientOrderId)
-          || !validDirection(stage.direction) || stage.direction === direction
+          || !validDirection(stage.direction) || (legacy && stage.direction === direction)
+          || !Number.isSafeInteger(rung) || rung < 0 || (!legacy && rung >= round.config.maxStages)
+          || (stage.replaced !== undefined && typeof stage.replaced !== "boolean")
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
-          || stage.price !== round.config.maxBuyPrice || stage.shares !== round.config.stageShares[consumed]
+          || stage.price !== round.config.maxBuyPrice || stage.shares !== round.config.stageShares[rung]
           || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares)
           || stage.filledShares < 0 || stage.filledShares > stage.shares + EPS
           || (stage.feeReserveUsd !== undefined && (!Number.isFinite(stage.feeReserveUsd) || stage.feeReserveUsd < 0))
@@ -615,8 +638,9 @@ export class BtcReversalStrategy implements StrategyPlugin {
           || !["initial_band_entry", "crossing"].includes(stage.trigger)) throw new Error("invalid persisted reversal stage");
         clients.add(stage.clientOrderId);
         lastStageDir = stage.direction;
-        // Only a consumed rung advances the ladder size and the live direction.
-        if (BtcReversalStrategy.consumedRung(stage)) { direction = stage.direction; consumed += 1; }
+        if (stage.status !== "REJECTED" && stage.status !== "ABANDONED" && stage.filledShares > EPS) {
+          direction = stage.direction; consumed += 1;
+        }
       }
       if (lastStageDir !== round.lastStageDirection) throw new Error("invalid persisted stage direction");
     }
