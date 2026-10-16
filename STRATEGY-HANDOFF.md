@@ -239,7 +239,7 @@ python scripts/backtest.py --history E:/pm-backup/market-history --coins btc,eth
 
 ## 8. 实盘和系统（策略研究需要知道的部分）
 
-- 服务器：`ssh -i ~/.ssh/id_ed25519_dublin_pm root@34.242.206.196`，目录 `/root/pm-system`。控制台：https://34-242-206-196.sslip.io/console/
+- 服务器：`ssh pm-new`（`root@166.1.221.53`），目录 `/root/pm-system`。控制台：https://166-1-221-53.sslip.io/console/
 - **交易现在停着**。已发布的策略配置是 revision 22（btc、1 档 5 股、起始秒 0）。
 - 实盘引擎支持这些参数，都在控制台策略页填：触发价、限价、阶梯股数、档数、起始秒、单场/总资金上限、每日亏损上限。
 - 要加新的规则参数（比如"从第几次开始"），改引擎 `backend/engine/src/strategies/btc-reversal.ts`、控制面 `scripts/dashboard/strategy_config.py`、控制台 `frontend/console/strategy-block.js`、`frontend/console/shared/api-adapter.js`，再加测试。可以参考 `firstTriggerFromSec`（起始秒）当初是怎么加的。

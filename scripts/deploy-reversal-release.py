@@ -414,9 +414,34 @@ result={'revision':manifest['revision'],'release':str(release),'files_verified':
 print(json.dumps(result))
 '''
 
+HOST = "166.1.221.53"
+# Port 22 of this box is unreachable from the operator's China line: set
+# PM_DEPLOY_SOCKS=127.0.0.1:10808 to go through the local SOCKS5 proxy.
+SOCKS = os.environ.get("PM_DEPLOY_SOCKS", "")
+
+
+def socks_socket():
+    import socket, struct
+    host, port = SOCKS.rsplit(":", 1)
+    sock = socket.create_connection((host, int(port)), timeout=20)
+    sock.sendall(b"\x05\x01\x00")
+    if sock.recv(2) != b"\x05\x00":
+        raise ConnectionError("SOCKS5 proxy refused no-auth")
+    sock.sendall(b"\x05\x01\x00\x01" + socket.inet_aton(HOST) + struct.pack(">H", 22))
+    reply = sock.recv(10)
+    if len(reply) < 2 or reply[1] != 0:
+        raise ConnectionError(f"SOCKS5 connect to {HOST}:22 failed: {reply!r}")
+    return sock
+
+
+def connect(client):
+    client.connect(HOST, username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"),
+                   timeout=20, sock=socks_socket() if SOCKS else None)
+
+
 client = paramiko.SSHClient()
 client.load_system_host_keys()
-client.connect("34.242.206.196", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
+connect(client)
 try:
     directory = "/root/.pm-releases/" + RELEASE
     with client.open_sftp() as sftp:
@@ -442,7 +467,7 @@ try:
         for _ in range(60):
             time.sleep(10)
             try:
-                client.connect("34.242.206.196", username="root", key_filename=str(Path.home()/".ssh/id_ed25519_dublin_pm"), timeout=20)
+                connect(client)
                 with client.open_sftp() as sftp, sftp.open(directory + "/result.json") as handle:
                     output = handle.read().decode()
                 break
