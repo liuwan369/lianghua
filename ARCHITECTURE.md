@@ -205,6 +205,6 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 
 ## 已知限制与延后
 
-- O1：服务器 root 允许密码 SSH 登录且对公网开放。计划调试完后在 Lightsail 防火墙设 IP 白名单（80 端口需对外开放以续期证书）。
+- O1：服务器 root 允许密码 SSH 登录且对公网开放。计划调试完后设 IP 白名单（80 端口需对外开放以续期证书）。
 - O3：没有任何备份（账本、结算记录、账户配置只在这一块盘上）。调试完后再做。
 - C30：账本自己计算已结算盈亏的旧逻辑（`scripts/dashboard/ledger.py`）待官方数据连续稳定、没出现 `ledger` 回退后删除。
