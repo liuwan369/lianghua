@@ -18,14 +18,14 @@ https://166-1-221-53.sslip.io/console/ （nginx basic auth）。四个页面，�
 ## 目录
 
 - `backend/engine/`：TypeScript 交易引擎、行情采集器、账户读取器（Node ≥ 24）。
-- `scripts/`：Python 控制面 `system-dashboard-server.py`、`dashboard/` 读模型、部署脚本、回测 `backtest.py`（只读录制行情，在服务器上手动跑）。
+- `scripts/`：Python 控制面 `system-dashboard-server.py`、`dashboard/` 读模型、部署脚本、回测 `backtest.py`（只读录制行情，在本机跑）。
 - `frontend/console/`：静态控制台，由控制面托管。
 - `config/`：systemd 单元和 nginx 配置。
 
 ## 部署
 
 ```
-python scripts/deploy-reversal-release.py
+PM_DEPLOY_SOCKS=127.0.0.1:10808 python scripts/deploy-reversal-release.py
 ```
 
 不带参数，只部署已提交的 HEAD（未提交的改动不会上线）。交易必须处于停止状态，否则拒绝。详见 [ARCHITECTURE.md](ARCHITECTURE.md#部署与回滚)。
@@ -45,5 +45,5 @@ node frontend/console/regress/<名字>.mjs
 
 - [ARCHITECTURE.md](ARCHITECTURE.md)：进程、模块、数据流、策略、风控、结算、文件、部署、已知限制。
 - [API.md](API.md)：控制面 HTTP 接口和推送。
-- [AGENTS.md](AGENTS.md)：铁律和工作方式。
+- [AGENTS.md](AGENTS.md)：铁律和工作方式；[HANDOFF.md](HANDOFF.md)：当前状态、服务器操作、行情录制。
 - [STRATEGY.md](STRATEGY.md)：已确认的策略规则和回测口径；[REVERSAL.md](REVERSAL.md)：怎么判过线、谁赢。

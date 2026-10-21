@@ -128,7 +128,7 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 
 ## 策略 `btc-reversal`
 
-> 规则以 [STRATEGY.md](STRATEGY.md) 为准，"怎么判过线"见 [REVERSAL.md](REVERSAL.md)；回测用 `scripts/backtest.py`（STRATEGY.md 文末"回测口径"）。
+> 规则以 [STRATEGY.md](STRATEGY.md) 为准，"怎么判过线"见 [REVERSAL.md](REVERSAL.md)；回测 `scripts/backtest.py` 按同一套判定（STRATEGY.md 文末"回测口径"）。
 
 默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,13,60]`、`maxStages 3`（STRATEGY.md 第 6 条；控制面 `strategy_config.default_config()` 同值）、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`、`firstTriggerFromSec 0`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 

@@ -1,7 +1,7 @@
-"""Backtest the reversal ladder on the market recordings. Read-only; run on the
-server (data/market-history/<coin>/<Beijing date>.jsonl.gz):
+"""Backtest the reversal ladder on the market recordings. Read-only; run it
+locally on the E: copy, never on the server:
 
-    nice -n 19 python3 scripts/backtest.py --coins eth --first-after 60
+    python scripts/backtest.py --history E:/pm-backup/market-history --coins btc --from 2026-10-17
 
 Crossings, like live (STRATEGY.md 2-5, REVERSAL.md):
 - each side's ask, only rows inside the round (R <= t < R+300);
@@ -18,8 +18,8 @@ Orders (STRATEGY.md 4-6), each a 0.70 limit:
   largest quantity <= 0.70 seen in any one later frame of the round;
 - rung 1 not yet filled when the other side crosses is cancelled and placed
   there, still as rung 1; nothing after the last rung.
-Winner: the last book frame with an ask or bid >= 0.9 (matched the official
-result on 82 of 82 checked rounds).
+Winner: the last book frame with an ask or bid >= 0.9 (wrong on 12 of 17,280
+rounds checked against the official result, mostly books emptied at the close).
 Limits: only five levels are recorded (deeper asks are missed: under-fills)
 and no queue ahead of us is modelled (over-fills).
 """
