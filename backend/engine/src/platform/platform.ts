@@ -280,10 +280,17 @@ export class TradingPlatform {
     return true;
   }
   private context(): StrategyContext {
-    return freeze({ mode: this.options.adapters.gateway.mode, now: this.options.now?.() ?? Date.now() / 1000,
+    const now = this.options.now?.() ?? Date.now() / 1000;
+    // Only markets that have not ended, and their books. The platform keeps
+    // every market for settlement, and every event clones this context: all of
+    // them cost a lead event ~6.5 ms after a day of rounds, ~23 ms after 3.5.
+    const markets = [...this.markets.values()].filter(market => market.endsAt > now);
+    const tokens = new Set(markets.flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
+    return freeze({ mode: this.options.adapters.gateway.mode, now,
       // Strategy contexts expose the execution-safe view. The public market
       // accessors and paired snapshots retain the venue's raw L2 for display.
-      markets: this.market.list(), books: clone([...this.executionBooks.values()]), account: this.core.contextSnapshot(),
+      markets: clone(markets), books: clone([...this.executionBooks.values()].filter(book => tokens.has(book.tokenId))),
+      account: this.core.contextSnapshot(),
       estimateFee: (order: Omit<OrderRequest, "strategyId">) =>
         this.options.adapters.estimateFee?.({ ...order, strategyId: "estimate" }) ?? 0 });
   }

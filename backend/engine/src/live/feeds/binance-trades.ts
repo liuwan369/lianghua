@@ -42,23 +42,41 @@ export const binanceTradeUrls = (symbol: string): string[] => [
 ];
 const IDLE_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 10_000;
+/** The rule was measured with a trade seen ~125 ms after it happened (p90
+ * ~360 ms). A copy older than this, e.g. the lagging line after the leading one
+ * dropped, would be a stale signal at today's book. */
+const MAX_TRADE_AGE_MS = 1_000;
+/** Trade time ahead of our clock (chrony keeps it under 1 ms). */
+const MAX_TRADE_LEAD_MS = 1_000;
+/** BTCUSDT runs ~10 aggregate trades a second; a bigger id jump is a bad frame. */
+const MAX_ID_JUMP = 1_000_000;
 
 /** Parse one aggTrade frame and pass it on only if its id is newer than every
- * id already delivered. Both lines share one ingest, so whichever line is
- * first wins and the later copy is dropped; delivery order follows the id. */
+ * id already delivered and it happened within MAX_TRADE_AGE_MS. Both lines
+ * share one ingest, so whichever line is first wins and the later copy is
+ * dropped; delivery order follows the id. */
 export function createAggTradeIngest(onTrade: (trade: AggTrade) => void) {
   let lastId = -1;
-  return (raw: unknown, receivedAtUnix: number, receivedAtMonoMs: number): boolean => {
+  // Whether the last frame was a current trade (delivered, or a fresh copy the
+  // other line already delivered): what keeps a line counted as alive.
+  let current = false;
+  const ingest = (raw: unknown, receivedAtUnix: number, receivedAtMonoMs: number): boolean => {
+    current = false;
     let message: { a?: unknown; p?: unknown; T?: unknown };
     try { message = JSON.parse(String(raw)); } catch { return false; }
     const id = message?.a;
-    if (typeof id !== "number" || !(id > lastId)) return false;
-    const price = Number(message.p), tradeTimeMs = message.T;
-    if (!(price > 0) || price === Infinity || typeof tradeTimeMs !== "number" || !(tradeTimeMs > 0)) return false;
+    const price = Number(message?.p), tradeTimeMs = message?.T;
+    if (typeof id !== "number" || !(price > 0) || price === Infinity || typeof tradeTimeMs !== "number") return false;
+    const ageMs = receivedAtUnix * 1000 - tradeTimeMs;
+    if (!(ageMs <= MAX_TRADE_AGE_MS && ageMs >= -MAX_TRADE_LEAD_MS)) return false;
+    if (!(id > lastId)) { current = true; return false; }
+    if (lastId >= 0 && id - lastId > MAX_ID_JUMP) return false;
     lastId = id;
+    current = true;
     onTrade({ id, price, tradeTimeMs, receivedAtUnix, receivedAtMonoMs });
     return true;
   };
+  return Object.assign(ingest, { lastWasCurrent: () => current });
 }
 
 function connect(url: string, sockets: Set<WebSocket>, signal: AbortSignal): Promise<WebSocket> {
@@ -119,8 +137,11 @@ async function lineLoop(url: string, line: number, ingest: ReturnType<typeof cre
         const onMessage = (raw: WebSocket.RawData) => {
           const receivedAtMonoMs = performance.now();
           const receivedAtMs = Date.now();
-          lastMessageAt[line] = receivedAtMs;
-          try { ingest(raw, receivedAtMs / 1000, receivedAtMonoMs); } catch { /* A consumer error must not kill the line. */ }
+          // Alive = this line carries current trades (its own copy or a fresh
+          // duplicate); pings, garbage and stale copies do not count.
+          try { ingest(raw, receivedAtMs / 1000, receivedAtMonoMs); }
+          catch { /* A consumer error must not kill the line. */ }
+          if (ingest.lastWasCurrent()) lastMessageAt[line] = receivedAtMs;
         };
         socket.on("message", onMessage); socket.once("close", finish); socket.once("error", finish);
         signal.addEventListener("abort", finish, { once: true });

@@ -26,16 +26,60 @@ assert.deepEqual(binanceTradeUrls("btcusdt"), ["wss://stream.binance.com:9443/ws
   const ingest = createAggTradeIngest(t => got.push(t));
   // line A and line B interleaved, each in order, with overlaps
   const arrivals = [["A", 1], ["B", 1], ["B", 2], ["A", 2], ["A", 3], ["A", 5], ["B", 3], ["B", 4], ["B", 5], ["B", 6], ["A", 4], ["A", 6]];
-  for (const [, a] of arrivals) ingest(frame(a), 1_800_000_020.1, 42);
+  for (const [, a] of arrivals) ingest(frame(a), 1_800_000_020.1, 42);   // T = …020_00a: ~100 ms before
   assert.deepEqual(got.map(t => t.id), [1, 2, 3, 5, 6], "each id once; 4 arrived after 5 and is dropped");
   assert.deepEqual(got[0], { id: 1, price: 100000, tradeTimeMs: 1_800_000_020_001, receivedAtUnix: 1_800_000_020.1, receivedAtMonoMs: 42 });
   for (const bad of ["not json", "{}", JSON.stringify({ a: "7", p: "1", T: 1 }), JSON.stringify({ a: 7, p: "x", T: 1 }),
     JSON.stringify({ a: 7, p: "0", T: 1 }), JSON.stringify({ a: 7, p: "1" }), "null", JSON.stringify({ result: null, id: 1 })]) {
     assert.equal(ingest(bad, 0, 0), false, bad);
   }
-  assert.equal(ingest(Buffer.from(frame(7, "100001.5")), 1, 2), true, "ws delivers Buffers");
+  assert.equal(ingest(Buffer.from(frame(7, "100001.5")), 1_800_000_020.1, 2), true, "ws delivers Buffers");
   assert.equal(got.at(-1).price, 100001.5);
   assert.equal(got.length, 6, "malformed frames delivered nothing and did not move the id");
+}
+
+// --- a trade too old, or with an impossible time or id, never reaches the detector (review 10-25) ---
+// The rule assumes we see a trade ~125 ms after it happened. When the leading
+// line drops, the lagging one's copies are new ids but seconds old; a stray
+// frame with a far-future time would sit in the 250 ms window, and one with a
+// huge id would lift the watermark above every real trade.
+{
+  const got = [];
+  const ingest = createAggTradeIngest(t => got.push(t));
+  const T0 = 1_800_000_020_000, at = (ms) => ms / 1000;
+  assert.equal(ingest(frame(1, "100000.00", T0), at(T0 + 120), 1), true, "a fresh trade is delivered");
+  assert.equal(ingest(frame(2, "100030.00", T0 + 10), at(T0 + 10 + 4992), 2), false, "5 s old: dropped");
+  assert.equal(ingest(frame(3, "100030.00", T0 + 20), at(T0 + 20 + 1001), 3), false, "just over 1 s old: dropped");
+  assert.equal(ingest(frame(4, "100030.00", T0 + 30), at(T0 + 30 + 999), 4), true, "under 1 s: delivered");
+  assert.equal(ingest(frame(5, "100030.00", 9e15), at(T0 + 40), 5), false, "a far-future trade time is dropped");
+  assert.equal(ingest(frame(1e15, "100030.00", T0 + 50), at(T0 + 170), 6), false, "an id jump of 1e15 is dropped");
+  assert.equal(ingest(frame(6, "100030.00", T0 + 60), at(T0 + 180), 7), true, "real trades still flow after a bad id");
+  assert.deepEqual(got.map(t => t.id), [1, 4, 6]);
+  // A too-old copy does not move the watermark: the next fresh one still lands.
+  assert.equal(ingest(frame(7, "1", T0 + 70), at(T0 + 70 + 3000), 8), false);
+  assert.equal(ingest(frame(7, "100030.00", T0 + 70), at(T0 + 190), 9), true);
+  // The first trade after a start sets the watermark wherever Binance's id is.
+  const fresh = [];
+  assert.equal(createAggTradeIngest(t => fresh.push(t))(frame(4_100_000_000, "100000.00", T0), at(T0 + 100), 1), true);
+}
+
+// --- a line that only sends non-trade frames is not healthy and is recycled (review 10-25) ---
+{
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise(r => server.on("listening", r));
+  let socket;
+  server.on("connection", ws => { socket = ws; });
+  const feed = runBinanceTrades(() => {}, "btcusdt", [`ws://127.0.0.1:${server.address().port}`]);
+  assert.ok(await until(() => socket));
+  const noise = setInterval(() => { try { socket.send("not json"); } catch {} }, 200);
+  await sleep(1500);
+  assert.equal(feed.isHealthy(), false, "garbage only: not healthy");
+  socket.send(frame(1, "100000.00", Date.now() - 100));
+  assert.ok(await until(() => feed.isHealthy(), 2000), "a real trade makes the line healthy");
+  clearInterval(noise);
+  feed.stop();
+  for (const c of server.clients) c.terminate();
+  server.close();
 }
 
 // --- two live lines: whichever has it first, each trade once, ids increasing ---
@@ -50,7 +94,8 @@ assert.deepEqual(binanceTradeUrls("btcusdt"), ["wss://stream.binance.com:9443/ws
   const feed = runBinanceTrades(t => got.push(t), "btcusdt", urls);
   assert.equal(feed.isHealthy(), false, "no message yet");
   assert.ok(await until(() => sockets[0].length && sockets[1].length), "both lines connect");
-  const send = (line, a) => sockets[line].at(-1).send(frame(a));
+  // Live lines take the real clock: a trade must be under 1 s old when it lands.
+  const send = (line, a) => sockets[line].at(-1).send(frame(a, "100000.00", Date.now() - 50));
   // B is ahead for 1-3, A ahead for 4-6, then both resend old ids.
   for (const a of [1, 2, 3]) send(1, a);
   await sleep(50);
@@ -95,7 +140,7 @@ assert.deepEqual(binanceTradeUrls("btcusdt"), ["wss://stream.binance.com:9443/ws
     if (signal) sink({ kind: "lead", ...signal });
   }, "btcusdt", [url]);
   assert.ok(await until(() => socket));
-  const T = 1_800_000_020_000;
+  const T = Date.now() - 100;
   const tape = [[1, "100000.00", T], [2, "100030.00", T + 10], [3, "100031.00", T + 20], [4, "100000.00", T + 30], [5, "100030.00", T + 40]];
   for (const [a, p, t] of tape) socket.send(frame(a, p, t));
   assert.ok(await until(() => events.length === 3));

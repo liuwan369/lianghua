@@ -1,11 +1,6 @@
 /** Exchange product codes per coin. The collector (cli/market-snapshot.ts)
- * subscribes to each coin's Binance 1 s kline with them. */
-
-export interface ReferenceFeedCapability {
-  asset: string;
-  supported: boolean;
-  reason?: "invalid_asset" | "unsupported_asset" | "disabled_by_configuration";
-}
+ * subscribes to each coin's Binance 1 s kline with them; the engine
+ * (cli/platform.ts) subscribes to the coin's Binance aggTrade. */
 
 export interface ReferenceVenueProducts {
   binance: string;
@@ -27,38 +22,10 @@ const REFERENCE_ASSETS: Readonly<Record<string, ReferenceVenueProducts>> = Objec
   bnb: { binance: "bnbusdt", coinbase: "BNB-USD", okx: "BNB-USDT", bybit: "BNBUSDT" },
 });
 
-function configuredReferenceAssets(): Set<string> | undefined {
-  const raw = process.env.PM_REFERENCE_ASSETS?.trim();
-  if (!raw) return undefined;
-  return new Set(raw.split(",").map(value => value.trim().toLowerCase()).filter(Boolean));
-}
-
-/** Reports whether this process has a real venue mapping for an asset. */
-function referenceFeedCapability(asset = "btc"): ReferenceFeedCapability {
-  const normalized = asset.trim().toLowerCase();
-  if (!/^[a-z0-9]+$/.test(normalized)) return { asset: String(asset), supported: false, reason: "invalid_asset" };
-  if (!Object.hasOwn(REFERENCE_ASSETS, normalized)) return { asset: normalized, supported: false, reason: "unsupported_asset" };
-  const configured = configuredReferenceAssets();
-  if (configured && !configured.has(normalized)) {
-    return { asset: normalized, supported: false, reason: "disabled_by_configuration" };
-  }
-  return { asset: normalized, supported: true };
-}
-
-/** Returns the exact public venue products used for the requested asset. */
+/** The exact public venue products for a supported coin. */
 export function referenceVenueProducts(asset = "btc"): ReferenceVenueProducts {
-  const capability = referenceFeedCapability(asset);
-  if (!capability.supported) throw new ReferenceFeedUnsupportedError(capability);
-  return { ...REFERENCE_ASSETS[capability.asset]! };
-}
-
-export class ReferenceFeedUnsupportedError extends Error {
-  readonly code = "reference_feed_unsupported";
-  readonly capability: ReferenceFeedCapability;
-
-  constructor(capability: ReferenceFeedCapability) {
-    super(`${capability.asset}: ${capability.reason ?? "reference_feed_unsupported"}`);
-    this.name = "ReferenceFeedUnsupportedError";
-    this.capability = capability;
-  }
+  const normalized = asset.trim().toLowerCase();
+  const products = Object.hasOwn(REFERENCE_ASSETS, normalized) ? REFERENCE_ASSETS[normalized] : undefined;
+  if (!products) throw new Error(`no exchange products for ${asset}`);
+  return { ...products };
 }
