@@ -316,6 +316,33 @@ export class TradingCore {
   }
 
   snapshot(): CoreState { this.updateRisk(); return copy(this.state); }
+  /** Drop ended, fully settled markets from the live state: their market
+   * record, orders, fills, empty positions and indexes. The caller decides
+   * which (cli pruneSettledHistory, the start-up rule); every persist copies
+   * the whole state, so a run that kept them all grew slower each round. */
+  forgetMarkets(marketIds: ReadonlySet<string>): void {
+    if (!marketIds.size) return;
+    const now = this.clock();
+    const markets = (this.state.markets ?? []).filter(market => marketIds.has(market.id));
+    if (markets.length !== marketIds.size || markets.some(market => market.endsAt > now)) {
+      throw new Error("forgetMarkets: every market must be known and ended");
+    }
+    const tokens = new Set(markets.flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
+    if (this.state.orders.some(order => tokens.has(order.tokenId) && reservationPending(order))
+      || this.state.positions.some(position => tokens.has(position.tokenId) && position.shares > EPS)
+      || this.state.fills.some(fill => tokens.has(fill.tokenId) && fill.status && !["CONFIRMED", "FAILED"].includes(fill.status))) {
+      throw new Error("forgetMarkets: a market still has an order, position or unsettled fill");
+    }
+    const orderIds = new Set(this.state.orders.filter(order => tokens.has(order.tokenId)).map(order => order.orderId));
+    this.state.markets = (this.state.markets ?? []).filter(market => !marketIds.has(market.id));
+    this.state.orders = this.state.orders.filter(order => !tokens.has(order.tokenId));
+    this.state.fills = this.state.fills.filter(fill => !tokens.has(fill.tokenId));
+    this.state.positions = this.state.positions.filter(position => !tokens.has(position.tokenId));
+    this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(id => !orderIds.has(id));
+    for (const token of tokens) { this.instruments.delete(token); this.books.delete(token); this.lastBidByToken.delete(token); }
+    this.reindexFills();
+    this.persist();
+  }
   /** Public account view includes the in-memory recovery gate without persisting it. */
   view(): CoreState { this.updateRisk(); return copy({ ...this.state, risk: this.recoveryRisk() }); }
   setRecovering(recovering: boolean, marketIds?: readonly string[]): void {

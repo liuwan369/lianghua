@@ -172,6 +172,19 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   }
 
   exportState(): BinanceLeadState { return clone(this.state); }
+  /** Drop ended rounds the platform has forgotten (cli pruneSettledHistory). */
+  forgetRounds(marketIds: ReadonlySet<string>): void {
+    if (!marketIds.size) return;
+    const kept = this.state.rounds.filter(round => !marketIds.has(round.marketId));
+    if (kept.length === this.state.rounds.length) return;
+    for (const round of this.state.rounds) {
+      if (!marketIds.has(round.marketId)) continue;
+      this.roundsByMarket.delete(round.marketId); this.workingRounds.delete(round.marketId); this.blockNoted.delete(round.marketId);
+      for (const stage of round.stages) { this.stagesByClient.delete(stage.clientOrderId); this.createdStages.delete(stage.clientOrderId); }
+    }
+    this.state.rounds = kept;
+    this.save();
+  }
   /** The round whose window holds `ts`, without cloning the state. Callers must not mutate it. */
   roundAt(ts: number): Readonly<LeadRound> | undefined {
     return this.state.rounds.find(round => round.startsAt <= ts && ts < round.endsAt);

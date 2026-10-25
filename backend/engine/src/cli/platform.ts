@@ -1151,9 +1151,34 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
               }
             }
           };
+          // Settled rounds leave memory while the run goes on, by the start-up
+          // rule (pruneSettledHistory). Every strategy save copies the whole
+          // state: after 300 kept rounds (877 KB) a lead signal reached its POST
+          // in 77 ms instead of 12 ms (server, 2026-10-25).
+          const forgetSettled = () => {
+            if (signalReason || primaryFailure) return;
+            let records: Record<string, unknown> = {};
+            try {
+              if (existsSync(settlementStateFile)) {
+                records = (JSON.parse(readFileSync(settlementStateFile, "utf8")) as { records?: Record<string, unknown> }).records ?? {};
+              }
+            } catch { return; }   // a write in progress: try on the next pass
+            const state = connection!.platform.core.snapshot();
+            const kept = new Set(pruneSettledHistory(state, records, Date.now() / 1000).state.markets?.map(market => market.id));
+            const dead = new Set((state.markets ?? []).map(market => market.id).filter(id => !kept.has(id)));
+            if (!dead.size) return;
+            connection!.platform.forgetMarkets(dead);
+            lead.forgetRounds(dead);
+            for (const id of dead) {
+              confirmedSettlements.delete(id); terminalSettlements.delete(id); pendingSettlements.delete(id);
+              settlementRecoveryMarketIds.delete(id);
+            }
+          };
           const settleEndedMarkets = (draining = false): Promise<void> | undefined => {
             if (settlementJob || (!draining && signalReason)) return settlementJob;
             settlementJob = runSettlementPass(draining).catch(() => reportError("settlement", "settlement_reconciliation_pending"))
+              .then(() => { if (!draining) forgetSettled(); })
+              .catch(() => reportError("settlement", "settled_history_prune_failed"))
               .finally(() => { settlementJob = undefined; });
             return settlementJob;
           };

@@ -279,6 +279,18 @@ export class TradingPlatform {
       durationMs: snapshot.marketAgeMs, ts, marketId });
     return true;
   }
+  /** Forget ended, settled markets here and in the core (see TradingCore.forgetMarkets). */
+  forgetMarkets(marketIds: ReadonlySet<string>): void {
+    this.core.forgetMarkets(marketIds);
+    for (const id of marketIds) {
+      const market = this.markets.get(id);
+      this.markets.delete(id);
+      for (const instrument of market?.instruments ?? []) {
+        this.books.delete(instrument.tokenId); this.executionBooks.delete(instrument.tokenId);
+      }
+    }
+    for (const [key, snapshot] of this.snapshots) if (snapshot.marketId && marketIds.has(snapshot.marketId)) this.snapshots.delete(key);
+  }
   private context(): StrategyContext {
     const now = this.options.now?.() ?? Date.now() / 1000;
     // Only markets that have not ended, and their books. The platform keeps
