@@ -165,6 +165,17 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   const s = begin();
   on(s, book(START + 20, 0.98, 0.03));
   assert.equal(submits(on(s, lead(START + 21)))[0].price, 0.99);
+  // An ask above 0.99 (tick 0.001) cannot be bought at the 0.99 cap: no order,
+  // and the round keeps its one attempt for a later signal (review 10-25).
+  const fine = { ...market, instruments: market.instruments.map(i => ({ ...i, tickSize: 0.001 })) };
+  const high = createStrategy();
+  high.onEvent({ kind: "timer", ts: START - 20 }, ctx(START - 20, account(), [fine]));
+  high.onEvent(book(START + 20, 0.995, 0.006), ctx(START + 20, account(), [fine]));
+  assert.deepEqual(submits(high.onEvent(lead(START + 21), ctx(START + 21.002, account(), [fine]))), []);
+  assert.equal(high.exportState().rounds[0].stages.length, 0, "the attempt is not used");
+  assert.match(high.exportState().rounds[0].reason, /0\.99/);
+  high.onEvent(book(START + 22, 0.98, 0.03), ctx(START + 22, account(), [fine]));
+  assert.equal(submits(high.onEvent(lead(START + 23), ctx(START + 23.002, account(), [fine])))[0].price, 0.99);
 }
 // --- a round discovered after its open is not traded ---
 {
@@ -249,6 +260,43 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   const two = JSON.parse(JSON.stringify(state));
   two.rounds[0].stages.push({ ...two.rounds[0].stages[0] });
   assert.throws(() => createStrategy({}, two));
+}
+// --- crash before the stage was saved: the core's order is the round's attempt (review 10-25) ---
+// The core persists the signed order (.intent) before POST but the strategy
+// state only on the next flush. After a crash in between, the restored core
+// holds the order and the strategy has no stage: the order must count as the
+// round's attempt (no second order), and later events must not throw on it.
+{
+  const s = begin();
+  const lost = s.exportState();                                         // saved before the signal
+  on(s, book(START + 20, 0.57, 0.45));
+  const [order] = submits(on(s, lead(START + 21, "UP")));
+  const pending = { ...orderRecord(order, "UNKNOWN", 0), reconciliationPending: true };
+  const acct = account({ orders: [pending] });
+  const r = createStrategy({}, JSON.parse(JSON.stringify(lost)));
+  r.onEvent(book(START + 30, 0.6, 0.42), ctx(START + 30, acct));
+  assert.deepEqual(submits(r.onEvent(lead(START + 31, "DOWN"), ctx(START + 31.002, acct))), [],
+    "the restored core order is this round's attempt");
+  const stage = r.exportState().rounds[0].stages[0];
+  assert.ok(stage, "the order is adopted as the round's stage");
+  assert.equal(stage.direction, "UP");
+  assert.equal(stage.price, order.price);
+  assert.equal(stage.status, "UNKNOWN");
+  // Later rounds keep trading: no strategy_callback_failed loop.
+  const next = { ...market, id: "0xn", roundId: String(START + 300), name: `btc-updown-5m-${START + 300}`,
+    startsAt: START + 300, endsAt: START + 600, instruments: market.instruments.map(i => ({ ...i, marketId: "0xn" })) };
+  r.onEvent({ kind: "timer", ts: START + 290 }, ctx(START + 290, acct, [market, next]));
+  r.onEvent(book(START + 320, 0.57, 0.45, { id: "0xn", round: String(START + 300) }), ctx(START + 320, acct, [market, next]));
+  const [later] = submits(r.onEvent(lead(START + 321), ctx(START + 321.002, acct, [market, next])));
+  assert.equal(later?.clientOrderId, "binance-lead:0xn:1", "the next round places its own order");
+  // A core order that disagrees with an existing stage is recorded, not thrown.
+  const odd = createStrategy();
+  odd.onEvent({ kind: "timer", ts: START - 20 }, ctx(START - 20));
+  odd.onEvent(book(START + 20, 0.57, 0.45), ctx(START + 20));
+  const [mine] = submits(odd.onEvent(lead(START + 21), ctx(START + 21.002)));
+  const other = account({ orders: [{ ...orderRecord(mine, "OPEN", 0), price: 0.66 }] });
+  assert.doesNotThrow(() => odd.onEvent({ kind: "timer", ts: START + 22 }, ctx(START + 22, other)));
+  assert.match(odd.exportState().rounds[0].stages[0].error ?? "", /不一致/);
 }
 // --- close: an unfilled remainder is cancelled, a filled order is not ---
 {

@@ -353,6 +353,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       round.reason = "交易所规则暂不可用"; return undefined;
     }
     const price = leadLimitPrice(ask, config.limitPremium, instrument.tickSize);
+    // A FAK under the ask cannot fill: keep the round's attempt for a later signal.
+    if (price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
     if (!this.validSizeAndPrice(instrument, config.shares, price)) {
       round.reason = "数量或限价不符合交易所规则"; return undefined;
     }
@@ -460,11 +462,17 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   }
   private recordOrder(order: OrderRecord): boolean {
     if (order.strategyId !== this.id) return false;
-    const indexed = this.stagesByClient.get(order.clientOrderId);
+    const indexed = this.stagesByClient.get(order.clientOrderId) ?? this.adoptOrder(order);
     if (!indexed) return false;
     const { round, stage } = indexed;
     if (order.tokenId !== stage.tokenId || order.direction !== "BUY" || Math.abs(order.shares - stage.shares) > EPS
-      || Math.abs(order.price - stage.price) > EPS) throw new Error("order does not match its lead stage");
+      || Math.abs(order.price - stage.price) > EPS) {
+      // The core's order is the truth; a throw here would fail every later event.
+      const error = `订单与本场记录不一致（token/价格/股数），以订单为准等对账：${order.orderId ?? order.clientOrderId}`;
+      if (stage.error === error) return false;
+      stage.error = error;
+      return true;
+    }
     if (stage.orderId === order.orderId && stage.status === order.status && stage.filledShares === order.filledShares
       && stage.error === order.error) return false;
     stage.orderId = order.orderId; stage.status = order.status; stage.filledShares = order.filledShares; stage.error = order.error;
@@ -473,6 +481,30 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (round.status === "ended" && activeOrder(stage.status) && stage.orderId
       && stage.filledShares < stage.shares - EPS) this.workingRounds.set(round.marketId, round);
     return true;
+  }
+  /** The core holds this round's order but the strategy has no stage: the
+   * process died after the signed order was saved (.intent, before POST) and
+   * before the strategy state was. The order is the round's one attempt. The
+   * signal it came from is gone; its fields are zero, the ask is the limit. */
+  private adoptOrder(order: OrderRecord): { round: LeadRound; stage: LeadStage } | undefined {
+    const match = /^(.+):([^:]+):1$/.exec(order.clientOrderId);
+    if (!match || match[1] !== this.state.instanceId) return undefined;
+    const round = this.roundsByMarket.get(match[2]!);
+    if (!round || round.stages.length || order.direction !== "BUY") return undefined;
+    const direction = order.tokenId === round.upTokenId ? "UP" : order.tokenId === round.downTokenId ? "DOWN" : undefined;
+    if (!direction) return undefined;
+    const stage: LeadStage = { stage: 1, direction, tokenId: order.tokenId, clientOrderId: order.clientOrderId,
+      price: order.price, shares: order.shares, createdAt: order.createdAt, status: order.status, filledShares: order.filledShares,
+      ...(order.orderId ? { orderId: order.orderId } : {}),
+      error: "重启时本场订单已在交易所记录中，策略记录丢失，按订单恢复",
+      signal: { direction, price: 0, refPrice: 0, moveBp: 0, tradeId: 0, tradeTimeMs: 0, receivedAtUnix: order.createdAt,
+        receivedAtMonoMs: 0 },
+      askAtSignal: order.price };
+    round.stages.push(stage);
+    this.indexStage(round, stage);
+    if (round.status === "ended") this.workingRounds.set(round.marketId, round);
+    this.noteAttempt(round, stage);
+    return { round, stage };
   }
   private noteAttempt(round: LeadRound, stage: LeadStage): void {
     if (round.status !== "ended") round.reason = BinanceLeadStrategy.attemptReason(stage);
