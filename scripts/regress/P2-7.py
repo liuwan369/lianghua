@@ -37,13 +37,13 @@ class P2_7(unittest.TestCase):
         path = self.console([
             {"kind": "platform_status", "status": "starting"},
             {"kind": "platform_error", "phase": "state_open", "code": "platform_run_failed",
-             "message": "invalid persisted reversal stage"},
+             "message": "invalid persisted binance-lead stage"},
             {"kind": "platform_status", "status": "failed"},
         ])
         result = server._automatic_stop_result(1, path)
         self.assertEqual(result["reason"], "process_failed")
         self.assertIn("state_open", result["message"])
-        self.assertIn("invalid persisted reversal stage", result["message"])
+        self.assertIn("invalid persisted binance-lead stage", result["message"])
 
     def test_control_normal_stop_unchanged(self):
         path = self.console([{"kind": "platform_status", "status": "stopped", "reason": "round_limit_reached"}])

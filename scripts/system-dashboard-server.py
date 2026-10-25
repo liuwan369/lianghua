@@ -1441,8 +1441,11 @@ def trade_log_stats(selection: tuple | None = None) -> dict:
 
 
 def strategy_config_store() -> StrategyConfigStore:
+    """binance-lead's own file. The retired btc-reversal-config.json beside it
+    is never read: until a binance-lead config is published the store answers
+    the defaults at revision 0, and a start needs a published revision."""
     global _strategy_config_store
-    path = (TRADING_ROOT / "results" / "dashboard" / "btc-reversal-config.json").resolve()
+    path = (TRADING_ROOT / "results" / "dashboard" / f"{STRATEGY_ID}-config.json").resolve()
     if _strategy_config_store is None or _strategy_config_store.path != path:
         _strategy_config_store = StrategyConfigStore(path)
     return _strategy_config_store
@@ -1477,7 +1480,7 @@ def strategy_control(payload: dict) -> dict:
         with _trading_lock:
             status = trading_status(include_stats=False)
             if not status["running"] or status["strategy_id"] != STRATEGY_ID or not _trading_log:
-                raise ValueError("反转策略尚未运行")
+                raise ValueError("策略尚未运行")
             control = _trading_log.with_suffix(".control.json")
             temporary = control.with_suffix(".next")
             temporary.write_text(json.dumps({"paused": action == "pause"}), encoding="utf-8")
@@ -1508,7 +1511,7 @@ def strategy_control(payload: dict) -> dict:
         if payload["revision"] != saved["savedRevision"]:
             raise ConfigConflictError(saved["savedRevision"])
         if not saved["savedRevision"]:
-            raise ValueError("请先保存策略参数")
+            raise ValueError("请先在策略页保存并发布 binance-lead 参数")
         config = saved["config"]
         selected_asset = config.get("assetId", "btc")
         requested_asset = payload.get("asset_id")
@@ -1645,6 +1648,10 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         account_id = account_wallet.lower() if isinstance(account_wallet, str) and account_wallet else None
         if strategy_config:
             identity = hashlib.sha256((account_id or "live").lower().encode()).hexdigest()[:20]
+            # The account's state, shared by every run and every strategy. The
+            # engine keeps settlement records at <state>.settlements.json, so a
+            # new name would orphan an unfinished redemption and the account's
+            # orders/positions; the "btc-reversal" prefix is only a file name.
             candidate_state = log_dir / f"btc-reversal-{identity}.platform-state.json"
         # Create the selected journal before returning the start response.
         # The status endpoint must never fall back to a previous run while the
@@ -1973,7 +1980,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         round_id = round_id if isinstance(round_id, str) and round_id else None
         supported = asset_id in SUPPORTED_ASSET_IDS
         return {"assetId": asset_id, "symbol": symbol, "supported": supported, "canEnable": supported,
-                "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
+                "name": str(row.get("name") or slug or (f"{symbol} 五分钟涨跌" if symbol else "市场")),
                 "marketId": market_id, "roundId": round_id, "market_id": market_id, "round_id": round_id,
                 "cycle": cycle, "startAt": start, "endAt": end, "yes": yes, "no": no,
                 "yesToken": yes["assetId"], "noToken": no["assetId"], "yesBid": yes["bid"],
@@ -2032,7 +2039,7 @@ def _modern_market(row: dict, *, now: float | None = None, stale_after_ms: float
         "symbol": symbol,
         "supported": supported,
         "canEnable": supported,
-        "name": str(row.get("name") or slug or (f"{symbol} 五分钟反转" if symbol else "市场")),
+        "name": str(row.get("name") or slug or (f"{symbol} 五分钟涨跌" if symbol else "市场")),
         "marketId": market_id,
         "roundId": round_id,
         "market_id": market_id,
@@ -2355,7 +2362,10 @@ def _modern_runtime(status: dict) -> dict:
             "source": "platform-runtime" if runtime else "control-plane",
             "asOf": source_at,
             "stale": stale, "runId": status.get("run_id"),
-            "strategyId": status.get("strategy_id") or "btc-reversal", "assetId": asset_id,
+            "strategyId": status.get("strategy_id") or STRATEGY_ID, "assetId": asset_id,
+            "leadFeedHealthy": runtime.get("lead_feed_healthy") if isinstance(runtime.get("lead_feed_healthy"), bool) else None,
+            # The strategy's verdict on the latest Binance signals (lead_signal, newest first).
+            "leadSignals": runtime.get("lead_signals") if isinstance(runtime.get("lead_signals"), list) else [],
             "execution": status.get("execution"), "risk": risk or None, "funds": funds, "markets": [
                 {**item, "marketId": item.get("marketId") or item.get("market_id") or item.get("id"),
                  "roundId": item.get("roundId") or item.get("round_id")}
@@ -2743,8 +2753,8 @@ def make_handler(root: Path):
                 status = trading_status()
                 runtime = _modern_runtime(status)
                 self._send_json(json.dumps({
-                    "schemaVersion": 1, "app": "polymarket-btc-reversal",
-                    "strategyId": "btc-reversal", "assetId": runtime.get("assetId"), "cycle": "5m",
+                    "schemaVersion": 1, "app": "polymarket-binance-lead",
+                    "strategyId": STRATEGY_ID, "assetId": runtime.get("assetId"), "cycle": "5m",
                     "source": "control-plane", "asOf": runtime["asOf"], "stale": runtime["stale"],
                     "error": runtime["error"],
                     "capabilities": ["markets", "runtime", "orders", "positions", "metrics", "events"],
@@ -3251,7 +3261,7 @@ def make_handler(root: Path):
                     return
                 if path == "/api/runtime/commands":
                     action = payload.get("action")
-                    translated = {"action": action, "strategy_id": payload.get("strategyId", "btc-reversal"),
+                    translated = {"action": action, "strategy_id": payload.get("strategyId", STRATEGY_ID),
                                   "revision": payload.get("revision"), "request_id": payload.get("requestId"),
                                   "asset_id": payload.get("assetId"), "market_ids": payload.get("marketIds")}
                     if action == "start" and translated["revision"] is None:
@@ -3287,7 +3297,7 @@ def make_handler(root: Path):
                         if draft:
                             _validate_running_asset(draft["config"])
                         config = strategy_config_store().activate_draft(payload.get("expectedRevision"), payload.get("draftId"))
-                    self._send_json(json.dumps({"accepted": True, "strategyId": "btc-reversal",
+                    self._send_json(json.dumps({"accepted": True, "strategyId": STRATEGY_ID,
                         "revision": config["savedRevision"], "savedRevision": config["savedRevision"], "effectiveRoundId": None,
                         "activationScope": "future_uncreated_round", "status": "published",
                         "source": "control-plane", "asOf": time.time(), "stale": False},

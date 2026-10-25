@@ -1,6 +1,6 @@
-# Polymarket 五分钟反转系统
+# Polymarket 五分钟币安领先系统
 
-真钱实盘系统：在 Polymarket 的加密货币 5 分钟涨跌盘（`<币>-updown-5m-<roundId>`）上跑 `btc-reversal` 反转策略。一边卖一价从下往上穿过触发价时，用限价买入这一边；方向反转时加仓另一边，按阶梯最多 N 级。收盘后自动结算。
+真钱实盘系统：在 Polymarket 的 btc 5 分钟涨跌盘（`btc-updown-5m-<roundId>`）上跑 `binance-lead` 策略。币安 BTCUSDT 成交价 250 ms 内涨跌 ≥ 2 bp 时，FAK 吃单买同方向那一边 5 股，限价 = 卖价 + 0.03；一场最多一笔，持有到结算。规则见 [STRATEGY.md](STRATEGY.md)。
 
 ## 控制台
 
@@ -18,7 +18,7 @@ https://166-1-221-53.sslip.io/console/ （nginx basic auth）。四个页面，�
 ## 目录
 
 - `backend/engine/`：TypeScript 交易引擎、行情采集器、账户读取器（Node ≥ 24）。
-- `scripts/`：Python 控制面 `system-dashboard-server.py`、`dashboard/` 读模型、部署脚本、回测 `backtest.py`（只读录制行情，在本机跑）。
+- `scripts/`：Python 控制面 `system-dashboard-server.py`、`dashboard/` 读模型、部署脚本、录制行情读取与赢家判定 `backtest.py`（前向验证脚本 import 它，在本机跑）。
 - `frontend/console/`：静态控制台，由控制面托管。
 - `config/`：systemd 单元和 nginx 配置。
 
@@ -46,4 +46,4 @@ node frontend/console/regress/<名字>.mjs
 - [ARCHITECTURE.md](ARCHITECTURE.md)：进程、模块、数据流、策略、风控、结算、文件、部署、已知限制。
 - [API.md](API.md)：控制面 HTTP 接口和推送。
 - [AGENTS.md](AGENTS.md)：铁律和工作方式；[HANDOFF.md](HANDOFF.md)：当前状态、服务器操作、行情录制。
-- [STRATEGY.md](STRATEGY.md)：已确认的策略规则和回测口径；[REVERSAL.md](REVERSAL.md)：怎么判过线、谁赢。
+- [STRATEGY.md](STRATEGY.md)：策略规则和前向验证口径。

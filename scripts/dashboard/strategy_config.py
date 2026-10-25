@@ -1,4 +1,4 @@
-"""Durable configuration for the reversal strategy and its selected asset."""
+"""Durable configuration for the binance-lead strategy and its selected asset."""
 from __future__ import annotations
 
 import copy
@@ -14,37 +14,29 @@ import re
 from .config import (ConfigStore, ConfigValidationError, ConfigConflictError,
                      ConfigStoreError, _unique_object)
 
-STRATEGY_ID = "btc-reversal"
+STRATEGY_ID = "binance-lead"
 ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 # Polymarket runs 5m up/down markets for these seven. Verified live: every
-# "<asset>-updown-5m-<round>" slug resolves with 2 CLOB tokens and tick 0.01,
-# and all four reference venues (Binance/Coinbase/OKX/Bybit) quote each coin.
+# "<asset>-updown-5m-<round>" slug resolves with 2 CLOB tokens and tick 0.01.
+# binance-lead is only researched on btc (STRATEGY.md); the others stay
+# selectable for the run pool and collector.
 SUPPORTED_ASSET_IDS = frozenset({"btc", "eth", "sol", "xrp", "doge", "hype", "bnb"})
 
 
 def default_config() -> dict:
-    return {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
-            "stageShares": [5, 13, 60], "maxStages": 3,      # STRATEGY.md rule 6
+    # BINANCE_LEAD_DEFAULTS (backend/engine/src/strategies/binance-lead.ts) plus
+    # the control plane's run settings, which reach the engine as flags.
+    return {"assetId": "btc", "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
+            "fromSec": 15, "toSec": 265, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
-            "durationMinutes": 0, "maxRounds": 0, "mode": "live",
-            "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
-            "firstTriggerFromSec": 0}                          # STRATEGY.md rule 3
+            "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
 def validate_config(config: dict) -> dict:
-    if not isinstance(config, dict):
+    """The same ranges as the engine's normalizeBinanceLeadConfig."""
+    if not isinstance(config, dict) or set(config) != set(default_config()):
         raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
     result = copy.deepcopy(config)
-    expected = set(default_config())
-    # A config saved before a field existed must keep loading, or adding a field
-    # makes the already-saved revision unreadable. Backfill only these known
-    # additions from their defaults; any other key mismatch is still rejected.
-    defaults = default_config()
-    for added in ("assetId", "maxRounds", "firstTriggerFromSec"):
-        if added not in result and not (set(result) - expected):
-            result[added] = defaults[added]
-    if set(result) != expected:
-        raise ConfigValidationError("请提交完整策略参数，不接受未知字段")
 
     asset_id = result.get("assetId")
     if not isinstance(asset_id, str):
@@ -56,51 +48,45 @@ def validate_config(config: dict) -> dict:
         raise ConfigValidationError("当前运行时不支持该资产")
     result["assetId"] = asset_id
 
-    def number(value, name, *, positive=True):
-        if type(value) not in (int, float):
-            raise ConfigValidationError(f"{name}必须填写数字")
+    def number(name, label):
+        value = result[name]
         try:
-            finite = math.isfinite(value)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ConfigValidationError(f"{label}必须填写数字")
         except OverflowError:
-            finite = False
-        if not finite or value < 0 or (positive and value == 0):
-            raise ConfigValidationError(f"{name}必须是有效的{'正数' if positive else '非负数'}")
+            raise ConfigValidationError(f"{label}必须填写数字") from None
         return value
 
-    for key in ("triggerPrice", "confirmationPrice", "maxBuyPrice"):
-        if number(result[key], key) >= 1:
-            raise ConfigValidationError("价格必须在0到100美分之间")
-    if result["triggerPrice"] > result["maxBuyPrice"]:
-        raise ConfigValidationError("触发价不能高于最高买价")
-    if result["confirmationPrice"] < result["triggerPrice"]:
-        raise ConfigValidationError("确认价不能低于触发价")
-    shares = result["stageShares"]
-    if not isinstance(shares, list) or not 1 <= len(shares) <= 100:
-        raise ConfigValidationError("请设置1至100个阶段的份额")
-    for value in shares:
-        number(value, "阶段份额")
-    stages = result["maxStages"]
-    if type(stages) is not int or not 1 <= stages <= len(shares):
-        raise ConfigValidationError("阶段上限不能超过已填写的阶段数")
-    for key in ("roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"):
-        if result[key] is not None:
-            number(result[key], key)
-    duration = number(result["durationMinutes"], "运行分钟数", positive=False)
-    if duration * 60_000 > 2_147_483_647:
-        raise ConfigValidationError("运行时长过大；持续运行请填0")
+    def within(name, label, low, high, *, low_open=True, high_open=False):
+        value = number(name, label)
+        if (value <= low if low_open else value < low) or (value >= high if high_open else value > high):
+            raise ConfigValidationError(f"{label}必须在{'(' if low_open else '['}{low}, {high}{')' if high_open else ']'}之内")
+        return value
+
+    within("shares", "份额", 0, 10_000)
+    within("thresholdBp", "阈值bp", 0, 1000)
+    within("windowMs", "窗口毫秒", 0, 60_000)
+    within("limitPremium", "限价加价", 0, 1, low_open=False, high_open=True)
+    start, end = number("fromSec", "起始秒"), number("toSec", "截止秒")
+    if not 0 <= start < end <= 300:
+        raise ConfigValidationError("起止秒必须满足 0 ≤ 起始秒 < 截止秒 ≤ 300")
+    for key, label in (("maxQuoteAgeSeconds", "盘口最大年龄"), ("maxQuoteSkewSeconds", "盘口两边时间差")):
+        if number(key, label) <= 0:
+            raise ConfigValidationError(f"{label}必须是正数")
+    for key, label in (("roundBudgetUsd", "单场预算"), ("totalBudgetUsd", "总预算"), ("dailyLossUsd", "每日亏损上限")):
+        if result[key] is not None and number(key, label) <= 0:
+            raise ConfigValidationError(f"{label}必须为空或正数")
+    duration = number("durationMinutes", "运行分钟数")
+    if duration < 0 or duration * 60_000 > 2_147_483_647:
+        raise ConfigValidationError("运行分钟数必须是非负数；持续运行请填0")
     # Rounds are the natural unit: they are five minutes wide, so a minute count
     # can stop mid round and abandon a position it just opened.
-    rounds = number(result["maxRounds"], "运行场次数", positive=False)
+    rounds = number("maxRounds", "运行场次数")
     if rounds != int(rounds) or rounds < 0 or rounds > 10_000:
         raise ConfigValidationError("运行场次数必须是0到10000之间的整数；持续运行请填0")
     result["maxRounds"] = int(rounds)
-    for key in ("maxQuoteAgeSeconds", "maxQuoteSkewSeconds"):
-        number(result[key], key)
-    # A round whose first crossing comes earlier than this is skipped whole.
-    if number(result["firstTriggerFromSec"], "起始秒", positive=False) >= 300:
-        raise ConfigValidationError("起始秒必须在0到299之间；不限制填0")
     if result["mode"] != "live":
-        raise ConfigValidationError("新版策略配置只支持live模式")
+        raise ConfigValidationError("策略配置只支持live模式")
     return result
 
 
@@ -187,22 +173,7 @@ class StrategyConfigStore(ConfigStore):
                     "draftId": str(uuid.uuid4()), "expectedRevision": expected_revision,
                     "savedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "config": validated}
-            temporary = None
-            try:
-                self.draft_path.parent.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.draft_path.parent,
-                                                 prefix=f".{self.draft_path.name}.", suffix=".tmp", delete=False) as out:
-                    temporary = Path(out.name)
-                    json.dump(data, out, ensure_ascii=False, allow_nan=False)
-                    out.write("\n")
-                    out.flush()
-                    os.fsync(out.fileno())
-                os.replace(temporary, self.draft_path)
-            except OSError as exc:
-                raise ConfigStoreError("策略草稿保存失败") from exc
-            finally:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
+            self._write(self.draft_path, data, "策略草稿保存失败")
             return self._public(data)
 
     def activate_draft(self, expected_revision: int, draft_id: str) -> dict:
@@ -237,21 +208,25 @@ class StrategyConfigStore(ConfigStore):
                     "savedRevision": expected_revision + 1,
                     "savedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "config": validated}
-            temporary = None
-            try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
-                                                 prefix=f".{self.path.name}.", suffix=".tmp", delete=False) as out:
-                    temporary = Path(out.name)
-                    json.dump(data, out, ensure_ascii=False, allow_nan=False)
-                    out.write("\n")
-                    out.flush()
-                    os.fsync(out.fileno())
-                os.replace(temporary, self.path)
-            except OSError as exc:
-                raise ConfigStoreError("策略参数保存失败") from exc
-            finally:
-                if temporary is not None:
-                    temporary.unlink(missing_ok=True)
+            self._write(self.path, data, "策略参数保存失败")
             self._seen_persisted = True
             return self._public(data)
+
+    @staticmethod
+    def _write(path: Path, data: dict, failure: str) -> None:
+        temporary = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                             prefix=f".{path.name}.", suffix=".tmp", delete=False) as out:
+                temporary = Path(out.name)
+                json.dump(data, out, ensure_ascii=False, allow_nan=False)
+                out.write("\n")
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(temporary, path)
+        except OSError as exc:
+            raise ConfigStoreError(failure) from exc
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)

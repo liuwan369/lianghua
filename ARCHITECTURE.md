@@ -42,11 +42,15 @@
 ```
 node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds <n>
   --journal-file results/live/dashboard-<run_id>.jsonl --state-file results/live/btc-reversal-<hash>.platform-state.json
-  --stop-file <journal>.stop --strategy binance-lead --asset <币> --strategy-config <配置文件>
+  --stop-file <journal>.stop --strategy binance-lead --asset <币> --strategy-config results/dashboard/binance-lead-config.json
   --control-file <journal>.control.json --expected-market-id <id> --expected-round-id <roundId>
 ```
 
-（控制面还没切到 binance-lead，命令行和配置文件路径以控制面改完后为准。）引擎只认 `--strategy binance-lead`；配置文件的 `strategyId` 必须是 `binance-lead`，`config` 里的 `durationMinutes`/`maxRounds`/`mode` 是控制面的运行设置，引擎丢掉。状态文件里旧的 `strategyStates["btc-reversal"]` 不读也不删。
+引擎只认 `--strategy binance-lead`；配置文件的 `strategyId` 必须是 `binance-lead`，`config` 里的 `durationMinutes`/`maxRounds`/`mode` 是控制面的运行设置（变成 `--duration-sec`/`--max-rounds`），引擎丢掉，其余字段由 `normalizeBinanceLeadConfig` 校验。控制面 `scripts/dashboard/strategy_config.py` 的 `validate_config` 按同样的范围校验，字段集合必须完全一致。
+
+状态文件名里的 `btc-reversal` 只是历史名字，没改：它按账户跨 run、跨策略共用，结算记录在 `<状态文件>.settlements.json`，换名字会丢掉未完成的赎回和账户的订单/持仓。里面旧的 `strategyStates["btc-reversal"]` 不读也不删。
+
+旧的 `results/dashboard/btc-reversal-config.json` 不再读。没有 `binance-lead-config.json` 时控制面返回 binance-lead 默认值、`savedRevision: 0`，启动要求已发布的版本，所以部署后必须在策略页保存并激活一次才能启动。
 
 暂停/恢复：控制面写 `<journal>.control.json` 的 `paused`，引擎每 1 s 读一次（同一个定时器也热加载策略配置）。
 
@@ -92,12 +96,12 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 |---|---|
 | `system-dashboard-server.py` | 控制面：路由、鉴权、启停引擎、PnL 拼装、静态前端 |
 | `dashboard/push.py` | `PushHub`：SSE 推送，按路径节奏重渲染 |
-| `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计） |
+| `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计）；`_strategy_projection` 投影 binance-lead 的 getStatus，`lead_signal` 进事件表，最近 20 条随运行快照给控制台 |
 | `dashboard/projection_worker.py` | 投影子进程，不读账户配置 |
 | `dashboard/read_model.py` | 拉起并读取投影快照 |
 | `dashboard/official_pnl.py` | 从 Data API 结果按场次算官方盈亏 |
 | `dashboard/account_data.py` | 管理 account-data 子进程，缓存快照 |
-| `dashboard/strategy_config.py` | 策略配置与草稿持久化、支持的币种 |
+| `dashboard/strategy_config.py` | binance-lead 配置与草稿持久化（默认值、校验范围同引擎）、支持的币种 |
 | `dashboard/config.py` | 配置文件锁与错误类型 |
 | `dashboard/market_snapshot.py` | 校验采集器快照 |
 | `dashboard/system_metrics.py` | 主机与进程指标 |
@@ -108,7 +112,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
-| `*.html` + `*-block.js/css` | 四个页面：自动交易、市场、策略、设置 |
+| `*.html` + `*-block.js/css` | 四个页面：自动交易（本场下单/没下单的原因、当前盘口能否下单、最近币安信号、币安行情健康）、市场、策略（binance-lead 参数表单）、设置 |
 | `stats-panel.js` | 自动交易页的交易统计、服务器状态、清空数据 |
 | `event-log.js` | 设置页的运行日志 |
 | `shared/preview-core.js` | 请求、侧栏、格式化 |
@@ -145,7 +149,8 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 - 一场最多一笔，成不成交都不再下；持有到结算。
 - 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
 - 重启时未提交的 `CREATED` 意图标为 `ABANDONED`，从不补发。
-- journal 每个信号一行 `lead_signal`：信号字段、所在场次、结果（`order_submitted`/`skipped`/`no_round`/`stopping`）和本场 reason、下单的限价与卖价。
+- journal 每个信号一行 `lead_signal`：信号字段、所在场次、结果（`order_submitted`/`skipped`/`no_round`/`stopping`）和本场 reason、下单的限价与卖价。账本把它存成事件 `lead_signal`（不建场次行、不算成交），控制台用它显示"这场为什么没下单"。
+- 状态行 `strategy_runtime` 是 `getStatus()`：每场 `stages`（至多 1 个，含 `signal`、`askAtSignal`）、`reason`、`latest`（当前盘口摘要），加上 `roundOutcome` 的 `upShares/downShares/costUsd/netIfUpUsd/netIfDownUsd`；结算盈亏的 coverage 用 `upTokenId/downTokenId` + `upShares/downShares`。
 
 ## 风控（`platform/core.ts`）
 
@@ -180,9 +185,9 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 | 路径 | 说明 |
 |---|---|
 | `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 前只保留最新 20 个。每个盘口的延迟指标按 1/10 抽样写入 |
-| `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎状态，按账户跨 run 共用 |
+| `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎状态，按账户跨 run、跨策略共用（名字是历史遗留，见"启动与停止"） |
 | `…platform-state.json.settlements.json` | 结算记录，清空数据时保留 |
-| `E/results/dashboard/btc-reversal-config.json`、`btc-reversal-config.draft.json` | 已发布配置、草稿 |
+| `E/results/dashboard/binance-lead-config.json`、`binance-lead-config.draft.json` | 已发布配置、草稿（旧的 `btc-reversal-config*.json` 不再读，留在原处） |
 | `E/results/dashboard/market_pool.json` | 运行池 |
 | `E/results/dashboard/ledger.sqlite3`、`snapshot.json` | 账本投影 |
 | `E/results/dashboard-state.json` | 控制面当前 run 信息 |

@@ -1,4 +1,4 @@
-"""Shared file locking and errors for the active BTC reversal configuration."""
+"""Shared file locking and errors for the active strategy configuration."""
 from __future__ import annotations
 
 import os

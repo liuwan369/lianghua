@@ -13,7 +13,7 @@
     <aside class="preview-sidebar">
       <div class="preview-brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>交易控制台</small></div></div>
       <div class="brand-card"><span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span><strong>Polymarket</strong></div>
-      <p class="sidebar-copy">面向平台支持加密货币的五分钟反转策略控制平台。</p>
+      <p class="sidebar-copy">面向五分钟币安领先策略的交易控制平台。</p>
       <nav aria-label="设置导航">${navMarkup}</nav>
       <div class="sidebar-status"><i></i><span>服务器数据</span><small>等待后端连接</small></div>
     </aside>

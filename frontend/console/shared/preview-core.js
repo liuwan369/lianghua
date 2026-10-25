@@ -220,7 +220,6 @@
     strategyConfig: () => request("/api/strategy/config"),
     strategyDraft: (payload) => request("/api/strategy/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
     strategyActivate: (payload) => request("/api/strategy/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
-    presets: (options) => request("/api/strategy/presets", options),
     position: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/position${scopedQuery({ ...context, roundId })}`),
     orders: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/orders${scopedQuery({ ...context, roundId })}`),
     cancelOrder: (orderId) => request(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" }),
@@ -241,6 +240,6 @@
   const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
   // Backend is the default. Preserve an explicitly supplied mode for hosts
   // that use it as metadata, while keeping local/demo data disabled.
-  const config = { apiBase: "", marketCycle: "5m", strategyId: "btc-reversal", selectedAssetId: selectedAssetFromUrl, mode: "backend", ...runtimeConfig, demo: false };
+  const config = { apiBase: "", marketCycle: "5m", strategyId: "binance-lead", selectedAssetId: selectedAssetFromUrl, mode: "backend", ...runtimeConfig, demo: false };
   window.PolyPreview = Object.freeze({ config, api, request, format, navMarkup, navigate, setSelectedAssetUrl, on, emit });
 })();

@@ -1,9 +1,13 @@
-"""Backtest the reversal ladder on the market recordings. Read-only; run it
-locally on the E: copy, never on the server:
+"""Backtest the retired reversal ladder on the market recordings. Read-only;
+run it locally on the E: copy, never on the server:
 
     python scripts/backtest.py --history E:/pm-backup/market-history --coins btc --from 2026-10-17
 
-Crossings, like live (STRATEGY.md 2-5, REVERSAL.md):
+The live strategy is binance-lead (STRATEGY.md). Its forward test,
+E:/pm-backup/forward-binance-agg.py, imports read_lines and Round (book
+replay and the winner) from here; the ladder below is the old rule.
+
+Crossings, as the old live engine judged them:
 - each side's ask, only rows inside the round (R <= t < R+300);
 - a frame is usable only if both asks are present and each side's exchange
   time is at most 2 s old and the two at most 1.5 s apart; an unusable or
@@ -12,7 +16,7 @@ Crossings, like live (STRATEGY.md 2-5, REVERSAL.md):
 - a frame whose asks sum above 1.05 is skipped and keeps the starting point;
 - a side crosses when its previous ask < 0.67 and this one >= 0.67; after a
   firing only the other side counts.
-Orders (STRATEGY.md 4-6), each a 0.70 limit:
+Orders, each a 0.70 limit:
 - at the cross it takes the recorded asks <= 0.70 (taker, each at its own
   price, fee 0.07 p (1-p)); the rest rests and fills at 0.70 (maker) from the
   largest quantity <= 0.70 seen in any one later frame of the round;

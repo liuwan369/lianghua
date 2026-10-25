@@ -210,7 +210,7 @@ class Fill(unittest.TestCase):
         self.assertEqual(early.orders, [], "never reached the 5th crossing: nothing bought")
 
     def test_unfilled_rung1_moves(self):
-        """STRATEGY.md 4: rung 1 with nothing filled when the other side crosses
+        """Old rule 4: rung 1 with nothing filled when the other side crosses
         is cancelled and placed there as rung 1 (5 shares)."""
         item = bt.Round(R, LADDER)
         item._place("UP", book(2, 0.72, 0.29, ual=[[0.72, 50]]), R + 2)

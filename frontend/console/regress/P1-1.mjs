@@ -32,8 +32,8 @@ for (const file of ["preview-core.js", "view-model.js", "preview-store.js", "api
   vm.runInContext(readFileSync(new URL(`../shared/${file}`, import.meta.url), "utf8"), context, { filename: file });
 }
 const adapter = window.PolyPreviewAdapter;
-const form = { strategyId: "btc-reversal", assetId: "btc", expectedRevision: 22, triggerPrice: 0.67, confirmationPrice: 0.7,
-  maxBuyPrice: 0.7, stageShares: [5], maxStages: 1, roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10,
+const form = { strategyId: "binance-lead", assetId: "btc", expectedRevision: 22, shares: 5, thresholdBp: 2, windowMs: 250,
+  limitPremium: 0.03, fromSec: 15, toSec: 265, roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10,
   durationMinutes: 0, mode: "live", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
 
 // --- bug: "run 3 rounds" reaches the server as 3 ---
@@ -45,12 +45,15 @@ assert.equal(draft.body.config.maxRounds, 3, "maxRounds is part of the saved con
 sent.length = 0;
 await adapter.saveStrategy({ ...form, maxRounds: 0 });
 assert.equal(sent.find((item) => item.url.includes("/api/strategy/drafts")).body.config.maxRounds, 0);
-// --- the same whitelist must carry the entry second (STRATEGY.md 3, 2026-10-13) ---
+// --- the same whitelist must carry every binance-lead field, and nothing else ---
 sent.length = 0;
-await adapter.saveStrategy({ ...form, maxRounds: 0, firstTriggerFromSec: 60 });
-assert.equal(sent.find((item) => item.url.includes("/api/strategy/drafts")).body.config.firstTriggerFromSec, 60,
-  "firstTriggerFromSec is part of the saved config");
-sent.length = 0;
-await adapter.saveStrategy({ ...form, maxRounds: 0 });
-assert.equal(sent.find((item) => item.url.includes("/api/strategy/drafts")).body.config.firstTriggerFromSec, 0, "missing means 0");
+await adapter.saveStrategy({ ...form, maxRounds: 0, fromSec: 60, toSec: 240, thresholdBp: 3 });
+const body = sent.find((item) => item.url.includes("/api/strategy/drafts")).body;
+assert.equal(body.strategyId, "binance-lead");
+assert.equal(body.config.fromSec, 60, "fromSec is part of the saved config");
+assert.equal(body.config.toSec, 240);
+assert.equal(body.config.thresholdBp, 3);
+assert.deepEqual(Object.keys(body.config).sort(), ["assetId", "dailyLossUsd", "durationMinutes", "fromSec", "limitPremium",
+  "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "maxRounds", "mode", "roundBudgetUsd", "shares", "thresholdBp", "toSec",
+  "totalBudgetUsd", "windowMs"], "exactly binance-lead's fields");
 console.log("P1-1 OK");

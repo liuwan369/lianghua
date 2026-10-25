@@ -96,7 +96,9 @@ CREATE INDEX IF NOT EXISTS order_economic_id ON order_details(run_id,json_extrac
 CREATE TABLE IF NOT EXISTS projection_migrations (name TEXT PRIMARY KEY);
 """
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
-                         "order", "settlement", "platform_status"})
+                         "order", "settlement", "platform_status", "lead_signal"})
+# lead_signal (cli/platform.ts leadJournalFields): what the strategy did with one Binance signal.
+LEAD_OUTCOMES = frozenset({"order_submitted", "skipped", "no_round", "stopping"})
 LATENCY_METRICS = frozenset({
     "market_age", "book_processing", "book_batch_apply", "strategy_decision", "ws_receive_to_decision",
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
@@ -341,25 +343,36 @@ def _trade_revision(prior, event):
     return None
 
 
+STRATEGY_ID = "binance-lead"
+# Signals kept on the runtime view, newest first; the full list is /api/events.
+LEAD_SIGNALS_KEPT = 20
+
+
 def _strategy_projection(value):
-    if not isinstance(value, dict) or value.get("strategyId") != "btc-reversal":
+    """binance-lead's getStatus(), enriched by cli/platform.ts roundOutcome."""
+    if not isinstance(value, dict) or value.get("strategyId") != STRATEGY_ID:
         return None
     def config(source):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "triggerPrice", "confirmationPrice", "maxBuyPrice", "maxStages", "roundBudgetUsd",
-            "totalBudgetUsd", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds")}
-        result.update(revision=_text(str(source["revision"])) if source.get("revision") is not None else None,
-                      stageShares=[_number(n) for n in source.get("stageShares", [])[:100]]
-                      if isinstance(source.get("stageShares"), list) else [])
+            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxQuoteAgeSeconds",
+            "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
+        result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
+        return result
+    def signal_view(source):
+        if not isinstance(source, dict):
+            return None
+        result = {key: _number(source.get(key)) for key in (
+            "price", "refPrice", "moveBp", "tradeId", "tradeTimeMs", "receivedAtUnix")}
+        result["direction"] = source.get("direction") if source.get("direction") in ("UP", "DOWN") else None
         return result
     def round_view(source):
         if not isinstance(source, dict):
             return None
         result = {key: _text(source.get(key)) for key in (
-            "marketId", "roundId", "round_id", "name", "upTokenId", "downTokenId", "status", "reason", "lastStageDirection",
-            "lastConfirmedDirection", "nextDirection", "resultScope", "resultReason")}
+            "marketId", "roundId", "round_id", "name", "upTokenId", "downTokenId", "status", "reason",
+            "resultScope", "resultReason")}
         result["assetId"] = _asset_from(source)
         result["marketId"] = result.get("marketId") or _text(source.get("market_id"))
         result["name"] = result.get("name") or _text(source.get("market_slug"))
@@ -368,19 +381,27 @@ def _strategy_projection(value):
         result["roundId"] = result.get("roundId") or result.get("round_id")
         result.pop("round_id", None)
         result.update({key: _number(source.get(key)) for key in (
-            "startsAt", "endsAt", "confirmationCount", "nextStage", "nextShares", "consumedStages",
-            "costUsd", "reservedUsd", "upShares", "downShares", "netIfUpUsd", "netIfDownUsd")})
-        result["feesVerified"] = source.get("feesVerified") if isinstance(source.get("feesVerified"), bool) else None
+            "startsAt", "endsAt", "costUsd", "reservedUsd", "upShares", "downShares", "netIfUpUsd", "netIfDownUsd")})
+        for key in ("feesVerified", "attempted"):
+            result[key] = source.get(key) if isinstance(source.get(key), bool) else None
         result["configRevision"] = _text(str(source["configRevision"])) if source.get("configRevision") is not None else None
         result["config"] = config(source.get("config"))
+        latest = source.get("latest")
+        result["latest"] = {**{key: _number(latest.get(key)) for key in ("upAsk", "downAsk")},
+                            **{key: latest.get(key) if isinstance(latest.get(key), bool) else None
+                               for key in ("twoSided", "freshOnArrival")},
+                            "staleReason": _text(latest.get("staleReason"))} if isinstance(latest, dict) else None
+        # At most one: one attempt per round.
         stages = source.get("stages") if isinstance(source.get("stages"), list) else []
         result["stages"] = [{**{key: _text(stage.get(key)) for key in (
-            "direction", "tokenId", "clientOrderId", "orderId", "trigger", "status", "error")},
-            **{key: _number(stage.get(key)) for key in ("stage", "price", "shares", "createdAt", "filledShares")}}
-            for stage in stages[:100] if isinstance(stage, dict)]
+            "tokenId", "clientOrderId", "orderId", "status", "error")},
+            **{key: _number(stage.get(key)) for key in ("price", "askAtSignal", "shares", "createdAt", "filledShares")},
+            "direction": stage.get("direction") if stage.get("direction") in ("UP", "DOWN") else None,
+            "signal": signal_view(stage.get("signal"))}
+            for stage in stages[:1] if isinstance(stage, dict)]
         return result
     rounds = value.get("rounds") if isinstance(value.get("rounds"), list) else []
-    result = {"strategyId": _text(value.get("strategyId")) or "btc-reversal", "schemaVersion": 1,
+    result = {"strategyId": STRATEGY_ID, "schemaVersion": 1,
               "instanceId": _text(value.get("instanceId")), "paused": value.get("paused") is True,
               "savedRevision": _text(str(value["savedRevision"])) if value.get("savedRevision") is not None else None,
               "config": config(value.get("config")),
@@ -401,6 +422,8 @@ def _runtime_projection(value, mode):
     result["assetId"] = _asset_from(value)
     result["strategy_id"] = _text(value.get("strategy_id"))
     result["strategy_runtime"] = _strategy_projection(value.get("strategy_runtime"))
+    # Binance feed: true while either aggTrade line delivered within its idle limit.
+    result["lead_feed_healthy"] = value.get("lead_feed_healthy") if isinstance(value.get("lead_feed_healthy"), bool) else None
     snapshots = value.get("snapshots") if isinstance(value.get("snapshots"), list) else []
     # Keep the accepted paired snapshot lossless enough for the read-only
     # market DTO. Never rebuild it from the legacy token books below.
@@ -552,6 +575,20 @@ def _projection(record):
         "http_ack", "user_ws", "account_read") else None
     result["cancellation_source"] = record.get("cancellation_source") if record.get("cancellation_source") in (
         "local_http", "user_ws", "account_read") else None
+    if record["event"] == "lead_signal":
+        # The signal's price is Binance's BTC price, not an order: never an amount.
+        result["side"] = record.get("direction") if record.get("direction") in ("UP", "DOWN") else None
+        result["direction"] = result["side"]
+        result["trade_id"] = _number(record.get("trade_id"))
+        result["outcome"] = record.get("outcome") if record.get("outcome") in LEAD_OUTCOMES else None
+        result["reason"] = _text(record.get("reason"))
+        result["round_status"] = _text(record.get("round_status"))
+        result["attempted"] = record.get("attempted") if isinstance(record.get("attempted"), bool) else None
+        for field in ("move_bp", "ref_price", "received_at", "trade_time_ms", "limit_price", "ask_at_signal"):
+            result[field] = _number(record.get(field))
+        result["binance_price"] = result["price"]
+        result["price"] = result["shares"] = result["amount"] = result["pnl"] = None
+        return result
     price, shares = result["price"], result["shares"]
     result["amount"] = _number(price * shares) if price is not None and shares is not None and price >= 0 and shares >= 0 else None
     # Only the platform settlement lifecycle can produce final PnL. Legacy
@@ -1362,6 +1399,10 @@ class Ledger:
             Ledger._accumulate_trade(db, run_id, event)
             return
         db.execute("INSERT INTO kind_counts VALUES(?,?,1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id, kind))
+        # A signal is not trading activity: no market row, so a round that only
+        # saw signals never enters market summaries or settlement handover.
+        if kind == "lead_signal":
+            return
         if kind == "fill" and event["is_maker"] is False:
             db.execute("INSERT INTO kind_counts VALUES(?,'taker_fill',1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id,))
         if kind == "order" and event["client_order_id"] and event["status"]:
@@ -1731,7 +1772,7 @@ class Ledger:
                 "has_more": offset + len(orders) < total, "asOf": stamp, "snapshotEventId": cutoff}
 
     def runtime_stats(self, run_id, *, summary=None):
-        """Current BTC reversal runtime projection."""
+        """Current binance-lead runtime projection."""
         summary = self.summary(run_id) if summary is None else summary
         with self._connect() as db:
             counts = {r["kind"]: r["count"] for r in db.execute("SELECT kind,count FROM kind_counts WHERE run_id=?", (run_id,))}
@@ -1757,6 +1798,11 @@ class Ledger:
             runtime = {**json.loads(runtime_row["payload"]), "source_at": at,
                        "expires_at": at + RUNTIME_MAX_AGE, "age_seconds": age,
                        "stale": age > RUNTIME_MAX_AGE or at > time.time() + 1 or summary["completeness"] != "caught_up"}
+            # Why a round placed nothing: the strategy's verdict on each recent signal.
+            runtime["lead_signals"] = [
+                {key: signal.get(key) for key in ("trade_id", "direction", "move_bp", "received_at", "round_id",
+                                                  "market_id", "outcome", "reason", "limit_price", "ask_at_signal")}
+                for signal in self.events(run_id, limit=LEAD_SIGNALS_KEPT, kinds=["lead_signal"])["events"]]
         events = self.events(run_id, limit=20)["events"]
         for event in events:
             event["side"] = event["side"] or event.get("winner")
@@ -1783,7 +1829,7 @@ class Ledger:
                 "orders": orders, "order_count": order_count, "orders_truncated": order_count > len(orders)}
 
     def position(self, run_id, round_id=None, *, asset_id=None, market_id=None):
-        """Return the latest projected BTC reversal round position.
+        """Return the latest projected binance-lead round position.
 
         This reads the platform status projection only.  It never queries the
         exchange from an HTTP request and reports an unavailable/stale result
@@ -1823,11 +1869,21 @@ class Ledger:
             return traded["averagePrice"] if traded else None
         unavailable = {"available": False, "stale": True, "runId": run_id, "assetId": asset_id,
                        "roundId": round_id,
-                       "marketId": None, "stage": None, "confirmations": None, "yesShares": None,
+                       "marketId": None, "yesShares": None,
                        "noShares": None, "averagePrice": None, "occupiedUsd": None,
-                       "stages": [], "maxStages": None, "reason": None, "roundStatus": None,
-                       "nextShares": None,
+                       "attempt": None, "reason": None, "roundStatus": None, "config": None, "latest": None,
                        "outcomePnl": {"yes": None, "no": None}, "updatedAt": None}
+        def attempt_of(selected):
+            """The round's one order: signal, direction, limit, ask then, fills."""
+            stage = next(iter(selected.get("stages") or []), None)
+            if not isinstance(stage, dict):
+                return None
+            signal = stage.get("signal") if isinstance(stage.get("signal"), dict) else {}
+            return {"direction": stage.get("direction"), "price": stage.get("price"), "askAtSignal": stage.get("askAtSignal"),
+                    "shares": stage.get("shares"), "filledShares": stage.get("filledShares"), "status": stage.get("status"),
+                    "error": stage.get("error"), "createdAt": stage.get("createdAt"),
+                    "moveBp": signal.get("moveBp"), "binancePrice": signal.get("price"), "refPrice": signal.get("refPrice"),
+                    "signalAt": signal.get("receivedAtUnix")}
         with self._connect() as db:
             run = self._run(db, run_id)
             if not self._has_table(db, "platform_runtime"):
@@ -1885,10 +1941,9 @@ class Ledger:
         complete = runtime.get("positions_complete") is True
         # A token with no position row yields {} from by_token.get, and {} is
         # falsy, so a missing side used to report a confident 0 shares. When the
-        # stage ladder says that side filled, 0 is simply wrong: the console showed
-        # "NO 份额 0.00 / 均价 --" while the timeline said the NO order was fully
-        # filled, and the net cost covered only the other side. Treat that
-        # disagreement as unknown (None -> "--") instead of asserting zero.
+        # round's order says that side filled, 0 is simply wrong: the console
+        # showed "NO 份额 0.00 / 均价 --" while the NO order was fully filled.
+        # Treat that disagreement as unknown (None -> "--") instead of zero.
         def _filled_for(direction):
             total = 0.0
             for stage in (selected.get("stages") or []):
@@ -1906,7 +1961,7 @@ class Ledger:
                 return _number(side.get("shares"))
             if complete and token_id and _filled_for(direction) <= 0:
                 return 0
-            # Either the snapshot is incomplete, or the ladder reports fills this
+            # Either the snapshot is incomplete, or the order reports fills this
             # side should have. Do not claim zero.
             return None
         yes_shares = _side_shares(yes, selected.get("upTokenId"), "UP")
@@ -1922,11 +1977,8 @@ class Ledger:
         if error is not None and not total_shares:
             historical = _from_fills(error)
             if historical is not None:
-                return {**historical, "stage": selected.get("nextStage"),
-                        "confirmations": selected.get("confirmationCount"),
-                        "stages": selected.get("stages") if isinstance(selected.get("stages"), list) else [],
-                        "maxStages": (selected.get("config") or {}).get("maxStages"),
-                        "reason": selected.get("reason")}
+                return {**historical, "attempt": attempt_of(selected), "config": selected.get("config"),
+                        "reason": selected.get("reason"), "roundStatus": selected.get("status")}
         return {
             "available": True,
             "stale": error is not None,
@@ -1936,20 +1988,14 @@ class Ledger:
             "assetId": _asset_from(selected),
             "roundId": selected.get("roundId"),
             "marketId": selected.get("marketId"),
-            "stage": selected.get("nextStage"),
-            # Rungs actually consumed. "stage" is the NEXT rung, so labelling it
-            # 当前阶段 read one too high (2 filled showed "阶段 3").
-            "consumedStages": selected.get("consumedStages"),
-            "confirmations": selected.get("confirmationCount"),
-            # Staged entry is the core mechanic of this strategy, but the ladder
-            # itself was never exposed, so the console could not show which
-            # stages had filled. maxStages also gives the confirmation counter a
-            # real denominator instead of a hardcoded "--".
-            "stages": selected.get("stages") if isinstance(selected.get("stages"), list) else [],
-            "maxStages": (selected.get("config") or {}).get("maxStages"),
+            # The round's one FAK, or None while it waits for a signal; reason
+            # says why nothing was placed (or what became of the order).
+            "attempt": attempt_of(selected),
             "reason": selected.get("reason"),
             "roundStatus": selected.get("status"),
-            "nextShares": selected.get("nextShares"),
+            "config": selected.get("config"),
+            # The book in force at the last frame: is a signal tradeable now.
+            "latest": selected.get("latest"),
             "yesShares": yes_shares,
             "noShares": no_shares,
             # One meaning everywhere (BUGS P2-8): fill notional / shares, fees
@@ -2357,6 +2403,10 @@ class Ledger:
                     raise ValueError("invalid event kinds")
                 clause += f" AND kind IN ({','.join('?' for _ in kinds)})"
                 args.extend(kinds)
+            else:
+                # Hundreds of signals a day would bury the run log's errors;
+                # they are read on their own (kinds=["lead_signal"]).
+                clause += " AND kind!='lead_signal'"
             if asset_id is not None:
                 asset_id = _query_asset(asset_id)
                 clause += " AND asset_id=?"

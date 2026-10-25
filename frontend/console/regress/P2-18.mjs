@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const now = () => Date.now() / 1000;
-const config = { assetId: "btc", triggerPrice: 0.67, confirmationPrice: 0.7, maxBuyPrice: 0.7, stageShares: [5], maxStages: 1,
+const config = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
   roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10, durationMinutes: 0, maxRounds: 3, mode: "live",
   maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
 const posted = [];
@@ -21,8 +21,8 @@ const element = (selector) => {
     addEventListener(type, fn) { if (type === "click" && selector) handlers.set(selector, fn); }, focus() {},
     closest: () => element(), insertAdjacentHTML() {}, appendChild() {}, remove() {}, children: [], value: "", disabled: false }, {
     get: (t, k) => k === "textContent" ? written.get(selector) ?? "" : k === "innerHTML" ? "" : k === "querySelector" ? lookup
-      : k === "value" && selector in formValues ? formValues[selector] : k === "value" && selector === "stage0" ? "5"
-      : k === "querySelectorAll" ? (s) => s.includes("[data-field]") ? inputs : s.includes("[data-stage]") ? [stage] : [] : k in t ? t[k] : undefined,
+      : k === "value" && selector in formValues ? formValues[selector]
+      : k === "querySelectorAll" ? (s) => s.includes("[data-lead]") ? inputs : [] : k in t ? t[k] : undefined,
     set: (t, k, v) => { if (k === "textContent" && selector) written.set(selector, String(v)); else t[k] = v; return true; } });
   return node;
 };
@@ -30,11 +30,10 @@ for (let i = 0; i < 4; i += 1) inputs.push(element(`input${i}`));
 const nodes = new Map();
 const lookup = (s) => { if (!nodes.has(s)) nodes.set(s, element(s)); return nodes.get(s); };
 // A filled-in form, as the operator would leave it.
-const formValues = { '[data-field="trigger"]': "67", '[data-field="confirm"]': "70", '[data-field="maxPrice"]': "70",
-  "[data-stage-count]": "1", "[data-max-stages]": "1", '[data-runtime-field="roundBudget"]': "5",
-  '[data-runtime-field="totalBudget"]': "10", '[data-runtime-field="lossLimit"]': "10", '[data-runtime-field="rounds"]': "3",
-  "[data-entry-from]": "60" };
-const stage = element("stage0");
+const formValues = { '[data-lead="shares"]': "5", '[data-lead="thresholdBp"]': "2", '[data-lead="windowMs"]': "250",
+  '[data-lead="limitPremium"]': "3", '[data-lead="fromSec"]': "60", '[data-lead="toSec"]': "265",
+  '[data-runtime-field="roundBudget"]': "5", '[data-runtime-field="totalBudget"]': "10",
+  '[data-runtime-field="lossLimit"]': "10", '[data-runtime-field="rounds"]': "3" };
 const window = { location: { search: "?assetId=eth", origin: "http://x", href: "http://x/strategy.html?assetId=eth", pathname: "/strategy.html" },
   addEventListener() {}, removeEventListener() {}, setTimeout, clearTimeout, setInterval, clearInterval, console, URLSearchParams, URL,
   AbortController, history: { replaceState() {} }, navigator: {}, HTMLElement: function () {},
@@ -43,7 +42,7 @@ const window = { location: { search: "?assetId=eth", origin: "http://x", href: "
 window.fetch = async (url, options = {}) => {
   if (options.method === "POST") posted.push({ url: String(url), body: JSON.parse(options.body) });
   const body = String(url).includes("/api/strategy/config")
-    ? { schemaVersion: 1, source: "control-plane", asOf: now(), stale: false, error: null, strategyId: "btc-reversal", savedRevision: 22, revision: 22, config, draft: null }
+    ? { schemaVersion: 1, source: "control-plane", asOf: now(), stale: false, error: null, strategyId: "binance-lead", savedRevision: 22, revision: 22, config, draft: null }
     : String(url).includes("/api/strategy/drafts") ? { accepted: true, draftId: "d1", expectedRevision: 22, config: { ...config, assetId: "eth" } }
     : { schemaVersion: 1, asOf: now(), stale: false, items: [] };
   return { ok: true, status: 200, json: async () => body };
@@ -71,7 +70,7 @@ switchHandler();
 await saveHandler();
 await new Promise((r) => setTimeout(r, 50));
 assert.equal(posted.at(-1)?.body?.config?.assetId, "eth", "P2-18: after 切换为 ETH the draft submits ETH");
-// STRATEGY.md 3 (2026-10-13): the page's 起始秒 input reaches the draft.
-assert.equal(posted.at(-1)?.body?.config?.firstTriggerFromSec, 60, "the entry second typed on the page is saved");
+// The page's 开盘后起始秒 input reaches the draft.
+assert.equal(posted.at(-1)?.body?.config?.fromSec, 60, "the start second typed on the page is saved");
 console.log("P2-18 OK");
 process.exit(0);

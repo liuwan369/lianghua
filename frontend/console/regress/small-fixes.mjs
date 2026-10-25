@@ -83,12 +83,12 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ---------- strategy page: P3-16 ----------
 {
   let phase = "ok";
-  const config = { assetId: "btc", triggerPrice: 0.67, confirmationPrice: 0.7, maxBuyPrice: 0.7, stageShares: [5], maxStages: 1,
+  const config = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
     roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10, durationMinutes: 0, maxRounds: 3, mode: "live",
     maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
   const reply = (url) => {
     if (url.includes("/api/strategy/config")) return phase === "down" ? { __status: 503, error: "down" }
-      : { schemaVersion: 1, source: "control-plane", asOf: now(), stale: false, error: null, strategyId: "btc-reversal",
+      : { schemaVersion: 1, source: "control-plane", asOf: now(), stale: false, error: null, strategyId: "binance-lead",
         savedRevision: 22, revision: 22, config, draft: null };
     return { schemaVersion: 1, asOf: now(), stale: false, items: [] };
   };

@@ -32,7 +32,7 @@
         <span class="brand-card-logo" aria-hidden="true"><i></i><b>P</b></span>
         <strong>Polymarket</strong>
       </div>
-      <p class="sidebar-copy">\u9762\u5411 平台支持加密货币 \u4E94\u5206\u949F\u53CD\u8F6C\u7B56\u7565\u7684\u5B9E\u65F6\u4EA4\u6613\u63A7\u5236\u53F0\u3002</p>
+      <p class="sidebar-copy">面向五分钟币安领先策略的实时交易控制台。</p>
       <nav aria-label="\u81EA\u52A8\u4EA4\u6613\u9884\u89C8\u5BFC\u822A">${navMarkup}</nav>
       <div class="sidebar-status"><i></i><span data-sidebar-state>服务器数据</span><small data-sidebar-detail>等待后端连接</small></div>
     </aside>
@@ -40,7 +40,7 @@
     <main class="preview-main auto-trade-main">
       <header class="preview-header trade-header">
         <div class="hero-copy">
-          <p class="eyebrow" data-asset-eyebrow>BTC 五分钟反转 · 实盘控制</p>
+          <p class="eyebrow" data-asset-eyebrow>BTC 五分钟币安领先 · 实盘控制</p>
           <div class="hero-title-row"><h1>\u81EA\u52A8\u4EA4\u6613</h1><span class="language-chip">5 \u5206\u949F</span></div>
           <p class="subtitle">\u76D8\u53E3\u3001\u7B56\u7565\u5224\u65AD\u3001\u5F53\u524D\u6301\u4ED3\u548C\u8BA2\u5355\u72B6\u6001\u96C6\u4E2D\u67E5\u770B\uFF0C\u5B9E\u65F6\u6570\u636E\u5404\u81EA\u72EC\u7ACB\u66F4\u65B0\u3002</p>
           <div class="hero-actions">
@@ -89,8 +89,8 @@
 
       <section class="trade-summary-grid" aria-label="\u5F53\u524D\u7B56\u7565\u6458\u8981">
         <article class="summary-card"><div class="summary-icon blue-icon">\u25F7</div><div><span>\u5F53\u524D\u573A\u6B21</span><strong data-round>待接入 · 当前场次</strong><small data-countdown>\u5F85\u63A5\u5165</small></div></article>
-        <article class="summary-card"><div class="summary-icon violet-icon">\u21AF</div><div><span>\u5F53\u524D\u9636\u6BB5</span><strong data-stage>\u8BFB\u53D6\u4E2D</strong><small>\u786E\u8BA4\u53CD\u8F6C <b data-confirmations>--</b> / -- \u6B21</small></div></article>
-        <article class="summary-card"><div class="summary-icon amber-icon">\u2192</div><div><span>\u4E0B\u4E00\u7B14</span><strong data-next>\u7B49\u5F85\u4FE1\u53F7</strong><small data-strategy-revision>\u53C2\u6570\u7248\u672C\u5F85\u63A5\u5165</small></div></article>
+        <article class="summary-card"><div class="summary-icon violet-icon">\u21AF</div><div><span>\u672C\u573A\u4E0B\u5355</span><strong data-lead-state>\u8BFB\u53D6\u4E2D</strong><small data-lead-reason>\u7B49\u5F85\u7B56\u7565\u72B6\u6001</small></div></article>
+        <article class="summary-card"><div class="summary-icon amber-icon">\u2192</div><div><span>\u5E01\u5B89\u884C\u60C5</span><strong data-lead-feed>\u8BFB\u53D6\u4E2D</strong><small data-strategy-revision>\u53C2\u6570\u7248\u672C\u5F85\u63A5\u5165</small></div></article>
            <article class="summary-card"><div class="summary-icon green-icon">\u2713</div><div><span>\u7B56\u7565\u72B6\u6001</span><strong data-strategy-status>策略配置待接入</strong><small>\u66F4\u65B0\u65F6\u95F4 <b data-status-age>--</b></small></div></article>
       </section>
 
@@ -119,7 +119,7 @@
               <table class="depth-table asks"><tbody data-depth-asks="down"></tbody></table>
             </section>
           </div>
-          <div class="book-decision"><span class="decision-mark">\u21AF</span><div><span>\u4EA4\u6613\u5224\u65AD</span><strong data-decision>\u7B49\u5F85\u786E\u8BA4\uFF0C\u4E0D\u4E0B\u5355</strong><small data-decision-reason>\u53CD\u8F6C\u4FE1\u53F7\u9700\u8981\u8FDE\u7EED\u786E\u8BA4\uFF0C\u5F53\u524D\u76D8\u53E3\u4EC5\u7528\u4E8E\u89C2\u5BDF\u3002</small></div><b class="decision-state" data-decision-state>\u89C2\u5BDF\u4E2D</b></div>
+          <div class="book-decision"><span class="decision-mark">\u21AF</span><div><span>\u4EA4\u6613\u5224\u65AD</span><strong data-decision>等待信号</strong><small data-decision-reason>币安 250 ms 内动够阈值、当前盘口新鲜时，买同方向那一边。</small></div><b class="decision-state" data-decision-state>\u89C2\u5BDF\u4E2D</b></div>
         </article>
 
         <article class="trade-panel position-panel" aria-labelledby="position-title">
@@ -134,9 +134,14 @@
           </div>
           <div class="result-grid"><div><span>\u5DF2\u4E70\u5165 / \u8BA2\u5355\u5360\u7528</span><strong><b data-bought>--</b> / <b data-occupied>--</b> USDC</strong></div><div><span>YES \u80DC / NO \u80DC\u9884\u8BA1\u7ED3\u679C</span><strong class="result-values"><b data-outcome="up">--</b><em>/</em><b data-outcome="down">--</b> USDC</strong></div><div title="\u6309\u672C\u573A\u51C0\u6295\u5165\u9664\u4EE5\u603B\u4EFD\u989D\u8BA1\u7B97\uFF0C\u542B\u624B\u7EED\u8D39\uFF0C\u56E0\u6B64\u53EF\u80FD\u7565\u9AD8\u4E8E\u9650\u4EF7"><span>\u5168\u90E8\u6301\u4ED3\u5747\u4EF7\uFF08\u542B\u8D39\uFF09</span><strong><b data-average-total>--</b></strong></div></div>
           <div class="stage-section">
-            <div class="stage-heading"><div><span>\u9636\u6BB5\u8FDB\u5EA6</span><small>\u9636\u6BB5\u72B6\u6001\u5F52\u5165\u672C\u573A\u7ED3\u679C</small></div><b data-stage-progress>--</b></div>
+            <div class="stage-heading"><div><span>本场状态</span><small>一场最多一笔 FAK，持有到结算</small></div><b data-lead-fill>--</b></div>
             <div class="stage-track"><i data-progress-fill></i></div>
-            <ol class="stage-timeline" data-stage-timeline><li class="current"><span>·</span><div><strong>\u573A\u6B21\u548C\u7B56\u7565\u9636\u6BB5\u5F85\u63A5\u5165</strong><small>\u540E\u7AEF\u8FD4\u56DE\u5E02\u573A\u548C\u8F6E\u6B21\u8EAB\u4EFD\u540E\u663E\u793A\u5B9E\u65F6\u8FDB\u5EA6</small></div><time>--</time></li></ol>
+            <ol class="stage-timeline">
+              <li class="current"><span>·</span><div><strong>下单</strong><small data-lead-order>本场还没有下单</small></div><time data-lead-order-time>--</time></li>
+              <li><span>·</span><div><strong>当前盘口</strong><small data-lead-book>等待本场盘口</small></div><time>--</time></li>
+            </ol>
+            <div class="stage-heading"><div><span>最近币安信号</span><small>每个信号策略怎么处理的，最新在上</small></div></div>
+            <ol class="stage-timeline" data-lead-signals><li><span>·</span><div><strong>暂无信号</strong><small>币安 250 ms 内动够阈值时出现在这里</small></div><time>--</time></li></ol>
           </div>
           <p class="result-note"><span class="info-dot">i</span>\u9884\u8BA1\u7ED3\u679C\u6309\u5DF2\u6210\u4EA4\u4EFD\u989D\u548C\u5B9E\u9645\u6210\u672C\u8BA1\u7B97\uFF0C\u6700\u7EC8\u4EE5\u5B98\u65B9\u7ED3\u679C\u548C\u5230\u8D26\u4E3A\u51C6\u3002</p>
           <p class="result-note settlement-note"><span class="info-dot">!</span><span>结算状态：<b data-settlement-state>等待本场结算记录</b><small data-settlement-detail>成交、结算和到账状态由服务器账本确认。</small></span></p>
@@ -243,8 +248,8 @@
     var selected = assetById(selectedAssetId);
     var activeMarket = selected ? `${selected.symbol} / ${selected.cycle || "5分钟"} YES-NO` : "请选择市场";
     text("[data-active-market]", activeMarket);
-    // The eyebrow said "BTC 五分钟反转" no matter which asset was selected.
-    text("[data-asset-eyebrow]", `${vm.assetSymbol(selectedAssetId, "--")} 五分钟反转 · 实盘控制`);
+    // The eyebrow named BTC no matter which asset was selected.
+    text("[data-asset-eyebrow]", `${vm.assetSymbol(selectedAssetId, "--")} 五分钟币安领先 · 实盘控制`);
     text("[data-market-pool-note]", marketPool.stale ? "运行池连接中断 · 保留服务器最近确认配置" : marketPool.pendingDesiredIds ? "变更已提交 · 等待服务器确认运行池" : visibleAssets.length ? "单实例运行一个资产（在市场页选择）；运行状态以服务器确认结果为准。" : "尚未启用币种；前往市场选择要加入自动交易的五分钟市场。");
   };
   var snapshotWatermarks = new Map();
@@ -515,14 +520,15 @@
   var clearPreviousPosition = function() {
     if (isPreviousRound(".position-panel")) {
       ["[data-invested]", '[data-holding="up"]', '[data-holding="down"]', '[data-average="up"]', '[data-average="down"]',
-        "[data-average-total]", "[data-confirmations]", "[data-stage-progress]", "[data-bought]", "[data-occupied]",
+        "[data-average-total]", "[data-lead-fill]", "[data-lead-order-time]", "[data-bought]", "[data-occupied]",
         '[data-outcome="up"]', '[data-outcome="down"]'].forEach(function(selector) { text(selector, "--"); });
-      text("[data-stage]", "本场暂无持仓数据");
+      text("[data-lead-state]", "本场暂无数据");
+      text("[data-lead-reason]", "等待策略状态");
+      text("[data-lead-order]", "本场还没有下单");
+      text("[data-lead-book]", "等待本场盘口");
       text("[data-position-state]", "本场暂无持仓数据");
       text("[data-settlement-state]", "等待本场结算记录");
       text("[data-settlement-detail]", "成交、结算和到账状态由服务器账本确认。");
-      var timeline = document.querySelector("[data-stage-timeline]");
-      if (timeline) timeline.innerHTML = '<li class="current"><span>·</span><div><strong>本场暂无策略阶段</strong><small>本场下单后这里显示阶段进度</small></div><time>--</time></li>';
       markRoundCurrent(".position-panel");
     }
   };
@@ -633,23 +639,6 @@
     text('[data-outcome="up"]', yesOutcome == null ? "--" : yesOutcome.toFixed(2));
     text('[data-outcome="down"]', noOutcome == null ? "--" : noOutcome.toFixed(2));
     text("[data-invested]", occupied != null ? `${occupied.toFixed(2)} USDC` : "-- USDC");
-    var maxStages = numeric(position.maxStages ?? position.max_stages);
-    // `stage` is the NEXT rung the ladder will use, so showing it as 当前阶段 read
-    // one too high (two rungs filled displayed "阶段 3 / 4") and went "--" at the
-    // cap while the final rung was still working. Prefer the consumed count.
-    var consumedStages = number("consumedStages", "consumed_stages");
-    var currentStage = consumedStages != null ? consumedStages
-      : position.stage != null ? Math.max(0, position.stage - 1) : null;
-    text("[data-stage]", currentStage == null ? "--"
-      : maxStages != null ? `阶段 ${currentStage} / ${maxStages}` : `阶段 ${currentStage}`);
-    // Reversal confirmations count direction flips and are not capped, so a
-    // maxStages denominator produced nonsense like "6 / 4 次". Show the count.
-    text("[data-confirmations]", position.confirmations == null ? "--" : String(position.confirmations));
-    var confirmTotal = document.querySelector("[data-confirmations]");
-    if (confirmTotal && confirmTotal.parentNode) {
-      var tail = confirmTotal.nextSibling;
-      if (tail && tail.nodeType === 3 && tail.textContent !== " 次") tail.textContent = " 次";
-    }
     var yesShares = number("yesShares", "yes_shares"); var noShares = number("noShares", "no_shares");
     // The fills projection knows the round's total shares but not the per-side
     // split, so report the total rather than asserting a false zero per side.
@@ -683,64 +672,74 @@
     }
     text('[data-average="up"]', yesAverage == null ? "--" : yesAverage.toFixed(3));
     text('[data-average="down"]', noAverage == null ? "--" : noAverage.toFixed(3));
-    renderStageTimeline(position, maxStages);
-    // "下一笔" was a permanent "等待信号" placeholder; the ledger reports the next
-    // stage index and its planned size.
-    var nextStage = numeric(position.stage);
-    var nextShares = numeric(position.nextShares ?? position.next_shares);
-    text("[data-next]", nextStage == null ? "等待信号"
-      : nextShares != null ? `第 ${nextStage} 阶段 · ${nextShares.toFixed(2)} 份` : `第 ${nextStage} 阶段`);
+    renderLeadRound(position);
     // Keep the historical marker set above; overwriting it would present a
     // fills-sourced position as live current-round data.
     if (!historical) text("[data-position-state]", `已更新 · ${window.PolyPreview.format.time(position.updatedAt ?? raw.asOf)}`);
     return true;
   };
-  // Staged entry is this strategy's core mechanic. The timeline was a permanent
-  // "待接入" placeholder even though the ledger tracks every stage, so an operator
-  // could not see which stages had filled.
-  var stageStatusLabel = {
-    CREATED: "已创建，待提交", SUBMITTING: "提交中", OPEN: "挂单中", PARTIAL: "部分成交",
-    FILLED: "已成交", CANCELED: "已撤销", CANCELLED: "已撤销", REJECTED: "未接受",
-    EXPIRED: "已过期", ABANDONED: "本场未提交", UNKNOWN: "状态待确认", FAILED: "失败"
+  // binance-lead places at most one FAK per round (the ledger's attempt) and
+  // holds it to the close. Show that order, or why there is none yet: the
+  // strategy's own reason, and whether the book in force would let a signal trade.
+  var attemptStatusLabel = {
+    CREATED: "已创建，待提交", SUBMITTING: "提交中", OPEN: "等待成交回报", PARTIAL: "部分成交",
+    FILLED: "已成交", CANCELLED: "未成交部分已撤", REJECTED: "被拒", ABANDONED: "已放弃，未提交", UNKNOWN: "状态待确认"
   };
-  var renderStageTimeline = function(position, maxStages) {
-    var node = document.querySelector("[data-stage-timeline]");
-    if (!node) return;
-    var stages = Array.isArray(position.stages) ? position.stages : [];
-    var filled = stages.reduce(function(sum, stage) {
-      var got = numeric(stage.filledShares ?? stage.filled_shares) || 0;
-      return sum + (got > 0 ? 1 : 0);
-    }, 0);
-    var total = maxStages != null ? maxStages : (stages.length || null);
-    text("[data-stage-progress]", total ? `${filled} / ${total}` : (stages.length ? String(filled) : "--"));
+  var side = function(direction) { return direction === "UP" ? "YES" : direction === "DOWN" ? "NO" : "--"; };
+  var signed = function(value, digits) { return value == null ? "--" : `${value > 0 ? "+" : ""}${value.toFixed(digits)}`; };
+  var renderLeadRound = function(position) {
+    var attempt = position.attempt && typeof position.attempt === "object" ? position.attempt : null;
+    var reason = position.reason ? String(position.reason) : null;
+    text("[data-lead-reason]", reason || (position.roundStatus === "waiting_next_round" ? "中途启动，等待下一场" : "等待币安信号"));
     var fill = document.querySelector("[data-progress-fill]");
-    if (fill) {
-      var pct = total ? Math.min(100, Math.max(0, filled / total * 100)) : 0;
-      var width = `${pct}%`;
-      if (fill.style.width !== width) fill.style.width = width;
+    if (!attempt) {
+      text("[data-lead-state]", position.roundStatus === "waiting_next_round" ? "本场不做" : position.roundStatus === "ended" ? "本场未下单" : "等待信号");
+      text("[data-lead-order]", "本场还没有下单");
+      text("[data-lead-order-time]", "--");
+      text("[data-lead-fill]", "--");
+      if (fill && fill.style.width !== "0%") fill.style.width = "0%";
+    } else {
+      var shares = numeric(attempt.shares), got = numeric(attempt.filledShares) || 0;
+      var price = numeric(attempt.price), ask = numeric(attempt.askAtSignal), move = numeric(attempt.moveBp);
+      var status = String(attempt.status || "UNKNOWN").toUpperCase();
+      text("[data-lead-state]", `已下单 · 买 ${side(attempt.direction)}`);
+      text("[data-lead-order]", [`买 ${side(attempt.direction)}`, `限价 ${price != null ? price.toFixed(3) : "--"}`,
+        `当时卖价 ${ask != null ? ask.toFixed(3) : "--"}`, `币安 ${signed(move, 1)} bp`,
+        `成交 ${got.toFixed(2)} / ${shares != null ? shares.toFixed(2) : "--"} 股`, attemptStatusLabel[status] || status].join(" · "));
+      text("[data-lead-order-time]", window.PolyPreview.format.time(attempt.signalAt ?? attempt.createdAt, "--:--:--"));
+      text("[data-lead-fill]", shares ? `${got.toFixed(2)} / ${shares.toFixed(2)} 股` : "--");
+      var width = `${shares ? Math.min(100, Math.max(0, got / shares * 100)) : 0}%`;
+      if (fill && fill.style.width !== width) fill.style.width = width;
     }
-    if (!stages.length) {
-      var idle = position.reason || (position.roundStatus === "waiting_next_round"
-        ? "中途启动，等待下一场" : "本场尚未触发阶段");
-      html(node, `<li class="current"><span>·</span><div><strong>${window.PolyPreview.format.escape(idle)}</strong><small>触发跨价后在此显示每一阶段的成交进度</small></div><time>--</time></li>`);
-      return;
-    }
-    html(node, stages.map(function(stage) {
-      var status = String(stage.status || "UNKNOWN").toUpperCase();
-      var shares = numeric(stage.shares);
-      var got = numeric(stage.filledShares ?? stage.filled_shares) || 0;
-      var price = numeric(stage.price);
-      var done = got > 0 && shares != null && got >= shares;
-      var cls = done ? "done" : got > 0 ? "current" : ["ABANDONED", "REJECTED", "FAILED", "EXPIRED"].includes(status) ? "skipped" : "pending";
-      var mark = done ? "✓" : got > 0 ? "·" : cls === "skipped" ? "×" : String(stage.stage ?? "·");
-      var dir = String(stage.direction || "").toUpperCase() === "UP" ? "YES" : String(stage.direction || "").toUpperCase() === "DOWN" ? "NO" : "--";
-      var detail = [
-        dir + " · " + (price != null ? price.toFixed(3) : "--"),
-        (shares != null ? `${got.toFixed(2)} / ${shares.toFixed(2)} 份` : `${got.toFixed(2)} 份`),
-        stageStatusLabel[status] || status
-      ].join(" · ");
-      return `<li class="${cls}"><span>${window.PolyPreview.format.escape(mark)}</span><div><strong>第 ${window.PolyPreview.format.escape(String(stage.stage ?? "-"))} 阶段</strong><small>${window.PolyPreview.format.escape(detail)}</small></div><time>${window.PolyPreview.format.escape(window.PolyPreview.format.time(stage.createdAt ?? stage.created_at, "--:--:--"))}</time></li>`;
-    }).join(""));
+    var latest = position.latest && typeof position.latest === "object" ? position.latest : null;
+    var up = latest ? numeric(latest.upAsk) : null, down = latest ? numeric(latest.downAsk) : null;
+    var asks = `YES 卖 ${up != null ? up.toFixed(3) : "无"} / NO 卖 ${down != null ? down.toFixed(3) : "无"}`;
+    text("[data-lead-book]", !latest ? "还没有本场盘口（行情恢复中或尚未开盘），信号会被跳过"
+      : !latest.twoSided ? `${asks} · 一边没有卖价，信号会被跳过`
+      : !latest.freshOnArrival ? `${asks} · 到达时不新鲜（${latest.staleReason || "未知"}），信号会被跳过`
+      : `${asks} · 新鲜，信号可以下单`);
+  };
+  var leadOutcomeLabel = { order_submitted: "已下单", skipped: "没下单", no_round: "不在场次内", stopping: "停机中" };
+  // The Binance feed and the strategy's verdict on each recent signal, from
+  // /api/runtime/status (ledger lead_signal events): why a round placed nothing.
+  var renderLeadSignals = function(runtime) {
+    var healthy = runtime && typeof runtime.leadFeedHealthy === "boolean" ? runtime.leadFeedHealthy : null;
+    text("[data-lead-feed]", healthy === true ? "币安行情正常" : healthy === false ? "币安行情中断 · 不会出信号" : "币安行情状态未知");
+    var node = document.querySelector("[data-lead-signals]");
+    if (!node) return;
+    var context = currentContext();
+    var signals = (Array.isArray(runtime?.leadSignals) ? runtime.leadSignals : [])
+      .filter(function(item) { return !context.roundId || item.round_id == null || String(item.round_id) === String(context.roundId); })
+      .slice(0, 8);
+    html(node, signals.length ? signals.map(function(item) {
+      var move = numeric(item.move_bp);
+      var limit = numeric(item.limit_price), ask = numeric(item.ask_at_signal);
+      var detail = item.outcome === "order_submitted"
+        ? `限价 ${limit != null ? limit.toFixed(3) : "--"} · 当时卖价 ${ask != null ? ask.toFixed(3) : "--"}`
+        : (item.reason || "--");
+      var title = `${item.direction === "UP" ? "涨" : item.direction === "DOWN" ? "跌" : "--"} ${signed(move, 1)} bp · ${leadOutcomeLabel[item.outcome] || "--"}`;
+      return `<li class="${item.outcome === "order_submitted" ? "done" : "skipped"}"><span>${item.outcome === "order_submitted" ? "✓" : "·"}</span><div><strong>${window.PolyPreview.format.escape(title)}</strong><small>${window.PolyPreview.format.escape(detail)}</small></div><time>${window.PolyPreview.format.escape(window.PolyPreview.format.time(item.received_at, "--:--:--"))}</time></li>`;
+    }).join("") : '<li><span>·</span><div><strong>本场暂无信号</strong><small>币安 250 ms 内动够阈值时出现在这里</small></div><time>--</time></li>');
   };
   var renderOrders = function(raw, asset, requested) {
     raw = raw?.data && typeof raw.data === "object" ? raw.data : raw;
@@ -989,7 +988,7 @@
       button.dataset.controlState = runtimeActive && action === "start" && !stopping ? "running" : busy ? "pending" : reason ? "blocked" : "ready";
       button.classList.toggle("is-pending", busy);
       button.disabled = Boolean(reason);
-      button.title = action === "pause" && !reason ? "只停止开新阶段，已挂的单照常成交或撤销"
+      button.title = action === "pause" && !reason ? "只停止下新单，已挂的单照常成交或撤销"
         : action === "stop" && stopping && stopRequestedAt && now - stopRequestedAt > STOP_SLOW_MS
           ? "停止耗时较长：服务器仍在撤单和收尾，确认后按钮会恢复" : reason;
       button.setAttribute("aria-label", button.textContent);
@@ -1065,6 +1064,7 @@
   };
   var renderRuntime = function(runtime, globalProcess = false) {
     if (globalProcess) {
+      renderLeadSignals(runtime);
       globalRuntime = runtime || null;
       if (typeof runtime?.processRunning === "boolean") globalProcessRunning = runtime.processRunning;
       globalRuntime = { ...(runtime || {}), processRunning: globalProcessRunning, processRunningFresh: runtime?.processRunningFresh === true && typeof runtime?.processRunning === "boolean" };
@@ -1097,7 +1097,7 @@
     text("[data-status-age]", window.PolyPreview.format.time((available ? runtime : selectedRuntime)?.asOf));
     text("[data-connection-status]", available ? `接口独立刷新 · ${processState}` : `运行状态已过期 · ${processState} · 行情独立刷新`);
     text("[data-sidebar-state]", available ? `所选市场已连接 · ${processState}` : `所选市场状态待接入 · ${processState}`);
-    text("[data-sidebar-detail]", available ? "五分钟反转策略" : "保留本场最近成功数据");
+    text("[data-sidebar-detail]", available ? "五分钟币安领先策略" : "保留本场最近成功数据");
     // Reflect the real trading decision instead of the permanent "观察中" placeholder.
     // The strategy's own reason (round.reason) is surfaced when the runtime
     // reports it; otherwise show an honest process state so the panel never
@@ -1107,7 +1107,7 @@
       || sourceRuntime.currentRound?.reason);
     if (displayProcessRunning === true) {
       text("[data-decision]", decisionReason ? "策略运行中" : "策略运行中 · 等待信号");
-      text("[data-decision-reason]", decisionReason || "按五分钟反转规则监控当前盘口。");
+      text("[data-decision-reason]", decisionReason || "等币安信号，盘口新鲜时下单。");
       text("[data-decision-state]", "运行中");
     } else if (displayProcessRunning === false) {
       text("[data-decision]", "交易进程未运行");

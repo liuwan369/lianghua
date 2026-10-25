@@ -439,12 +439,17 @@
       ].find((value) => value !== undefined && value !== null && String(value).trim() !== "");
       if (!assetId) throw new Error("当前未选择资产，无法保存策略");
       const values = { ...(payload?.config || {}), ...Object.fromEntries(Object.entries(payload).filter(([key, value]) => key !== "config" && value !== undefined)) };
+      // Exactly binance-lead's fields (scripts/dashboard/strategy_config.py
+      // default_config); the server rejects any other key.
       const config = {
-        triggerPrice: values.triggerPrice,
-        confirmationPrice: values.confirmationPrice,
-        maxBuyPrice: values.maxBuyPrice,
-        stageShares: values.stageShares,
-        maxStages: values.maxStages ?? values.stageShares?.length,
+        shares: values.shares,
+        thresholdBp: values.thresholdBp,
+        windowMs: values.windowMs,
+        limitPremium: values.limitPremium,
+        fromSec: values.fromSec,
+        toSec: values.toSec,
+        maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
+        maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
         roundBudgetUsd: values.roundBudgetUsd ?? null,
         totalBudgetUsd: values.totalBudgetUsd ?? null,
         dailyLossUsd: values.dailyLossUsd ?? null,
@@ -452,9 +457,6 @@
         // Dropping it made the backend default to 0 = run forever (BUGS P1-1).
         maxRounds: values.maxRounds ?? 0,
         mode: values.mode || "live",
-        maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
-        maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
-        firstTriggerFromSec: values.firstTriggerFromSec ?? 0,
         assetId: String(assetId).trim()
       };
       const strategyId = payload?.strategyId || strategyData?.strategyId || core.config.strategyId;

@@ -27,17 +27,17 @@
 | `/api/stream?p=<GET 路径>&p=…` | SSE 推送，见下文 |
 | `/api/markets?assetId=` | 币种目录 `items[]`：`assetId/marketId/roundId/startAt/endAt/yesBid/yesAsk/noBid/noAsk/orderBook/quoteAt/stale/strategyEligible/supported/canEnable/current/oneSided`。`oneSided`：一边没有挂单时（快收盘赢的那边没人卖）交易所当前的盘口 `{at, yesBid, yesAsk, noBid, noAsk}`，空的一边为 null；只用于展示，有它时 `stale` 仍为 true，不能交易；比双边价旧或超过 15 秒则为 null。`quietConfirmedAt`：双边报价超过 2 秒没人改价时，采集器向交易所 REST 盘口核对、两边最优价都没变的时间（unix 秒）；只用于展示，`stale` 仍为 true；超过 3 秒没再核对上则为 null |
 | `/api/markets/{marketId}/snapshot?roundId=&marketId=` | 单市场盘口，找不到 404 |
-| `/api/runtime/status` | 引擎状态：`status`、`processRunning`、风控、资金、当前场次、停止结果 |
+| `/api/runtime/status` | 引擎状态：`status`、`processRunning`、`strategyId`（`binance-lead`）、风控、资金、当前场次、停止结果；`leadFeedHealthy`（币安 aggTrade 行情是否在收，null=未知）；`leadSignals[]` 最近 20 个币安信号，最新在前：`trade_id/direction/move_bp/received_at/market_id/round_id/outcome`（`order_submitted`/`skipped`/`no_round`/`stopping`）`/reason/limit_price/ask_at_signal` |
 | `/api/runtime/market-pool` | 运行池：`desiredIds`、`currentIds`、`effectiveRoundId` |
-| `/api/strategy/config` | 已发布配置、`savedRevision`、`draft`、`activationScope="future_uncreated_round"` |
+| `/api/strategy/config` | `strategyId="binance-lead"`、已发布配置 `config`、`savedRevision`、`draft`、`activationScope="future_uncreated_round"`。`config` 字段：`assetId, shares, thresholdBp, windowMs, limitPremium, fromSec, toSec, maxQuoteAgeSeconds, maxQuoteSkewSeconds, roundBudgetUsd, totalBudgetUsd, dailyLossUsd`（后三个可为 null）和控制面的 `mode, durationMinutes, maxRounds`。从没发布过时返回默认值、`savedRevision: 0`（旧的 btc-reversal 配置不读），此时启动被拒 |
 | `/api/account/status` | 账户配置就绪情况（不含秘密）：`account_check_state`、`server_live_enabled`、`control_source` 等 |
 | `/api/account/snapshot` | 余额、占用、持仓、挂单；不含成交史、链上活动、平仓记录 |
 | `/api/diagnostics/health` | `status` ok/degraded、`services`（trading/collector/projection）、`resources`、问题列表在 `error` |
 | `/api/metrics/summary?range=run\|today\|month\|all&runId=&assetId=&marketId=&roundId=` | 统计：`fill_count`、`order_count`、`fill_notional`、`fees`、`settled_pnl`/`pnl`、`settled_wins`/`settled_losses`、`win_rate`、`unsettled_cost`、`unsettled_rounds`、`exposed_pnl`、`pending_settlements`、`pnl_source`、`pnl_source_error`、`pnl_source_as_of`。today/month 按北京时间 |
 | `/api/rounds?runId=&assetId=&roundId=&beforeRoundId=&limit=` | 按场次聚合：投入、份额、手续费、均价、`status`、`settled`、`pnl`、`pnlSource`；官方已结算的场次 `status="已结算"` |
 | `/api/rounds/{roundId}/orders?assetId=&marketId=&limit=&offset=` | 该场订单 `orders[]`（含 `fills`）、`total` |
-| `/api/rounds/{roundId}/position?assetId=&marketId=` | 该场持仓：`yesShares/noShares/averagePrice/occupiedUsd`；运行快照已无此场时 `source="fills"` 由成交回落 |
-| `/api/events?runId=&cursor=&limit=` | 事件分页 `items[]`、`cursor` |
+| `/api/rounds/{roundId}/position?assetId=&marketId=` | 该场持仓：`yesShares/noShares/averagePrice/occupiedUsd/outcomePnl`；`attempt`（本场那一笔，没下单时 null）：`direction/price`（限价）`/askAtSignal/shares/filledShares/status/moveBp/binancePrice/refPrice/signalAt`；`reason`（策略对本场的说明，没下单时就是原因）、`roundStatus`、`config`、`latest`（当前盘口 `upAsk/downAsk/twoSided/freshOnArrival/staleReason`）。运行快照已无此场时 `source="fills"` 由成交回落 |
+| `/api/events?runId=&cursor=&limit=` | 事件分页 `items[]`、`cursor`。币安信号（账本事件 `lead_signal`，一天几百条）不在这里，看 `/api/runtime/status` 的 `leadSignals` |
 | `/api/fills?…` | 成交事件分页（同一成交可能有多条修订） |
 | `/api/settlements?…` | 每场最新结算；`pnl` 取官方结果，`pnlSource` |
 | `/api/live` | 采集器快照（引擎发现兜底用） |
@@ -47,7 +47,7 @@
 | 路径 | 用途 |
 |---|---|
 | `POST /api/runtime/commands` | `{action: start\|pause\|resume\|stop, requestId, revision\|expectedRevision, assetId, marketIds}`。返回 `accepted`、`status`、`commandStatus`、`remoteOrdersState`。最终状态看 `/api/runtime/status` |
-| `POST /api/strategy/drafts` | `{config, expectedRevision}` 保存草稿；版本冲突 409 |
+| `POST /api/strategy/drafts` | `{strategyId:"binance-lead", config, expectedRevision}` 保存草稿；`config` 必须恰好是上面的字段，范围同引擎 `normalizeBinanceLeadConfig`（份额 (0,10000]、阈值 (0,1000] bp、窗口 (0,60000] ms、加价 [0,1)、0 ≤ fromSec < toSec ≤ 300、两个盘口门 > 0、预算和日亏损为空或 > 0），不合法 400；版本冲突 409 |
 | `POST /api/strategy/activate` | `{expectedRevision, draftId}` 发布草稿，对之后尚未冻结的场次生效；`effectiveRoundId` 非空返回 501 |
 | `POST\|PUT /api/runtime/market-pool` | 设置运行池（单币） |
 | `POST /api/ledger/reset` | `{confirm:"RESET"}`，引擎在跑或无法确认已停时 409。删 journal、引擎状态和投影，保留结算记录、配置、运行池 |

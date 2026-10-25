@@ -154,6 +154,9 @@
       marketId: first(payload.marketId, payload.market_id, null),
       roundId: first(payload.roundId, payload.round_id, null),
     markets: Array.isArray(payload.markets) ? payload.markets : [],
+    // binance-lead: the Binance aggTrade feed, and the strategy's verdict on recent signals.
+    leadFeedHealthy: typeof payload.leadFeedHealthy === "boolean" ? payload.leadFeedHealthy : null,
+    leadSignals: Array.isArray(payload.leadSignals) ? payload.leadSignals : [],
     error: payload.error || null
     };
   };
