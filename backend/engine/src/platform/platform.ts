@@ -330,7 +330,8 @@ export class TradingPlatform {
             const timing: ExecutionTiming | undefined = current.kind === "book" ? {
               triggerReceivedAtMonoMs: currentSnapshot?.receivedAtMonoMs ?? currentBook?.receivedAtMonoMs,
               decisionAtMonoMs,
-            } : undefined;
+            } : current.kind === "lead" ? { triggerReceivedAtMonoMs: current.receivedAtMonoMs, decisionAtMonoMs }
+              : undefined;
             for (const action of actions) this.dispatch(strategy.id, action, timing);
             if (current.kind === "book") {
               const marketId = currentSnapshot?.marketId ?? (currentBook ? this.core.instrument(currentBook.tokenId)?.marketId : undefined);

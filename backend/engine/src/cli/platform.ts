@@ -3,14 +3,18 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import * as referenceFeedModule from "../live/feeds/btc.js";
-import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, SettlementResult, TradingEvent, TradingMode } from "../platform/contracts.js";
+import { binanceLeadFeed, LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
+import { referenceVenueProducts } from "../live/feeds/btc.js";
+import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, SettlementResult, TradingEvent,
+  TradingMode } from "../platform/contracts.js";
 import { PlatformJournal } from "../platform/journal.js";
-import { connectPolymarketPlatform, discoverMarket, referenceProducerForAsset } from "../platform/polymarket.js";
+import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
-import { createBtcReversalStrategy, normalizeBtcReversalConfig, type BtcReversalConfig,
-  type BtcReversalState, type BtcReversalStrategy } from "../strategies/btc-reversal.js";
+import { createStrategy, normalizeBinanceLeadConfig, type BinanceLeadConfig, type BinanceLeadState,
+  type BinanceLeadStrategy, type LeadRound } from "../strategies/binance-lead.js";
 
+/** The only built-in strategy; also its key in CoreState.strategyStates. */
+export const STRATEGY_ID = "binance-lead";
 const MARKET_WINDOW_SEC = 300;
 const DISCOVERY_PREWARM_MS = 10_000;
 const DISCOVERY_PREWARM_RETRY_MS = 250;
@@ -138,7 +142,7 @@ export function pruneSettledHistory(state: CoreState, settlementRecords: Record<
     const record = raw as { status?: unknown; assetId?: unknown; marketId?: unknown; roundId?: unknown };
     return record?.status === "confirmed" ? [JSON.stringify([record.assetId, record.marketId, record.roundId])] : [];
   }));
-  const strategy = state.strategyStates?.["btc-reversal"] as BtcReversalState | undefined;
+  const strategy = state.strategyStates?.[STRATEGY_ID] as BinanceLeadState | undefined;
   const liveStatuses = ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"];
   const dead = new Set<string>();
   for (const market of state.markets ?? []) {
@@ -165,20 +169,23 @@ export function pruneSettledHistory(state: CoreState, settlementRecords: Record<
   const keptRecords = Object.fromEntries(Object.entries(settlementRecords).filter(([key, raw]) =>
     (raw as { status?: unknown })?.status !== "confirmed" || keptKeys.has(key)));
   if (dead.size === 0) return { state, settlementRecords: keptRecords };
+  // A retired strategy's key (btc-reversal in an older state file) is left as
+  // it is, never read: its markets above were judged by the account's own
+  // orders, fills, positions and settlement records.
   return { settlementRecords: keptRecords, state: {
     ...state,
     markets: (state.markets ?? []).filter(market => !dead.has(market.id)),
     orders: state.orders.filter(order => !deadTokens.has(order.tokenId)),
     fills: state.fills.filter(fill => !deadTokens.has(fill.tokenId)),
     strategyStates: strategy ? { ...state.strategyStates,
-      "btc-reversal": { ...strategy, rounds: strategy.rounds.filter(round => !dead.has(round.marketId)) } }
+      [STRATEGY_ID]: { ...strategy, rounds: strategy.rounds.filter(round => !dead.has(round.marketId)) } }
       : state.strategyStates,
   } };
 }
 
 /** Does this closed market count toward --max-rounds? Only a round that began at
  * or after the run started can have been traded: the strategy admits a round only
- * when it is discovered before it starts (btc-reversal discover: now <= startsAt),
+ * when it is discovered before it starts (binance-lead discover: now <= startsAt),
  * parks the round already running at startup as waiting_next_round, and old
  * markets restored for settlement recovery ended before the run (BUGS P1-9). */
 export function countsTowardRoundLimit(market: Pick<MarketInfo, "startsAt">, runStartedAtSec: number,
@@ -318,9 +325,8 @@ export interface PlatformCliOptions {
   controlFile?: string;
   marketsFile?: string;
   expectedMarketIdentity?: { marketId: string; roundId: string };
-  strategy?: "btc-reversal";
+  strategy?: typeof STRATEGY_ID;
   strategyConfigFile?: string;
-  referenceFeed: boolean;
   assetId: AssetId;
 }
 
@@ -340,10 +346,10 @@ const positive = (value: unknown, flag: string): number => {
 export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undefined {
   const command = new Command()
     .name("trading-platform")
-    .description("Live Polymarket five-minute reversal trading service")
+    .description("Live Polymarket five-minute Binance-lead trading service")
     .exitOverride()
     .option("--live", "Use authenticated REAL trading services; required and never enabled by environment variables")
-    .option("--strategy <name>", "Built-in strategy: btc-reversal")
+    .option("--strategy <name>", `Built-in strategy: ${STRATEGY_ID}`)
     .option("--strategy-config <path>", "Persisted strategy configuration JSON")
     .option("--asset <symbol>", "Selected market asset: btc, eth or sol", "btc")
     .option("--markets <path>", "JSON MarketInfo[] file; defaults to current selected-asset binary market discovery")
@@ -360,8 +366,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     .option("--state-file <path>", "Durable state and exclusive lock file")
     .option("--journal-file <path>", "Append pure JSONL platform status and execution events")
     .option("--stop-file <path>", "Stop normally when this controller-owned file exists")
-    .option("--control-file <path>", "Controller JSON containing paused true or false")
-    .option("--reference-feed", "Subscribe to the selected asset reference feed");
+    .option("--control-file <path>", "Controller JSON containing paused true or false");
   try { command.parse(argv, { from: "user" }); }
   catch (error) {
     if (error instanceof CommanderError && error.code === "commander.helpDisplayed") return undefined;
@@ -370,13 +375,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
   const raw = command.opts();
   const mode: TradingMode = "live";
   const assetId = parseAsset(raw.asset);
-  if (raw.strategy && raw.strategy !== "btc-reversal") throw new CliInputError("unknown built-in strategy");
-  // The reversal strategy is asset-agnostic: it reads triggerPrice/maxBuyPrice
-  // and the paired up/down book, none of which are btc-specific. The strategy id
-  // keeps its historical name for persisted state compatibility.
-  if (raw.strategy === "btc-reversal" && !SUPPORTED_ASSETS.has(assetId)) {
-    throw new CliInputError(`btc-reversal live trading supports ${[...SUPPORTED_ASSETS].join(", ")}`);
-  }
+  if (raw.strategy && raw.strategy !== STRATEGY_ID) throw new CliInputError(`unknown built-in strategy; the only one is ${STRATEGY_ID}`);
   if (!!raw.strategy !== !!raw.strategyConfig) throw new CliInputError("--strategy requires --strategy-config and vice versa");
   if (!!raw.expectedMarketId !== !!raw.expectedRoundId) {
     throw new CliInputError("--expected-market-id and --expected-round-id must be provided together");
@@ -432,8 +431,7 @@ export function parsePlatformOptions(argv: string[]): PlatformCliOptions | undef
     statusSec, stateFile, journalFile, stopFile, controlFile, strategy: raw.strategy,
     strategyConfigFile,
     marketsFile: raw.markets ? resolve(raw.markets) : undefined,
-    expectedMarketIdentity,
-    referenceFeed: raw.referenceFeed === true, assetId };
+    expectedMarketIdentity, assetId };
 }
 
 /** Compare the request selector against authoritative discovery before connecting the live platform. */
@@ -494,8 +492,7 @@ export function validateMarkets(input: unknown, selectedAsset: AssetId = "btc"):
       tokenIds.add(instrument.tokenId);
     }
   }
-  return structuredClone(input).map(market => ({ ...market as MarketInfo,
-    assetId: selectedAsset, referenceProducer: (market as MarketInfo).referenceProducer ?? referenceProducerForAsset(selectedAsset) }));
+  return structuredClone(input).map(market => ({ ...market as MarketInfo, assetId: selectedAsset }));
 }
 
 export function journalMarketIdentity(market: MarketInfo | undefined, tokenId?: string): {
@@ -518,15 +515,15 @@ function readMarkets(path: string, selectedAsset: AssetId): MarketInfo[] {
   return validateMarkets(input, selectedAsset);
 }
 
-export interface ReversalConfigFile {
-  config: BtcReversalConfig;
+export interface StrategyConfigFile {
+  config: BinanceLeadConfig;
   dailyLossUsd: number | null;
   savedRevision: string;
 }
 
 /** Strategy revisions may tighten a run's operator ceilings, but never raise them. */
-export function resolveReversalLimits(operator: Readonly<HardLimits>,
-  config: Pick<BtcReversalConfig, "totalBudgetUsd" | "dailyLossUsd">): HardLimits {
+export function resolveStrategyLimits(operator: Readonly<HardLimits>,
+  config: Pick<BinanceLeadConfig, "totalBudgetUsd" | "dailyLossUsd">): HardLimits {
   const capitalUsd = Math.min(operator.capitalUsd, config.totalBudgetUsd ?? Number.MAX_SAFE_INTEGER);
   const configuredLoss = config.dailyLossUsd ?? null;
   const dailyLossUsd = operator.dailyLossUsd == null ? configuredLoss
@@ -534,19 +531,44 @@ export function resolveReversalLimits(operator: Readonly<HardLimits>,
   return { ...operator, capitalUsd, maxOrderUsd: Math.min(operator.maxOrderUsd, capitalUsd), dailyLossUsd };
 }
 
-export function readReversalConfig(path: string): ReversalConfigFile {
+/** The control plane's saved strategy file. Its config also carries the run
+ * settings durationMinutes/maxRounds/mode, which reach the engine as flags. */
+export function readStrategyConfig(path: string): StrategyConfigFile {
   let raw: Record<string, unknown>;
   try { raw = JSON.parse(readFileSync(path, "utf8")); }
   catch { throw new CliInputError("--strategy-config must refer to a readable JSON file"); }
-  if (!raw || raw.strategyId !== "btc-reversal" || !raw.config || typeof raw.config !== "object") {
-    throw new CliInputError("strategy configuration needs strategyId btc-reversal and config");
+  if (!raw || raw.strategyId !== STRATEGY_ID || !raw.config || typeof raw.config !== "object") {
+    throw new CliInputError(`strategy configuration needs strategyId ${STRATEGY_ID} and config`);
   }
-  const input = { ...raw.config as Record<string, unknown> };
+  const { durationMinutes: _duration, maxRounds: _rounds, mode: _mode, ...input } = raw.config as Record<string, unknown>;
   input.revision = String(input.revision ?? raw.savedRevision ?? "1");
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"]) if (input[key] == null) delete input[key];
   const dailyLossUsd = input.dailyLossUsd == null ? null : positive(input.dailyLossUsd, "dailyLossUsd");
-  return { config: normalizeBtcReversalConfig(input as Partial<BtcReversalConfig>), dailyLossUsd,
-    savedRevision: String(raw.savedRevision ?? input.revision) };
+  let config: BinanceLeadConfig;
+  try { config = normalizeBinanceLeadConfig(input as Partial<BinanceLeadConfig>); }
+  catch (error) { throw new CliInputError(`invalid strategy configuration: ${error instanceof Error ? error.message : "rejected"}`); }
+  return { config, dailyLossUsd, savedRevision: String(raw.savedRevision ?? input.revision) };
+}
+
+const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec">): LeadSignalParams =>
+  ({ windowMs: config.windowMs, thresholdBp: config.thresholdBp, fromSec: config.fromSec, toSec: config.toSec });
+
+/** One journal line per lead signal: the signal, the round it fell in, and what
+ * the strategy did with it (the order it placed, or the round's reason for not
+ * placing), so a live run can be lined up against a replay of the same trades.
+ * `round` is read after the strategy handled the signal. */
+export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>,
+  round: Pick<LeadRound, "marketId" | "roundId" | "status" | "reason" | "stages"> | undefined,
+  stopping: boolean): Record<string, unknown> {
+  const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId);
+  return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
+    move_bp: event.moveBp, trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
+    received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
+    market_id: round?.marketId ?? null, round_id: round?.roundId ?? null, round_status: round?.status ?? null,
+    outcome: stopping ? "stopping" : placed ? "order_submitted" : round ? "skipped" : "no_round",
+    reason: stopping ? "停机中，不处理信号" : round?.reason ?? null, attempted: (round?.stages.length ?? 0) > 0,
+    client_order_id: placed?.clientOrderId ?? null, token_id: placed?.tokenId ?? null,
+    limit_price: placed?.price ?? null, ask_at_signal: placed?.askAtSignal ?? null, shares: placed?.shares ?? null };
 }
 
 export async function runPlatformCli(argv: string[]): Promise<void> {
@@ -554,16 +576,17 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   if (!options) return;
   const operatorLimits: Readonly<HardLimits> = { ...options.limits };
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
-  let strategy: BtcReversalStrategy | undefined;
-  let reversal: BtcReversalStrategy | undefined;
-  let strategyConfig = options.strategyConfigFile ? readReversalConfig(options.strategyConfigFile) : undefined;
+  let strategy: BinanceLeadStrategy | undefined;
+  let leadFeed: ReturnType<typeof binanceLeadFeed> | undefined;
+  let syncDetector: ((config: Readonly<BinanceLeadConfig>) => void) | undefined;
+  let strategyConfig = options.strategyConfigFile ? readStrategyConfig(options.strategyConfigFile) : undefined;
   if (strategyConfig) {
     if (strategyConfig.config.assetId !== options.assetId) {
       throw new CliInputError(`strategy configuration asset ${strategyConfig.config.assetId} does not match selected asset ${options.assetId}`);
     }
-    Object.assign(options.limits, resolveReversalLimits(operatorLimits, strategyConfig.config));
+    Object.assign(options.limits, resolveStrategyLimits(operatorLimits, strategyConfig.config));
   }
-  const continuousMarkets = options.strategy === "btc-reversal" && !explicitMarkets;
+  const continuousMarkets = options.strategy === STRATEGY_ID && !explicitMarkets;
   let store: PlatformStore | undefined;
   let journal: PlatformJournal | undefined;
   let connection: Awaited<ReturnType<typeof connectPolymarketPlatform>> | undefined;
@@ -642,7 +665,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       // rounds are five minutes wide, so any minute count risks cutting off mid
       // round, buying into a round that then gets abandoned. Counting closed
       // rounds also stops on a boundary, which is when the drain can finish.
-      const parked = reversal?.getStatus().rounds
+      const parked = strategy?.getStatus().rounds
         .find(round => round.marketId === market.id)?.status === "waiting_next_round";
       if (countsTowardRoundLimit(market, startedAt, parked)) roundsCounted += 1;
       if (options.maxRounds > 0 && roundsCounted >= options.maxRounds) {
@@ -758,7 +781,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const currentMarket = allMarkets
       .filter(market => market.startsAt <= now && now < market.endsAt)
       .sort((left, right) => right.startsAt - left.startsAt)[0];
-    const strategyStatus = reversal?.getStatus();
+    const strategyStatus = strategy?.getStatus();
     const enrichRound = (round: NonNullable<typeof strategyStatus>["rounds"][number]) => ({
       ...round, ...roundOutcome(round, state) });
     // A market still needs work while it has an active or reconciliation-pending
@@ -810,6 +833,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         applied_count: state.cashFlowTracking.appliedFlows.length,
       } : null,
       strategy_runtime: strategyRuntime,
+      lead_feed_healthy: connection?.leadFeedHealthy() ?? null,
       journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: view.markets,
@@ -867,12 +891,33 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       renameSync(`${settlementStateFile}.tmp`, settlementStateFile);
     }
     if (strategyConfig) {
-      reversal = createBtcReversalStrategy(strategyConfig.config, {
-        restoredState: restored?.strategyStates?.["btc-reversal"] as BtcReversalState | undefined,
-        persist: state => connection?.platform.core.setStrategyState("btc-reversal", state),
-      });
-      const onEvent = reversal.onEvent.bind(reversal);
-      reversal.onEvent = (event, context) => {
+      // Only this strategy's key is read; an older file's btc-reversal key is ignored.
+      const lead = strategy = createStrategy(strategyConfig.config,
+        restored?.strategyStates?.[STRATEGY_ID] as BinanceLeadState | undefined,
+        { persist: state => connection?.platform.core.setStrategyState(STRATEGY_ID, state) });
+      const roundConfig = (now: number) => lead.activeRoundConfig(now) ?? strategyConfig!.config;
+      let detectorParams = leadSignalParams(roundConfig(Date.now() / 1000));
+      const detector = new LeadSignalDetector(detectorParams);
+      leadFeed = binanceLeadFeed(detector, referenceVenueProducts(options.assetId).binance);
+      // The detector runs the running round's parameters (frozen 10 s before
+      // its open), the saved ones between rounds. A hot reload or a new round
+      // reaches it on the next event; every round's close has its own timer.
+      syncDetector = (config: Readonly<BinanceLeadConfig>) => {
+        if (config.windowMs === detectorParams.windowMs && config.thresholdBp === detectorParams.thresholdBp
+          && config.fromSec === detectorParams.fromSec && config.toSec === detectorParams.toSec) return;
+        detectorParams = leadSignalParams(config);
+        detector.update(detectorParams);
+      };
+      // The strategy's verdict is read right after it handled the signal (the
+      // next signal may change the round); the line is written once the
+      // order is on its way.
+      const journalLead = (event: Extract<TradingEvent, { kind: "lead" }>, stopping: boolean) => {
+        if (!journal) return;
+        const fields = { ...leadJournalFields(event, lead.roundAt(event.receivedAtUnix), stopping), engine_ts: Date.now() / 1000 };
+        setImmediate(() => journal?.write("lead_signal", fields, `lead:${JSON.stringify([event.assetId, event.tradeId])}`));
+      };
+      const onEvent = lead.onEvent.bind(lead);
+      lead.onEvent = (event, context) => {
         // Shutdown is local to this run. Do not persist it as an operator
         // pause, or the next run would inherit a permanent admission lock.
         // Still record order/fill/settlement evidence though: short-circuiting
@@ -883,10 +928,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         // bookkeeping.
         if (signalReason || primaryFailure) {
           if (["order", "fill", "settlement"].includes(event.kind)) onEvent(event, context);
+          if (event.kind === "lead") journalLead(event, true);
           return [];
         }
         const actions = onEvent(event, context);
-        const limits = resolveReversalLimits(operatorLimits, reversal!.activeRoundConfig(context.now) ?? strategyConfig!.config);
+        if (event.kind === "lead") journalLead(event, false);
+        const config = roundConfig(context.now);
+        syncDetector!(config);
+        const limits = resolveStrategyLimits(operatorLimits, config);
         if (connection && (options.limits.dailyLossUsd !== limits.dailyLossUsd || options.limits.capitalUsd !== limits.capitalUsd
           || options.limits.maxOrderUsd !== limits.maxOrderUsd)) {
           connection.platform.core.updateLimits(limits);
@@ -894,7 +943,6 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         }
         return actions;
       };
-      strategy = reversal;
       if (options.controlFile) {
         // Dashboard starts have a fresh, per-run control path. An existing
         // pause command still wins when recovering the same run.
@@ -904,7 +952,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
           if (typeof control.paused !== "boolean") throw new CliInputError("invalid pause control");
           paused = control.paused;
         }
-        reversal.setPaused(paused);
+        lead.setPaused(paused);
       }
     }
     phase = "market_discovery";
@@ -914,8 +962,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     if (continuousMarkets && restored?.markets) {
       const settlementState = existsSync(settlementStateFile)
         ? JSON.parse(readFileSync(settlementStateFile, "utf8")) as unknown : undefined;
-      const settlementCandidates = reversal
-        ? settlementRecoveryCandidates(reversal.exportState(), settlementState, Date.now() / 1000) : [];
+      const settlementCandidates = strategy
+        ? settlementRecoveryCandidates(strategy.exportState(), settlementState, Date.now() / 1000) : [];
       const unsettledTokens = new Set([
         ...restored.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
           || order.reconciliationPending).map(order => order.tokenId),
@@ -939,22 +987,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     watchMarketExpiry();
     if (!signalReason) {
       phase = "platform_connect";
-      const settle = options.mode === "live" && reversal
+      const settle = options.mode === "live" && strategy
         ? await (await import("../platform/live-settlement.js")).createLiveSettlementAdapter({ stateFile: `${options.stateFile}.settlements.json` })
         : undefined;
-      const referenceFeeds = options.referenceFeed ? (() => {
-        const module = referenceFeedModule as typeof referenceFeedModule & {
-          referenceFeedCapability?: (asset: string) => { supported: boolean; reason?: string };
-          runReferenceFeed?: (sink: (event: import("../live/feeds/index.js").FeedEvent) => void, asset: string) => { stop: () => void };
-        };
-        const capability = module.referenceFeedCapability?.(options.assetId)
-          ?? (options.assetId === "btc" ? { supported: true } : { supported: false, reason: "asset_reference_feed_unavailable" });
-        if (!capability.supported) throw new CliInputError(`reference feed unavailable for ${options.assetId}: ${capability.reason}`);
-        const runner = module.runReferenceFeed
-          ?? (options.assetId === "btc" ? (sink: (event: import("../live/feeds/index.js").FeedEvent) => void) => referenceFeedModule.runBtcFeed(sink) : undefined);
-        if (!runner) throw new CliInputError(`reference feed producer unavailable for ${options.assetId}`);
-        return { [options.assetId]: (sink: (event: import("../live/feeds/index.js").FeedEvent) => void, _asset: AssetId) => runner(sink, options.assetId) };
-      })() : undefined;
       connection = await connectPolymarketPlatform({ mode: options.mode, markets, limits: options.limits,
         restored, persist: (state, critical) => store!.save(state, critical),
         deferPersistence: () => store!.defer(),
@@ -963,10 +998,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         // Before connection resolution the adapter records initialization;
         // afterwards the subscription includes publish-only plugin/settlement events.
         record: event => { if (!connection) record(event); },
-        durationSec: options.durationSec === 0 ? Infinity : options.durationSec, referenceFeed: options.referenceFeed,
-        assetId: options.assetId, referenceFeeds });
+        durationSec: options.durationSec === 0 ? Infinity : options.durationSec,
+        assetId: options.assetId, strategyId: strategy?.id, leadFeed });
       unsubscribe = connection.platform.subscribe(record);
-      if (reversal) connection.platform.core.setStrategyState("btc-reversal", reversal.exportState());
+      if (strategy) connection.platform.core.setStrategyState(STRATEGY_ID, strategy.exportState());
     }
     if (connection && !signalReason) {
       if (strategy) {
@@ -1034,24 +1069,26 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         };
         void discover(); discoveryTimer = setInterval(() => { void discover(); }, 15_000); scheduleBoundaryDiscovery();
       }
-      if (reversal) {
+      if (strategy) {
+        const lead = strategy;
         let lastConfig = JSON.stringify(strategyConfig);
-        let lastPaused = reversal.exportState().paused;
+        let lastPaused = lead.exportState().paused;
         controlTimer = setInterval(() => {
           try {
             if (options.strategyConfigFile) {
-              const next = readReversalConfig(options.strategyConfigFile);
+              const next = readStrategyConfig(options.strategyConfigFile);
               if (next.config.assetId !== options.assetId) throw new CliInputError(`strategy configuration asset ${next.config.assetId} does not match selected asset ${options.assetId}`);
               const key = JSON.stringify(next);
               if (key !== lastConfig) {
-                reversal!.updateConfig(next.config); strategyConfig = next; lastConfig = key;
+                lead.updateConfig(next.config); strategyConfig = next; lastConfig = key;
+                syncDetector?.(lead.activeRoundConfig(Date.now() / 1000) ?? next.config);
                 journal?.write("strategy_config_saved", { saved_revision: next.savedRevision });
               }
             }
             if (options.controlFile && existsSync(options.controlFile)) {
               const control = JSON.parse(readFileSync(options.controlFile, "utf8"));
               if (typeof control.paused !== "boolean") throw new Error("invalid pause control");
-              if (control.paused !== lastPaused) { reversal!.setPaused(control.paused); lastPaused = control.paused; }
+              if (control.paused !== lastPaused) { lead.setPaused(control.paused); lastPaused = control.paused; }
             }
           } catch { reportError("strategy_control", "strategy_configuration_unavailable"); }
         }, 1000);
@@ -1063,7 +1100,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
           // shutdown drain alive. A round that starts shortly before this run
           // is included because startup can happen after its five-minute
           // window has already opened.
-          const currentRunMarketIds = () => new Set(reversal!.getStatus().rounds
+          const currentRunMarketIds = () => new Set(lead.getStatus().rounds
             .filter(round => Number.isFinite(round.startsAt)
               && round.startsAt >= startedAt - MARKET_WINDOW_SEC
               && round.startsAt <= Date.now() / 1000
@@ -1088,7 +1125,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
               // but shutdown only waits for markets traded by this run.
               if (draining && !runMarketIds.has(market.id)) continue;
               const tokenIds = market.instruments.map(instrument => instrument.tokenId);
-              const hasStrategyRound = reversal!.getStatus().rounds.some(round => round.marketId === market.id && round.stages.length > 0);
+              const hasStrategyRound = lead.getStatus().rounds.some(round => round.marketId === market.id && round.stages.length > 0);
               if (!hasStrategyRound && !settlementRecoveryMarketIds.has(market.id)
                 && !state.positions.some(position => tokenIds.includes(position.tokenId) && position.shares > 0)) continue;
               if (state.orders.some(order => tokenIds.includes(order.tokenId)
@@ -1216,14 +1253,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         message: safeEventMessage(error instanceof Error ? error.message : undefined),
       });
     }
-    if (reversal) {
-      reversal.setPaused(true);
+    if (strategy) {
+      strategy.setPaused(true);
       // Each stage gets its own guard. Chained in one try, a slow cancel_all
       // skipped both the order drain and the account re-read, so the settlement
       // pass then ran against stale order state and refused to redeem anything
       // (it declines any market with a locally-active order).
       for (const [stage, work] of [
-        ["cancel_all", async () => { await connection?.platform.orders.cancelAll("btc-reversal"); }],
+        ["cancel_all", async () => { await connection?.platform.orders.cancelAll(STRATEGY_ID); }],
         ["order_idle", async () => { await connection?.platform.idle(); }],
         ["account_recovery", async () => { await connection?.recoverAccount(); }],
       ] as const) {

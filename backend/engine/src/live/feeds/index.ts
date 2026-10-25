@@ -1,6 +1,7 @@
 /** Shared feed types + queue for orchestrator. */
 
 import type { UserFeedEvent } from "./user.js";
+import type { LeadSignal } from "./binance-trades.js";
 
 export interface BookSnapshot {
   /** Stable market identity shared by the strategy and public projection. */
@@ -75,17 +76,7 @@ export interface FeedMarketIdentity {
   sequenceBase?: number;
 }
 
-export interface ReferenceTimes {
-  sourceAt?: number;
-  expiresAt?: number;
-  clockSource?: "exchange" | "received" | "mixed";
-}
-
-export const REFERENCE_FRESH_MAX_SEC = 5;
-
 export type FeedEvent =
-  | ({ kind: "btc"; asset?: string; tsUnix: number; price: number } & ReferenceTimes)
-  | ({ kind: "oracle"; asset?: string; tsUnix: number; price: number } & ReferenceTimes)
   | { kind: "book"; snapshot: BookSnapshot }
   | { kind: "tickSize"; token: string; tickSize: number; tsUnix: number }
   /** Top of book while one side is empty (no bid or no ask), for recording
@@ -103,16 +94,8 @@ export type FeedEvent =
       takerSide: string;
       tsUnix: number;
     }
-  | ({
-      kind: "venue";
-      asset?: string;
-      venue: number;
-      tsUnix: number;
-      bid: number;
-      ask: number;
-      bidSz: number;
-      askSz: number;
-    } & ReferenceTimes)
+  /** Binance lead signal (binance-trades.ts); belongs to no market. */
+  | ({ kind: "lead" } & LeadSignal)
   | { kind: "user"; event: UserFeedEvent; receivedAtMonoMs?: number }
   | { kind: "userStatus"; healthy: boolean; tsUnix: number }
   | ({ kind: "bookStatus"; healthy: boolean; connected?: boolean;
@@ -214,11 +197,6 @@ function regressed(next: number | undefined, previous: number | undefined): bool
   return previous != null && (next == null || next < previous);
 }
 
-type ReferenceEvent = Extract<FeedEvent, { kind: "btc" | "oracle" }>;
-function referenceExpiry(event: ReferenceEvent): number {
-  return Math.min(event.expiresAt ?? Infinity, (event.sourceAt ?? event.tsUnix) + REFERENCE_FRESH_MAX_SEC);
-}
-
 /** Async queue feeds push into; orchestrator drains. */
 export class FeedQueue {
   private priority: FeedEvent[] = [];
@@ -227,7 +205,6 @@ export class FeedQueue {
   private telemetry: FeedEvent[] = [];
   private waiters: Array<() => void> = [];
   private readonly acceptedBooks = new Map<string, BookWatermark>();
-  private readonly acceptedReferences = new Map<string, number>();
   private nextPruneAt = 0;
   private static readonly MAX_TELEMETRY_EVENTS = 256;
 
@@ -237,7 +214,9 @@ export class FeedQueue {
     if (
       event.kind === "user" ||
       event.kind === "userStatus" ||
-      event.kind === "bookStatus"
+      event.kind === "bookStatus" ||
+      // Every lead signal is a decision of its own: never merged or dropped.
+      event.kind === "lead"
     ) {
       if (event.kind === "bookStatus" && !event.healthy) {
         // Invalidate only this feed's pending decision, even before marketId is known.
@@ -248,9 +227,6 @@ export class FeedQueue {
       const previous = this.config.get(event.token);
       if (previous && event.tsUnix <= previous.tsUnix) return;
       this.config.set(event.token, event);
-    } else if (event.kind === "venue") {
-      // Already consumed by the BTC aggregator. Do not add unused queue load.
-      return;
     } else if (event.kind === "book") {
       // Decisions only need the newest unprocessed market state. Keeping every
       // stale quote after an HTTP ACK pause creates avoidable reaction lag.
@@ -280,18 +256,6 @@ export class FeedQueue {
       this.acceptedBooks.set(key, next);
       // Map replacement keeps a busy market's place instead of starving others.
       this.decisions.set(key, event);
-    } else if (event.kind === "btc" || event.kind === "oracle") {
-      if (!Number.isFinite(event.tsUnix) || event.tsUnix <= 0
-        || !Number.isFinite(event.price) || event.price <= 0 || event.tsUnix > now + 1
-        || (event.sourceAt != null && (!Number.isFinite(event.sourceAt) || event.sourceAt <= 0 || event.sourceAt > event.tsUnix))
-        || (event.expiresAt != null && !Number.isFinite(event.expiresAt)) || referenceExpiry(event) <= now) return;
-      const asset = event.asset?.trim().toLowerCase() ?? "btc";
-      if (!/^[a-z0-9]+$/.test(asset) || (event.kind === "btc" && asset !== "btc")) return;
-      const key = JSON.stringify([event.kind, asset]);
-      const previous = this.acceptedReferences.get(key);
-      if (previous != null && event.tsUnix < previous) return;
-      this.acceptedReferences.set(key, event.tsUnix);
-      this.decisions.set(key, event);
     } else {
       // Trades are useful telemetry, but they must never delay a decision
       // snapshot after a slow consumer pauses the queue.
@@ -310,7 +274,6 @@ export class FeedQueue {
     for (const [key, event] of this.decisions) {
       this.decisions.delete(key);
       if (event.kind === "book" && bookExpiry(event.snapshot) <= now) continue;
-      if ((event.kind === "btc" || event.kind === "oracle") && referenceExpiry(event) <= now) continue;
       return event.kind === "book" ? omitExpiredDepth(event, now) : event;
     }
     for (const [key, event] of this.config) {
@@ -323,9 +286,6 @@ export class FeedQueue {
   private prune(now: number): void {
     if (now < this.nextPruneAt) return;
     this.nextPruneAt = now + 1;
-    for (const [key, timestamp] of this.acceptedReferences) {
-      if (timestamp + REFERENCE_FRESH_MAX_SEC <= now) this.acceptedReferences.delete(key);
-    }
     for (const [key, watermark] of this.acceptedBooks) {
       if (watermark.retainUntil <= now) this.acceptedBooks.delete(key);
     }

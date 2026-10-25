@@ -42,9 +42,11 @@
 ```
 node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds <n>
   --journal-file results/live/dashboard-<run_id>.jsonl --state-file results/live/btc-reversal-<hash>.platform-state.json
-  --stop-file <journal>.stop --strategy btc-reversal --asset <币> --strategy-config results/dashboard/btc-reversal-config.json
+  --stop-file <journal>.stop --strategy binance-lead --asset <币> --strategy-config <配置文件>
   --control-file <journal>.control.json --expected-market-id <id> --expected-round-id <roundId>
 ```
+
+（控制面还没切到 binance-lead，命令行和配置文件路径以控制面改完后为准。）引擎只认 `--strategy binance-lead`；配置文件的 `strategyId` 必须是 `binance-lead`，`config` 里的 `durationMinutes`/`maxRounds`/`mode` 是控制面的运行设置，引擎丢掉。状态文件里旧的 `strategyStates["btc-reversal"]` 不读也不删。
 
 暂停/恢复：控制面写 `<journal>.control.json` 的 `paused`，引擎每 1 s 读一次（同一个定时器也热加载策略配置）。
 
@@ -74,13 +76,14 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/clob/wallet.ts` | 钱包、funder、签名类型 |
 | `live/feeds/polymarket.ts` | 公共行情 WS：L2 盘口、新鲜度看门狗 |
 | `live/feeds/user.ts` | 认证用户 WS：订单与成交，断线补偿 |
-| `live/feeds/index.ts` | `FeedQueue`：同一 key 只留最新盘口 |
-| `live/feeds/btc.ts` | 外部交易所参考价（遥测，不参与决策） |
+| `live/feeds/index.ts` | `FeedQueue`：同一 key 只留最新盘口；币安信号走优先通道，不合并 |
+| `live/feeds/binance-trades.ts` | 币安 aggTrade 两条线路按成交 id 去重、`LeadSignalDetector`（250 ms 窗口判信号）、`binanceLeadFeed` |
+| `live/feeds/btc.ts` | 各币在交易所的代码（采集器订阅币安 1 秒 K 线、引擎订阅币安 aggTrade 用） |
 | `live/orderbook.ts` | 本地 L2 盘口副本 |
 | `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘，采集器兜底 |
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
 | `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
-| `strategies/btc-reversal.ts` | 策略本体 |
+| `strategies/binance-lead.ts` | 策略本体 |
 | `models.ts` | 价格量化、手续费公式 `shares × rate × (p(1−p))^exp` |
 
 ### `scripts/`
@@ -124,26 +127,25 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 账户读取器 ─> /api/account/snapshot、official_pnl ─> 统计与历史
 ```
 
-签名后、POST 前把签名和载荷 fsync 到 `<state>.intent`。POST 结果不明时订单进 `UNKNOWN` 并阻断该市场，等对账，绝不为不确定的 POST 再生成一张新单；重启后只会原样重发同一份已签名订单。
+签名后、POST 前把签名和载荷 fsync 到 `<state>.intent`。POST 结果不明时订单进 `UNKNOWN` 并阻断该市场，等对账，绝不为不确定的 POST 再生成一张新单。账户恢复时交易所查不到的 GTC 单，本场未结束前最多原样重发同一份已签名订单两次；FAK 单从不重发（信号早已过期），保持 `UNKNOWN` 等账户读取或用户 feed 给出终态（`replaysPreparedOrder`）。
 
-## 策略 `btc-reversal`
+```
+币安 aggTrade ×2 ─> binance-trades 去重 ─> LeadSignalDetector ─> 优先队列 ─> platform.publish ─> 策略 onEvent
+```
 
-> 规则以 [STRATEGY.md](STRATEGY.md) 为准，"怎么判过线"见 [REVERSAL.md](REVERSAL.md)；回测 `scripts/backtest.py` 按同一套判定（STRATEGY.md 文末"回测口径"）。
+## 策略 `binance-lead`
 
-默认值（`BTC_REVERSAL_DEFAULTS`）：`triggerPrice 0.67`、`confirmationPrice 0.70`、`maxBuyPrice 0.70`、`stageShares [5,13,60]`、`maxStages 3`（STRATEGY.md 第 6 条；控制面 `strategy_config.default_config()` 同值）、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`、`firstTriggerFromSec 0`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
-- 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结，本场到结束都用这份。
+- 信号（`LeadSignalDetector`，在 feed 一侧）：币安成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
+- 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结。
 - 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
-- `firstTriggerFromSec`（默认 0）：本场第一次穿越早于开盘后这么多秒，本场转为 `waiting_next_round` 整场不做（之后的穿越也不做），不计入运行场次。
-- 双边报价门：未过期、年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、时间戳不倒退。
-- 第一对报价只做基线。行情断线、暂停、账户恢复后基线作废，重建基线后才认新的穿越。
-- 两边卖价之和 > 1.05 的帧跳过，不当基线也不判穿越，基线保留（`WIDE_SUM`）。
-- 触发：某一边卖一价 `prev < triggerPrice` 且 `now ≥ triggerPrice`，只有一边穿越；两边同一帧都穿越不算方向。
-- 下单：买穿越的那一边，GTC 限价 `maxBuyPrice`，股数 `stageShares[已用级数]`，`clientOrderId = <instanceId>:<marketId>:<阶段号>`。
-- 阶梯："我们这边"是最后挂出的那一档的方向，还在路上（没回执）或挂着没成交的也算，和回测 `sides[-1]` 一样；只有对面过线才下一档，所以各级 UP/DOWN 交替。一档都还没成交时对面过线：撤掉第 1 档（`replaced`），在对面挂第 1 档；还在路上的那张等拿到订单号再撤。被拒、放弃、被换掉、撤单时 0 成交的阶段不占级数。每个阶段记下自己是第几档（`rung`），旧状态文件没有这个字段，按以前的规则推算。
-- `confirmationPrice` 只更新确认方向和 `confirmationCount`，不是下单条件。
+- 当前盘口：本场最新一帧，一边没卖价也算。两边都有卖价、到达时年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、两边卖价之和 ≤ 1.05 才算新鲜。行情断线、账户恢复（只限被阻断的市场）后作废，等新的一帧。
+- 下单：本场第一个"当前盘口新鲜"的信号，买信号那一边，FAK 限价 = 卖价 + `limitPremium`（向下取到 tick，最多 0.99），`shares` 股，`clientOrderId = <instanceId>:<marketId>:1`。盘口不新鲜就等下一个信号。
+- 一场最多一笔，成不成交都不再下；持有到结算。
 - 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
-- 收盘时撤掉未成交的余单；未提交的 `CREATED` 意图标为 `ABANDONED`。
+- 重启时未提交的 `CREATED` 意图标为 `ABANDONED`，从不补发。
+- journal 每个信号一行 `lead_signal`：信号字段、所在场次、结果（`order_submitted`/`skipped`/`no_round`/`stopping`）和本场 reason、下单的限价与卖价。
 
 ## 风控（`platform/core.ts`）
 

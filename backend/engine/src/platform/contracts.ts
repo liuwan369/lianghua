@@ -19,8 +19,6 @@ export interface MarketInfo {
   id: string;
   /** Canonical selected asset for this market. Legacy callers may omit it only for BTC compatibility. */
   assetId?: AssetId;
-  /** Non-secret producer identifier advertised by market-data for this asset. */
-  referenceProducer?: string;
   /** Explicit five-minute execution identity from market discovery. */
   roundId: string;
   name: string;
@@ -388,7 +386,9 @@ export type TradingEvent =
   | { kind: "market"; market: MarketInfo }
   | { kind: "book"; book: Book; snapshot?: undefined }
   | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; assetId?: AssetId; book?: undefined }
-  | { kind: "reference"; assetId: AssetId; symbol: string; price: number; ts: number }
+  /** Binance lead signal; receivedAtUnix is when we saw the trade (S). */
+  | { kind: "lead"; assetId: AssetId; direction: "UP" | "DOWN"; price: number; refPrice: number; moveBp: number;
+      tradeId: number; tradeTimeMs: number; receivedAtUnix: number; receivedAtMonoMs: number }
   | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string; assetId?: AssetId }
   | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string; assetId?: AssetId }
   | { kind: "account"; snapshot: AccountSnapshot }

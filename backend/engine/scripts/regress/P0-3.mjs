@@ -18,7 +18,7 @@ import { summaryView, STATUS_RECENT_ROUNDS } from "../../dist/cli/platform.js";
 const START = 1_800_000_000;
 const mkRound = (i, extra = {}) => ({ marketId: `0x${String(i).padStart(64, "0")}`, roundId: String(START + i * 300),
   startsAt: START + i * 300, endsAt: START + i * 300 + 300, status: "ended", upTokenId: `u${i}`, downTokenId: `d${i}`,
-  stages: [], reason: "本场已结束", config: { maxStages: 4 }, ...extra });
+  stages: [], reason: "本场已结束", config: { shares: 5 }, ...extra });
 const mkMarket = (i) => ({ id: `0x${String(i).padStart(64, "0")}`, roundId: String(START + i * 300),
   startsAt: START + i * 300, endsAt: START + i * 300 + 300, instruments: [{ tokenId: `u${i}` }, { tokenId: `d${i}` }] });
 

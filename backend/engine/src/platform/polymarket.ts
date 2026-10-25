@@ -3,7 +3,6 @@ import { connectAccountReader } from "../live/account-data.js";
 import * as marketDiscovery from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import { parseAuthenticatedTrade, runUserFeed, type UserFeedControl } from "../live/feeds/user.js";
-import { runBtcFeed } from "../live/feeds/btc.js";
 import { FeedQueue, type FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
@@ -34,7 +33,7 @@ type FiveMinuteDiscovery = {
 type DiscoveryModule = typeof marketDiscovery & {
   findFiveMinuteMarket?: (asset: string, options: { now: number; allowCollectorFallback: boolean; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
 };
-type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string; __runtimeAssetId?: AssetId };
+type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string };
 
 /** A prewarmed next round is expected to be unhealthy until its window starts. */
 export function isActiveMarket(market: Pick<MarketInfo, "startsAt" | "endsAt">, now = Date.now() / 1000): boolean {
@@ -46,18 +45,6 @@ export function binaryMarketSides(market: MarketInfo): { up: Instrument; down: I
   const down = market.instruments.find(item => ["DOWN", "NO"].includes(item.outcome.toUpperCase()));
   if (!up || !down || up.tokenId === down.tokenId || up.marketId !== market.id || down.marketId !== market.id) return undefined;
   return { up, down };
-}
-
-/** Runtime-local producer label; market-data remains authoritative for actual feed availability. */
-export function referenceProducerForAsset(assetId: AssetId): string {
-  return `${assetId}-reference`;
-}
-
-/** Market-data currently names the reference asset `asset`; accept the temporary
- * runtime alias too, but never derive an asset from a price or local receive time. */
-export function referenceAssetFromFeedPayload(payload: Record<string, unknown>, fallback?: AssetId): AssetId | undefined {
-  const value = payload.asset ?? payload.assetId ?? fallback;
-  return typeof value === "string" && /^[a-z0-9_-]{1,32}$/i.test(value) ? value.toLowerCase() : undefined;
 }
 
 export function discoveryOptions(directOnly = false): { allowCollectorFallback: boolean; directOnly: boolean } {
@@ -112,10 +99,7 @@ export async function discoverMarket(
   if (market.roundId !== String(start)) throw new Error("market round id does not match discovery start");
   const discoveredAsset = String(market.asset ?? asset).toLowerCase();
   if (discoveredAsset !== asset) throw new Error("market discovery asset identity mismatch");
-  // The market-data discovery contract identifies the asset and market only.
-  // Reference producer availability is checked by ConnectOptions.referenceFeeds
-  // at startup; do not invent a discovery field that the producer does not own.
-  return [{ id: marketId, assetId: asset, referenceProducer: referenceProducerForAsset(asset), roundId: market.roundId,
+  return [{ id: marketId, assetId: asset, roundId: market.roundId,
     name: String(market.slug ?? `${asset}-updown-5m-${start}`), startsAt: start, endsAt: end, instruments }];
 }
 
@@ -197,11 +181,13 @@ export interface ConnectOptions {
   record?: PlatformAdapters["record"];
   settle?: PlatformAdapters["settle"];
   durationSec?: number;
-  referenceFeed?: boolean;
   /** Selected asset is checked against every supplied market. */
   assetId?: AssetId;
-  /** Reference producers are injected by the asset-aware market-data adapter. */
-  referenceFeeds?: Partial<Record<string, (sink: (event: FeedEvent) => void, assetId: AssetId) => { stop: () => void }>>;
+  /** Market-independent lead signals (binance-trades.ts binanceLeadFeed); started after the markets. */
+  leadFeed?: (sink: (event: FeedEvent) => void) => { stop: () => void; isHealthy?: () => boolean };
+  /** Strategy that receives the feed/recovery notices (market_feed_unhealthy,
+   * market_snapshot_rejected, account_recovery_started, ...). None without a strategy. */
+  strategyId?: string;
 }
 
 /** How long a matched fill may stay non-terminal before we stop waiting for it.
@@ -224,6 +210,19 @@ export function hasProvisionalFills(fills: readonly { status?: string; ts?: numb
     && typeof fill.ts === "number" && nowSec - fill.ts < PROVISIONAL_FILL_MAX_AGE_SEC);
 }
 
+/** Recovery found a signed order the venue does not know (404). Repeat exactly
+ * the persisted signature, at most twice, while its round is still open. Never
+ * a FAK: it answers a signal that is gone by the time recovery runs, so it stays
+ * UNKNOWN until the account read or the user feed gives its terminal state. */
+export function replaysPreparedOrder(
+  order: Pick<OrderRecord, "prepared" | "status" | "venueStatus" | "preparedReplayAttempts" | "timeInForce">,
+  venueStatus: string | undefined, market: Pick<MarketInfo, "endsAt"> | undefined, nowSec: number,
+): boolean {
+  return order.timeInForce !== "FAK" && !!order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
+    && !order.venueStatus && !venueStatus
+    && (order.preparedReplayAttempts ?? 0) < 2 && !!market && nowSec < market.endsAt;
+}
+
 export async function connectPolymarketPlatform(options: ConnectOptions) {
   if (options.mode !== "live") throw new Error("the platform connector only supports live execution");
   // Every market in one connection must be the same asset: feeds, the user
@@ -243,16 +242,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     || !Number.isFinite(m.startsAt) || !Number.isFinite(m.endsAt) || m.endsAt - m.startsAt !== 300
     || m.instruments.length !== 2 || !binaryMarketSides(m)
     || (options.assetId !== undefined && m.assetId !== options.assetId)
-    || (m.assetId !== undefined && (!/^[a-z0-9_-]{1,32}$/.test(m.assetId) || !m.referenceProducer)))) {
+    || (m.assetId !== undefined && !/^[a-z0-9_-]{1,32}$/.test(m.assetId)))) {
     throw new Error("the current Polymarket feed adapter requires explicit binary markets");
-  }
-  if (options.referenceFeed) {
-    for (const market of options.markets) {
-      const assetId = market.assetId ?? options.assetId ?? "btc";
-      if (!options.referenceFeeds?.[assetId] && assetId !== "btc") {
-        throw new Error(`reference producer unavailable for asset ${assetId}`);
-      }
-    }
   }
   let platform!: TradingPlatform;
   let client: ClobWrapper | undefined;
@@ -280,6 +271,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   // and token pair, but a per-market instance prevents a malformed marketId
   // from poisoning a valid stream that happens to reuse token metadata.
   const feedQueues = new Map<string, FeedQueue>();
+  // Lead signals belong to no market: one queue for the whole connection, never
+  // retired with a market, drained before any market's queue.
+  const leadQueue = new FeedQueue();
+  let leadControl: { stop: () => void; isHealthy?: () => boolean } | undefined;
+  const noticeStrategyId = options.strategyId;
   // Advance the starting queue after every consumed event. A busy current
   // round must not starve a prewarmed next-round queue at the boundary.
   let feedQueueCursor = 0;
@@ -501,17 +497,14 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     const payload = event as unknown as Record<string, unknown>;
     const snapshot = event.kind === "book" ? payload.snapshot as MarketBookSnapshot | undefined : undefined;
     const eventMarketId = typeof payload.marketId === "string" ? payload.marketId : snapshot?.marketId;
-    const byIdentity = options.markets.find(market => market.id === (eventMarketId ?? event.__runtimeMarketId));
-    if (byIdentity) return byIdentity;
-    const eventAsset = referenceAssetFromFeedPayload(payload);
-    return eventAsset ? options.markets.find(market => market.assetId === eventAsset) : undefined;
+    return options.markets.find(market => market.id === (eventMarketId ?? event.__runtimeMarketId));
   };
   const rejectSnapshot = (market: MarketInfo, reason: SnapshotRejectReason): void => {
     if (!isActiveMarket(market)) return;
     const key = snapshotStateKey(market);
     if (snapshotRejectNotice.get(key) === reason) return;
     snapshotRejectNotice.set(key, reason);
-    platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id, code: "market_snapshot_rejected",
+    platform.ingest({ kind: "error", strategyId: noticeStrategyId, marketId: market.id, code: "market_snapshot_rejected",
       message: `market_snapshot_rejected:${reason}` });
   };
   const acceptSnapshot = (market: MarketInfo, snapshot: MarketBookSnapshot): boolean => {
@@ -539,6 +532,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     return true;
   };
   const consumeFeedEvent = (raw: FeedEvent): void => {
+    if (raw.kind === "lead") {
+      platform.ingest({ kind: "lead", assetId: options.assetId ?? "btc", direction: raw.direction, price: raw.price,
+        refPrice: raw.refPrice, moveBp: raw.moveBp, tradeId: raw.tradeId, tradeTimeMs: raw.tradeTimeMs,
+        receivedAtUnix: raw.receivedAtUnix, receivedAtMonoMs: raw.receivedAtMonoMs });
+      return;
+    }
     const event = raw as RoutedFeedEvent;
     const market = routeMarket(event);
     const payload = event as unknown as Record<string, unknown>;
@@ -570,7 +569,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       else {
         snapshotFreshAfter.set(key, Number.isFinite(previousFreshAfter)
           ? Math.max(previousFreshAfter!, event.tsUnix) : event.tsUnix);
-        if (isActiveMarket(market)) platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
+        if (isActiveMarket(market)) platform.ingest({ kind: "error", strategyId: noticeStrategyId, marketId: market.id,
           code: "market_feed_unhealthy", message: `market_feed_unhealthy:${event.reason ?? "unknown"}` });
       }
       return;
@@ -591,23 +590,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         market.instruments = market.instruments.map(i => i.tokenId === event.token ? { ...i, tickSize: event.tickSize } : i);
         platform.ingest({ kind: "market", market }); client?.updateTickSize(event.token, event.tickSize);
       }
-      return;
-    }
-    if (event.kind === "marketTrade") return;
-    if (event.kind === "btc" || event.kind === "oracle") {
-      const runtimeAsset = typeof payload.__runtimeAssetId === "string" ? payload.__runtimeAssetId : undefined;
-      const declaredAsset = typeof payload.asset === "string" ? payload.asset
-        : typeof payload.assetId === "string" ? payload.assetId : undefined;
-      // Legacy BTC feed events have no asset field. They are accepted only
-      // from the BTC runtime binding; an unlabelled ETH event is rejected.
-      if (runtimeAsset !== undefined && declaredAsset !== undefined && declaredAsset.toLowerCase() !== runtimeAsset) return;
-      if (runtimeAsset !== undefined && declaredAsset === undefined && runtimeAsset !== "btc") return;
-      const eventAsset = referenceAssetFromFeedPayload(payload, runtimeAsset ?? "btc");
-      const marketForAsset = options.markets.find(item => (item.assetId ?? "btc") === eventAsset);
-      if (!marketForAsset || eventAsset !== (marketForAsset.assetId ?? "btc")) return;
-      const producer = typeof payload.producer === "string" ? payload.producer : undefined;
-      if (producer && marketForAsset.referenceProducer && marketForAsset.referenceProducer !== producer) return;
-      platform.ingest({ kind: "reference", assetId: eventAsset, symbol: event.kind === "btc" ? eventAsset.toUpperCase() : `${eventAsset.toUpperCase()}_ORACLE`, price: event.price, ts: event.tsUnix });
       return;
     }
     if (event.kind !== "user" || !market || !acceptUserEvents) return;
@@ -644,7 +626,12 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     if (stopped) return;
     const queue = feedQueues.get(market.id);
     if (!queue) return;
-    queue.push({ ...event, __runtimeMarketId: market.id, __runtimeAssetId: market.assetId ?? "btc" } as RoutedFeedEvent as FeedEvent);
+    queue.push({ ...event, __runtimeMarketId: market.id } as RoutedFeedEvent as FeedEvent);
+    wakeFeedConsumer();
+  };
+  const leadSink = (event: FeedEvent): void => {
+    if (stopped || event.kind !== "lead") return;
+    leadQueue.push(event);
     wakeFeedConsumer();
   };
   const startFeedConsumer = (): void => {
@@ -652,8 +639,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     feedConsumerAlive = true;
     feedConsumer = (async () => {
       while (feedConsumerAlive) {
-        let event: RoutedFeedEvent | undefined;
-        const queueKeys = [...feedQueues.keys()];
+        // A lead signal goes before every market's book decision.
+        let event = leadQueue.tryPop() as RoutedFeedEvent | undefined;
+        const queueKeys = event ? [] : [...feedQueues.keys()];
         if (queueKeys.length) {
           const start = feedQueueCursor % queueKeys.length;
           for (let offset = 0; offset < queueKeys.length; offset += 1) {
@@ -674,7 +662,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         catch (error) {
           const market = routeMarket(event as RoutedFeedEvent);
           if (market) { booksHealthy.set(market.id, false); userHealthy.set(market.id, false); }
-          platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market?.id, code: "feed_processing_failed",
+          platform.ingest({ kind: "error", strategyId: noticeStrategyId, marketId: market?.id, code: "feed_processing_failed",
             message: error instanceof Error ? error.message : "feed processing failed" });
         }
       }
@@ -713,7 +701,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     // markets with unresolved orders. Name them so the strategy resets just
     // those baselines: a settlement-time recovery that blocks nothing used to
     // wipe the live round's baseline and cost it a crossing (BUGS U2).
-    platform.ingest({ kind: "error", strategyId: "btc-reversal",
+    platform.ingest({ kind: "error", strategyId: noticeStrategyId,
       code: "account_recovery_started", message: "account_recovery_started", marketIds: [...recoveryMarkets] });
     recoveryJob = (async () => {
       await platform.idle();
@@ -854,13 +842,11 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         const venueStatus = normalizeVenueOrderStatus(detail.status);
         const market = options.markets.find(item => item.instruments.some(instrument => instrument.tokenId === order.tokenId));
         recoveryFailureMarketId = market?.id;
-        if (missing && effectiveOrder.prepared && ["SUBMITTING", "UNKNOWN"].includes(effectiveOrder.status)
-          && !effectiveOrder.venueStatus && !venueStatus
-          && (effectiveOrder.preparedReplayAttempts ?? 0) < 2 && market && Date.now() / 1000 < market.endsAt) {
+        if (missing && replaysPreparedOrder(effectiveOrder, venueStatus, market, Date.now() / 1000)) {
           // Repeat exactly the persisted signature/hash. Never generate a new
           // economic order to compensate an uncertain POST.
           platform.core.markPreparedReplay(order.orderId!);
-          const response = await client!.resubmitPrepared(effectiveOrder.prepared, effectiveOrder);
+          const response = await client!.resubmitPrepared(effectiveOrder.prepared!, effectiveOrder);
           platform.core.recoverPreparedAck(order.orderId!, { ...response,
             status: response.success && response.orderId ? "accepted" : "unknown", error: response.errorMsg });
           replayed = true;
@@ -1061,7 +1047,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       void user.waitUntilReady(10_000, signal).catch(error => {
         if (stopped || signal?.aborted) return;
         userHealthy.set(market.id, false);
-        platform.ingest({ kind: "error", strategyId: "btc-reversal", marketId: market.id,
+        platform.ingest({ kind: "error", strategyId: noticeStrategyId, marketId: market.id,
           code: "user_feed_not_ready", message: `authenticated user feed not ready: ${error instanceof Error ? error.message : "retrying"}` });
       });
     }
@@ -1134,6 +1120,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   return {
     platform,
     recoverAccount,
+    /** undefined when no lead feed is configured or it has no health probe. */
+    leadFeedHealthy: (): boolean | undefined => stopped ? false : leadControl?.isHealthy?.(),
     async addMarkets(markets: MarketInfo[], signal?: AbortSignal) {
       for (const market of markets) {
         signal?.throwIfAborted();
@@ -1167,15 +1155,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           });
         }
         await Promise.all(options.markets.map(market => startMarket(market)));
-        if (options.referenceFeed) {
-          for (const market of options.markets) {
-            if (market.endsAt <= Date.now() / 1000) continue;
-            const assetId = market.assetId ?? options.assetId ?? "btc";
-            const producer = options.referenceFeeds?.[assetId];
-            if (producer) controls.add(producer(sink(market), assetId));
-            else if (assetId === "btc") controls.add(runBtcFeed(sink(market)));
-          }
-        }
+        if (options.leadFeed) { leadControl = options.leadFeed(leadSink); controls.add(leadControl); }
         cleanupExpiredFeeds(); cleanupTimer = setInterval(cleanupExpiredFeeds, 5000);
         refreshCashFlows(); cashFlowTimer = setInterval(refreshCashFlows, 30_000);
       } catch (error) {
