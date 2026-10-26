@@ -94,6 +94,17 @@ export class TradingCore {
     }
     this.validateCashFlowTracking(this.state.cashFlowTracking);
     if (!options.restored) this.applyCashFlowEvidence(this.state, initial);
+    // A restored state from an earlier day holds that day's cash; the start-up
+    // read is today's. Open the new day at the read's equity, not at the stale
+    // cash updateRisk() would otherwise value (2026-10-26: a 10-02 baseline of
+    // 209.53 against a 164.35 balance, -45.18 from the first second). A restart
+    // within the day keeps the day's start.
+    if (options.restored && this.state.risk.day !== dayOf(this.clock())) {
+      const risk = this.state.risk;
+      risk.day = dayOf(this.clock()); risk.baselineAt = this.clock(); risk.baselineEquityUsd = equity;
+      risk.baselineAccountAt = initial.cashAt ?? initial.at;
+      if (risk.reason === "daily loss limit") { risk.halted = false; delete risk.reason; }
+    }
     this.state.fills.forEach((fill, index) => {
       if (!fill.tradeId || !fill.orderId) throw new Error("invalid persisted fill identity");
       // Distinct legs of one trade are distinct fills, keyed by (tradeId, orderId)
