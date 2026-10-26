@@ -570,8 +570,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
           || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS || stage.shares !== round.config.shares
           || !unitPrice(stage.askAtSignal) || stage.price > stage.askAtSignal + round.config.limitPremium + EPS
-          || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares)
-          || stage.filledShares < 0 || stage.filledShares > stage.shares + EPS
+          // A BUY below its limit gets more than `shares` for the same budget
+          // (2026-10-26: 5.25 of 5); the core bounds every fill by that budget.
+          || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares) || stage.filledShares < 0
           || (stage.feeReserveUsd !== undefined && (!Number.isFinite(stage.feeReserveUsd) || stage.feeReserveUsd < 0))
           || !STAGE_STATUSES.includes(stage.status)
           || !signal || signal.direction !== stage.direction

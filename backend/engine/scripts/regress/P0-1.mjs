@@ -77,7 +77,9 @@ for (const [name, finish] of Object.entries(outcomes)) {
   assert.ok(!restores(corrupt((st) => { st.rounds[0].stages[0].tokenId = DOWN; })), "UP stage on the DOWN token");
   assert.ok(!restores(corrupt((st) => { st.rounds[0].stages[0].shares = 6; })), "size other than the round's config");
   assert.ok(!restores(corrupt((st) => { st.rounds[0].stages[0].price = 0.61; })), "limit above ask + premium");
-  assert.ok(!restores(corrupt((st) => { st.rounds[0].stages[0].filledShares = 6; })), "filled more than placed");
+  // More than placed is a BUY below its limit (2026-10-26: 5.25 of 5); the core bounds it by the budget.
+  assert.ok(restores(corrupt((st) => { st.rounds[0].stages[0].filledShares = 5.25; })), "a better price bought more shares");
+  assert.ok(!restores(corrupt((st) => { st.rounds[0].stages[0].filledShares = -1; })), "negative fill");
   assert.ok(!restores(corrupt((st) => { st.rounds[0].stages[0].clientOrderId = "binance-lead:0xother:1"; })), "foreign client id");
   assert.ok(!restores(corrupt((st) => { st.rounds[0].stages.push({ ...st.rounds[0].stages[0] }); })), "two attempts in a round");
   assert.ok(!restores(corrupt((st) => { delete st.rounds[0].stages[0].signal; })), "stage without its signal");

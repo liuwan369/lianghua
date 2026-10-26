@@ -3,6 +3,10 @@ import type { AccountSnapshot, Book, CashFlowTracking, CancellationSource, CoreO
 import { accountDayKey as dayOf } from "../live/account-day.js";
 
 const EPS = 1e-8;
+/** Rounding allowed above a BUY's budget (shares x limit), in USDC. The venue
+ * spends at most the signed budget (2026-10-26: 5.176466 x 0.85 = 4.3999961 of
+ * 4.40); this only absorbs rounding in the reported trade price and size. */
+const BUY_BUDGET_TOLERANCE_USD = 0.01;
 const active = (order: OrderRecord) => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status);
 const reservationPending = (order: OrderRecord) => active(order) || order.reconciliationPending === true;
 const copy = <T>(value: T): T => structuredClone(value);
@@ -10,6 +14,7 @@ const finite = (value: number) => Number.isFinite(value);
 /** Marks a caller-demanded halt. Deliberately avoids the word "reconciliation"
  * so no substring test can mistake it for one this core may clear on its own. */
 const OPERATOR_HALT_SUFFIX = "operator halt requires manual release";
+const FAK_AWAITS_RECOVERY = "FAK has nothing resting; account recovery reads its trades";
 
 /** Account-wide accounting and execution. No price selection or strategy lifecycle rules. */
 export class TradingCore {
@@ -162,7 +167,9 @@ export class TradingCore {
         || !["GTC", "FOK", "FAK"].includes(o.timeInForce) || typeof o.postOnly !== "boolean"
         || ![o.shares, o.price, o.filledShares, o.reservedUsd, o.reservedShares, o.createdAt, o.updatedAt].every(finite)
         || o.shares <= 0 || o.price <= 0 || o.price >= 1 || o.filledShares < 0
-        || o.filledShares > o.shares + EPS || o.reservedUsd < 0 || o.reservedShares < 0
+        // A BUY is bounded by its budget, checked per fill (applyFill): a
+        // better price buys more shares than it asked for.
+        || (o.direction === "SELL" && o.filledShares > o.shares + EPS) || o.reservedUsd < 0 || o.reservedShares < 0
         || (o.reconciliationPending !== undefined && typeof o.reconciliationPending !== "boolean")
         || (o.cancelRequestedAt !== undefined && (!finite(o.cancelRequestedAt) || o.cancelRequestedAt < 0))
         || (o.cancelAckAt !== undefined && (!finite(o.cancelAckAt) || o.cancelAckAt < 0))
@@ -510,6 +517,24 @@ export class TradingCore {
     this.updateRisk();
     this.notify(order, true);
     return true;
+  }
+  /** A FAK never rests on the book. Answered `matched`, it is over once every
+   * trade the answer named is applied. */
+  private matchedFakComplete(order: OrderRecord): boolean {
+    return order.timeInForce === "FAK" && order.venueStatus === "matched" && !!order.orderId && !!order.tradeIds?.length
+      && order.tradeIds.every(tradeId => {
+        const fill = this.fillByKey.get(JSON.stringify([tradeId, order.orderId]));
+        return fill !== undefined && fill.status !== "FAILED";
+      });
+  }
+  /** End a finished FAK: what it bought stays, the unfilled rest is void. */
+  private voidFakRest(order: OrderRecord): void {
+    order.status = order.filledShares >= order.shares - EPS ? "FILLED" : "CANCELLED";
+    if (order.status === "CANCELLED") order.error = "FAK matched; unfilled rest is void";
+    order.reconciliationPending = false;
+    order.reservedUsd = 0; order.reservedShares = 0;
+    this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
+    this.refreshReconciliationRisk();
   }
   /** Flush a state mutation that was intentionally held until synchronous observers updated their state. */
   commit(): void { this.persist(true); }
@@ -1039,6 +1064,8 @@ export class TradingCore {
         order.status = "UNKNOWN"; this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
       }
       order.error = ack.error;
+      // Its trades can arrive before the answer that names them.
+      if (ack.status === "accepted" && active(order) && this.matchedFakComplete(order)) this.voidFakRest(order);
     } catch (error) {
       releasePreparation?.();
       if (!(order.orderId && ["FILLED", "PARTIAL"].includes(order.status))) {
@@ -1100,6 +1127,15 @@ export class TradingCore {
       order.status = "UNKNOWN";
     }
     if (!order.orderId) throw new Error("unidentified order requires reconciliation");
+    // A matched FAK has nothing resting: the venue refuses the cancel (2026-10-26,
+    // the order then went UNKNOWN on "cancellation not confirmed"). One still
+    // active has trades on their way; account recovery reads them.
+    if (order.timeInForce === "FAK" && order.venueStatus === "matched") {
+      if (order.status === "UNKNOWN" && order.error === FAK_AWAITS_RECOVERY) return copy(order);
+      order.status = "UNKNOWN"; order.error = FAK_AWAITS_RECOVERY;
+      this.refreshReconciliationRisk();
+      return this.notify(order, true);
+    }
     const cancelRequestedAt = this.clock();
     const cancelStarted = performance.now();
     try {
@@ -1224,12 +1260,20 @@ export class TradingCore {
       this.state.fills.push(saved);
       this.notify(order, true); this.emitFill(fill); return true;
     }
+    // A BUY signs a USDC budget (makerAmount = shares x limit) and receives at
+    // least `shares`; a better price buys more shares with the same budget
+    // (2026-10-26: 5 @ 0.42 filled 5.25 @ 0.40). Bound a BUY by what it spent,
+    // a SELL by its shares.
+    const spentUsd = order && fill.direction === "BUY" ? this.state.fills.reduce((sum, item) =>
+      item.orderId === order.orderId && item.status !== "FAILED" ? sum + item.shares * item.price : sum, 0) : 0;
     if (!order || order.tokenId !== fill.tokenId || order.direction !== fill.direction
-      || order.status === "FILLED" || (order.status === "CANCELLED" && !order.reconciliationPending)
+      || (order.status === "FILLED" && order.direction === "SELL") || (order.status === "CANCELLED" && !order.reconciliationPending)
       || !fill.tradeId || ![fill.shares, fill.price, fill.feeUsd, fill.ts].every(finite)
       || fill.shares <= 0 || fill.price <= 0 || fill.price >= 1 || fill.feeUsd < 0
       || (fill.direction === "BUY" ? fill.price > order.price + EPS : fill.price < order.price - EPS)
-      || order.filledShares + fill.shares > order.shares + EPS) throw new Error("invalid or unowned fill");
+      || (fill.direction === "BUY"
+        ? spentUsd + fill.shares * fill.price > order.shares * order.price + BUY_BUDGET_TOLERANCE_USD
+        : order.filledShares + fill.shares > order.shares + EPS)) throw new Error("invalid or unowned fill");
     if (fill.marketId !== undefined && fill.marketId !== order.marketId
       || fill.roundId !== undefined && fill.roundId !== order.roundId
       || fill.assetId !== undefined && fill.assetId !== order.assetId) {
@@ -1252,23 +1296,24 @@ export class TradingCore {
       position.realizedPnlUsd += amount - fill.feeUsd - basis;
       this.state.cashUsd += amount - fill.feeUsd;
     }
-    const remainingBefore = order.shares - order.filledShares;
+    const remainingBefore = Math.max(0, order.shares - order.filledShares);
     order.filledShares += fill.shares;
     const left = Math.max(0, order.shares - order.filledShares);
     order.reservedUsd *= remainingBefore > EPS ? left / remainingBefore : 0;
     order.reservedShares = order.direction === "SELL" && reservationPending(order) ? left : 0;
-    if (left <= EPS) {
-      order.status = "FILLED";
-      order.reconciliationPending = false;
-      order.reservedUsd = 0; order.reservedShares = 0;
-    }
-    else if (order.status !== "CANCELLED") order.status = "PARTIAL";
-    order.updatedAt = this.clock();
     const saved = copy(fill), savedKey = this.fillKey(saved);
     this.fillIndexByKey.set(savedKey, this.state.fills.length);
     this.fillByKey.set(savedKey, saved);
     this.registerTradeLeg(saved.tradeId, saved.orderId);
     this.state.fills.push(saved);
+    if (left <= EPS) {
+      order.status = "FILLED";
+      order.reconciliationPending = false;
+      order.reservedUsd = 0; order.reservedShares = 0;
+    }
+    else if (this.matchedFakComplete(order)) this.voidFakRest(order);
+    else if (order.status !== "CANCELLED") order.status = "PARTIAL";
+    order.updatedAt = this.clock();
     this.persist(true);
     // Inventory is authoritative in the event context before the strategy sees the fill.
     this.emitFill(fill);

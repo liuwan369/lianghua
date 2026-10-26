@@ -131,6 +131,8 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 账户读取器 ─> /api/account/snapshot、official_pnl ─> 统计与历史
 ```
 
+成交校验（`TradingCore.applyFill`）：价格不劣于限价；买单按花的钱判断（已成交成本 + 这笔 ≤ 股数 × 限价 + 0.01 USDC），因为买单签的是 USDC 上限，按更便宜的价格成交会多给股数；卖单按股数判断。FAK 从不挂单：交易所回 `matched` 后，回执列出的成交（`tradeIds`）都入账了就终结（买满为 `FILLED`，否则 `CANCELLED`，剩余作废、释放预留）；对回 `matched` 的 FAK 不发撤单（交易所会拒），还没到的成交留给账户恢复去扫。
+
 签名后、POST 前把签名和载荷 fsync 到 `<state>.intent`。POST 结果不明时订单进 `UNKNOWN` 并阻断该市场，等对账，绝不为不确定的 POST 再生成一张新单。账户恢复时交易所查不到的 GTC 单，本场未结束前最多原样重发同一份已签名订单两次；FAK 单从不重发（信号早已过期），保持 `UNKNOWN` 等账户读取或用户 feed 给出终态（`replaysPreparedOrder`）。
 
 ```
