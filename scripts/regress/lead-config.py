@@ -5,6 +5,7 @@
 - validate_config() accepts exactly what the engine's readStrategyConfig
   (normalizeBinanceLeadConfig) accepts, checked case by case against the engine;
 - a file the store writes is read by the engine as written;
+- a published config from before maxAsk (server revision 1) loads with 0.80;
 - a reversal config is never loaded: not at the new path (ConfigStoreError,
   never replaced by defaults), not as a draft (ConfigValidationError).
 
@@ -67,6 +68,7 @@ CASES = [("shares", v) for v in (0, -1, 0.5, 5, 10000, 10000.1, "5", True, None)
 CASES += [("thresholdBp", v) for v in (0, 0.1, 2, 1000, 1000.5, -2)]
 CASES += [("windowMs", v) for v in (0, 1, 250, 60000, 60001)]
 CASES += [("limitPremium", v) for v in (-0.01, 0, 0.03, 0.99, 1)]
+CASES += [("maxAsk", v) for v in (0, -0.1, 0.01, 0.8, 0.99, 1, 1.5, "0.8", None)]
 CASES += [(("fromSec", "toSec"), v) for v in ((0, 300), (-1, 265), (265, 265), (270, 265), (15, 301), (0, 0.5), (299, 300))]
 CASES += [("maxQuoteAgeSeconds", v) for v in (0, 0.1, 2, -1)]
 CASES += [("maxQuoteSkewSeconds", v) for v in (0, 1.5, -1)]
@@ -96,6 +98,7 @@ with tempfile.TemporaryDirectory() as tmp:
 for (key, value), mine, theirs in zip(CASES, python_ok, engine_ok):
     assert mine == theirs, f"{key}={value!r}: control plane {'accepts' if mine else 'rejects'}, engine {'accepts' if theirs else 'rejects'}"
 assert python_ok.count(False) >= 20 and python_ok.count(True) >= 15, "both sides of every boundary are exercised"
+assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "maxAsk"] == [False, False, True, True, True, False, False, False, False]
 
 # Values JSON cannot carry, and the control plane's own run settings.
 for key, value in (("shares", float("nan")), ("thresholdBp", float("inf")), ("durationMinutes", -1),
@@ -116,11 +119,15 @@ for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmatio
         continue
     raise AssertionError(f"{extra} is not a binance-lead field")
 for missing in defaults:
+    if missing == "maxAsk":
+        continue                     # added after revision 1 was published: backfilled, below
     try:
         validate_config({k: v for k, v in defaults.items() if k != missing})
     except ConfigValidationError:
         continue
     raise AssertionError(f"a config without {missing} must be rejected")
+assert validate_config({k: v for k, v in defaults.items() if k != "maxAsk"})["maxAsk"] == 0.8
+assert validate_config({**defaults, "maxAsk": 0.7})["maxAsk"] == 0.7
 
 REVERSAL = {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
             "stageShares": [5], "maxStages": 1, "roundBudgetUsd": 5, "totalBudgetUsd": 10, "dailyLossUsd": 10,
@@ -141,7 +148,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert store.get_draft() is None
     # --- save -> the engine reads exactly what was saved ---
     chosen = {**defaults, "shares": 7, "thresholdBp": 2.5, "windowMs": 300, "limitPremium": 0.02, "fromSec": 20,
-              "toSec": 260, "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
+              "toSec": 260, "maxAsk": 0.75, "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
     draft = store.save_draft(chosen, 0)
     saved = store.activate_draft(0, draft["draftId"])
     assert saved["savedRevision"] == 1 and saved["config"] == chosen
@@ -168,4 +175,21 @@ with tempfile.TemporaryDirectory() as tmp:
         pass
     else:
         raise AssertionError("reversal fields under the new strategy id are rejected too")
+    # --- revision 1 on the server was published before maxAsk: it loads with 0.80 ---
+    before = {k: v for k, v in chosen.items() if k != "maxAsk"}
+    store.path.write_text(json.dumps(document(before)), encoding="utf-8")
+    loaded = StrategyConfigStore(store.path).get()
+    assert loaded["savedRevision"] == 1 and loaded["config"]["maxAsk"] == 0.8, loaded["config"]
+    assert loaded["config"] == {**before, "maxAsk": 0.8}
+    read = engine("const { readStrategyConfig } = await load('cli/platform.js');\n"
+                  "console.log(JSON.stringify(readStrategyConfig(payload)));", str(store.path))
+    assert read["config"]["maxAsk"] == 0.8, "the engine reads the same file with the same default"
+    # Only a missing maxAsk is filled in: a pre-maxAsk file with any other gap is still damage.
+    store.path.write_text(json.dumps(document({k: v for k, v in before.items() if k != "shares"})), encoding="utf-8")
+    try:
+        StrategyConfigStore(store.path).get()
+    except ConfigStoreError:
+        pass
+    else:
+        raise AssertionError("a config missing another field is not backfilled")
 print("lead-config OK")

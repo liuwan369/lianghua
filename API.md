@@ -29,7 +29,7 @@
 | `/api/markets/{marketId}/snapshot?roundId=&marketId=` | 单市场盘口，找不到 404 |
 | `/api/runtime/status` | 引擎状态：`status`、`processRunning`、`strategyId`（`binance-lead`）、风控、资金、当前场次、停止结果；`leadFeedHealthy`（币安 aggTrade 行情是否在收，null=未知）；`leadSignals[]` 最近 20 个币安信号，最新在前：`trade_id/direction/move_bp/received_at/market_id/round_id/outcome`（`order_submitted`/`skipped`/`no_round`/`stopping`）`/reason/limit_price/ask_at_signal` |
 | `/api/runtime/market-pool` | 运行池：`desiredIds`、`currentIds`、`effectiveRoundId` |
-| `/api/strategy/config` | `strategyId="binance-lead"`、已发布配置 `config`、`savedRevision`、`draft`、`activationScope="future_uncreated_round"`。`config` 字段：`assetId, shares, thresholdBp, windowMs, limitPremium, fromSec, toSec, maxQuoteAgeSeconds, maxQuoteSkewSeconds, roundBudgetUsd, totalBudgetUsd, dailyLossUsd`（后三个可为 null）和控制面的 `mode, durationMinutes, maxRounds`。从没发布过时返回默认值、`savedRevision: 0`（旧的 btc-reversal 配置不读），此时启动被拒 |
+| `/api/strategy/config` | `strategyId="binance-lead"`、已发布配置 `config`、`savedRevision`、`draft`、`activationScope="future_uncreated_round"`。`config` 字段：`assetId, shares, thresholdBp, windowMs, limitPremium, fromSec, toSec, maxAsk, maxQuoteAgeSeconds, maxQuoteSkewSeconds, roundBudgetUsd, totalBudgetUsd, dailyLossUsd`（后三个可为 null）和控制面的 `mode, durationMinutes, maxRounds`。`maxAsk` 是信号那一边的卖价上限（含等于，默认 0.80），之前发布的配置没有这个字段时按 0.80 读。从没发布过时返回默认值、`savedRevision: 0`（旧的 btc-reversal 配置不读），此时启动被拒 |
 | `/api/account/status` | 账户配置就绪情况（不含秘密）：`account_check_state`、`server_live_enabled`、`control_source` 等 |
 | `/api/account/snapshot` | 余额、占用、持仓、挂单；不含成交史、链上活动、平仓记录 |
 | `/api/diagnostics/health` | `status` ok/degraded、`services`（trading/collector/projection）、`resources`、问题列表在 `error` |
@@ -47,7 +47,7 @@
 | 路径 | 用途 |
 |---|---|
 | `POST /api/runtime/commands` | `{action: start\|pause\|resume\|stop, requestId, revision\|expectedRevision, assetId, marketIds}`。返回 `accepted`、`status`、`commandStatus`、`remoteOrdersState`。最终状态看 `/api/runtime/status` |
-| `POST /api/strategy/drafts` | `{strategyId:"binance-lead", config, expectedRevision}` 保存草稿；`config` 必须恰好是上面的字段，范围同引擎 `normalizeBinanceLeadConfig`（份额 (0,10000]、阈值 (0,1000] bp、窗口 (0,60000] ms、加价 [0,1)、0 ≤ fromSec < toSec ≤ 300、两个盘口门 > 0、预算和日亏损为空或 > 0），不合法 400；版本冲突 409 |
+| `POST /api/strategy/drafts` | `{strategyId:"binance-lead", config, expectedRevision}` 保存草稿；`config` 必须恰好是上面的字段，范围同引擎 `normalizeBinanceLeadConfig`（份额 (0,10000]、阈值 (0,1000] bp、窗口 (0,60000] ms、加价 [0,1)、0 ≤ fromSec < toSec ≤ 300、卖价上限 maxAsk (0,1)、两个盘口门 > 0、预算和日亏损为空或 > 0），不合法 400；版本冲突 409 |
 | `POST /api/strategy/activate` | `{expectedRevision, draftId}` 发布草稿，对之后尚未冻结的场次生效；`effectiveRoundId` 非空返回 501 |
 | `POST\|PUT /api/runtime/market-pool` | 设置运行池（单币） |
 | `POST /api/ledger/reset` | `{confirm:"RESET"}`，引擎在跑或无法确认已停时 409。删 journal、引擎状态和投影，保留结算记录、配置、运行池 |

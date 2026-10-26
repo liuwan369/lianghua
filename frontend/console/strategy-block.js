@@ -9,14 +9,15 @@
   // Sidebar markup and bindings come from PolyPreview (single definition).
   var navMarkup = window.PolyPreview.navMarkup("strategy");
   // binance-lead's own fields (backend/engine/src/strategies/binance-lead.ts,
-  // ranges as normalizeBinanceLeadConfig). limitPremium is edited in cents.
+  // ranges as normalizeBinanceLeadConfig). limitPremium and maxAsk are edited in cents.
   var LEAD_FIELDS = [
     { key: "shares", label: "每场份额", unit: "股", step: "any", note: "信号出现时 FAK 吃单买入的股数，一场最多一笔。", check: (v) => v > 0 && v <= 10000, error: "每场份额须大于 0 且不超过 10000。" },
     { key: "thresholdBp", label: "触发阈值", unit: "bp", step: "any", note: "币安成交价比窗口内最低价高（涨）或比最高价低（跌）至少这么多 bp。", check: (v) => v > 0 && v <= 1000, error: "触发阈值须在 0 到 1000 bp 之间（不含 0）。" },
     { key: "windowMs", label: "观察窗口", unit: "ms", step: "any", note: "和此前这么多毫秒内的币安成交比较（按成交时间）。", check: (v) => v > 0 && v <= 60000, error: "观察窗口须在 0 到 60000 ms 之间（不含 0）。" },
     { key: "limitPremium", label: "限价加价", unit: "¢", step: "any", cents: true, note: "限价 = 信号时这一边的卖价 + 加价，向下取到 tick，最高 0.99。", check: (v) => v >= 0 && v < 100, error: "限价加价须在 0 到 100 美分之间（不含 100）。" },
     { key: "fromSec", label: "开盘后起始秒", unit: "秒", step: "1", note: "开盘后这么多秒起才认信号。", check: (v) => v >= 0 && v < 300, error: "起始秒须在 0 到 299 之间。" },
-    { key: "toSec", label: "开盘后截止秒", unit: "秒", step: "1", note: "到这一秒（不含）为止；必须大于起始秒、不超过 300。", check: (v) => v > 0 && v <= 300, error: "截止秒须大于 0 且不超过 300。" }
+    { key: "toSec", label: "开盘后截止秒", unit: "秒", step: "1", note: "到这一秒（不含）为止；必须大于起始秒、不超过 300。", check: (v) => v > 0 && v <= 300, error: "截止秒须大于 0 且不超过 300。" },
+    { key: "maxAsk", label: "卖价上限", unit: "¢", step: "any", cents: true, note: "信号这一边的卖价高于它就不买，本场不算尝试，等下一个信号（等于照买）。", check: (v) => v > 0 && v < 100, error: "卖价上限须在 0 到 100 美分之间（不含 0 和 100）。" }
   ];
   root.innerHTML = `
   <div class="overview-preview strategy-preview" data-theme="deep-sea">

@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const now = () => Date.now() / 1000;
-const config = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
+const config = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
   roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10, durationMinutes: 0, maxRounds: 3, mode: "live",
   maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
 const posted = [];
@@ -31,7 +31,7 @@ const nodes = new Map();
 const lookup = (s) => { if (!nodes.has(s)) nodes.set(s, element(s)); return nodes.get(s); };
 // A filled-in form, as the operator would leave it.
 const formValues = { '[data-lead="shares"]': "5", '[data-lead="thresholdBp"]': "2", '[data-lead="windowMs"]': "250",
-  '[data-lead="limitPremium"]': "3", '[data-lead="fromSec"]': "60", '[data-lead="toSec"]': "265",
+  '[data-lead="limitPremium"]': "3", '[data-lead="fromSec"]': "60", '[data-lead="toSec"]': "265", '[data-lead="maxAsk"]': "80",
   '[data-runtime-field="roundBudget"]': "5", '[data-runtime-field="totalBudget"]': "10",
   '[data-runtime-field="lossLimit"]': "10", '[data-runtime-field="rounds"]': "3" };
 const window = { location: { search: "?assetId=eth", origin: "http://x", href: "http://x/strategy.html?assetId=eth", pathname: "/strategy.html" },

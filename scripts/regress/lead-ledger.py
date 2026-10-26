@@ -139,6 +139,7 @@ class LeadLedger(unittest.TestCase):
         self.assertEqual(view["strategyId"], "binance-lead")
         self.assertEqual(view["config"]["shares"], 5)
         self.assertEqual(view["config"]["thresholdBp"], 2)
+        self.assertEqual(view["config"]["maxAsk"], 0.8, "the round's ask cap reaches the runtime view")
         current = view["currentRound"]
         self.assertEqual((current["upTokenId"], current["downTokenId"]), (UP, DOWN))
         self.assertEqual((current["upShares"], current["downShares"]), (3, 0))

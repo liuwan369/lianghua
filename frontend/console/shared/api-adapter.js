@@ -448,6 +448,7 @@
         limitPremium: values.limitPremium,
         fromSec: values.fromSec,
         toSec: values.toSec,
+        maxAsk: values.maxAsk,
         maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
         maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
         roundBudgetUsd: values.roundBudgetUsd ?? null,

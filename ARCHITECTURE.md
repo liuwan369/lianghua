@@ -143,13 +143,13 @@ FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易�
 
 ## 策略 `binance-lead`
 
-默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
 - 信号（`LeadSignalDetector`，在 feed 一侧）：币安成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结。
 - 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
 - 当前盘口：本场最新一帧，一边没卖价也算。两边都有卖价、到达时年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、两边卖价之和 ≤ 1.05 才算新鲜。行情断线、账户恢复（只限被阻断的市场）后作废，等新的一帧。
-- 下单：本场第一个"当前盘口新鲜"的信号，买信号那一边，FAK 限价 = 卖价 + `limitPremium`（向下取到 tick，最多 0.99），`shares` 股，`clientOrderId = <instanceId>:<marketId>:1`。盘口不新鲜就等下一个信号。
+- 下单：本场第一个"当前盘口新鲜"、这一边卖价 ≤ `maxAsk` 的信号，买信号那一边，FAK 限价 = 卖价 + `limitPremium`（向下取到 tick，最多 0.99），`shares` 股，`clientOrderId = <instanceId>:<marketId>:1`。盘口不新鲜或卖价高于 `maxAsk` 就等下一个信号，不算本场的尝试。
 - 一场最多一笔，成不成交都不再下；持有到结算。
 - 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
 - 重启时未提交的 `CREATED` 意图标为 `ABANDONED`，从不补发。

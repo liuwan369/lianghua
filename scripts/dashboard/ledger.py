@@ -356,7 +356,7 @@ def _strategy_projection(value):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxQuoteAgeSeconds",
+            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "maxQuoteAgeSeconds",
             "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
         return result

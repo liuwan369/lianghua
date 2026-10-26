@@ -18,6 +18,8 @@ export interface BinanceLeadConfig {
   limitPremium: number;
   fromSec: number;
   toSec: number;
+  /** Highest ask (inclusive) of the signal's side that is bought (user 2026-10-26). */
+  maxAsk: number;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -84,7 +86,7 @@ export interface BinanceLeadOptions {
 
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
-  limitPremium: 0.03, fromSec: 15, toSec: 265, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
@@ -100,6 +102,8 @@ const clone = <T>(value: T): T => structuredClone(value);
 const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
 const positive = (n: unknown): n is number => finite(n) && n > 0;
 const unitPrice = (n: unknown): n is number => positive(n) && n < 1;
+/** 0.8 -> "0.80"; a finer tick keeps its digits (0.805). */
+const priceText = (n: number) => Number(n.toFixed(2)) === n ? n.toFixed(2) : String(n);
 const validDirection = (value: unknown): value is LeadDirection => value === "UP" || value === "DOWN";
 const activeOrder = (status: string) => ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(status);
 const STAGE_STATUSES = ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN", "ABANDONED"];
@@ -134,6 +138,7 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   }
   if (!finite(config.fromSec) || !finite(config.toSec) || config.fromSec < 0 || config.fromSec >= config.toSec
     || config.toSec > 300) throw new Error("fromSec/toSec must satisfy 0 <= fromSec < toSec <= 300");
+  if (!unitPrice(config.maxAsk)) throw new Error("maxAsk must be in (0, 1)");
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
   }
@@ -372,6 +377,11 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const direction = event.direction;
     const tokenId = direction === "UP" ? round.upTokenId : round.downTokenId;
     const ask = (direction === "UP" ? latest.upAsk : latest.downAsk)!;
+    // A side already this dear is near decided: backtest fills above 0.9 made
+    // +0.004 a share (t 0.15). Keep the round's attempt for a later signal.
+    if (ask > config.maxAsk + EPS) {
+      round.reason = `卖价 ${priceText(ask)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
+    }
     const instrument = context.markets.find(m => m.id === round.marketId)?.instruments.find(i => i.tokenId === tokenId);
     if (!instrument || !positive(instrument.tickSize) || !positive(instrument.minOrderSize)) {
       round.reason = "交易所规则暂不可用"; return undefined;

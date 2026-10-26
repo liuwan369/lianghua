@@ -162,13 +162,14 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
     assert.ok(Math.abs(p * 100 - Math.round(p * 100)) < 1e-9 && p <= 0.99 && p <= ask + 0.03 + 1e-12, `ask ${ask}`);
     assert.equal(p, Math.min(0.99, Number((ask + 0.03).toFixed(2))), `ask ${ask}`);
   }
-  const s = begin();
+  // The 0.99 cap only binds with an ask cap raised above the default 0.80.
+  const s = begin({ maxAsk: 0.98 });
   on(s, book(START + 20, 0.98, 0.03));
   assert.equal(submits(on(s, lead(START + 21)))[0].price, 0.99);
   // An ask above 0.99 (tick 0.001) cannot be bought at the 0.99 cap: no order,
   // and the round keeps its one attempt for a later signal (review 10-25).
   const fine = { ...market, instruments: market.instruments.map(i => ({ ...i, tickSize: 0.001 })) };
-  const high = createStrategy();
+  const high = createStrategy({ maxAsk: 0.999 });
   high.onEvent({ kind: "timer", ts: START - 20 }, ctx(START - 20, account(), [fine]));
   high.onEvent(book(START + 20, 0.995, 0.006), ctx(START + 20, account(), [fine]));
   assert.deepEqual(submits(high.onEvent(lead(START + 21), ctx(START + 21.002, account(), [fine]))), []);
@@ -176,6 +177,40 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   assert.match(high.exportState().rounds[0].reason, /0\.99/);
   high.onEvent(book(START + 22, 0.98, 0.03), ctx(START + 22, account(), [fine]));
   assert.equal(submits(high.onEvent(lead(START + 23), ctx(START + 23.002, account(), [fine])))[0].price, 0.99);
+}
+// --- ask cap (user 2026-10-26): a side asking above maxAsk (0.80) is not bought,
+// and the round keeps its one attempt for a later signal. Backtest: fills above
+// 0.9 made +0.004 a share, t 0.15 ---
+{
+  assert.equal(BINANCE_LEAD_DEFAULTS.maxAsk, 0.8);
+  const s = begin();
+  on(s, book(START + 20, 0.81, 0.20));
+  assert.deepEqual(submits(on(s, lead(START + 21, "UP"))), [], "ask 0.81 > 0.80: no order");
+  assert.equal(round(s).reason, "卖价 0.81 高于上限 0.80，等下一个信号");
+  assert.equal(round(s).stages.length, 0, "the round's attempt is not used");
+  assert.equal(s.getStatus().currentRound.attempted, false);
+  on(s, book(START + 30, 0.42, 0.60));
+  const [order] = submits(on(s, lead(START + 31, "DOWN")));
+  assert.ok(order, "a later signal on a 0.60 ask places");
+  assert.equal(order.tokenId, DOWN);
+  assert.equal(order.price, 0.63, "0.60 + 0.03");
+  // Exactly at the cap places.
+  const edge = begin();
+  on(edge, book(START + 20, 0.80, 0.21));
+  assert.equal(submits(on(edge, lead(START + 21, "UP")))[0]?.price, 0.83, "ask 0.80 = cap: places at 0.83");
+  // The cap is configurable.
+  const raised = begin({ maxAsk: 0.9 });
+  on(raised, book(START + 20, 0.85, 0.17));
+  assert.equal(submits(on(raised, lead(START + 21, "UP")))[0]?.price, 0.88, "maxAsk 0.90 lets a 0.85 ask through");
+  // A state saved before maxAsk existed restores with the default.
+  const old = JSON.parse(JSON.stringify(begin().exportState()));
+  delete old.config.maxAsk; delete old.rounds[0].config.maxAsk;
+  const r = createStrategy({}, old);
+  assert.equal(r.exportState().config.maxAsk, 0.8);
+  assert.equal(r.exportState().rounds[0].config.maxAsk, 0.8, "the restored round gets the default cap");
+  r.onEvent({ kind: "timer", ts: START - 15 }, ctx(START - 15));
+  on(r, book(START + 20, 0.85, 0.17));
+  assert.deepEqual(submits(on(r, lead(START + 21, "UP"))), [], "and applies it");
 }
 // --- the venue's 1 USD minimum for a marketable BUY (2026-10-26 live: 5 @ 0.13 = 0.65
 // was "invalid amount for a marketable BUY order ($0.65), min size: 1") ---
@@ -384,9 +419,11 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   assert.equal(BINANCE_LEAD_DEFAULTS.toSec, 265);
   for (const bad of [{ fromSec: 265, toSec: 15 }, { toSec: 301 }, { fromSec: -1 }, { shares: 0 }, { thresholdBp: 0 },
     { windowMs: 0 }, { limitPremium: 1 }, { limitPremium: -0.01 }, { maxQuoteAgeSeconds: 0 }, { roundBudgetUsd: 0 },
-    { dailyLossUsd: 0 }, { instanceId: "a b" }]) {
+    { dailyLossUsd: 0 }, { instanceId: "a b" }, { maxAsk: 0 }, { maxAsk: 1 }, { maxAsk: -0.1 }, { maxAsk: "0.8" }]) {
     assert.throws(() => normalizeBinanceLeadConfig(bad), JSON.stringify(bad));
   }
+  assert.equal(normalizeBinanceLeadConfig({ maxAsk: 0.99 }).maxAsk, 0.99);
+  assert.equal(normalizeBinanceLeadConfig({ maxAsk: 0.01 }).maxAsk, 0.01);
 }
 // --- through the real platform: FAK reaches the gateway with the lead's receive time as trigger ---
 {
