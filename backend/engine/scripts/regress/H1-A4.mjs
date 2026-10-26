@@ -39,8 +39,10 @@ winner.reconcile(account([{ tokenId: UP, shares: 5, costUsd: 3.35, realizedPnlUs
 assert.equal(winner.risk().dailyPnlUsd.toFixed(2), "1.65", "A4: a resolved winner is worth its payout (5 x 1 - 3.35)");
 
 // --- control: a live quote still wins over a venue mark for an unresolved market ---
+// The day opens at the marked equity (venue mark 0.50, review C F3), so the live
+// 0.71 bid is +21; were the mark used it would be 0.
 const live = new TradingCore({ account: account([{ tokenId: UP, shares: 100, costUsd: 70, realizedPnlUsd: 0, markPrice: 0.5 }], now),
   instruments, limits, adapters, now: () => now });
 live.mark({ tokenId: UP, ts: now + 1, bid: 0.71, ask: 0.72 });
-assert.equal(Math.round(live.risk().dailyPnlUsd), 1, "an unresolved market is marked at its live bid");
+assert.equal(Math.round(live.risk().dailyPnlUsd), 21, "an unresolved market is marked at its live bid");
 console.log("H1-A4 OK");

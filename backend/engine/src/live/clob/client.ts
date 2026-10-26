@@ -220,11 +220,13 @@ const zeroAmount = (value: unknown) => value === undefined || value === "" || Nu
  * 400 `{error, orderID}` live, docs/resources/error-codes), or an accepted
  * `unmatched` with nothing made, taken or traded. `delayed` is not one: its
  * matching has not happened yet. */
-function fakMatchedNothing(response: unknown, error: string | undefined): boolean {
-  if (error !== undefined) return FAK_NO_MATCH.test(error);
+export function fakMatchedNothing(response: unknown, error: string | undefined): boolean {
   const record = response && typeof response === "object" ? response as Record<string, unknown> : {};
-  return normalizeVenueOrderStatus(record.status) === "unmatched" && zeroAmount(record.makingAmount)
-    && zeroAmount(record.takingAmount) && responseTradeIds(response).length === 0;
+  // Words alone are not proof: a reply that names a trade or an amount made
+  // matched something, whatever its error text says (review C F5).
+  const nothingMade = zeroAmount(record.makingAmount) && zeroAmount(record.takingAmount) && responseTradeIds(response).length === 0;
+  if (error !== undefined) return FAK_NO_MATCH.test(error) && nothingMade;
+  return normalizeVenueOrderStatus(record.status) === "unmatched" && nothingMade;
 }
 
 function responseTradeIds(value: unknown): string[] {

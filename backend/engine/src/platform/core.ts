@@ -53,7 +53,11 @@ export class TradingCore {
     this.validateAccount(options.account);
     this.register(options.instruments);
     const initial = options.account;
-    const equity = initial.cashUsd + initial.positions.reduce((n, p) => n + p.costUsd, 0);
+    // Valued like updateRisk's equity (markValue): at cost, a held position
+    // opened a restored day with a fake gain or loss (review C F3). No book
+    // is known yet, so the venue mark is the price; without one, the cost.
+    const equity = initial.cashUsd + initial.positions.reduce((n, p) =>
+      n + (p.markPrice != null ? p.shares * p.markPrice : p.costUsd), 0);
     this.state = options.restored ? copy(options.restored) : {
       schemaVersion: 1, accountId: initial.accountId, accountAt: initial.at, cashAt: initial.cashAt ?? initial.at, mode: options.adapters.gateway.mode,
       cashUsd: initial.cashUsd, positions: copy(initial.positions), orders: copy(initial.openOrders), fills: [], quarantinedOrderIds: [],
@@ -488,8 +492,10 @@ export class TradingCore {
    */
   abandonUnknown(id: string, reason = "account snapshot confirmed no open order, position, or fill", persist = true): boolean {
     const order = this.find(id);
+    // A FAILED leg was reversed: it is not a fill (review C F2).
     if (!order?.orderId || order.status !== "UNKNOWN" || !this.isOrderQuarantined(order.orderId)
-      || order.filledShares > EPS || this.state.fills.some(fill => fill.orderId === order.orderId && fill.shares > EPS)) return false;
+      || order.filledShares > EPS || this.state.fills.some(fill => fill.orderId === order.orderId && fill.shares > EPS
+        && fill.status !== "FAILED")) return false;
     const { orderId, clientOrderId, strategyId } = order;
     this.state.orders = this.state.orders.filter(candidate => candidate.orderId !== orderId);
     this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(candidate => candidate !== orderId);
@@ -513,7 +519,7 @@ export class TradingCore {
     const order = this.find(id);
     if (!order?.orderId || !["UNKNOWN", "OPEN", "PARTIAL"].includes(order.status)
       || !finite(venueMatchedShares) || Math.abs(venueMatchedShares - order.filledShares) > EPS) return false;
-    const fills = this.state.fills.filter(fill => fill.orderId === order.orderId && fill.shares > EPS);
+    const fills = this.state.fills.filter(fill => fill.orderId === order.orderId && fill.shares > EPS && fill.status !== "FAILED");
     if (fills.some(fill => fill.status !== undefined && fill.status !== "CONFIRMED")) return false;
     order.status = order.filledShares >= order.shares - EPS ? "FILLED" : "CANCELLED";
     order.venueStatus = "matched";
@@ -1032,7 +1038,10 @@ export class TradingCore {
       order.responseBodyLatencyMs = ack.responseBodyLatencyMs;
       order.postLatencyMs = ack.postLatencyMs; order.failurePhase = ack.failurePhase;
       order.ackLatencyMs = ack.ackLatencyMs;
-      if (ack.status === "accepted" || ack.status === "unknown") order.httpAckAt = this.clock();
+      // Only a reply the venue actually sent is an ACK. A POST that timed out,
+      // reset or got a 5xx comes back with failurePhase "post" and may still be
+      // matching: no httpAckAt, so the slow UNKNOWN rules apply (review C F1).
+      if (ack.status === "accepted" || (ack.status === "unknown" && ack.failurePhase !== "post")) order.httpAckAt = this.clock();
       if (order.venueStatusAt !== undefined && order.httpAckAt !== undefined) {
         order.venueStatusAfterAckLatencyMs = Math.max(0, (order.venueStatusAt - order.httpAckAt) * 1000);
       }
@@ -1281,7 +1290,11 @@ export class TradingCore {
     const spentUsd = order && fill.direction === "BUY" ? this.state.fills.reduce((sum, item) =>
       item.orderId === order.orderId && item.status !== "FAILED" ? sum + item.shares * item.price : sum, 0) : 0;
     if (!order || order.tokenId !== fill.tokenId || order.direction !== fill.direction
-      || (order.status === "FILLED" && order.direction === "SELL") || (order.status === "CANCELLED" && !order.reconciliationPending)
+      || (order.status === "FILLED" && order.direction === "SELL")
+      // A matched FAK ended on the trades its answer listed still owns another
+      // leg of the same order; the USDC budget below caps it (review C F6).
+      || (order.status === "CANCELLED" && !order.reconciliationPending
+        && !(order.timeInForce === "FAK" && order.venueStatus === "matched"))
       || !fill.tradeId || ![fill.shares, fill.price, fill.feeUsd, fill.ts].every(finite)
       || fill.shares <= 0 || fill.price <= 0 || fill.price >= 1 || fill.feeUsd < 0
       || (fill.direction === "BUY" ? fill.price > order.price + EPS : fill.price < order.price - EPS)

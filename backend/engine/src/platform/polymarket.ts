@@ -156,8 +156,10 @@ export class PolymarketGateway implements OrderGateway {
       triggerReceivedAtMonoMs: timing?.triggerReceivedAtMonoMs, decisionAtMonoMs: timing?.decisionAtMonoMs });
     // A FAK the venue says matched nothing is over, with or without an order id
     // (2026-10-26: 400 {error, orderID} for 7 of 9 orders mapped to "unknown").
+    // A reply that names a trade matched something: never "rejected", whatever
+    // else it says; the user feed or recovery books it (review C F5).
     return { status: response.fakKilled ? "rejected" : response.success && response.orderId ? "accepted"
-      : response.stateUnknown || response.orderId || response.success ? "unknown" : "rejected",
+      : response.stateUnknown || response.orderId || response.success || (response.tradeIds?.length ?? 0) > 0 ? "unknown" : "rejected",
       orderId: response.orderId, error: response.errorMsg, tradeIds: response.tradeIds,
       venueStatus: response.status,
       signLatencyMs: response.signLatencyMs, ackLatencyMs: response.ackLatencyMs,
@@ -832,7 +834,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       const missingUnknown = new Set<string>();
       /** Detail lookup answered 404/not found in this pass (not merely unavailable). */
       const notFoundIds = new Set<string>();
-      const currentFills = new Set(platform.portfolio.fills().filter(fill => fill.shares > 0).map(fill => fill.orderId));
+      // A FAILED leg was reversed: it is not a fill (review C F2).
+      const currentFills = new Set(platform.portfolio.fills().filter(fill => fill.shares > 0 && fill.status !== "FAILED")
+        .map(fill => fill.orderId));
       const detailResults = [...await earlyDetailResultsPromise, ...await detailResultsPromise];
       for (const { order, detail, unavailable, quarantined } of detailResults) {
         const currentOrder = platform.orders.get(order.orderId!);
