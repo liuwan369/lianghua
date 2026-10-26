@@ -154,7 +154,9 @@ export class PolymarketGateway implements OrderGateway {
       size: request.shares, tickSize: instrument.tickSize, direction: request.direction,
       timeInForce: request.timeInForce, postOnly: request.postOnly, onPrepared: prepared,
       triggerReceivedAtMonoMs: timing?.triggerReceivedAtMonoMs, decisionAtMonoMs: timing?.decisionAtMonoMs });
-    return { status: response.success && response.orderId ? "accepted"
+    // A FAK the venue says matched nothing is over, with or without an order id
+    // (2026-10-26: 400 {error, orderID} for 7 of 9 orders mapped to "unknown").
+    return { status: response.fakKilled ? "rejected" : response.success && response.orderId ? "accepted"
       : response.stateUnknown || response.orderId || response.success ? "unknown" : "rejected",
       orderId: response.orderId, error: response.errorMsg, tradeIds: response.tradeIds,
       venueStatus: response.status,
@@ -221,6 +223,23 @@ export function replaysPreparedOrder(
   return order.timeInForce !== "FAK" && !!order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
     && !order.venueStatus && !venueStatus
     && (order.preparedReplayAttempts ?? 0) < 2 && !!market && nowSec < market.endsAt;
+}
+
+/** A FAK whose POST was answered, whose detail lookup is 404 for its signed
+ * hash, that no trade, position or open order names, has no venue order: it
+ * ends now, without UNKNOWN_ABANDON_AFTER_SEC (2026-10-26: 7 unfilled FAKs held
+ * their reservation 5 minutes each). An unanswered POST can still be in
+ * flight, and a FAK with a venue status (delayed, matched) has a venue order;
+ * both keep waiting. */
+export function abandonsMissingFak(
+  order: Pick<OrderRecord, "status" | "timeInForce" | "filledShares" | "httpAckAt" | "venueStatus">,
+  evidence: { missing: boolean; open: boolean; tradeScanned: boolean; hasFill: boolean; hasPosition: boolean; accountAt: number },
+  nowSec: number,
+): boolean {
+  return order.timeInForce === "FAK" && order.status === "UNKNOWN" && order.filledShares === 0
+    && order.httpAckAt !== undefined && order.venueStatus === undefined
+    && evidence.missing && !evidence.open && evidence.tradeScanned && !evidence.hasFill && !evidence.hasPosition
+    && evidence.accountAt + 1e-8 >= order.httpAckAt && nowSec - evidence.accountAt <= UNKNOWN_ACCOUNT_MAX_AGE_SEC;
 }
 
 export async function connectPolymarketPlatform(options: ConnectOptions) {
@@ -811,6 +830,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       let replayed = false;
       const detailUnavailable = new Set<string>();
       const missingUnknown = new Set<string>();
+      /** Detail lookup answered 404/not found in this pass (not merely unavailable). */
+      const notFoundIds = new Set<string>();
       const currentFills = new Set(platform.portfolio.fills().filter(fill => fill.shares > 0).map(fill => fill.orderId));
       const detailResults = [...await earlyDetailResultsPromise, ...await detailResultsPromise];
       for (const { order, detail, unavailable, quarantined } of detailResults) {
@@ -828,6 +849,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         // (core checks that equals our settled fills) instead of retrying.
         if (detail && String(detail.status ?? "").toUpperCase() === "MATCHED"
           && platform.core.closeMatched(order.orderId!, numeric(detail.size_matched))) continue;
+        const missing = !!detail && (detail.status === "NOT_FOUND" || numeric(detail.status) === 404
+          || /order.*not found|not found.*order/i.test(String(detail.error ?? "")));
+        if (missing) notFoundIds.add(order.orderId!);
         if (quarantined) {
           if (effectiveOrder.status === "UNKNOWN" && !effectiveOrder.venueStatus) missingUnknown.add(order.orderId!);
           continue;
@@ -836,8 +860,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
           detailUnavailable.add(order.orderId!);
           continue;
         }
-        const missing = detail.status === "NOT_FOUND" || numeric(detail.status) === 404
-          || /order.*not found|not found.*order/i.test(String(detail.error ?? ""));
         const status = String(detail.status ?? "").toUpperCase();
         const venueStatus = normalizeVenueOrderStatus(detail.status);
         const market = options.markets.find(item => item.instruments.some(instrument => instrument.tokenId === order.tokenId));
@@ -866,13 +888,22 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       for (const orderId of new Set([...detailUnavailable, ...missingUnknown])) {
         const order = platform.orders.get(orderId);
         const noPosition = order ? !account.positions.some(position => position.tokenId === order.tokenId && position.shares > 0) : false;
-        const canAbandon = (missingUnknown.has(orderId) || detailUnavailable.has(orderId)) && order?.status === "UNKNOWN"
+        const nowSec = Date.now() / 1000;
+        const fakGone = !!order && abandonsMissingFak(order, { missing: notFoundIds.has(orderId), open: openIds.has(orderId),
+          tradeScanned: tradeScanComplete.has(orderId), hasFill: currentFills.has(orderId), hasPosition: !noPosition,
+          accountAt: account.at }, nowSec);
+        const canAbandon = fakGone || ((missingUnknown.has(orderId) || detailUnavailable.has(orderId)) && order?.status === "UNKNOWN"
           && order.filledShares === 0 && tradeScanComplete.has(orderId) && !currentFills.has(orderId) && noPosition
           && account.at + 1e-8 >= order.createdAt
-          && Date.now() / 1000 - account.at <= UNKNOWN_ACCOUNT_MAX_AGE_SEC
-          && Date.now() / 1000 - order.createdAt >= UNKNOWN_ABANDON_AFTER_SEC;
-        if (canAbandon && platform.core.abandonUnknown(orderId,
-          "complete account and trade reads confirmed no open order, position, or fill after timeout", false)) continue;
+          && nowSec - account.at <= UNKNOWN_ACCOUNT_MAX_AGE_SEC
+          && nowSec - order.createdAt >= UNKNOWN_ABANDON_AFTER_SEC);
+        // abandonUnknown() only takes a quarantined order: isolate it first.
+        if (fakGone && !platform.core.isOrderQuarantined(orderId)) {
+          platform.core.quarantineUnknown(orderId, "order detail returned not found; venue outcome pending");
+        }
+        if (canAbandon && platform.core.abandonUnknown(orderId, fakGone
+          ? "FAK not found on the venue, with no trade, position or open order: it matched nothing"
+          : "complete account and trade reads confirmed no open order, position, or fill after timeout", false)) continue;
         if (!openIds.has(orderId)) {
           platform.core.quarantineUnknown(orderId,
             missingUnknown.has(orderId) ? "order detail returned not found; venue outcome pending"

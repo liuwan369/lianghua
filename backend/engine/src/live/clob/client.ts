@@ -147,6 +147,8 @@ export interface SubmitOrderResult {
   tradeIds?: string[];
   /** The request may have reached CLOB even though no ACK was received. */
   stateUnknown?: boolean;
+  /** The venue's answer says this FAK matched nothing; it is over. */
+  fakKilled?: boolean;
 }
 
 const DEFAULT_WARM_TIMEOUT_MS = 3_000;
@@ -209,6 +211,20 @@ function responseError(value: unknown): string | undefined {
   const error = record.error ?? record.errorMsg ?? record.error_msg;
   if (error == null || error === "") return undefined;
   return typeof error === "string" ? error : JSON.stringify(error);
+}
+
+const FAK_NO_MATCH = /no orders found to match with FAK order/i;
+const zeroAmount = (value: unknown) => value === undefined || value === "" || Number(value) === 0;
+
+/** A FAK the venue's answer proves matched nothing: the no-match error (HTTP
+ * 400 `{error, orderID}` live, docs/resources/error-codes), or an accepted
+ * `unmatched` with nothing made, taken or traded. `delayed` is not one: its
+ * matching has not happened yet. */
+function fakMatchedNothing(response: unknown, error: string | undefined): boolean {
+  if (error !== undefined) return FAK_NO_MATCH.test(error);
+  const record = response && typeof response === "object" ? response as Record<string, unknown> : {};
+  return normalizeVenueOrderStatus(record.status) === "unmatched" && zeroAmount(record.makingAmount)
+    && zeroAmount(record.takingAmount) && responseTradeIds(response).length === 0;
 }
 
 function responseTradeIds(value: unknown): string[] {
@@ -775,6 +791,7 @@ export class ClobWrapper {
           return {
             success,
             orderId,
+            ...(args.timeInForce === "FAK" && fakMatchedNothing(resp, apiError) ? { fakKilled: true } : {}),
             status: normalizeVenueOrderStatus(resp?.status),
             errorMsg: apiError ?? resp?.errorMsg,
             latencyMs: performance.now() - started,

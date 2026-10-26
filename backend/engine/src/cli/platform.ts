@@ -697,6 +697,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       journal?.write("order", { client_order_id: order.clientOrderId, order_id: order.orderId ?? null,
         token_id: order.tokenId, strategy_id: order.strategyId, status: order.status,
         venue_status: order.venueStatus ?? null,
+        // The venue's own words for a rejection or an unknown outcome.
+        error: safeErrorMessage(order.error) ?? null,
         filled_shares: order.filledShares, reserved_usd: order.reservedUsd, reserved_shares: order.reservedShares,
         price: order.price, shares: order.shares, direction: order.direction, created_at: order.createdAt,
         asset_id: journalAssetId(event, marketIdentity(order.tokenId).asset_id),
