@@ -92,6 +92,9 @@ const CONFIG_FREEZE_SEC = 10;
 /** A frame whose two asks sum above this was not fresh on arrival (backtest `ok`). */
 const WIDE_SUM = 1.05;
 const MAX_LIMIT = 0.99;
+/** The venue refuses a marketable BUY under this many USD (2026-10-26 live:
+ * "invalid amount for a marketable BUY order ($0.65), min size: 1"). */
+const MIN_MARKETABLE_BUY_USD = 1;
 const WAITING = "等待币安信号";
 const clone = <T>(value: T): T => structuredClone(value);
 const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
@@ -106,6 +109,14 @@ export function leadLimitPrice(ask: number, premium: number, tickSize: number): 
   const decimals = Math.max(0, Math.ceil(-Math.log10(tickSize) - 1e-9));
   const onTick = Math.floor((ask + premium) / tickSize + 1e-9) * tickSize;
   return Number(Math.min(MAX_LIMIT, onTick).toFixed(decimals));
+}
+
+/** The configured size, raised to the fewest whole shares worth the venue's
+ * marketable-BUY minimum at the limit: a cheap side (ask 0.10, limit 0.13)
+ * buys 8 shares instead of being refused. Backtest (PMData 09-15..10-04): 51
+ * of 442 fills cost under 1 USD at 5 shares and made 68.6 of the 241.2. */
+export function leadShares(configured: number, price: number): number {
+  return Math.max(configured, Math.ceil(MIN_MARKETABLE_BUY_USD / price - 1e-9));
 }
 
 export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {}): BinanceLeadConfig {
@@ -368,12 +379,13 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const price = leadLimitPrice(ask, config.limitPremium, instrument.tickSize);
     // A FAK under the ask cannot fill: keep the round's attempt for a later signal.
     if (price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
-    if (!this.validSizeAndPrice(instrument, config.shares, price)) {
+    const shares = leadShares(config.shares, price);
+    if (!this.validSizeAndPrice(instrument, shares, price)) {
       round.reason = "数量或限价不符合交易所规则"; return undefined;
     }
     const { kind: _kind, assetId: _assetId, ...signal } = event;
     const stage: LeadStage = { stage: 1, direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
-      price, shares: config.shares, createdAt: context.now, status: "CREATED", filledShares: 0,
+      price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
       signal: { ...signal }, askAtSignal: ask };
     const order = this.orderIntent(round, stage);
     let feeReserve: number;
@@ -568,7 +580,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         if (stage.stage !== 1 || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:1`
           || !validDirection(stage.direction)
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
-          || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS || stage.shares !== round.config.shares
+          || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS || stage.shares !== leadShares(round.config.shares, stage.price)
           || !unitPrice(stage.askAtSignal) || stage.price > stage.askAtSignal + round.config.limitPremium + EPS
           // A BUY below its limit gets more than `shares` for the same budget
           // (2026-10-26: 5.25 of 5); the core bounds every fill by that budget.

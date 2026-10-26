@@ -177,6 +177,32 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   high.onEvent(book(START + 22, 0.98, 0.03), ctx(START + 22, account(), [fine]));
   assert.equal(submits(high.onEvent(lead(START + 23), ctx(START + 23.002, account(), [fine])))[0].price, 0.99);
 }
+// --- the venue's 1 USD minimum for a marketable BUY (2026-10-26 live: 5 @ 0.13 = 0.65
+// was "invalid amount for a marketable BUY order ($0.65), min size: 1") ---
+{
+  const s = begin();
+  on(s, book(START + 20, 0.89, 0.10));
+  const [order] = submits(on(s, lead(START + 21, "DOWN")));
+  assert.ok(order, "a cheap side still trades");
+  assert.equal(order.price, 0.13, "limit = ask 0.10 + 0.03");
+  assert.ok(order.shares * order.price >= 1 - 1e-9, `the order is worth at least 1 USD: ${order.shares} x ${order.price}`);
+  assert.equal(order.shares, 8, "the fewest whole shares that reach 1 USD at the limit (8 x 0.13 = 1.04)");
+  // The restored state accepts the larger stage.
+  assert.doesNotThrow(() => createStrategy({}, JSON.parse(JSON.stringify(s.exportState()))));
+  // Above the minimum the configured size is kept.
+  const t = begin();
+  on(t, book(START + 20, 0.57, 0.45));
+  assert.equal(submits(on(t, lead(START + 21)))[0].shares, 5, "5 x 0.60 = 3.00: the configured 5");
+  // At exactly 1 USD (5 x 0.20) nothing changes.
+  const u = begin();
+  on(u, book(START + 20, 0.80, 0.17));
+  assert.equal(submits(on(u, lead(START + 21, "DOWN")))[0].shares, 5, "5 x 0.20 = 1.00");
+  // A round budget too small for the raised size skips the round rather than send a rejected order.
+  const v = begin({ roundBudgetUsd: 0.9 });
+  on(v, book(START + 20, 0.89, 0.10));
+  assert.deepEqual(submits(on(v, lead(START + 21, "DOWN"))), [], "1.04 + fee is over a 0.90 round budget");
+  assert.match(round(v).reason, /单场预算/);
+}
 // --- a round discovered after its open is not traded ---
 {
   const s = createStrategy();
