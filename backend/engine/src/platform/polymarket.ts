@@ -158,7 +158,7 @@ export class PolymarketGateway implements OrderGateway {
     // (2026-10-26: 400 {error, orderID} for 7 of 9 orders mapped to "unknown").
     // A reply that names a trade matched something: never "rejected", whatever
     // else it says; the user feed or recovery books it (review C F5).
-    return { status: response.fakKilled ? "rejected" : response.success && response.orderId ? "accepted"
+    return { status: response.venueRefused ? "rejected" : response.success && response.orderId ? "accepted"
       : response.stateUnknown || response.orderId || response.success || (response.tradeIds?.length ?? 0) > 0 ? "unknown" : "rejected",
       orderId: response.orderId, error: response.errorMsg, tradeIds: response.tradeIds,
       venueStatus: response.status,
@@ -216,13 +216,14 @@ export function hasProvisionalFills(fills: readonly { status?: string; ts?: numb
 
 /** Recovery found a signed order the venue does not know (404). Repeat exactly
  * the persisted signature, at most twice, while its round is still open. Never
- * a FAK: it answers a signal that is gone by the time recovery runs, so it stays
- * UNKNOWN until the account read or the user feed gives its terminal state. */
+ * a FAK or a post-only order (binance-lead's maker stage): each answers a signal
+ * that is gone by the time recovery runs, so it stays UNKNOWN until the account
+ * read or the user feed gives its terminal state. */
 export function replaysPreparedOrder(
-  order: Pick<OrderRecord, "prepared" | "status" | "venueStatus" | "preparedReplayAttempts" | "timeInForce">,
+  order: Pick<OrderRecord, "prepared" | "status" | "venueStatus" | "preparedReplayAttempts" | "timeInForce" | "postOnly">,
   venueStatus: string | undefined, market: Pick<MarketInfo, "endsAt"> | undefined, nowSec: number,
 ): boolean {
-  return order.timeInForce !== "FAK" && !!order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
+  return order.timeInForce !== "FAK" && !order.postOnly && !!order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
     && !order.venueStatus && !venueStatus
     && (order.preparedReplayAttempts ?? 0) < 2 && !!market && nowSec < market.endsAt;
 }

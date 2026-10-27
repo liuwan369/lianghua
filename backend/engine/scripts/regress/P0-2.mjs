@@ -94,14 +94,13 @@ const openOne = async (h) => { h.tick(20, 0.57, 0.45); h.signal(21); await settl
   h.store.close(); harness(h.dir); rmSync(h.dir, { recursive: true, force: true });
   console.log("PASS control: plain cancel still clean");
 }
-// --- case C (found by the independent reviewer): the reservation is already
-// released to 0 by the time the local cancel's success branch runs. While the
-// cancel HTTP is in flight, the User WS delivers orderCancelled
-// (confirmCancelled -> CANCELLED, pending=true, reservation kept) and then a
-// stray non-cancel status on the now-terminal order, which core.ts:619 answers
-// by zeroing the reservation. A naive `reconciliationPending = true` would then
-// leave CANCELLED + pending=true + reserved=0, which validateAccount rejects on
-// restart just like the original bug. pending must follow the reservation. ---
+// --- case C (found by the independent reviewer): while the cancel HTTP is in
+// flight, the User WS delivers orderCancelled (confirmCancelled -> CANCELLED,
+// pending=true, reservation kept) and then a stray resting status on the
+// now-terminal order. That status reports a match from before the cancel
+// (maker review 2026-10-27): it is ignored, the reservation stays for the
+// trade on its way, and pending follows the reservation; reconcile and a
+// restart are clean. ---
 {
   const h = harness();
   const o = await openOne(h);
@@ -112,12 +111,12 @@ const openOne = async (h) => { h.tick(20, 0.57, 0.45); h.signal(21); await settl
   await h.platform.core.cancel(o.clientOrderId); await settle();
   const [c] = h.platform.core.orders();
   assert.equal(c.status, "CANCELLED");
-  assert.ok(c.reservedUsd <= 1e-8, "C precondition: the race must have released the reservation");
-  assert.equal(c.reconciliationPending, false, "C: no reservation held, so the order must not be left pending");
+  assert.ok(c.reservedUsd > 1e-8, "C: a stray live after the cancel keeps the reservation");
+  assert.equal(c.reconciliationPending, true, "C: pending follows the reservation");
   await h.platform.core.reconcile(account(100));               // must not throw
   h.store.close();
   harness(h.dir);                                              // restart must not throw
   rmSync(h.dir, { recursive: true, force: true });
-  console.log("PASS C: reservation released mid-cancel — not forced pending, reconcile + restart clean");
+  console.log("PASS C: stray live mid-cancel ignored — reservation kept and pending, reconcile + restart clean");
 }
 console.log("P0-2 OK");

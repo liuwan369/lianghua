@@ -17,7 +17,8 @@
     { key: "limitPremium", label: "限价加价", unit: "¢", step: "any", cents: true, note: "限价 = 信号时这一边的卖价 + 加价，向下取到 tick，最高 0.99。", check: (v) => v >= 0 && v < 100, error: "限价加价须在 0 到 100 美分之间（不含 100）。" },
     { key: "fromSec", label: "开盘后起始秒", unit: "秒", step: "1", note: "开盘后这么多秒起才认信号。", check: (v) => v >= 0 && v < 300, error: "起始秒须在 0 到 299 之间。" },
     { key: "toSec", label: "开盘后截止秒", unit: "秒", step: "1", note: "到这一秒（不含）为止；必须大于起始秒、不超过 300。", check: (v) => v > 0 && v <= 300, error: "截止秒须大于 0 且不超过 300。" },
-    { key: "maxAsk", label: "卖价上限", unit: "¢", step: "any", cents: true, note: "信号这一边的卖价高于它就不买，本场不算尝试，等下一个信号（等于照买）。", check: (v) => v > 0 && v < 100, error: "卖价上限须在 0 到 100 美分之间（不含 0 和 100）。" }
+    { key: "maxAsk", label: "卖价上限", unit: "¢", step: "any", cents: true, note: "信号这一边的价格高于它就不买，本场不算尝试，等下一个信号（等于照买）。吃单看卖价，挂单看买价。", check: (v) => v > 0 && v < 100, error: "卖价上限须在 0 到 100 美分之间（不含 0 和 100）。" },
+    { key: "makerHoldSec", label: "挂单秒数", unit: "秒", step: "any", note: "0 = 吃单（FAK，卖价 + 加价）。大于 0 = 只挂单：在这一边买一价挂买单，挂这么多秒后撤掉，没成交不花钱。", check: (v) => v >= 0 && v <= 300, error: "挂单秒数须在 0 到 300 之间。" }
   ];
   root.innerHTML = `
   <div class="overview-preview strategy-preview" data-theme="deep-sea">

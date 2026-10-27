@@ -706,6 +706,12 @@ export class TradingCore {
     const order = this.find(id);
     const observedAt = metadata.observedAt ?? this.clock();
     if (!finite(observedAt) || observedAt < 0) return false;
+    // A confirmed cancel is final: a resting status after it is the venue's
+    // report of a match from before the cancel (order UPDATEs skip the trade
+    // queue). Its trade is still on the way and needs the reservation the
+    // cancel kept; releasing it here made that fill "unowned" and lost it
+    // (maker review 2026-10-27).
+    if (order?.status === "CANCELLED" && ["live", "delayed", "unmatched"].includes(status)) return false;
     if (!order || (order.venueStatus === status && !this.isOrderQuarantined(order.orderId ?? "") && order.reconciliationPending !== true
       && !(["live", "delayed", "unmatched"].includes(status) && order.status === "UNKNOWN"))) return false;
     order.venueStatus = status;
@@ -1076,10 +1082,12 @@ export class TradingCore {
         order.status = "OPEN";
       }
       else if (ack.status === "accepted" && ack.orderId) { /* A fill can arrive before the HTTP ACK. */ }
-      // The gateway rejects a FAK with an order id only when the venue said it
-      // matched nothing (2026-10-26: 400 {error, orderID}); any other order id
-      // without acceptance stays UNKNOWN below.
-      else if (ack.status === "rejected" && (!ack.orderId || (order.timeInForce === "FAK" && order.filledShares <= EPS))) {
+      // The gateway rejects an order with an order id only when the venue's
+      // answer proves it never traded: a FAK that matched nothing (2026-10-26:
+      // 400 {error, orderID}) or a post-only order refused for crossing. Any
+      // other order id without acceptance stays UNKNOWN below.
+      else if (ack.status === "rejected" && (!ack.orderId
+        || ((order.timeInForce === "FAK" || order.postOnly) && order.filledShares <= EPS))) {
         order.status = "REJECTED"; order.reservedUsd = 0; order.reservedShares = 0;
       } else if (ack.status === "unknown" && order.orderId && ["FILLED", "PARTIAL"].includes(order.status)) {
         // Authenticated fills already proved this signed order reached the venue.

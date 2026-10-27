@@ -5,7 +5,13 @@ import type { AssetId, Instrument, MarketInfo, OrderRecord, OrderRequest, OrderS
  * round's first valid Binance signal whose book in force is two-sided and was
  * fresh on arrival gets one FAK BUY on the signal's side at ask + premium, held
  * to the close. The 250 ms window lives in LeadSignalDetector on the feed side;
- * this plugin only sees the rare signals. */
+ * this plugin only sees the rare signals.
+ *
+ * Maker mode (makerHoldSec > 0, user 2026-10-27): the same signal posts a
+ * post-only BUY at that side's best bid instead, cancelled makerHoldSec after
+ * the decision; what filled is held to the close. Live FAKs filled 2 of 18
+ * (the cheap asks were gone during the venue's taker hold); backtest
+ * E:/pm-backup/maker/maker_a_engine.py, 22 days, cap 0.80, 3 s: +219.6, t 5.8. */
 export type LeadDirection = "UP" | "DOWN";
 export interface BinanceLeadConfig {
   instanceId: string;
@@ -18,8 +24,12 @@ export interface BinanceLeadConfig {
   limitPremium: number;
   fromSec: number;
   toSec: number;
-  /** Highest ask (inclusive) of the signal's side that is bought (user 2026-10-26). */
+  /** Highest price (inclusive) of the signal's side that is bought (user
+   * 2026-10-26): the ask for a FAK, the bid a maker order rests at. */
   maxAsk: number;
+  /** 0: FAK at ask + limitPremium. > 0: post-only BUY at the best bid, cancelled
+   * after this many seconds (limitPremium unused). */
+  makerHoldSec: number;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -33,7 +43,8 @@ export interface LeadStage {
   direction: LeadDirection;
   tokenId: string;
   clientOrderId: string;
-  /** Limit: ask at the signal + limitPremium, on tick, at most 0.99. */
+  /** Limit: ask at the signal + limitPremium, on tick, at most 0.99; a maker
+   * stage rests at the bid at the signal. */
   price: number;
   shares: number;
   createdAt: number;
@@ -46,11 +57,16 @@ export interface LeadStage {
   cancelRequestedAt?: number;
   signal: LeadSignalRecord;
   askAtSignal: number;
+  /** Maker stage: the bid it rests at, and when its hold is up (strategy clock). */
+  bidAtSignal?: number;
+  cancelAt?: number;
 }
 /** Summary of the round's latest frame; never restored across a restart. */
 export interface LeadQuote {
   upAsk?: number;
   downAsk?: number;
+  upBid?: number;
+  downBid?: number;
   twoSided: boolean;
   freshOnArrival: boolean;
   staleReason?: string;
@@ -86,7 +102,7 @@ export interface BinanceLeadOptions {
 
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
-  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
@@ -139,6 +155,9 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (!finite(config.fromSec) || !finite(config.toSec) || config.fromSec < 0 || config.fromSec >= config.toSec
     || config.toSec > 300) throw new Error("fromSec/toSec must satisfy 0 <= fromSec < toSec <= 300");
   if (!unitPrice(config.maxAsk)) throw new Error("maxAsk must be in (0, 1)");
+  if (!finite(config.makerHoldSec) || config.makerHoldSec < 0 || config.makerHoldSec > 300) {
+    throw new Error("makerHoldSec must be in [0, 300]");
+  }
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
   }
@@ -304,6 +323,16 @@ export class BinanceLeadStrategy implements StrategyPlugin {
 
     const actions: StrategyAction[] = [];
     for (const round of this.workingRounds.values()) {
+      // A maker stage's hold is up: pull what is still resting (the ended
+      // branch below keeps retrying once the round is over).
+      if (context.now < round.endsAt) for (const stage of round.stages) {
+        if (stage.cancelAt === undefined || context.now < stage.cancelAt || !activeOrder(stage.status) || !stage.orderId
+          || stage.filledShares >= stage.shares - EPS) continue;
+        if (context.account.quarantinedOrderIds?.includes(stage.orderId)) continue;
+        if (stage.cancelRequestedAt !== undefined && context.now - stage.cancelRequestedAt < 1) continue;
+        stage.cancelRequestedAt = context.now; changed = true;
+        actions.push({ kind: "cancel", orderId: stage.orderId });
+      }
       if (this.restoredWaitingMarkets.delete(round.marketId) && round.startsAt < context.now) {
         round.status = "waiting_next_round"; round.reason = "重启时已错过本场开始，等待下一场"; changed = true;
       }
@@ -349,7 +378,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       const decision = this.decide(round, event, context, knownClients);
       if (!decision) continue;
       round.stages.push(decision.stage);
-      round.reason = "已下单（FAK），等待成交回报";
+      round.reason = BinanceLeadStrategy.attemptReason(decision.stage);
       this.indexStage(round, decision.stage);
       changed = true;
       actions.push({ kind: "submit", order: decision.order });
@@ -377,26 +406,33 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const direction = event.direction;
     const tokenId = direction === "UP" ? round.upTokenId : round.downTokenId;
     const ask = (direction === "UP" ? latest.upAsk : latest.downAsk)!;
+    const maker = config.makerHoldSec > 0;
+    const bid = direction === "UP" ? latest.upBid : latest.downBid;
+    if (maker && !(unitPrice(bid) && bid < ask - EPS)) { round.reason = "这一边没有买价，等下一个信号"; return undefined; }
     // A side already this dear is near decided: backtest fills above 0.9 made
     // +0.004 a share (t 0.15). Keep the round's attempt for a later signal.
-    if (ask > config.maxAsk + EPS) {
-      round.reason = `卖价 ${priceText(ask)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
+    const dear = maker ? bid! : ask;
+    if (dear > config.maxAsk + EPS) {
+      round.reason = `${maker ? "买价" : "卖价"} ${priceText(dear)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
     }
     const instrument = context.markets.find(m => m.id === round.marketId)?.instruments.find(i => i.tokenId === tokenId);
     if (!instrument || !positive(instrument.tickSize) || !positive(instrument.minOrderSize)) {
       round.reason = "交易所规则暂不可用"; return undefined;
     }
-    const price = leadLimitPrice(ask, config.limitPremium, instrument.tickSize);
+    const price = maker ? bid! : leadLimitPrice(ask, config.limitPremium, instrument.tickSize);
+    if (maker && price > MAX_LIMIT + EPS) { round.reason = `买价 ${bid} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
     // A FAK under the ask cannot fill: keep the round's attempt for a later signal.
-    if (price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
-    const shares = leadShares(config.shares, price);
+    if (!maker && price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
+    // A resting order is not marketable: the venue's 1 USD floor is for takers.
+    const shares = maker ? config.shares : leadShares(config.shares, price);
     if (!this.validSizeAndPrice(instrument, shares, price)) {
       round.reason = "数量或限价不符合交易所规则"; return undefined;
     }
     const { kind: _kind, assetId: _assetId, ...signal } = event;
     const stage: LeadStage = { stage: 1, direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
       price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
-      signal: { ...signal }, askAtSignal: ask };
+      signal: { ...signal }, askAtSignal: ask,
+      ...(maker ? { bidAtSignal: price, cancelAt: context.now + config.makerHoldSec } : {}) };
     const order = this.orderIntent(round, stage);
     let feeReserve: number;
     try { feeReserve = context.estimateFee?.(order) ?? 0; }
@@ -437,7 +473,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if ((snapshot.receivedAtUnix ?? now) < round.startsAt) return;
     const yes = snapshot.YES, no = snapshot.NO;
     if ((yes && yes.assetId !== round.upTokenId) || (no && no.assetId !== round.downTokenId)) return;
-    const upAsk = yes?.ask, downAsk = no?.ask;
+    const upAsk = yes?.ask, downAsk = no?.ask, upBid = yes?.bid, downBid = no?.bid;
     const twoSided = unitPrice(upAsk) && unitPrice(downAsk);
     let staleReason: string | undefined;
     if (twoSided) {
@@ -451,7 +487,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         staleReason = `两边卖价之和 ${(upAsk + downAsk).toFixed(2)} 超过 ${WIDE_SUM}`;
       }
     }
-    round.latest = { upAsk, downAsk, twoSided, freshOnArrival: twoSided && staleReason === undefined,
+    round.latest = { upAsk, downAsk, upBid, downBid, twoSided, freshOnArrival: twoSided && staleReason === undefined,
       ...(staleReason ? { staleReason } : {}) };
   }
 
@@ -488,7 +524,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
 
   private orderIntent(round: LeadRound, stage: LeadStage): Omit<OrderRequest, "strategyId"> {
     return { clientOrderId: stage.clientOrderId, assetId: round.assetId, marketId: round.marketId, roundId: round.roundId,
-      tokenId: stage.tokenId, direction: "BUY", price: stage.price, shares: stage.shares, timeInForce: "FAK", postOnly: false,
+      tokenId: stage.tokenId, direction: "BUY", price: stage.price, shares: stage.shares,
+      ...(stage.cancelAt === undefined ? { timeInForce: "FAK", postOnly: false } : { timeInForce: "GTC", postOnly: true }),
       ...(round.config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: round.config.roundBudgetUsd }) };
   }
   private validSizeAndPrice(instrument: Instrument, shares: number, price: number): boolean {
@@ -534,7 +571,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       error: "重启时本场订单已在交易所记录中，策略记录丢失，按订单恢复",
       signal: { direction, price: 0, refPrice: 0, moveBp: 0, tradeId: 0, tradeTimeMs: 0, receivedAtUnix: order.createdAt,
         receivedAtMonoMs: 0 },
-      askAtSignal: order.price };
+      askAtSignal: order.price,
+      // A resting maker order still needs its timed cancel.
+      ...(order.postOnly ? { bidAtSignal: order.price, cancelAt: order.createdAt + round.config.makerHoldSec } : {}) };
     round.stages.push(stage);
     this.indexStage(round, stage);
     if (round.status === "ended") this.workingRounds.set(round.marketId, round);
@@ -546,9 +585,13 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   }
   private static attemptReason(stage: LeadStage): string {
     const got = `${Number(stage.filledShares.toFixed(4))}/${stage.shares}`;
-    if (stage.status === "CREATED" || stage.status === "SUBMITTING") return "已下单（FAK），等待成交回报";
+    const maker = stage.cancelAt !== undefined;
+    if (stage.status === "CREATED" || stage.status === "SUBMITTING") return maker ? "已挂买单（只挂单），等待成交" : "已下单（FAK），等待成交回报";
+    if (maker && ["OPEN", "PARTIAL"].includes(stage.status)) {
+      return stage.filledShares > EPS ? `挂单已成交 ${got} 股，到时撤掉剩余` : `买单挂在 ${priceText(stage.price)}，到时撤单`;
+    }
     if (stage.status === "ABANDONED") return "本场已尝试，意图已放弃";
-    if (stage.status === "REJECTED") return "本场已尝试，订单被拒";
+    if (stage.status === "REJECTED") return maker && /crosses book/i.test(stage.error ?? "") ? "本场已尝试，挂单会直接成交被拒" : "本场已尝试，订单被拒";
     if (stage.status === "UNKNOWN") return "本场已尝试，订单状态待确认";
     if (stage.filledShares > EPS) return `本场已买到 ${got} 股，持有到结算`;
     return stage.status === "CANCELLED" ? "本场已尝试，未成交" : `本场已尝试，买到 ${got} 股`;
@@ -590,8 +633,11 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         if (stage.stage !== 1 || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:1`
           || !validDirection(stage.direction)
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
-          || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS || stage.shares !== leadShares(round.config.shares, stage.price)
+          || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS
+          || stage.shares !== (stage.cancelAt === undefined ? leadShares(round.config.shares, stage.price) : round.config.shares)
           || !unitPrice(stage.askAtSignal) || stage.price > stage.askAtSignal + round.config.limitPremium + EPS
+          || (stage.cancelAt !== undefined && (!Number.isFinite(stage.cancelAt) || stage.bidAtSignal !== stage.price))
+          || (stage.cancelAt === undefined && stage.bidAtSignal !== undefined)
           // A BUY below its limit gets more than `shares` for the same budget
           // (2026-10-26: 5.25 of 5); the core bounds every fill by that budget.
           || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares) || stage.filledShares < 0

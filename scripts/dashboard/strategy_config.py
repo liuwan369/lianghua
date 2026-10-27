@@ -27,15 +27,15 @@ def default_config() -> dict:
     # BINANCE_LEAD_DEFAULTS (backend/engine/src/strategies/binance-lead.ts) plus
     # the control plane's run settings, which reach the engine as flags.
     return {"assetId": "btc", "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
-            "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
+            "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "makerHoldSec": 0, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
 # Fields added after a binance-lead revision was published (the server's
-# revision 1 has no maxAsk): a config missing only these gets their defaults,
-# any other key mismatch is still rejected.
-ADDED_FIELDS = ("maxAsk",)
+# revision 1 has no maxAsk, revision 2 no makerHoldSec): a config missing only
+# these gets their defaults, any other key mismatch is still rejected.
+ADDED_FIELDS = ("maxAsk", "makerHoldSec")
 
 
 def validate_config(config: dict) -> dict:
@@ -83,6 +83,7 @@ def validate_config(config: dict) -> dict:
     if not 0 <= start < end <= 300:
         raise ConfigValidationError("起止秒必须满足 0 ≤ 起始秒 < 截止秒 ≤ 300")
     within("maxAsk", "卖价上限", 0, 1, high_open=True)
+    within("makerHoldSec", "挂单秒数", 0, 300, low_open=False)
     for key, label in (("maxQuoteAgeSeconds", "盘口最大年龄"), ("maxQuoteSkewSeconds", "盘口两边时间差")):
         if number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须是正数")

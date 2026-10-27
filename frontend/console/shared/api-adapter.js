@@ -449,6 +449,7 @@
         fromSec: values.fromSec,
         toSec: values.toSec,
         maxAsk: values.maxAsk,
+        makerHoldSec: values.makerHoldSec ?? 0,
         maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
         maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
         roundBudgetUsd: values.roundBudgetUsd ?? null,
