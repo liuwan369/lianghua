@@ -159,6 +159,10 @@ const DEFAULT_WARM_TIMEOUT_MS = 3_000;
 const MAX_VENUE_CLOCK_SKEW_SECONDS = 3;
 const DEFAULT_WARM_ATTEMPTS = 2;
 const DEFAULT_ORDER_TIMEOUT_MS = 3_000;
+/** The V2 payload's `deferExec` (docs: "Whether to defer execution", server
+ * effect undocumented). Every order sent it true. CLOB_DEFER_EXEC=0 sends false,
+ * to measure whether it is the ~380 ms POST on itode markets (2026-10-27). */
+const deferExec = () => process.env.CLOB_DEFER_EXEC !== "0";
 const POST_ORDER_PATH = "/order";
 /** Signing settles at ~3ms by the fourth call in a fresh process. */
 const SIGNING_WARM_ITERATIONS = 6;
@@ -627,8 +631,8 @@ export class ClobWrapper {
     onTiming?: RequestTimingSink,
   ): Promise<OrderResponse> {
     const payload = isV2Order(order)
-      ? orderToJsonV2(order, this.creds.key, orderType, postOnly, true)
-      : orderToJsonV1(order, this.creds.key, orderType, postOnly, true);
+      ? orderToJsonV2(order, this.creds.key, orderType, postOnly, deferExec())
+      : orderToJsonV1(order, this.creds.key, orderType, postOnly, deferExec());
     return (await this.l2Json(POST_ORDER_PATH, "POST", payload, onRequestStart, onTiming)) as OrderResponse;
   }
 
@@ -693,8 +697,8 @@ export class ClobWrapper {
               );
               signedV2OrderHash(order, negRisk);
               const payload = isV2Order(order)
-                ? orderToJsonV2(order, this.creds.key, OrderType.GTC, false, true)
-                : orderToJsonV1(order, this.creds.key, OrderType.GTC, false, true);
+                ? orderToJsonV2(order, this.creds.key, OrderType.GTC, false, deferExec())
+                : orderToJsonV1(order, this.creds.key, OrderType.GTC, false, deferExec());
               this.l2Headers("POST", POST_ORDER_PATH, JSON.stringify(payload));
               signal?.throwIfAborted();
             }
