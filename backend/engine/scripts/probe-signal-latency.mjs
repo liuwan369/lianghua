@@ -3,8 +3,9 @@
 // three orders at once and records the POST -> response-headers time of each:
 //   A far  : post-only BUY 5 @ 0.01 on the side whose bid is >= 0.30 (rests far
 //            below the book; post-only never takes);
-//   B near : post-only BUY 5 one tick under that side's best bid (rests next to
-//            the book, cannot match);
+//   B near : post-only BUY 5 two ticks under that side's best bid (rests next
+//            to the book; if the book moved under it the venue refuses it as
+//            "crosses book", which is recorded, never a fill);
 //   C bad  : FAK BUY 5 @ 0.01 = 0.05 USD, under the venue's 1 USD marketable
 //            minimum, refused at validation ("front door" time). If the side's
 //            ask is ever <= 0.05 the shot is skipped, so C can never match.
@@ -74,7 +75,7 @@ async function shot(kind, signal) {
   if (!m || books.start !== m.start || Date.now() - books.at > 2500 || sec < 15 || sec > 270) return;
   const token = books[m.up].bid >= books[m.down].bid ? m.up : m.down, side = books[token];
   if (side.bid < MIN_BID || side.ask <= 0.05 || side.ask - side.bid > 0.05) return;
-  const near = Math.round((side.bid - side.tick) * 100) / 100;
+  const near = Math.round((side.bid - 2 * side.tick) * 100) / 100;
   if (!(near > 0.01 && near < side.ask)) return;
   busy = true; lastShot = Date.now();
   const base = { tokenId: token, size: SHARES, tickSize: side.tick, direction: "BUY" };
@@ -93,7 +94,8 @@ async function shot(kind, signal) {
   rows.push(row);
   console.log(JSON.stringify(row));
   if (traded) { spentB += near * SHARES; stop = true; console.log("STOP: a probe order traded", JSON.stringify(row.st)); }
-  if (a.r.status !== "live" || b.r.status !== "live") { stop = true; console.log("STOP: unexpected post-only status", JSON.stringify(row.st)); }
+  const refused = (x) => /crosses book/i.test(x.r.errorMsg ?? "");
+  if (a.r.status !== "live" || (b.r.status !== "live" && !refused(b))) { stop = true; console.log("STOP: unexpected post-only status", JSON.stringify(row.st)); }
   if (spentB >= MAX_B_USD) stop = true;
   busy = false;
 }
