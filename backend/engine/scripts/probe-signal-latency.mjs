@@ -12,7 +12,8 @@
 // (no signal for 5 s). Stops on any trade, any unexpected status, or the cap.
 // Worst case: 0 USD. A rests at 0.01 under a bid >= 0.30; C is refused.
 //
-//   node scripts/probe-signal-latency.mjs <minutes> <maxShots>
+//   node scripts/probe-signal-latency.mjs <minutes> <maxSignalShots>
+// Calm shots: at most one a minute (control), not counted in maxSignalShots.
 // Needs the engine's account env. Prints one JSON line per shot, then a summary.
 import { ClobWrapper } from "../dist/live/clob/client.js";
 import { ownerSignerPrivateKey } from "../dist/live/account.js";
@@ -67,13 +68,17 @@ const send = async (args) => {
   const r = await client.submitOrder(args);
   return { r, ms: performance.now() - t0 };
 };
+const signals = () => rows.filter(r => r.kind === "signal").length;
+let lastCalm = 0;
 async function shot(kind, signal) {
-  if (busy || stop || rows.length >= maxShots || Date.now() - lastShot < MIN_GAP_MS) return;
+  if (busy || stop || signals() >= maxShots || Date.now() - lastShot < MIN_GAP_MS) return;
+  if (kind === "calm" && Date.now() - lastCalm < 60_000) return;
   const m = market, sec = Date.now() / 1000 - (m?.start ?? 0);
   if (!m || books.start !== m.start || Date.now() - books.at > 2500 || sec < 15 || sec > 270) return;
   const token = books[m.up].bid >= books[m.down].bid ? m.up : m.down, side = books[token];
   if (side.bid < MIN_BID || side.ask <= 0.05 || side.ask - side.bid > 0.05) return;
   busy = true; lastShot = Date.now();
+  if (kind === "calm") lastCalm = Date.now();
   const base = { tokenId: token, size: SHARES, tickSize: side.tick, direction: "BUY" };
   const [a, c] = await Promise.all([
     send({ ...base, price: 0.01, timeInForce: "GTC", postOnly: true }),
@@ -101,7 +106,7 @@ const feed = runBinanceTrades(trade => {
 });
 const calm = setInterval(() => { if (Date.now() - lastSignal > CALM_MS) void shot("calm"); }, 7000);
 const deadline = Date.now() + minutes * 60_000;
-while (!stop && rows.length < maxShots && Date.now() < deadline) await new Promise(r => setTimeout(r, 500));
+while (!stop && signals() < maxShots && Date.now() < deadline) await new Promise(r => setTimeout(r, 500));
 clearInterval(calm); clearInterval(refresher); feed.stop();
 while (busy) await new Promise(r => setTimeout(r, 100));
 const open = await client.client.getOpenOrders().catch(() => null);
