@@ -83,7 +83,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // ---------- strategy page: P3-16 ----------
 {
   let phase = "ok";
-  const config = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0,
+  const config = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot",
     roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10, durationMinutes: 0, maxRounds: 3, mode: "live",
     maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
   const reply = (url) => {

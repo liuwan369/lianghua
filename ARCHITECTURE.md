@@ -81,7 +81,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/feeds/polymarket.ts` | 公共行情 WS：L2 盘口、新鲜度看门狗 |
 | `live/feeds/user.ts` | 认证用户 WS：订单与成交，断线补偿 |
 | `live/feeds/index.ts` | `FeedQueue`：同一 key 只留最新盘口；币安信号走优先通道，不合并 |
-| `live/feeds/binance-trades.ts` | 币安 aggTrade 两条线路按成交 id 去重、`LeadSignalDetector`（250 ms 窗口判信号）、`binanceLeadFeed` |
+| `live/feeds/binance-trades.ts` | 领先成交：币安 aggTrade 两条线路按成交 id 去重（`binanceLeadFeed`），Bybit 永续 publicTrade 两条线路按 `seq` + 成交 id 去重（`bybitLeadFeed`）；`LeadSignalDetector`（250 ms 窗口判信号） |
 | `live/feeds/btc.ts` | 各币在交易所的代码（采集器订阅币安 1 秒 K 线、引擎订阅币安 aggTrade 用） |
 | `live/orderbook.ts` | 本地 L2 盘口副本 |
 | `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘，采集器兜底 |
@@ -138,14 +138,15 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易所报 "no orders found to match with FAK order"（实盘是 HTTP 400 `{error, orderID}`，带我们签名的哈希），或 `success` + `unmatched` + makingAmount/takingAmount 为 0 + 没有 tradeIDs，网关给 `rejected`，订单直接 `REJECTED`、释放预留、不阻断市场。`delayed`（撮合还没发生）照常 `OPEN` 等用户 feed；超时、5xx、连接断开仍是 `UNKNOWN`。账户恢复里，回执拿到过、详情 404、开放订单和成交扫描里都没有、该 token 没持仓的 FAK 当场放弃（`abandonsMissingFak`），不等 `UNKNOWN_ABANDON_AFTER_SEC` 的 5 分钟。journal 的 `order` 行带 `error`（交易所原话，过 `safeErrorMessage`）。
 
 ```
-币安 aggTrade ×2 ─> binance-trades 去重 ─> LeadSignalDetector ─> 优先队列 ─> platform.publish ─> 策略 onEvent
+币安 aggTrade ×2 或 Bybit 永续 ×2（leadSource）─> binance-trades 去重 ─> LeadSignalDetector ─> 优先队列 ─> platform.publish ─> 策略 onEvent
 ```
 
 ## 策略 `binance-lead`
 
-默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`makerHoldSec 0`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`makerHoldSec 0`、`leadSource binance-spot`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
-- 信号（`LeadSignalDetector`，在 feed 一侧）：币安成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
+- 信号源（`leadSource`，`cli/platform.ts leadFeedFor`）：`binance-spot` 或 `bybit-perp`，引擎启动时选定，热更新改它要下次启动才生效（检测器窗口里只能是一家的价格）。两家都只认 1 秒内的成交（太旧、时间在未来、编号乱跳的丢掉）。
+- 信号（`LeadSignalDetector`，在 feed 一侧）：领先成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结。
 - 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
 - 当前盘口：本场最新一帧，一边没卖价也算。两边都有卖价、到达时年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、两边卖价之和 ≤ 1.05 才算新鲜。行情断线、账户恢复（只限被阻断的市场）后作废，等新的一帧。

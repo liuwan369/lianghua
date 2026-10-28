@@ -450,6 +450,7 @@
         toSec: values.toSec,
         maxAsk: values.maxAsk,
         makerHoldSec: values.makerHoldSec ?? 0,
+        leadSource: values.leadSource ?? "binance-spot",
         maxQuoteAgeSeconds: values.maxQuoteAgeSeconds ?? 2,
         maxQuoteSkewSeconds: values.maxQuoteSkewSeconds ?? 1.5,
         roundBudgetUsd: values.roundBudgetUsd ?? null,

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { binanceLeadFeed, LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
+import { binanceLeadFeed, bybitLeadFeed, LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
 import { referenceVenueProducts } from "../live/feeds/btc.js";
 import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, SettlementResult, TradingEvent,
   TradingMode } from "../platform/contracts.js";
@@ -550,6 +550,14 @@ export function readStrategyConfig(path: string): StrategyConfigFile {
   return { config, dailyLossUsd, savedRevision: String(raw.savedRevision ?? input.revision) };
 }
 
+/** The lead trades for the run (chosen once, at start: the detector's window
+ * holds one venue's prices; a hot reload that changes it acts on the next run). */
+export function leadFeedFor(source: BinanceLeadConfig["leadSource"], detector: LeadSignalDetector, assetId: AssetId) {
+  const products = referenceVenueProducts(assetId);
+  return { venue: source, feed: source === "bybit-perp" ? bybitLeadFeed(detector, products.bybit) : binanceLeadFeed(detector, products.binance),
+    symbol: source === "bybit-perp" ? products.bybit : products.binance };
+}
+
 const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec">): LeadSignalParams =>
   ({ windowMs: config.windowMs, thresholdBp: config.thresholdBp, fromSec: config.fromSec, toSec: config.toSec });
 
@@ -578,6 +586,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
   let strategy: BinanceLeadStrategy | undefined;
   let leadFeed: ReturnType<typeof binanceLeadFeed> | undefined;
+  // The venue the running feed reads (fixed at start; the saved config can differ).
+  let leadSourceInUse: BinanceLeadConfig["leadSource"] | null = null;
   let syncDetector: ((config: Readonly<BinanceLeadConfig>) => void) | undefined;
   let strategyConfig = options.strategyConfigFile ? readStrategyConfig(options.strategyConfigFile) : undefined;
   if (strategyConfig) {
@@ -836,6 +846,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       } : null,
       strategy_runtime: strategyRuntime,
       lead_feed_healthy: connection?.leadFeedHealthy() ?? null,
+      lead_source: leadSourceInUse,
       journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: view.markets,
@@ -900,7 +911,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       const roundConfig = (now: number) => lead.activeRoundConfig(now) ?? strategyConfig!.config;
       let detectorParams = leadSignalParams(roundConfig(Date.now() / 1000));
       const detector = new LeadSignalDetector(detectorParams);
-      leadFeed = binanceLeadFeed(detector, referenceVenueProducts(options.assetId).binance);
+      leadSourceInUse = strategyConfig.config.leadSource;
+      leadFeed = leadFeedFor(leadSourceInUse, detector, options.assetId).feed;
       // The detector runs the running round's parameters (frozen 10 s before
       // its open), the saved ones between rounds. A hot reload or a new round
       // reaches it on the next event; every round's close has its own timer.

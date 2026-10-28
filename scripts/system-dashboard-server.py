@@ -2364,6 +2364,7 @@ def _modern_runtime(status: dict) -> dict:
             "stale": stale, "runId": status.get("run_id"),
             "strategyId": status.get("strategy_id") or STRATEGY_ID, "assetId": asset_id,
             "leadFeedHealthy": runtime.get("lead_feed_healthy") if isinstance(runtime.get("lead_feed_healthy"), bool) else None,
+            "leadSource": runtime.get("lead_source") if runtime.get("lead_source") in ("binance-spot", "bybit-perp") else None,
             # The strategy's verdict on the latest Binance signals (lead_signal, newest first).
             "leadSignals": runtime.get("lead_signals") if isinstance(runtime.get("lead_signals"), list) else [],
             "execution": status.get("execution"), "risk": risk or None, "funds": funds, "markets": [

@@ -1,11 +1,14 @@
-/** Binance aggregated trades (aggTrade) on two public lines, deduplicated by
- * the aggregate id, and the 250 ms lead-signal detector that runs on them.
- * The rule is frozen in E:/pm-backup/forward-binance-agg.py (signals()). */
+/** Lead trades on two public lines each, deduplicated, and the 250 ms
+ * lead-signal detector that runs on them: Binance spot aggTrade (the frozen
+ * rule, E:/pm-backup/forward-binance-agg.py signals()) or Bybit USDT perpetual
+ * publicTrade (user 2026-10-29: same rule, earlier in Dublin at signals;
+ * backtest E:/pm-backup/research-1028/bybit_vs_binance.py). */
 import WebSocket from "ws";
 import type { FeedEvent } from "./index.js";
 
 export interface AggTrade {
-  /** Aggregate trade id `a`; strictly increasing per symbol. */
+  /** Binance: aggregate trade id `a`, strictly increasing per symbol. Bybit:
+   * the trade's position in our delivery order (its venue id is a UUID). */
   id: number;
   price: number;
   /** Binance trade time `T`, milliseconds. */
@@ -112,13 +115,16 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-async function lineLoop(url: string, line: number, ingest: ReturnType<typeof createAggTradeIngest>,
-  lastMessageAt: number[], signal: AbortSignal, sockets: Set<WebSocket>): Promise<void> {
+type LineIngest = ((raw: unknown, receivedAtUnix: number, receivedAtMonoMs: number) => boolean) & { lastWasCurrent: () => boolean };
+
+async function lineLoop(url: string, line: number, ingest: LineIngest,
+  lastMessageAt: number[], signal: AbortSignal, sockets: Set<WebSocket>, subscribe?: string): Promise<void> {
   while (!signal.aborted) {
     let ws: WebSocket | undefined;
     try {
       ws = await connect(url, sockets, signal);
       const socket = ws;
+      if (subscribe) socket.send(subscribe);
       const connectedAt = Date.now();
       await new Promise<void>(resolve => {
         let finished = false;
@@ -155,11 +161,14 @@ async function lineLoop(url: string, line: number, ingest: ReturnType<typeof cre
 /** Two public aggTrade lines for one symbol; each trade is delivered once. */
 export function runBinanceTrades(onTrade: (trade: AggTrade) => void, symbol = "btcusdt",
   urls: readonly string[] = binanceTradeUrls(symbol)): { stop: () => void; isHealthy: () => boolean } {
+  return runLines(urls, createAggTradeIngest(onTrade));
+}
+
+function runLines(urls: readonly string[], ingest: LineIngest, subscribe?: string): { stop: () => void; isHealthy: () => boolean } {
   const controller = new AbortController();
   const sockets = new Set<WebSocket>();
   const lastMessageAt = urls.map(() => 0);
-  const ingest = createAggTradeIngest(onTrade);
-  urls.forEach((url, line) => { void lineLoop(url, line, ingest, lastMessageAt, controller.signal, sockets); });
+  urls.forEach((url, line) => { void lineLoop(url, line, ingest, lastMessageAt, controller.signal, sockets, subscribe); });
   return {
     stop: () => {
       if (controller.signal.aborted) return;
@@ -256,6 +265,81 @@ export class LeadSignalDetector {
 export function binanceLeadFeed(detector: LeadSignalDetector, symbol = "btcusdt") {
   return (sink: (event: FeedEvent) => void): { stop: () => void; isHealthy: () => boolean } =>
     runBinanceTrades(trade => {
+      const signal = detector.push(trade, trade.receivedAtUnix);
+      if (signal) sink({ kind: "lead", ...signal });
+    }, symbol);
+}
+
+/** Bybit v5 public linear (USDT perpetual) trades. Two CloudFront hosts carry
+ * the same stream (390/390 trades, either first, measured 2026-10-29). */
+export const bybitTradeUrls = (): string[] => [
+  "wss://stream.bybit.com/v5/public/linear",
+  "wss://stream.bytick.com/v5/public/linear",
+];
+const bybitSubscribe = (symbol: string) => JSON.stringify({ op: "subscribe", args: [`publicTrade.${symbol}`] });
+
+/** Parse one Bybit `publicTrade.<symbol>` frame and pass on each trade not yet
+ * delivered, in the venue's order. Bybit's `seq` is the match sequence: one
+ * sweep is many trades sharing a seq and a time (59 of 66 multi-trade frames),
+ * so a trade is identified by its id `i` (a UUID) and a frame is new when its
+ * seq is above the last delivered one, or equal with ids not seen yet. Both
+ * lines share one ingest; whichever is first wins. Same age and lead bounds as
+ * Binance (MAX_TRADE_AGE_MS / MAX_TRADE_LEAD_MS).
+ *
+ * seq is the contract's whole match sequence (~9,000-22,000 a second against
+ * ~90 trades), so it is no clock: two minutes down puts it 1e6+ ahead, and a
+ * renumbering would put it behind. A copy of a delivered trade is never later
+ * than the latest delivered trade time, so a later trade is new whatever its
+ * seq; the seq checks only order trades within one millisecond (review
+ * 2026-10-29: the Binance-sized jump guard dropped every trade after an
+ * outage, for good). */
+export function createBybitTradeIngest(onTrade: (trade: AggTrade) => void, symbol = "BTCUSDT") {
+  let lastSeq = -1;
+  let lastTimeMs = -Infinity;
+  let delivered = 0;
+  // Trade ids delivered at the current top seq: a later frame may carry the
+  // rest of that seq's sweep, or a duplicate from the other line.
+  let atTop = new Set<string>();
+  let current = false;
+  const topic = `publicTrade.${symbol}`;
+  const ingest = (raw: unknown, receivedAtUnix: number, receivedAtMonoMs: number): boolean => {
+    current = false;
+    let message: { topic?: unknown; data?: unknown };
+    try { message = JSON.parse(String(raw)); } catch { return false; }
+    if (message?.topic !== topic || !Array.isArray(message.data)) return false;
+    let any = false;
+    for (const item of message.data as Array<Record<string, unknown>>) {
+      const id = item?.i, seq = item?.seq, tradeTimeMs = item?.T, price = Number(item?.p);
+      if (typeof id !== "string" || !id || typeof seq !== "number" || !Number.isFinite(seq) || typeof tradeTimeMs !== "number"
+        || !(price > 0) || price === Infinity || item?.s !== symbol) continue;
+      const ageMs = receivedAtUnix * 1000 - tradeTimeMs;
+      if (!(ageMs <= MAX_TRADE_AGE_MS && ageMs >= -MAX_TRADE_LEAD_MS)) continue;
+      if (tradeTimeMs < lastTimeMs) { current = true; continue; }
+      if (tradeTimeMs === lastTimeMs) {
+        if (seq < lastSeq || (seq === lastSeq && atTop.has(id))) { current = true; continue; }
+        if (seq - lastSeq > MAX_ID_JUMP) continue;
+      }
+      if (seq !== lastSeq) { lastSeq = seq; atTop = new Set(); }
+      lastTimeMs = tradeTimeMs;
+      atTop.add(id);
+      current = true; any = true;
+      onTrade({ id: ++delivered, price, tradeTimeMs, receivedAtUnix, receivedAtMonoMs });
+    }
+    return any;
+  };
+  return Object.assign(ingest, { lastWasCurrent: () => current });
+}
+
+/** Two Bybit linear lines for one symbol; each trade is delivered once. */
+export function runBybitTrades(onTrade: (trade: AggTrade) => void, symbol = "BTCUSDT",
+  urls: readonly string[] = bybitTradeUrls()): { stop: () => void; isHealthy: () => boolean } {
+  return runLines(urls, createBybitTradeIngest(onTrade, symbol), bybitSubscribe(symbol));
+}
+
+/** binanceLeadFeed on Bybit USDT perpetual trades. */
+export function bybitLeadFeed(detector: LeadSignalDetector, symbol = "BTCUSDT") {
+  return (sink: (event: FeedEvent) => void): { stop: () => void; isHealthy: () => boolean } =>
+    runBybitTrades(trade => {
       const signal = detector.push(trade, trade.receivedAtUnix);
       if (signal) sink({ kind: "lead", ...signal });
     }, symbol);

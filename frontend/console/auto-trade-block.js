@@ -724,7 +724,9 @@
   // /api/runtime/status (ledger lead_signal events): why a round placed nothing.
   var renderLeadSignals = function(runtime) {
     var healthy = runtime && typeof runtime.leadFeedHealthy === "boolean" ? runtime.leadFeedHealthy : null;
-    text("[data-lead-feed]", healthy === true ? "币安行情正常" : healthy === false ? "币安行情中断 · 不会出信号" : "币安行情状态未知");
+    // The venue the running engine reads; Binance when an older engine does not say.
+    var venue = runtime && runtime.leadSource === "bybit-perp" ? "Bybit 合约" : "币安";
+    text("[data-lead-feed]", healthy === true ? `${venue}行情正常` : healthy === false ? `${venue}行情中断 · 不会出信号` : `${venue}行情状态未知`);
     var node = document.querySelector("[data-lead-signals]");
     if (!node) return;
     var context = currentContext();

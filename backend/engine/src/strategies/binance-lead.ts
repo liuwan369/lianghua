@@ -13,6 +13,10 @@ import type { AssetId, Instrument, MarketInfo, OrderRecord, OrderRequest, OrderS
  * (the cheap asks were gone during the venue's taker hold); backtest
  * E:/pm-backup/maker/maker_a_engine.py, 22 days, cap 0.80, 3 s: +219.6, t 5.8. */
 export type LeadDirection = "UP" | "DOWN";
+/** Where the lead trades come from: Binance spot aggTrade (the frozen rule) or
+ * Bybit USDT perpetual (user 2026-10-29). Read when the engine starts. */
+export type LeadSource = "binance-spot" | "bybit-perp";
+export const LEAD_SOURCES: readonly LeadSource[] = ["binance-spot", "bybit-perp"];
 export interface BinanceLeadConfig {
   instanceId: string;
   assetId: AssetId;
@@ -30,6 +34,7 @@ export interface BinanceLeadConfig {
   /** 0: FAK at ask + limitPremium. > 0: post-only BUY at the best bid, cancelled
    * after this many seconds (limitPremium unused). */
   makerHoldSec: number;
+  leadSource: LeadSource;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -102,7 +107,8 @@ export interface BinanceLeadOptions {
 
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
-  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot",
+  maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
@@ -158,6 +164,7 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (!finite(config.makerHoldSec) || config.makerHoldSec < 0 || config.makerHoldSec > 300) {
     throw new Error("makerHoldSec must be in [0, 300]");
   }
+  if (!LEAD_SOURCES.includes(config.leadSource)) throw new Error(`leadSource must be one of ${LEAD_SOURCES.join(", ")}`);
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
   }

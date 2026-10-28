@@ -18,8 +18,12 @@
     { key: "fromSec", label: "开盘后起始秒", unit: "秒", step: "1", note: "开盘后这么多秒起才认信号。", check: (v) => v >= 0 && v < 300, error: "起始秒须在 0 到 299 之间。" },
     { key: "toSec", label: "开盘后截止秒", unit: "秒", step: "1", note: "到这一秒（不含）为止；必须大于起始秒、不超过 300。", check: (v) => v > 0 && v <= 300, error: "截止秒须大于 0 且不超过 300。" },
     { key: "maxAsk", label: "卖价上限", unit: "¢", step: "any", cents: true, note: "信号这一边的价格高于它就不买，本场不算尝试，等下一个信号（等于照买）。吃单看卖价，挂单看买价。", check: (v) => v > 0 && v < 100, error: "卖价上限须在 0 到 100 美分之间（不含 0 和 100）。" },
-    { key: "makerHoldSec", label: "挂单秒数", unit: "秒", step: "any", note: "0 = 吃单（FAK，卖价 + 加价）。大于 0 = 只挂单：在这一边买一价挂买单，挂这么多秒后撤掉，没成交不花钱。", check: (v) => v >= 0 && v <= 300, error: "挂单秒数须在 0 到 300 之间。" }
+    { key: "makerHoldSec", label: "挂单秒数", unit: "秒", step: "any", note: "0 = 吃单（FAK，卖价 + 加价）。大于 0 = 只挂单：在这一边买一价挂买单，挂这么多秒后撤掉，没成交不花钱。", check: (v) => v >= 0 && v <= 300, error: "挂单秒数须在 0 到 300 之间。" },
+    { key: "leadSource", label: "信号来源", unit: "", options: [["binance-spot", "币安现货"], ["bybit-perp", "Bybit 合约"]], note: "用哪家交易所的逐笔成交出信号，规则相同。引擎启动时读取，改了要下次启动才生效。", error: "信号来源只能是币安现货或 Bybit 合约。" }
   ];
+  const fieldInput = (item) => item.options
+    ? `<select data-lead="${item.key}">${item.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`
+    : `<input type="number" step="${item.step}" placeholder="--" data-lead="${item.key}">`;
   root.innerHTML = `
   <div class="overview-preview strategy-preview" data-theme="deep-sea">
     <aside class="preview-sidebar">
@@ -47,7 +51,7 @@
 
           <div class="strategy-pane" data-strategy-pane="parameters">
             <div class="config-section"><div class="config-section-heading"><div><span class="section-number">01</span><div><h3>信号与下单</h3><p>什么算信号、本场什么时段认信号、FAK 限价怎么定。</p></div></div><span class="section-state">每场一次 · 持有到结算</span></div><div class="field-grid three-fields">
-              ${LEAD_FIELDS.map((item) => `<label class="strategy-field"><span>${item.label}</span><div><input type="number" step="${item.step}" placeholder="--" data-lead="${item.key}"><b>${item.unit}</b></div><small>${item.note}</small></label>`).join("")}
+              ${LEAD_FIELDS.map((item) => `<label class="strategy-field"><span>${item.label}</span><div>${fieldInput(item)}<b>${item.unit}</b></div><small>${item.note}</small></label>`).join("")}
             </div></div>
             <div class="budget-hint" data-budget-hint><span class="info-dot">i</span><span>按 0.99 最高限价计算，每场最多花 <strong>--</strong>。交易费用另计。</span></div>
           </div>
@@ -160,7 +164,8 @@
     baselineRevision = resource.revision;
     for (const item of LEAD_FIELDS) {
       const value = config[item.key];
-      leadInput(item.key).value = value == null ? "" : item.cents ? String(Number((value * 100).toPrecision(12))) : String(value);
+      leadInput(item.key).value = value == null ? "" : item.options ? String(value)
+        : item.cents ? String(Number((value * 100).toPrecision(12))) : String(value);
     }
     for (const [key, name] of Object.entries({ roundBudget: "roundBudgetUsd", totalBudget: "totalBudgetUsd", lossLimit: "dailyLossUsd", rounds: "maxRounds" })) {
       runtimeInput(key).value = show(config[name]);
@@ -210,6 +215,7 @@
   };
   root.querySelectorAll("[data-lead], [data-runtime-field]").forEach((input) => {
     input.addEventListener("input", markDirty);
+    input.addEventListener("change", markDirty);
   });
   root.querySelector("[data-switch-asset]").addEventListener("click", () => {
     if (busy || !switchOffered()) return;
@@ -237,6 +243,11 @@
     const values = {};
     for (const item of LEAD_FIELDS) {
       const raw = leadInput(item.key).value.trim();
+      if (item.options) {
+        if (!item.options.some(([value]) => value === raw)) throw new Error(item.error);
+        values[item.key] = raw;
+        continue;
+      }
       const value = raw === "" ? NaN : Number(raw);
       if (!Number.isFinite(value) || !item.check(value)) throw new Error(item.error);
       values[item.key] = item.cents ? Number((value / 100).toPrecision(12)) : value;

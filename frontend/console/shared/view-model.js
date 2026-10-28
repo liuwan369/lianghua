@@ -154,8 +154,10 @@
       marketId: first(payload.marketId, payload.market_id, null),
       roundId: first(payload.roundId, payload.round_id, null),
     markets: Array.isArray(payload.markets) ? payload.markets : [],
-    // binance-lead: the Binance aggTrade feed, and the strategy's verdict on recent signals.
+    // binance-lead: the lead feed (Binance spot or Bybit perp, fixed at engine start)
+    // and the strategy's verdict on recent signals.
     leadFeedHealthy: typeof payload.leadFeedHealthy === "boolean" ? payload.leadFeedHealthy : null,
+    leadSource: payload.leadSource === "bybit-perp" || payload.leadSource === "binance-spot" ? payload.leadSource : null,
     leadSignals: Array.isArray(payload.leadSignals) ? payload.leadSignals : [],
     error: payload.error || null
     };

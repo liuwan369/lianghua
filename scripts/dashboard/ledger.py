@@ -358,6 +358,7 @@ def _strategy_projection(value):
         result = {key: _number(source.get(key)) for key in (
             "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "maxQuoteAgeSeconds",
             "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
+        result["leadSource"] = source.get("leadSource") if source.get("leadSource") in ("binance-spot", "bybit-perp") else None
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
         return result
     def signal_view(source):
@@ -422,8 +423,10 @@ def _runtime_projection(value, mode):
     result["assetId"] = _asset_from(value)
     result["strategy_id"] = _text(value.get("strategy_id"))
     result["strategy_runtime"] = _strategy_projection(value.get("strategy_runtime"))
-    # Binance feed: true while either aggTrade line delivered within its idle limit.
+    # Lead feed: true while either line delivered within its idle limit; the venue
+    # it reads is fixed when the engine starts (lead_source).
     result["lead_feed_healthy"] = value.get("lead_feed_healthy") if isinstance(value.get("lead_feed_healthy"), bool) else None
+    result["lead_source"] = value.get("lead_source") if value.get("lead_source") in ("binance-spot", "bybit-perp") else None
     snapshots = value.get("snapshots") if isinstance(value.get("snapshots"), list) else []
     # Keep the accepted paired snapshot lossless enough for the read-only
     # market DTO. Never rebuild it from the legacy token books below.

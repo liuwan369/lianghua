@@ -31,6 +31,7 @@ const nodes = new Map();
 const lookup = (selector) => { if (!nodes.has(selector)) nodes.set(selector, element(selector)); return nodes.get(selector); };
 
 let phase = "waiting";
+let source = null;
 const identity = () => ({ assetId: "btc", marketId: "0xm", roundId: String(roundStart()) });
 const market = () => ({ ...identity(), symbol: "BTC", supported: true, canEnable: true, cycle: "5m", startAt: roundStart(),
   endAt: roundStart() + 300, current: true, sequence: 3, sourceAt: now(), expiresAt: now() + 2,
@@ -49,6 +50,7 @@ const position = () => {
 };
 const runtime = () => ({ schemaVersion: 1, asOf: now(), stale: false, source: "platform-runtime", status: "running", state: "running",
   processRunning: true, processRunningFresh: true, strategyId: "binance-lead", assetId: "btc", leadFeedHealthy: phase === "waiting",
+  ...(source ? { leadSource: source } : {}),
   leadSignals: [{ trade_id: 41, direction: "DOWN", move_bp: -2.4, received_at: now() - 8, ...identity(),
     round_id: identity().roundId, market_id: "0xm", outcome: "skipped", reason: "当前盘口一边没有卖价，等下一个信号" }],
   markets: [{ ...identity(), id: "0xm", name: `btc-updown-5m-${roundStart()}`, startsAt: roundStart(), endsAt: roundStart() + 300 }] });
@@ -80,7 +82,13 @@ await wait(2600);
 assert.equal(written.get("[data-lead-state]"), "等待信号", "waiting: no order yet");
 assert.equal(written.get("[data-lead-reason]"), "当前盘口一边没有卖价，等下一个信号", "the strategy's own reason");
 assert.match(written.get("[data-lead-book]") || "", /一边没有卖价/, "the book in force says why a signal cannot trade");
-assert.match(written.get("[data-lead-feed]") || "", /币安行情正常/);
+assert.match(written.get("[data-lead-feed]") || "", /币安行情正常/, "an engine that does not name its source reads Binance");
+// The engine reads Bybit perp: the feed line names the venue actually in use.
+source = "bybit-perp";
+await wait(2600);
+assert.match(written.get("[data-lead-feed]") || "", /^Bybit 合约行情正常/);
+source = null;
+await wait(2600);
 assert.match(written.get("[data-lead-signals]#html") || "", /当前盘口一边没有卖价/, "the skipped signal and its reason are listed");
 assert.match(written.get("[data-lead-signals]#html") || "", /-2\.4/, "with its Binance move");
 

@@ -1,7 +1,7 @@
 // The strategy page edits binance-lead's config, on the real page modules in a
 // vm with a stub DOM and a stub server that stores what is saved:
 // - the form shows the published values (份额, 阈值 bp, 窗口 ms, 限价加价 and
-//   卖价上限 in cents, 开盘后起止秒, 挂单秒数, 预算/日亏损上限, 运行场次);
+//   卖价上限 in cents, 开盘后起止秒, 挂单秒数, 信号来源, 预算/日亏损上限, 运行场次);
 // - an edit is saved -> read back -> the form shows exactly the saved values,
 //   and the draft body carries exactly binance-lead's fields (no reversal ones);
 // - nothing published yet (revision 0): the defaults are shown and editable,
@@ -13,15 +13,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const FIELDS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec",
+const FIELDS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "leadSource",
   "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"];
 const DEFAULTS = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
-  maxAsk: 0.8, makerHoldSec: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: null, dailyLossUsd: null,
+  maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: null, dailyLossUsd: null,
   durationMinutes: 0, maxRounds: 0, mode: "live" };
 const INPUTS = { shares: "[data-lead=\"shares\"]", thresholdBp: "[data-lead=\"thresholdBp\"]", windowMs: "[data-lead=\"windowMs\"]",
   limitCents: "[data-lead=\"limitPremium\"]", fromSec: "[data-lead=\"fromSec\"]", toSec: "[data-lead=\"toSec\"]",
-  maxAskCents: "[data-lead=\"maxAsk\"]", makerHoldSec: "[data-lead=\"makerHoldSec\"]",
+  maxAskCents: "[data-lead=\"maxAsk\"]", makerHoldSec: "[data-lead=\"makerHoldSec\"]", leadSource: "[data-lead=\"leadSource\"]",
   roundBudget: '[data-runtime-field="roundBudget"]', totalBudget: '[data-runtime-field="totalBudget"]',
   lossLimit: '[data-runtime-field="lossLimit"]', rounds: '[data-runtime-field="rounds"]' };
 
@@ -100,6 +100,7 @@ function controlPlane(published, revision) {
   assert.equal(ui.read("toSec"), "265");
   assert.equal(ui.read("maxAskCents"), "80", "the ask cap is shown in cents");
   assert.equal(ui.read("makerHoldSec"), "0", "0 = the FAK rule");
+  assert.equal(ui.read("leadSource"), "binance-spot", "the published source is selected");
   assert.equal(ui.read("roundBudget"), "5");
   assert.equal(ui.read("totalBudget"), "", "unset stays empty");
   assert.equal(ui.read("lossLimit"), "10");
@@ -124,6 +125,14 @@ function controlPlane(published, revision) {
     assert.ok([...ui.written.values()].some((text) => text.includes("挂单秒数")), "and the page says which field");
   }
   ui.type("makerHoldSec", 3);
+  // 信号来源 must be one of the two venues.
+  for (const bad of ["okx", ""]) {
+    ui.type("leadSource", bad);
+    await ui.click("[data-save]");
+    assert.equal(plane.state.drafts.length, 0, `信号来源 ${JSON.stringify(bad)} is not sent`);
+    assert.ok([...ui.written.values()].some((text) => text.includes("信号来源")), "and the page says which field");
+  }
+  ui.type("leadSource", "bybit-perp");
   await ui.click("[data-save]");
   const sent = plane.state.drafts.at(-1);
   assert.ok(sent, "a draft is sent");
@@ -132,7 +141,7 @@ function controlPlane(published, revision) {
   assert.equal(sent.expectedRevision, 4);
   assert.deepEqual(Object.keys(sent.config).sort(), [...FIELDS].sort(), "exactly binance-lead's fields");
   assert.deepEqual(sent.config, { ...DEFAULTS, shares: 7, thresholdBp: 2.5, windowMs: 300, limitPremium: 0.02, fromSec: 20, toSec: 260,
-    maxAsk: 0.75, makerHoldSec: 3, roundBudgetUsd: 5, totalBudgetUsd: 50, dailyLossUsd: 10, maxRounds: 12 });
+    maxAsk: 0.75, makerHoldSec: 3, leadSource: "bybit-perp", roundBudgetUsd: 5, totalBudgetUsd: 50, dailyLossUsd: 10, maxRounds: 12 });
   assert.equal(ui.lookup("[data-activate]").disabled, false, "the saved draft can be published");
   await ui.click("[data-activate]");
   assert.equal(plane.state.revision, 5, "published");
@@ -140,10 +149,11 @@ function controlPlane(published, revision) {
   // A fresh page reads the published revision back.
   const again = page(plane.handler);
   await wait(300);
-  assert.deepEqual(["shares", "thresholdBp", "windowMs", "limitCents", "fromSec", "toSec", "maxAskCents", "makerHoldSec", "roundBudget", "totalBudget",
-    "lossLimit", "rounds"].map(again.read), ["7", "2.5", "300", "2", "20", "260", "75", "3", "5", "50", "10", "12"], "read back exactly as saved");
+  assert.deepEqual(["shares", "thresholdBp", "windowMs", "limitCents", "fromSec", "toSec", "maxAskCents", "makerHoldSec", "leadSource", "roundBudget", "totalBudget",
+    "lossLimit", "rounds"].map(again.read), ["7", "2.5", "300", "2", "20", "260", "75", "3", "bybit-perp", "5", "50", "10", "12"], "read back exactly as saved");
   assert.equal(plane.state.published.maxAsk, 0.75, "the published config carries the cap");
   assert.equal(plane.state.published.makerHoldSec, 3, "and the maker hold");
+  assert.equal(plane.state.published.leadSource, "bybit-perp", "and the signal source");
   assert.ok(![...again.written.values()].some((text) => /反转|阶段|确认价|触发价/.test(text)), "no reversal wording on the page");
 }
 
@@ -170,6 +180,7 @@ function controlPlane(published, revision) {
   assert.equal(plane.state.drafts[0].expectedRevision, 0);
   assert.equal(plane.state.drafts[0].config.maxAsk, 0.8, "the untouched default goes out as 0.80");
   assert.equal(plane.state.drafts[0].config.makerHoldSec, 0, "and the FAK rule");
+  assert.equal(plane.state.drafts[0].config.leadSource, "binance-spot", "and Binance spot");
   await ui.click("[data-activate]");
   assert.equal(plane.state.revision, 1, "the first binance-lead revision is published");
 }

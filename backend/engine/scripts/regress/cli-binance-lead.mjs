@@ -11,8 +11,9 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { leadJournalFields, parsePlatformOptions, readStrategyConfig, resolveStrategyLimits, STRATEGY_ID }
+import { leadFeedFor, leadJournalFields, parsePlatformOptions, readStrategyConfig, resolveStrategyLimits, STRATEGY_ID }
   from "../../dist/cli/platform.js";
+import { LeadSignalDetector } from "../../dist/live/feeds/binance-trades.js";
 import { createStrategy } from "../../dist/strategies/binance-lead.js";
 
 const dir = mkdtempSync(join(tmpdir(), "cli-lead-"));
@@ -38,6 +39,12 @@ try {
   assert.equal(read.config.shares, 7);
   assert.equal(read.config.thresholdBp, 2.5);
   assert.equal(read.config.windowMs, 250, "defaults fill what the file leaves out");
+  // --- the run's lead source: Binance spot by default, Bybit perp when chosen ---
+  assert.equal(read.config.leadSource, "binance-spot");
+  const detector = new LeadSignalDetector({ windowMs: 250, thresholdBp: 2, fromSec: 15, toSec: 265 });
+  assert.deepEqual([leadFeedFor("binance-spot", detector, "btc").symbol, leadFeedFor("bybit-perp", detector, "btc").symbol],
+    ["btcusdt", "BTCUSDT"], "each venue's own product code");
+  assert.equal(typeof leadFeedFor("bybit-perp", detector, "btc").feed, "function");
   assert.equal(read.config.revision, "4", "the saved revision is the config revision");
   assert.equal(read.savedRevision, "4");
   assert.equal(read.dailyLossUsd, 10);

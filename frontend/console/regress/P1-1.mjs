@@ -33,7 +33,7 @@ for (const file of ["preview-core.js", "view-model.js", "preview-store.js", "api
 }
 const adapter = window.PolyPreviewAdapter;
 const form = { strategyId: "binance-lead", assetId: "btc", expectedRevision: 22, shares: 5, thresholdBp: 2, windowMs: 250,
-  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10,
+  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot", roundBudgetUsd: 5, totalBudgetUsd: 10, dailyLossUsd: 10,
   durationMinutes: 0, mode: "live", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5 };
 
 // --- bug: "run 3 rounds" reaches the server as 3 ---
@@ -54,7 +54,7 @@ assert.equal(body.config.fromSec, 60, "fromSec is part of the saved config");
 assert.equal(body.config.toSec, 240);
 assert.equal(body.config.thresholdBp, 3);
 assert.equal(body.config.maxAsk, 0.8, "maxAsk is part of the saved config");
-assert.deepEqual(Object.keys(body.config).sort(), ["assetId", "dailyLossUsd", "durationMinutes", "fromSec", "limitPremium",
+assert.deepEqual(Object.keys(body.config).sort(), ["assetId", "dailyLossUsd", "durationMinutes", "fromSec", "leadSource", "limitPremium",
   "makerHoldSec", "maxAsk", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "maxRounds", "mode", "roundBudgetUsd", "shares", "thresholdBp", "toSec",
   "totalBudgetUsd", "windowMs"], "exactly binance-lead's fields");
 console.log("P1-1 OK");
