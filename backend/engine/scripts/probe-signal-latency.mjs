@@ -1,18 +1,16 @@
 // Live probe (user agreed 2026-10-28): is the venue slow AT a Binance signal for
 // every order (queueing), or only for orders near the book? Each "shot" sends
-// three orders at once and records the POST -> response-headers time of each:
+// two orders at once and records the POST -> response-headers time of each:
 //   A far  : post-only BUY 5 @ 0.01 on the side whose bid is >= 0.30 (rests far
 //            below the book; post-only never takes);
-//   B near : post-only BUY 5 two ticks under that side's best bid (rests next
-//            to the book; if the book moved under it the venue refuses it as
-//            "crosses book", which is recorded, never a fill);
 //   C bad  : FAK BUY 5 @ 0.01 = 0.05 USD, under the venue's 1 USD marketable
 //            minimum, refused at validation ("front door" time). If the side's
 //            ask is ever <= 0.05 the shot is skipped, so C can never match.
-// A and B are cancelled right after. Shots are fired at Binance 2bp/250 ms
+// A is cancelled right after. (No order near the book: one could fill, and the
+// user agreed only to orders that cannot.) Shots are fired at Binance 2bp/250 ms
 // signals (the engine's own LeadSignalDetector) and, as control, at calm moments
 // (no signal for 5 s). Stops on any trade, any unexpected status, or the cap.
-// Worst case: B fills 5 x (bid - 0.01) on every shot; cap MAX_B_USD on that.
+// Worst case: 0 USD. A rests at 0.01 under a bid >= 0.30; C is refused.
 //
 //   node scripts/probe-signal-latency.mjs <minutes> <maxShots>
 // Needs the engine's account env. Prints one JSON line per shot, then a summary.
@@ -22,7 +20,7 @@ import { LeadSignalDetector, runBinanceTrades } from "../dist/live/feeds/binance
 
 const minutes = Number(process.argv[2] ?? 30), maxShots = Number(process.argv[3] ?? 40);
 if (!(minutes > 0 && minutes <= 120 && maxShots >= 1 && maxShots <= 80)) throw new Error("usage: <minutes<=120> <maxShots<=80>");
-const MIN_BID = 0.3, SHARES = 5, MAX_B_USD = 5, CALM_MS = 5000, MIN_GAP_MS = 4000;
+const MIN_BID = 0.3, SHARES = 5, CALM_MS = 5000, MIN_GAP_MS = 4000;
 const key = ownerSignerPrivateKey();
 if (!key) throw new Error("owner signer key unavailable");
 const client = await ClobWrapper.connect({ key });
@@ -63,7 +61,7 @@ await refresh();
 const refresher = setInterval(() => { void refresh(); }, 1000);
 
 const rows = [];
-let busy = false, lastShot = 0, lastSignal = 0, spentB = 0, stop = false;
+let busy = false, lastShot = 0, lastSignal = 0, stop = false;
 const send = async (args) => {
   const t0 = performance.now();
   const r = await client.submitOrder(args);
@@ -75,28 +73,24 @@ async function shot(kind, signal) {
   if (!m || books.start !== m.start || Date.now() - books.at > 2500 || sec < 15 || sec > 270) return;
   const token = books[m.up].bid >= books[m.down].bid ? m.up : m.down, side = books[token];
   if (side.bid < MIN_BID || side.ask <= 0.05 || side.ask - side.bid > 0.05) return;
-  const near = Math.round((side.bid - 2 * side.tick) * 100) / 100;
-  if (!(near > 0.01 && near < side.ask)) return;
   busy = true; lastShot = Date.now();
   const base = { tokenId: token, size: SHARES, tickSize: side.tick, direction: "BUY" };
-  const [a, b, c] = await Promise.all([
+  const [a, c] = await Promise.all([
     send({ ...base, price: 0.01, timeInForce: "GTC", postOnly: true }),
-    send({ ...base, price: near, timeInForce: "GTC", postOnly: true }),
     send({ ...base, price: 0.01, timeInForce: "FAK", postOnly: false }),
   ]);
-  for (const x of [a, b]) if (x.r.orderId) await client.cancel(x.r.orderId).catch(e => { x.cancelErr = String(e.message ?? e).slice(0, 60); });
-  const traded = [a, b, c].some(x => (x.r.tradeIds?.length ?? 0) > 0 || ["matched", "delayed"].includes(x.r.status));
+  for (const x of [a]) if (x.r.orderId) await client.cancel(x.r.orderId).catch(e => { x.cancelErr = String(e.message ?? e).slice(0, 60); });
+  const traded = [a, c].some(x => (x.r.tradeIds?.length ?? 0) > 0 || ["matched", "delayed"].includes(x.r.status));
   const row = { kind, at: Math.round(Date.now() / 1000), sinceTradeMs: signal ? Math.round(Date.now() - signal.tradeTimeMs) : null,
-    moveBp: signal ? Math.round(signal.moveBp * 100) / 100 : null, bid: side.bid, ask: side.ask, near,
-    A: Math.round(a.r.responseHeadersLatencyMs ?? a.ms), B: Math.round(b.r.responseHeadersLatencyMs ?? b.ms),
-    C: Math.round(c.r.responseHeadersLatencyMs ?? c.ms),
-    st: [a.r.status ?? a.r.errorMsg?.slice(0, 30), b.r.status ?? b.r.errorMsg?.slice(0, 30), (c.r.errorMsg ?? c.r.status ?? "").slice(0, 40)] };
+    moveBp: signal ? Math.round(signal.moveBp * 100) / 100 : null, bid: side.bid, ask: side.ask,
+    A: Math.round(a.r.responseHeadersLatencyMs ?? a.ms), C: Math.round(c.r.responseHeadersLatencyMs ?? c.ms),
+    st: [a.r.status ?? a.r.errorMsg?.slice(0, 30), (c.r.errorMsg ?? c.r.status ?? "").slice(0, 40)] };
   rows.push(row);
   console.log(JSON.stringify(row));
-  if (traded) { spentB += near * SHARES; stop = true; console.log("STOP: a probe order traded", JSON.stringify(row.st)); }
-  const refused = (x) => /crosses book/i.test(x.r.errorMsg ?? "");
-  if (a.r.status !== "live" || (b.r.status !== "live" && !refused(b))) { stop = true; console.log("STOP: unexpected post-only status", JSON.stringify(row.st)); }
-  if (spentB >= MAX_B_USD) stop = true;
+  if (traded) { stop = true; console.log("STOP: a probe order traded", JSON.stringify(row.st)); }
+  if (a.r.status !== "live" || !/invalid amount/i.test(c.r.errorMsg ?? "")) {
+    stop = true; console.log("STOP: unexpected status", JSON.stringify(row.st));
+  }
   busy = false;
 }
 
@@ -114,7 +108,7 @@ const open = await client.client.getOpenOrders().catch(() => null);
 const pick = (kind, k) => rows.filter(r => r.kind === kind).map(r => r[k]).sort((x, y) => x - y);
 const q = (v, f) => v.length ? v[Math.min(v.length - 1, Math.floor(v.length * f))] : null;
 const summary = {};
-for (const kind of ["signal", "calm"]) for (const k of ["A", "B", "C"]) {
+for (const kind of ["signal", "calm"]) for (const k of ["A", "C"]) {
   const v = pick(kind, k);
   summary[`${kind}_${k}`] = { n: v.length, p50: q(v, 0.5), p90: q(v, 0.9), max: v.at(-1) ?? null };
 }
