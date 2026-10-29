@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import diagnosticsChannel from "node:diagnostics_channel";
 import {
   AssetType,
   ClobClient,
@@ -59,6 +60,37 @@ const TRANSPORT_TOUCH_TIMEOUT_MS = 2_000;
 
 let transportInstalled = false;
 
+/** "The request has left": undici publishes `undici:request:bodySent` once a
+ * request's body is written to the socket. fetch() returning only queues it:
+ * work run right after fetch() delayed the bytes by its own duration (review
+ * 2026-10-29: 20 ms of work after fetch(), the server got the request at
+ * +20.7 ms, also after a microtask; with bodySent, +0.6 ms). One waiter per
+ * POST path; a body-sent POST to that path fires the oldest waiter. */
+const bodySentWaiters = new Map<string, Array<() => void>>();
+let bodySentSubscribed = false;
+function onBodySent(path: string, run: () => void): () => void {
+  if (!bodySentSubscribed) {
+    bodySentSubscribed = true;
+    diagnosticsChannel.subscribe("undici:request:bodySent", message => {
+      const request = (message as { request?: { method?: string; path?: string } }).request;
+      if (request?.method !== "POST" || !request.path) return;
+      const queue = bodySentWaiters.get(request.path);
+      const next = queue?.shift();
+      if (queue && !queue.length) bodySentWaiters.delete(request.path);
+      try { next?.(); } catch { /* post-send work never fails the order */ }
+    });
+  }
+  const queue = bodySentWaiters.get(path) ?? [];
+  queue.push(run);
+  bodySentWaiters.set(path, queue);
+  return () => {
+    const list = bodySentWaiters.get(path);
+    const at = list?.indexOf(run) ?? -1;
+    if (list && at >= 0) list.splice(at, 1);
+    if (list && !list.length) bodySentWaiters.delete(path);
+  };
+}
+
 /** Reuse one warm TLS connection per origin for the whole process.
  *
  * Node's global `fetch` reads its dispatcher from a well-known symbol shared
@@ -87,6 +119,9 @@ async function installKeepAliveTransport(): Promise<void> {
   }
 }
 
+const presignKey = (tokenId: string, direction: "BUY" | "SELL", price: number, size: number) =>
+  `${tokenId}|${direction}|${Number(price.toFixed(6))}|${Number(size.toFixed(6))}`;
+
 export interface ClobWrapperOptions {
   key: string;
   /** Optional override — auto-detected via Gamma + on-chain when omitted. */
@@ -105,6 +140,8 @@ export interface SubmitOrderArgs {
   onPrepared?: (prepared: PreparedOrder) => void;
   triggerReceivedAtMonoMs?: number;
   decisionAtMonoMs?: number;
+  /** Runs right after the POST is issued (fetch called), once per order. */
+  onPostSent?: () => void;
 }
 
 /** Mirrors the installed v2 SDK's ExchangeOrderBuilderV2 typed-data hash. */
@@ -150,6 +187,8 @@ export interface SubmitOrderResult {
   /** The venue's answer proves this order never rests and never fills: a FAK
    * that matched nothing, or a post-only order refused for crossing. It is over. */
   venueRefused?: boolean;
+  /** The order posted was signed ahead (presign), not on the spot. */
+  presigned?: boolean;
 }
 
 const DEFAULT_WARM_TIMEOUT_MS = 3_000;
@@ -291,6 +330,9 @@ export class ClobWrapper {
   /** Local clock minus venue clock, in seconds. Undefined until measured. */
   private venueClockOffsetSeconds?: number;
   private feeRulesByToken = new Map<string, { rate: number; exponent: number; takerDelayMs: number }>();
+  /** Signed orders ready to post, by token|side|price|size (presign). */
+  private presigned = new Map<string, { order: SignedOrder; hash: string; negRisk: boolean; version: number }>();
+  private presignJobs = new Map<string, Promise<void>>();
 
   private constructor(
     client: ClobClient,
@@ -530,6 +572,7 @@ export class ClobWrapper {
     timeoutMs = this.requestTimeoutMs,
     onRequestStart?: (atMonoMs: number) => void,
     onTiming?: (timing: Omit<RequestTiming, "requestStartMonoMs" | "l2HeaderLatencyMs">) => void,
+    onSent?: () => void,
   ): Promise<unknown> {
     const timeout = AbortSignal.timeout(timeoutMs);
     const request: RequestInit = { ...init,
@@ -541,10 +584,18 @@ export class ClobWrapper {
     // response body returns promptly. Race both phases against the same hard
     // deadline so an exchange-side delay cannot block the strategy loop.
     const remaining = () => Math.max(1, deadline - performance.now());
-    const response = await withTimeout(
-      fetch(`${DEFAULT_HOST}${path}`, request), remaining(), `CLOB ${init.method ?? "GET"} ${path}`,
-      request.signal ?? undefined,
-    );
+    // The caller's post-send work runs once the body is on the socket, while
+    // the venue holds and matches the order; or, if the channel never fires
+    // (another fetch implementation, an error before sending), at the reply.
+    let sentOnce = false;
+    const runSent = () => { if (sentOnce) return; sentOnce = true; try { onSent?.(); } catch { /* never fails the order */ } };
+    const unwatch = onSent ? onBodySent(path, runSent) : () => {};
+    let response: Response;
+    try {
+      response = await withTimeout(fetch(`${DEFAULT_HOST}${path}`, request), remaining(), `CLOB ${init.method ?? "GET"} ${path}`,
+        request.signal ?? undefined,
+      );
+    } finally { unwatch(); runSent(); }
     const responseHeadersAt = performance.now();
     const text = await withTimeout(
       response.text(), remaining(), `CLOB ${init.method ?? "GET"} ${path} response body`, request.signal ?? undefined,
@@ -601,6 +652,7 @@ export class ClobWrapper {
     data?: unknown,
     onRequestStart?: (atMonoMs: number) => void,
     onTiming?: RequestTimingSink,
+    onSent?: () => void,
   ): Promise<unknown> {
     const body = data == null ? undefined : JSON.stringify(data);
     const headerStarted = performance.now();
@@ -611,7 +663,7 @@ export class ClobWrapper {
       method,
       headers: { ...headers, "Content-Type": "application/json" },
       body,
-    }, this.requestTimeoutMs, onRequestStart, timing => onTiming?.({ requestStartMonoMs: 0, ...timing }));
+    }, this.requestTimeoutMs, onRequestStart, timing => onTiming?.({ requestStartMonoMs: 0, ...timing }), onSent);
   }
 
   private async currentVersion(signal?: AbortSignal): Promise<2> {
@@ -629,11 +681,12 @@ export class ClobWrapper {
     postOnly: boolean,
     onRequestStart?: (atMonoMs: number) => void,
     onTiming?: RequestTimingSink,
+    onSent?: () => void,
   ): Promise<OrderResponse> {
     const payload = isV2Order(order)
       ? orderToJsonV2(order, this.creds.key, orderType, postOnly, deferExec())
       : orderToJsonV1(order, this.creds.key, orderType, postOnly, deferExec());
-    return (await this.l2Json(POST_ORDER_PATH, "POST", payload, onRequestStart, onTiming)) as OrderResponse;
+    return (await this.l2Json(POST_ORDER_PATH, "POST", payload, onRequestStart, onTiming, onSent)) as OrderResponse;
   }
 
   /** Warm all metadata used by the signing path before the first order. */
@@ -734,6 +787,49 @@ export class ClobWrapper {
     return result;
   }
 
+  /** Sign ahead: BUY orders of `token` at `prices` x `sizes`, so a signal posts
+   * an order already signed (2026-10-29 server: signing 3.6 ms and its hash 0.9
+   * ms were 38% of the hot path). The signature carries no expiry for a FAK, and
+   * its timestamp is only for uniqueness (docs order-lifecycle); a cached order
+   * is used once and dropped. Signing yields between orders so feeds keep
+   * flowing. A failure here never reaches trading: submitOrder signs on the spot. */
+  presign(tokenId: string, prices: readonly number[], sizes: (price: number) => number, tickSize: number): Promise<void> {
+    const key = `${tokenId}|${tickSize}`;
+    const previous = this.presignJobs.get(key) ?? Promise.resolve();
+    const job = previous.then(async () => {
+      const negRisk = await this.negRisk(tokenId);
+      for (const price of prices) {
+        const size = sizes(price);
+        const slot = presignKey(tokenId, "BUY", price, size);
+        if (this.presigned.has(slot)) continue;
+        const version = this.orderVersion;
+        const order = await this.client.createOrder({ tokenID: tokenId, price, size, side: ClobSide.BUY },
+          { tickSize: sdkTickSize(tickSize), negRisk, version });
+        if (version === this.orderVersion) {
+          this.presigned.set(slot, { order, hash: signedV2OrderHash(order, negRisk), negRisk, version });
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+    }).catch(() => { /* on-the-spot signing remains */ });
+    this.presignJobs.set(key, job);
+    void job.finally(() => { if (this.presignJobs.get(key) === job) this.presignJobs.delete(key); });
+    return job;
+  }
+  /** Drop every pre-signed order of these tokens (a round ended). */
+  forgetPresigned(tokenIds: Iterable<string>): void {
+    const tokens = new Set(tokenIds);
+    for (const slot of [...this.presigned.keys()]) if (tokens.has(slot.split("|", 1)[0]!)) this.presigned.delete(slot);
+  }
+  presignedCount(): number { return this.presigned.size; }
+  private takePresigned(tokenId: string, direction: "BUY" | "SELL", price: number, size: number, negRisk: boolean) {
+    const slot = presignKey(tokenId, direction, price, size);
+    const hit = this.presigned.get(slot);
+    if (!hit) return undefined;
+    this.presigned.delete(slot);
+    // A version change (CLOB upgrade) or a negRisk flip makes the signature stale.
+    return hit.version === this.orderVersion && hit.negRisk === negRisk ? hit : undefined;
+  }
+
   async submitOrder(args: SubmitOrderArgs): Promise<SubmitOrderResult> {
     const started = performance.now();
     let postAttempted = false;
@@ -752,11 +848,15 @@ export class ClobWrapper {
       let ackLatencyMs = 0;
       let triggerToPostLatencyMs: number | undefined;
       let decisionToPostLatencyMs: number | undefined;
+      let presignedUsed = false;
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         failurePhase = "signing";
         const signStarted = performance.now();
-        const order = await withTimeout(this.client.createOrder(
+        // The first attempt takes a pre-signed order when one matches exactly;
+        // a retry after a version mismatch always signs anew.
+        const ready = attempt === 0 ? this.takePresigned(args.tokenId, args.direction ?? "BUY", args.price, args.size, negRisk) : undefined;
+        const order = ready?.order ?? await withTimeout(this.client.createOrder(
           {
             tokenID: args.tokenId,
             price: args.price,
@@ -770,9 +870,10 @@ export class ClobWrapper {
           },
         ), this.requestTimeoutMs, "CLOB order signing");
         signLatencyMs += performance.now() - signStarted;
+        presignedUsed ||= ready !== undefined;
 
         if (args.onPrepared) {
-          args.onPrepared({ orderHash: signedV2OrderHash(order, negRisk), signedPayload: order, preparedAt: Date.now() / 1000 });
+          args.onPrepared({ orderHash: ready?.hash ?? signedV2OrderHash(order, negRisk), signedPayload: order, preparedAt: Date.now() / 1000 });
         }
 
         let ackStarted: number | undefined;
@@ -796,7 +897,7 @@ export class ClobWrapper {
           if (timing.l2HeaderLatencyMs != null) l2HeaderLatencyMs += timing.l2HeaderLatencyMs;
           if (timing.responseHeadersLatencyMs != null) responseHeadersLatencyMs += timing.responseHeadersLatencyMs;
           if (timing.responseBodyLatencyMs != null) responseBodyLatencyMs += timing.responseBodyLatencyMs;
-        });
+        }, args.onPostSent && (() => { const sent = args.onPostSent!; args.onPostSent = undefined; sent(); }));
         postAttempted = false;
         if (measuredPostLatency != null) postLatencyMs += measuredPostLatency;
         else if (postStarted != null) postLatencyMs += Math.max(0, performance.now() - postStarted);
@@ -826,6 +927,7 @@ export class ClobWrapper {
               ? Math.max(0, performance.now() - args.triggerReceivedAtMonoMs) : undefined,
             riskMetadataLatencyMs,
             tradeIds: responseTradeIds(resp),
+            presigned: presignedUsed,
           };
         }
 

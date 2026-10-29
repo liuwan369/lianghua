@@ -330,6 +330,9 @@ export interface ExecutionTiming {
   triggerReceivedAtMonoMs?: number;
   /** Monotonic time immediately after the synchronous strategy decision. */
   decisionAtMonoMs?: number;
+  /** Called by the gateway once the order's HTTP request has been issued:
+   * work that need not precede the POST (broadcasts, journal) runs here. */
+  onPostSent?: () => void;
 }
 export interface OrderGateway {
   readonly mode: TradingMode;

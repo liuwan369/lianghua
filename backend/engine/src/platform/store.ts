@@ -43,7 +43,12 @@ export class PlatformStore {
       catch { /* fall through to the last committed primary snapshot */ }
     }
     if (!state) {
-      if (!existsSync(this.path)) return undefined;
+      if (!existsSync(this.path)) {
+        // A signed order with no state behind it may be live at the venue:
+        // starting clean would forget it. Stop for the operator instead.
+        if (existsSync(`${this.path}.intent`)) throw new Error("signed order intent without engine state: reconcile before starting");
+        return undefined;
+      }
       state = JSON.parse(readFileSync(this.path, "utf8")) as CoreState;
     }
     const intentPath = `${this.path}.intent`;
@@ -87,6 +92,15 @@ export class PlatformStore {
     try { writeFileSync(fd, JSON.stringify({ version: 1, order })); fsyncSync(fd); } finally { closeSync(fd); }
     renameSync(`${this.path}.intent.next`, `${this.path}.intent`);
     this.deferred = false;
+    // The snapshot held back by defer() (the reservation, the strategy stage)
+    // had no timer while deferred: arm it now, or it waited for whatever write
+    // came next. A crash in between left an intent with no state file, which
+    // load() then ignored (2026-10-29: the order's broadcast, which used to
+    // trigger that write before the POST, now runs after it).
+    if (this.pending && !this.timer) this.timer = setTimeout(() => {
+      this.timer = undefined;
+      try { this.flush(); } catch (error) { this.failure = error instanceof Error ? error : new Error("state write failed"); }
+    }, 25);
   }
   /** Keep the newest in-memory snapshot pending without letting its timer fsync mid-signature. */
   defer(): void {

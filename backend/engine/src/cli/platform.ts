@@ -10,7 +10,7 @@ import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, Settlemen
 import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
-import { createStrategy, normalizeBinanceLeadConfig, type BinanceLeadConfig, type BinanceLeadState,
+import { createStrategy, normalizeBinanceLeadConfig, presignPrices, type BinanceLeadConfig, type BinanceLeadState,
   type BinanceLeadStrategy, type LeadRound } from "../strategies/binance-lead.js";
 
 /** The only built-in strategy; also its key in CoreState.strategyStates. */
@@ -1013,7 +1013,14 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         // afterwards the subscription includes publish-only plugin/settlement events.
         record: event => { if (!connection) record(event); },
         durationSec: options.durationSec === 0 ? Infinity : options.durationSec,
-        assetId: options.assetId, strategyId: strategy?.id, leadFeed });
+        assetId: options.assetId, strategyId: strategy?.id, leadFeed,
+        // The saved config's limits; a round frozen with other values signs on the spot.
+        presignPlan: strategyConfig ? market => market.instruments.map(instrument => {
+          const plan = presignPrices(strategyConfig!.config, instrument.tickSize);
+          const size = new Map(plan.map(item => [item.price, item.shares]));
+          return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices: plan.map(item => item.price),
+            size: (price: number) => size.get(price) ?? strategyConfig!.config.shares };
+        }) : undefined });
       unsubscribe = connection.platform.subscribe(record);
       if (strategy) connection.platform.core.setStrategyState(STRATEGY_ID, strategy.exportState());
     }

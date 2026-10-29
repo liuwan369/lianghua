@@ -167,6 +167,35 @@ const readJson = p => JSON.parse(readFileSync(p, "utf8"));
   console.log("PASS 2 crash between sign and POST: restored UNKNOWN, market blocked, no resubmit");
 }
 
+// --- 2b. The very first order crashes before any state file was written ---
+// (2026-10-29: the snapshot held back while signing was only written by a later
+// event; the broadcast that used to be it now runs after the POST.)
+{
+  const dir = mkdtempSync(join(tmpdir(), "order-path-first-"));
+  const path = join(dir, "state.json");
+  const store = new PlatformStore(path);
+  const platform = new TradingPlatform({ account: account(100), instruments: market.instruments, limits, now: () => START + 21,
+    adapters: { gateway: { mode: "live", durableIdentity: true,
+      async submit(_r, _i, prepared) { prepared({ orderHash: "0x" + "cd".repeat(32), signedPayload: { sig: "s" }, preparedAt: START + 21 });
+        return new Promise(() => {}); }, async cancel() { return true; } },
+      estimateFee: () => 0.05, persist: (state, critical) => store.save(state, critical), deferPersistence: () => store.defer(),
+      persistPreparedOrder: order => store.savePreparedOrder(order) } });
+  platform.ingest({ kind: "market", market });
+  void platform.core.submit({ clientOrderId: "binance-lead:0xmarket:1", strategyId: "binance-lead", tokenId: UP, direction: "BUY",
+    price: 0.6, shares: 5, timeInForce: "FAK", postOnly: false });
+  await settle();
+  assert.ok(existsSync(path), "the held-back snapshot is written soon after the intent, without waiting for another event");
+  rmSync(`${path}.lock`, { force: true });
+  const restored = new PlatformStore(path).load();
+  assert.equal(restored.orders.length, 1, "the order is in the restored state");
+  // An intent with no state file at all: refuse to start rather than forget it.
+  rmSync(path, { force: true }); rmSync(`${path}.lock`, { force: true });
+  assert.ok(existsSync(`${path}.intent`));
+  assert.throws(() => new PlatformStore(path).load(), /intent without engine state/);
+  rmSync(dir, { recursive: true, force: true });
+  console.log("PASS 2b first order: snapshot follows the intent; an orphan intent stops the start");
+}
+
 // --- 3. Rejected ACK releases the reservation and frees the stage ---
 {
   const h = harness({ onSubmit: async ({ prepared }) => {

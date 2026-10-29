@@ -153,7 +153,8 @@ export class PolymarketGateway implements OrderGateway {
     const response = await this.client.submitOrder({ tokenId: request.tokenId, price: request.price,
       size: request.shares, tickSize: instrument.tickSize, direction: request.direction,
       timeInForce: request.timeInForce, postOnly: request.postOnly, onPrepared: prepared,
-      triggerReceivedAtMonoMs: timing?.triggerReceivedAtMonoMs, decisionAtMonoMs: timing?.decisionAtMonoMs });
+      triggerReceivedAtMonoMs: timing?.triggerReceivedAtMonoMs, decisionAtMonoMs: timing?.decisionAtMonoMs,
+      onPostSent: timing?.onPostSent });
     // A FAK the venue says matched nothing is over, with or without an order id
     // (2026-10-26: 400 {error, orderID} for 7 of 9 orders mapped to "unknown").
     // A reply that names a trade matched something: never "rejected", whatever
@@ -189,6 +190,9 @@ export interface ConnectOptions {
   assetId?: AssetId;
   /** Market-independent lead signals (binance-trades.ts binanceLeadFeed); started after the markets. */
   leadFeed?: (sink: (event: FeedEvent) => void) => { stop: () => void; isHealthy?: () => boolean };
+  /** BUY orders to sign ahead for a new market: per token, the prices and the
+   * size at each (binance-lead presignPlan). Signed in the background. */
+  presignPlan?: (market: MarketInfo) => Array<{ tokenId: string; tickSize: number; prices: number[]; size: (price: number) => number }>;
   /** Strategy that receives the feed/recovery notices (market_feed_unhealthy,
    * market_snapshot_rejected, account_recovery_started, ...). None without a strategy. */
   strategyId?: string;
@@ -611,6 +615,14 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       if (instrument && market) {
         market.instruments = market.instruments.map(i => i.tokenId === event.token ? { ...i, tickSize: event.tickSize } : i);
         platform.ingest({ kind: "market", market }); client?.updateTickSize(event.token, event.tickSize);
+        // A new tick changes which prices are valid: sign the round again. A book
+        // frame repeats the current tick (1 in 160 book frames on 10-29): no-op.
+        if (client && options.presignPlan && market.endsAt > Date.now() / 1000 && instrument.tickSize !== event.tickSize) {
+          client.forgetPresigned([event.token]);
+          for (const plan of options.presignPlan(market)) if (plan.tokenId === event.token) {
+            void client.presign(plan.tokenId, plan.prices, plan.size, plan.tickSize);
+          }
+        }
       }
       return;
     }
@@ -1013,6 +1025,10 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       platform.ingest({ kind: "market", market });
     }
     connectedMarkets.add(market.id);
+    // Sign the round's likely orders now, minutes before a signal can need one.
+    if (client && options.presignPlan && market.endsAt > Date.now() / 1000) {
+      for (const plan of options.presignPlan(market)) void client.presign(plan.tokenId, plan.prices, plan.size, plan.tickSize);
+    }
     const sides = binaryMarketSides(market);
     if (!sides) throw new Error(`market ${market.id} has no UP/DOWN token mapping`);
     const { up, down } = sides;
@@ -1107,6 +1123,8 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     pruneSnapshotState(snapshotWatermarks);
     pruneSnapshotState(snapshotRejectNotice);
     pruneSnapshotState(snapshotFreshAfter);
+    // A round that ended can never use its signed-ahead orders.
+    client?.forgetPresigned(options.markets.filter(market => market.endsAt <= now).flatMap(market => market.instruments.map(i => i.tokenId)));
     const account = platform.account.current();
     if (client && !stopped && !recoveryJob && (account.risk.reason?.includes("reconciliation")
       || account.orders.some(order => (order.status === "UNKNOWN" || order.reconciliationPending)

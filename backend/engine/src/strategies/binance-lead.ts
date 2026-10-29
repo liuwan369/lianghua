@@ -145,6 +145,22 @@ export function leadShares(configured: number, price: number): number {
   return Math.max(configured, Math.ceil(MIN_MARKETABLE_BUY_USD / price - 1e-9));
 }
 
+/** The FAK limits a round can send on each side, for signing ahead: every
+ * ask the strategy would buy (one tick up to maxAsk) gives leadLimitPrice(ask),
+ * at leadShares. 0.01 tick, cap 0.80: 80 prices a side. A maker round signs
+ * nothing (its price is the bid, posted rarely). */
+export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitPremium" | "makerHoldSec" | "shares">, tickSize: number) {
+  if (!(tickSize > 0) || config.makerHoldSec > 0) return [];
+  const prices = new Set<number>();
+  const decimals = Math.max(0, Math.ceil(-Math.log10(tickSize) - 1e-9));
+  for (let n = 1; n * tickSize <= config.maxAsk + EPS; n += 1) {
+    const ask = Number((n * tickSize).toFixed(decimals));
+    const limit = leadLimitPrice(ask, config.limitPremium, tickSize);
+    if (limit >= ask - EPS) prices.add(limit);
+  }
+  return [...prices].map(price => ({ price, shares: leadShares(config.shares, price) }));
+}
+
 export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {}): BinanceLeadConfig {
   const config = { ...clone(BINANCE_LEAD_DEFAULTS), ...clone(input) };
   if (typeof config.instanceId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(config.instanceId)

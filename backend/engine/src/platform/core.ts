@@ -1005,8 +1005,20 @@ export class TradingCore {
       throw error;
     }
     let ackOutcome: GatewayAck["status"] | undefined;
-    try {
+    // The order's SUBMITTING and signed-identity broadcasts (journal, strategy,
+    // user-feed registration) are observability, not the order's path: on the
+    // server they cost ~2 ms before the POST (2026-10-29 bench). They now run
+    // once the gateway has issued the POST (onPostSent), or when its submit
+    // settles if it never did (an error before the POST, a test gateway). The
+    // reservation and the signed identity are still committed before the POST.
+    let broadcastPending = true;
+    const broadcast = () => {
+      if (!broadcastPending) return;
+      broadcastPending = false;
       this.emitOrder(order);
+      if (order.durableCommitLatencyMs !== undefined) this.emitLatency("durable_commit", order.durableCommitLatencyMs, order);
+    };
+    try {
       const ack = await this.options.adapters.gateway.submit(request, copy(instrument), prepared => {
         if (!prepared.orderHash || !prepared.signedPayload) throw new Error("signed order identity missing");
         if (this.state.orders.some(existing => existing !== order
@@ -1025,9 +1037,8 @@ export class TradingCore {
         }
         releasePreparation?.();
         order.durableCommitLatencyMs = Math.max(0, performance.now() - started);
-        this.emitOrder(order);
-        queueMicrotask(() => this.emitLatency("durable_commit", order.durableCommitLatencyMs, order));
-      }, timing);
+      }, { ...timing, onPostSent: broadcast });
+      broadcast();
       ackOutcome = ack.status;
       // User WebSocket can report a newer venue state before the HTTP ACK
       // arrives. An ACK only fills an unknown state; it must not move it back.
@@ -1099,6 +1110,8 @@ export class TradingCore {
       if (ack.status === "accepted" && active(order) && this.matchedFakComplete(order)) this.voidFakRest(order);
     } catch (error) {
       releasePreparation?.();
+      // Observers saw nothing yet if the gateway threw before the POST.
+      broadcast();
       if (!(order.orderId && ["FILLED", "PARTIAL"].includes(order.status))) {
         order.status = "UNKNOWN"; this.state.risk.halted = true; this.state.risk.reason = "unknown order requires reconciliation";
       }
