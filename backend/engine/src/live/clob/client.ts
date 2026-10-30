@@ -199,9 +199,11 @@ const MAX_VENUE_CLOCK_SKEW_SECONDS = 3;
 const DEFAULT_WARM_ATTEMPTS = 2;
 const DEFAULT_ORDER_TIMEOUT_MS = 3_000;
 /** The V2 payload's `deferExec` (docs: "Whether to defer execution", server
- * effect undocumented). Every order sent it true. CLOB_DEFER_EXEC=0 sends false,
- * to measure whether it is the ~380 ms POST on itode markets (2026-10-27). */
-const deferExec = () => process.env.CLOB_DEFER_EXEC !== "0";
+ * effect undocumented). False, as every official SDK sends it: with true (our
+ * default until 2026-10-30) 4 of 7 live FAKs took 1.9-2.9 s to match (10-29);
+ * with false 19 of 19 replied within 0.8 s, median 303 ms (10-30). CLOB_DEFER_EXEC=1
+ * sends true again. */
+const deferExec = () => process.env.CLOB_DEFER_EXEC === "1";
 const POST_ORDER_PATH = "/order";
 /** Signing settles at ~3ms by the fourth call in a fresh process. */
 const SIGNING_WARM_ITERATIONS = 6;
