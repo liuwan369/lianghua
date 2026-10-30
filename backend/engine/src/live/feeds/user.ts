@@ -89,6 +89,26 @@ function directionFields(opts: UserFeedOptions, orderId: string | undefined, raw
   return { tokenId, direction: owned ?? (value === "BUY" || value === "SELL" ? value : undefined) };
 }
 
+/** A taker trade's price is the last level it reached; what it paid is the sum
+ * of its maker legs (2026-10-30: 5.170455 Up "@0.44" was 2.5 @0.43 + 2.670455
+ * @0.44, 2.25 USDC, the signed budget; at 0.44 the core read 2.275 and refused
+ * the fill). A leg on the other token is a mint: our side paid 1 - its price.
+ * Falls back to the row's price when the legs do not add up to the size. */
+function takerPrice(e: Record<string, unknown>, size: number): number | undefined {
+  const reported = num(e.price);
+  if (!Array.isArray(e.maker_orders) || e.maker_orders.length === 0) return reported;
+  let shares = 0, usd = 0;
+  for (const raw of e.maker_orders) {
+    if (!raw || typeof raw !== "object") return reported;
+    const leg = raw as Record<string, unknown>;
+    const price = num(leg.price), matched = num(leg.matched_amount);
+    if (price == null || matched == null || matched <= 0 || price <= 0 || price >= 1) return reported;
+    shares += matched;
+    usd += matched * (leg.asset_id === e.asset_id ? price : 1 - price);
+  }
+  return Math.abs(shares - size) <= 1e-6 * Math.max(1, size) ? usd / shares : reported;
+}
+
 function tradeMetadata(event: Record<string, unknown>, status: string) {
   const feeUsd = num(event.fee_usd), feeRateBps = num(event.fee_rate_bps);
   return { status: status as TradeStatus,
@@ -165,8 +185,8 @@ export function parseUserMessage(
     if (takerId && opts.isOurOrder(takerId)) {
       const tok = typeof e.asset_id === "string" ? e.asset_id : undefined;
       const side = tok ? sideOfToken(tok, opts.upToken, opts.downToken) : undefined;
-      const price = num(e.price);
       const size = num(e.size);
+      const price = size == null ? undefined : takerPrice(e, size);
       if (side != null && price != null && size != null && size > 0) {
         events.push({
           kind: "exchangeFill",
@@ -252,8 +272,8 @@ export function parseAuthenticatedTrade(
   if (traderSide === "TAKER") {
     const tok = typeof e.asset_id === "string" ? e.asset_id : undefined;
     const side = tok ? sideOfToken(tok, opts.upToken, opts.downToken) : undefined;
-    const price = num(e.price);
     const size = num(e.size);
+    const price = size == null ? undefined : takerPrice(e, size);
     const orderId = typeof e.taker_order_id === "string" ? e.taker_order_id : undefined;
     if (!orderId || !opts.isOurOrder(orderId)) return [];
     if (side != null && price != null && size != null && size > 0) {
