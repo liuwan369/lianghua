@@ -391,6 +391,8 @@ export type TradingEvent =
   | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; assetId?: AssetId; book?: undefined }
   /** Binance lead signal; receivedAtUnix is when we saw the trade (S). */
   | { kind: "lead"; assetId: AssetId; direction: "UP" | "DOWN"; price: number; refPrice: number; moveBp: number;
+      /** The lead venue's price at the round open (absent if the feed started mid-round). */
+      openPrice?: number;
       tradeId: number; tradeTimeMs: number; receivedAtUnix: number; receivedAtMonoMs: number }
   | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string; assetId?: AssetId }
   | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string; assetId?: AssetId }

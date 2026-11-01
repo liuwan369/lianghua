@@ -125,7 +125,7 @@ for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmatio
         continue
     raise AssertionError(f"{extra} is not a binance-lead field")
 for missing in defaults:
-    if missing in ("maxAsk", "makerHoldSec", "leadSource"):
+    if missing in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp"):
         continue                     # added after a revision was published: backfilled, below
     try:
         validate_config({k: v for k, v in defaults.items() if k != missing})
@@ -138,6 +138,15 @@ assert validate_config({k: v for k, v in defaults.items() if k != "makerHoldSec"
 assert validate_config({k: v for k, v in defaults.items() if k not in ("maxAsk", "makerHoldSec")})["makerHoldSec"] == 0
 assert validate_config({**defaults, "makerHoldSec": 3})["makerHoldSec"] == 3
 assert validate_config({k: v for k, v in defaults.items() if k != "leadSource"})["leadSource"] == "binance-spot"
+# openBandBp (2026-11-01): a config published before it gets 0 (no filter); range [0, 1000].
+assert validate_config({k: v for k, v in defaults.items() if k != "openBandBp"})["openBandBp"] == 0
+assert validate_config({**defaults, "openBandBp": 5})["openBandBp"] == 5
+for bad in (-1, 1001, "5", None):
+    try:
+        validate_config({**defaults, "openBandBp": bad})
+    except ConfigValidationError:
+        continue
+    raise AssertionError(f"openBandBp {bad!r} must be rejected")
 assert validate_config({**defaults, "leadSource": "bybit-perp"})["leadSource"] == "bybit-perp"
 
 REVERSAL = {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
@@ -159,7 +168,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert store.get_draft() is None
     # --- save -> the engine reads exactly what was saved ---
     chosen = {**defaults, "shares": 7, "thresholdBp": 2.5, "windowMs": 300, "limitPremium": 0.02, "fromSec": 20,
-              "toSec": 260, "maxAsk": 0.75, "makerHoldSec": 3, "leadSource": "bybit-perp", "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
+              "toSec": 260, "maxAsk": 0.75, "makerHoldSec": 3, "leadSource": "bybit-perp", "openBandBp": 5, "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
     draft = store.save_draft(chosen, 0)
     saved = store.activate_draft(0, draft["draftId"])
     assert saved["savedRevision"] == 1 and saved["config"] == chosen
@@ -187,16 +196,17 @@ with tempfile.TemporaryDirectory() as tmp:
     else:
         raise AssertionError("reversal fields under the new strategy id are rejected too")
     # --- revision 1 on the server was published before maxAsk and makerHoldSec: 0.80 and 0 ---
-    before = {k: v for k, v in chosen.items() if k not in ("maxAsk", "makerHoldSec", "leadSource")}
+    before = {k: v for k, v in chosen.items() if k not in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp")}
     store.path.write_text(json.dumps(document(before)), encoding="utf-8")
     loaded = StrategyConfigStore(store.path).get()
     assert loaded["savedRevision"] == 1 and loaded["config"]["maxAsk"] == 0.8, loaded["config"]
-    assert loaded["config"] == {**before, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot"}
+    assert loaded["config"] == {**before, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0}
     read = engine("const { readStrategyConfig } = await load('cli/platform.js');\n"
                   "console.log(JSON.stringify(readStrategyConfig(payload)));", str(store.path))
     assert read["config"]["maxAsk"] == 0.8, "the engine reads the same file with the same default"
     assert read["config"]["makerHoldSec"] == 0, "and the FAK rule"
     assert read["config"]["leadSource"] == "binance-spot", "and Binance spot"
+    assert read["config"]["openBandBp"] == 0, "and no open-price filter"
     # Only a missing maxAsk is filled in: a pre-maxAsk file with any other gap is still damage.
     store.path.write_text(json.dumps(document({k: v for k, v in before.items() if k != "shares"})), encoding="utf-8")
     try:

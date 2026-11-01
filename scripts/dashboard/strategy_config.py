@@ -27,15 +27,17 @@ def default_config() -> dict:
     # BINANCE_LEAD_DEFAULTS (backend/engine/src/strategies/binance-lead.ts) plus
     # the control plane's run settings, which reach the engine as flags.
     return {"assetId": "btc", "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
-            "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
+            "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0,
+            "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
 # Fields added after a binance-lead revision was published (the server's
-# revision 1 has no maxAsk, revision 2 no makerHoldSec or leadSource): a config
-# missing only these gets their defaults, any other key mismatch is still rejected.
-ADDED_FIELDS = ("maxAsk", "makerHoldSec", "leadSource")
+# revision 1 has no maxAsk, revision 2 no makerHoldSec or leadSource, revisions
+# up to 8 no openBandBp): a config missing only these gets their defaults, any
+# other key mismatch is still rejected.
+ADDED_FIELDS = ("maxAsk", "makerHoldSec", "leadSource", "openBandBp")
 # binance-lead.ts LEAD_SOURCES: Binance spot aggTrade, or Bybit USDT perpetual.
 LEAD_SOURCES = ("binance-spot", "bybit-perp")
 
@@ -88,6 +90,7 @@ def validate_config(config: dict) -> dict:
     within("makerHoldSec", "挂单秒数", 0, 300, low_open=False)
     if result["leadSource"] not in LEAD_SOURCES:
         raise ConfigValidationError("信号来源只能是币安现货或 Bybit 合约")
+    within("openBandBp", "开盘价范围bp", 0, 1000, low_open=False)
     for key, label in (("maxQuoteAgeSeconds", "盘口最大年龄"), ("maxQuoteSkewSeconds", "盘口两边时间差")):
         if number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须是正数")

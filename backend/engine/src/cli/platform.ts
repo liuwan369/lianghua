@@ -570,7 +570,7 @@ export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>
   stopping: boolean): Record<string, unknown> {
   const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId);
   return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
-    move_bp: event.moveBp, trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
+    move_bp: event.moveBp, open_price: event.openPrice ?? null, trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
     received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
     market_id: round?.marketId ?? null, round_id: round?.roundId ?? null, round_status: round?.status ?? null,
     outcome: stopping ? "stopping" : placed ? "order_submitted" : round ? "skipped" : "no_round",

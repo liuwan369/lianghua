@@ -19,7 +19,8 @@
     { key: "toSec", label: "开盘后截止秒", unit: "秒", step: "1", note: "到这一秒（不含）为止；必须大于起始秒、不超过 300。", check: (v) => v > 0 && v <= 300, error: "截止秒须大于 0 且不超过 300。" },
     { key: "maxAsk", label: "卖价上限", unit: "¢", step: "any", cents: true, note: "信号这一边的价格高于它就不买，本场不算尝试，等下一个信号（等于照买）。吃单看卖价，挂单看买价。", check: (v) => v > 0 && v < 100, error: "卖价上限须在 0 到 100 美分之间（不含 0 和 100）。" },
     { key: "makerHoldSec", label: "挂单秒数", unit: "秒", step: "any", note: "0 = 吃单（FAK，卖价 + 加价）。大于 0 = 只挂单：在这一边买一价挂买单，挂这么多秒后撤掉，没成交不花钱。", check: (v) => v >= 0 && v <= 300, error: "挂单秒数须在 0 到 300 之间。" },
-    { key: "leadSource", label: "信号来源", unit: "", options: [["binance-spot", "币安现货"], ["bybit-perp", "Bybit 合约"]], note: "用哪家交易所的逐笔成交出信号，规则相同。引擎启动时读取，改了要下次启动才生效。", error: "信号来源只能是币安现货或 Bybit 合约。" }
+    { key: "leadSource", label: "信号来源", unit: "", options: [["binance-spot", "币安现货"], ["bybit-perp", "Bybit 合约"]], note: "用哪家交易所的逐笔成交出信号，规则相同。引擎启动时读取，改了要下次启动才生效。", error: "信号来源只能是币安现货或 Bybit 合约。" },
+    { key: "openBandBp", label: "开盘价范围", unit: "bp", step: "any", note: "只做信号时价格离本场开盘价在 ±这么多 bp 以内的（按信号方向算，领先或落后都算）。0 = 不过滤。离开盘价远的结果基本已定，没有优势。", check: (v) => v >= 0 && v <= 1000, error: "开盘价范围须在 0 到 1000 bp 之间。" }
   ];
   const fieldInput = (item) => item.options
     ? `<select data-lead="${item.key}">${item.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`
@@ -163,7 +164,9 @@
     formKey = key;
     baselineRevision = resource.revision;
     for (const item of LEAD_FIELDS) {
-      const value = config[item.key];
+      // A revision published before openBandBp existed has none: 0 (no filter),
+      // as the server backfills it (strategy_config.py ADDED_FIELDS).
+      const value = config[item.key] ?? (item.key === "openBandBp" ? 0 : undefined);
       leadInput(item.key).value = value == null ? "" : item.options ? String(value)
         : item.cents ? String(Number((value * 100).toPrecision(12))) : String(value);
     }

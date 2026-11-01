@@ -143,8 +143,9 @@ FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易�
 
 ## 策略 `binance-lead`
 
-默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`makerHoldSec 0`、`leadSource binance-spot`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`makerHoldSec 0`、`leadSource binance-spot`、`openBandBp 0`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
 
+- 开盘价（`openBandBp`）：`LeadSignalDetector` 按成交时间记下每场开盘价（本场开始时刻或之前最后一笔成交；行情在本场中途才连上就没有），随信号带出 `openPrice`；策略只在信号离开盘价 −openBandBp ≤ d < openBandBp 时下单（d 按信号方向取正负，单位 bp），并核对开盘价属于本场。journal 的 lead 行带 `open_price`。
 - 信号源（`leadSource`，`cli/platform.ts leadFeedFor`）：`binance-spot` 或 `bybit-perp`，引擎启动时选定，热更新改它要下次启动才生效（检测器窗口里只能是一家的价格）。两家都只认 1 秒内的成交（太旧、时间在未来、编号乱跳的丢掉）。
 - 信号（`LeadSignalDetector`，在 feed 一侧）：领先成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结。

@@ -26,6 +26,10 @@ export interface LeadSignal {
   refPrice: number;
   /** ln(price / refPrice) × 1e4: positive for UP, negative for DOWN. */
   moveBp: number;
+  /** The round's opening price: the last trade at or before the round start
+   * (trade time), as the backtest (E:/pm-backup/research-1101/band.py). Absent
+   * when the feed started inside the round. */
+  openPrice?: number;
   tradeId: number;
   tradeTimeMs: number;
   receivedAtUnix: number;
@@ -200,6 +204,12 @@ export class LeadSignalDetector {
   private minHead = 0;
   private maxQ: number[] = [];
   private maxHead = 0;
+  // The last trade's time and price, and the opening price of the round the
+  // latest trade is in (the last trade before that round's start).
+  private lastTradeMs?: number;
+  private lastPrice?: number;
+  private openRoundMs?: number;
+  private openPrice?: number;
 
   constructor(params: LeadSignalParams) { this.params = LeadSignalDetector.check(params); }
 
@@ -209,6 +219,16 @@ export class LeadSignalDetector {
   push(trade: AggTrade, seenAtUnix: number): LeadSignal | undefined {
     const { windowMs, thresholdBp, fromSec, toSec } = this.params;
     const t = trade.tradeTimeMs, p = trade.price;
+    // First trade at or after a round start: the trade before it opened the
+    // round. Without one (the feed started mid-round), the round has no open.
+    const roundMs = Math.floor(t / 300_000) * 300_000;
+    if (this.openRoundMs !== roundMs) {
+      this.openRoundMs = roundMs;
+      this.openPrice = t === roundMs ? p
+        : this.lastTradeMs !== undefined && this.lastTradeMs <= roundMs && this.lastTradeMs > roundMs - 300_000
+          ? this.lastPrice : undefined;
+    }
+    this.lastTradeMs = t; this.lastPrice = p;
     const cutoff = t - windowMs;
     while (this.head < this.next && this.times[this.head - this.base]! < cutoff) this.head += 1;
     while (this.minHead < this.minQ.length && this.minQ[this.minHead]! < this.head) this.minHead += 1;
@@ -233,6 +253,7 @@ export class LeadSignalDetector {
     this.base = this.head = this.next;
     this.append(t, p);
     return { direction, price: p, refPrice, moveBp: move * 1e4, tradeId: trade.id, tradeTimeMs: t,
+      ...(this.openPrice !== undefined ? { openPrice: this.openPrice } : {}),
       receivedAtUnix: trade.receivedAtUnix, receivedAtMonoMs: trade.receivedAtMonoMs };
   }
 

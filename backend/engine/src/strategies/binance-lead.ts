@@ -35,6 +35,13 @@ export interface BinanceLeadConfig {
    * after this many seconds (limitPremium unused). */
   makerHoldSec: number;
   leadSource: LeadSource;
+  /** Trade only a signal whose lead price is within this many bp of the round's
+   * opening lead price, signed by the signal (+ = its side already ahead):
+   * -openBandBp <= d < openBandBp. 0 = no filter. User 2026-11-01: 5 (backtest
+   * E:/pm-backup/research-1101/band.py, fills calibrated on 169 live orders:
+   * +525 vs +406 unfiltered, 16/16 days, ±4..±6 a plateau). Far from the open the
+   * price has already priced the outcome (edge +4 points vs +13..16 near it). */
+  openBandBp: number;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -108,7 +115,7 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot",
-  maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  openBandBp: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
@@ -181,6 +188,9 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
     throw new Error("makerHoldSec must be in [0, 300]");
   }
   if (!LEAD_SOURCES.includes(config.leadSource)) throw new Error(`leadSource must be one of ${LEAD_SOURCES.join(", ")}`);
+  if (!finite(config.openBandBp) || config.openBandBp < 0 || config.openBandBp > 1000) {
+    throw new Error("openBandBp must be in [0, 1000]");
+  }
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
   }
@@ -419,6 +429,18 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (!(sinceOpen >= config.fromSec && sinceOpen < config.toSec)) {
       round.reason = `信号在开盘后 ${sinceOpen.toFixed(1)} 秒，不在本场 [${config.fromSec}, ${config.toSec}) 秒内`;
       return undefined;
+    }
+    if (config.openBandBp > 0) {
+      // The open must be this round's: the detector keys it by trade time.
+      const open = event.openPrice;
+      if (!positive(open) || Math.floor(event.tradeTimeMs / 300_000) * 300 !== round.startsAt) {
+        round.reason = "本场开盘价未知（行情在本场中途才连上），等下一个信号"; return undefined;
+      }
+      const d = Math.log(event.price / open) * 1e4 * (event.direction === "UP" ? 1 : -1);
+      if (!(d >= -config.openBandBp && d < config.openBandBp)) {
+        round.reason = `信号离开盘价 ${d >= 0 ? "领先" : "落后"} ${Math.abs(d).toFixed(1)} bp，超出 ±${config.openBandBp} bp，等下一个信号`;
+        return undefined;
+      }
     }
     const latest = round.latest;
     if (!latest) { round.reason = "信号到达时没有当前盘口，等下一个信号"; return undefined; }

@@ -54,7 +54,8 @@ assert.equal(body.config.fromSec, 60, "fromSec is part of the saved config");
 assert.equal(body.config.toSec, 240);
 assert.equal(body.config.thresholdBp, 3);
 assert.equal(body.config.maxAsk, 0.8, "maxAsk is part of the saved config");
+assert.equal(body.config.openBandBp, 0, "openBandBp defaults to 0 (no filter)");
 assert.deepEqual(Object.keys(body.config).sort(), ["assetId", "dailyLossUsd", "durationMinutes", "fromSec", "leadSource", "limitPremium",
-  "makerHoldSec", "maxAsk", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "maxRounds", "mode", "roundBudgetUsd", "shares", "thresholdBp", "toSec",
+  "makerHoldSec", "maxAsk", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "maxRounds", "mode", "openBandBp", "roundBudgetUsd", "shares", "thresholdBp", "toSec",
   "totalBudgetUsd", "windowMs"], "exactly binance-lead's fields");
 console.log("P1-1 OK");
