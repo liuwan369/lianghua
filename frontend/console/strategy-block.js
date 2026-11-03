@@ -20,8 +20,15 @@
     { key: "maxAsk", label: "卖价上限", unit: "¢", step: "any", cents: true, note: "信号这一边的价格高于它就不买，本场不算尝试，等下一个信号（等于照买）。吃单看卖价，挂单看买价。", check: (v) => v > 0 && v < 100, error: "卖价上限须在 0 到 100 美分之间（不含 0 和 100）。" },
     { key: "makerHoldSec", label: "挂单秒数", unit: "秒", step: "any", note: "0 = 吃单（FAK，卖价 + 加价）。大于 0 = 只挂单：在这一边买一价挂买单，挂这么多秒后撤掉，没成交不花钱。", check: (v) => v >= 0 && v <= 300, error: "挂单秒数须在 0 到 300 之间。" },
     { key: "leadSource", label: "信号来源", unit: "", options: [["binance-spot", "币安现货"], ["bybit-perp", "Bybit 合约"]], note: "用哪家交易所的逐笔成交出信号，规则相同。引擎启动时读取，改了要下次启动才生效。", error: "信号来源只能是币安现货或 Bybit 合约。" },
-    { key: "openBandBp", label: "开盘价范围", unit: "bp", step: "any", note: "只做信号时价格离本场开盘价在 ±这么多 bp 以内的（按信号方向算，领先或落后都算）。0 = 不过滤。离开盘价远的结果基本已定，没有优势。", check: (v) => v >= 0 && v <= 1000, error: "开盘价范围须在 0 到 1000 bp 之间。" }
+    { key: "openBandBp", label: "开盘价范围", unit: "bp", step: "any", note: "只做信号时价格离本场开盘价在 ±这么多 bp 以内的（按信号方向算，领先或落后都算）。0 = 不过滤。离开盘价远的结果基本已定，没有优势。", check: (v) => v >= 0 && v <= 1000, error: "开盘价范围须在 0 到 1000 bp 之间。" },
+    { key: "midEdge", label: "中档优势", unit: "", step: "any", note: "模型算出的优势（胜率 − 卖价 − 手续费）不低于它，买中档份额。", check: (v) => v >= -1 && v <= 1, error: "中档优势须在 -1 到 1 之间。" },
+    { key: "midShares", label: "中档份额", unit: "股", step: "any", note: "优势达到中档时买的股数。0 = 关闭这一档。", check: (v) => v >= 0 && v <= 10000, error: "中档份额须在 0 到 10000 之间。" },
+    { key: "highEdge", label: "高档优势", unit: "", step: "any", note: "优势不低于它，买高档份额；两档都开时不能低于中档优势。", check: (v) => v >= -1 && v <= 1, error: "高档优势须在 -1 到 1 之间。" },
+    { key: "highShares", label: "高档份额", unit: "股", step: "any", note: "优势达到高档时买的股数。0 = 关闭这一档。没有模型估计（开机不满 6 分钟）时一律按每场份额买。", check: (v) => v >= 0 && v <= 10000, error: "高档份额须在 0 到 10000 之间。" }
   ];
+  // Fields a revision published before them lacks, as the server backfills
+  // them (strategy_config.py ADDED_FIELDS).
+  const BACKFILL = { openBandBp: 0, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0 };
   const fieldInput = (item) => item.options
     ? `<select data-lead="${item.key}">${item.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`
     : `<input type="number" step="${item.step}" placeholder="--" data-lead="${item.key}">`;
@@ -149,8 +156,11 @@
     root.querySelector("[data-activate]").disabled = busy || dirty || !validDraft() || resource.status !== "ready";
   };
   const updateBudget = () => {
+    // The largest size a round can buy: the base size or a tier that is on.
     const shares = Number(leadInput("shares").value);
-    text("[data-budget-hint] strong", leadInput("shares").value.trim() !== "" && Number.isFinite(shares) && shares > 0 ? `$${(shares * 0.99).toFixed(2)}` : "--");
+    const tiers = ["midShares", "highShares"].map(key => Number(leadInput(key).value)).filter(n => Number.isFinite(n) && n > 0);
+    const most = Math.max(shares, ...tiers);
+    text("[data-budget-hint] strong", leadInput("shares").value.trim() !== "" && Number.isFinite(shares) && shares > 0 ? `$${(most * 0.99).toFixed(2)}` : "--");
   };
   const markDirty = () => {
     dirty = true;
@@ -164,9 +174,7 @@
     formKey = key;
     baselineRevision = resource.revision;
     for (const item of LEAD_FIELDS) {
-      // A revision published before openBandBp existed has none: 0 (no filter),
-      // as the server backfills it (strategy_config.py ADDED_FIELDS).
-      const value = config[item.key] ?? (item.key === "openBandBp" ? 0 : undefined);
+      const value = config[item.key] ?? BACKFILL[item.key];
       leadInput(item.key).value = value == null ? "" : item.options ? String(value)
         : item.cents ? String(Number((value * 100).toPrecision(12))) : String(value);
     }

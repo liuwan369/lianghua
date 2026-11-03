@@ -570,13 +570,15 @@ export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>
   stopping: boolean): Record<string, unknown> {
   const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId);
   return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
-    move_bp: event.moveBp, open_price: event.openPrice ?? null, trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
+    move_bp: event.moveBp, open_price: event.openPrice ?? null, fair_up: event.fairUp ?? null,
+    trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
     received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
     market_id: round?.marketId ?? null, round_id: round?.roundId ?? null, round_status: round?.status ?? null,
     outcome: stopping ? "stopping" : placed ? "order_submitted" : round ? "skipped" : "no_round",
     reason: stopping ? "停机中，不处理信号" : round?.reason ?? null, attempted: (round?.stages.length ?? 0) > 0,
     client_order_id: placed?.clientOrderId ?? null, token_id: placed?.tokenId ?? null,
-    limit_price: placed?.price ?? null, ask_at_signal: placed?.askAtSignal ?? null, shares: placed?.shares ?? null };
+    limit_price: placed?.price ?? null, ask_at_signal: placed?.askAtSignal ?? null, shares: placed?.shares ?? null,
+    fair_edge: placed?.fairEdge ?? null };
 }
 
 export async function runPlatformCli(argv: string[]): Promise<void> {
@@ -1015,11 +1017,25 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         durationSec: options.durationSec === 0 ? Infinity : options.durationSec,
         assetId: options.assetId, strategyId: strategy?.id, leadFeed,
         // The saved config's limits; a round frozen with other values signs on the spot.
-        presignPlan: strategyConfig ? market => market.instruments.map(instrument => {
-          const plan = presignPrices(strategyConfig!.config, instrument.tickSize);
-          const size = new Map(plan.map(item => [item.price, item.shares]));
-          return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices: plan.map(item => item.price),
-            size: (price: number) => size.get(price) ?? strategyConfig!.config.shares };
+        // One plan per size tier (5/10/20 shares): a price signs once per size,
+        // the client skips a slot it already holds.
+        presignPlan: strategyConfig ? market => market.instruments.flatMap(instrument => {
+          // presignPrices gives one entry per (price, size), base size first.
+          const byPrice = new Map<number, number[]>();
+          for (const item of presignPrices(strategyConfig!.config, instrument.tickSize)) {
+            const sizes = byPrice.get(item.price) ?? [];
+            sizes.push(item.shares); byPrice.set(item.price, sizes);
+          }
+          const tiers = Math.max(0, ...[...byPrice.values()].map(sizes => sizes.length));
+          return Array.from({ length: tiers }, (_, tier) => {
+            const prices = [...byPrice.keys()];
+            const size = new Map(prices.map(price => {
+              const sizes = byPrice.get(price)!;
+              return [price, sizes[Math.min(tier, sizes.length - 1)]!] as const;
+            }));
+            return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices,
+              size: (price: number) => size.get(price) ?? strategyConfig!.config.shares };
+          });
         }) : undefined });
       unsubscribe = connection.platform.subscribe(record);
       if (strategy) connection.platform.core.setStrategyState(STRATEGY_ID, strategy.exportState());

@@ -125,7 +125,7 @@ for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmatio
         continue
     raise AssertionError(f"{extra} is not a binance-lead field")
 for missing in defaults:
-    if missing in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp"):
+    if missing in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp", "midEdge", "midShares", "highEdge", "highShares"):
         continue                     # added after a revision was published: backfilled, below
     try:
         validate_config({k: v for k, v in defaults.items() if k != missing})
@@ -148,6 +148,26 @@ for bad in (-1, 1001, "5", None):
         continue
     raise AssertionError(f"openBandBp {bad!r} must be rejected")
 assert validate_config({**defaults, "leadSource": "bybit-perp"})["leadSource"] == "bybit-perp"
+# Edge tiers (2026-11-03): a config published before them gets them off (0 shares).
+TIER_KEYS = ("midEdge", "midShares", "highEdge", "highShares")
+old = validate_config({k: v for k, v in defaults.items() if k not in TIER_KEYS})
+assert (old["midEdge"], old["midShares"], old["highEdge"], old["highShares"]) == (0.08, 0, 0.13, 0)
+tiers = validate_config({**defaults, "midShares": 10, "highShares": 20})
+assert (tiers["midShares"], tiers["highShares"]) == (10, 20)
+for key, bad in (("midEdge", 1.5), ("highEdge", -2), ("midShares", -1), ("highShares", 10_001), ("midEdge", "0.08"), ("highShares", None)):
+    try:
+        validate_config({**defaults, key: bad})
+    except ConfigValidationError:
+        continue
+    raise AssertionError(f"{key} {bad!r} must be rejected")
+try:
+    validate_config({**defaults, "midShares": 10, "highShares": 20, "midEdge": 0.13, "highEdge": 0.08})
+except ConfigValidationError:
+    pass
+else:
+    raise AssertionError("highEdge below midEdge with both tiers on must be rejected")
+assert validate_config({**defaults, "midShares": 10, "highShares": 0, "midEdge": 0.13, "highEdge": 0.08})["midShares"] == 10, \
+    "order of edges only matters when both tiers are on"
 
 REVERSAL = {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
             "stageShares": [5], "maxStages": 1, "roundBudgetUsd": 5, "totalBudgetUsd": 10, "dailyLossUsd": 10,
@@ -168,7 +188,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert store.get_draft() is None
     # --- save -> the engine reads exactly what was saved ---
     chosen = {**defaults, "shares": 7, "thresholdBp": 2.5, "windowMs": 300, "limitPremium": 0.02, "fromSec": 20,
-              "toSec": 260, "maxAsk": 0.75, "makerHoldSec": 3, "leadSource": "bybit-perp", "openBandBp": 5, "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
+              "toSec": 260, "maxAsk": 0.75, "makerHoldSec": 3, "leadSource": "bybit-perp", "openBandBp": 5, "midEdge": 0.08, "midShares": 10, "highEdge": 0.13, "highShares": 20, "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
     draft = store.save_draft(chosen, 0)
     saved = store.activate_draft(0, draft["draftId"])
     assert saved["savedRevision"] == 1 and saved["config"] == chosen
@@ -196,11 +216,12 @@ with tempfile.TemporaryDirectory() as tmp:
     else:
         raise AssertionError("reversal fields under the new strategy id are rejected too")
     # --- revision 1 on the server was published before maxAsk and makerHoldSec: 0.80 and 0 ---
-    before = {k: v for k, v in chosen.items() if k not in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp")}
+    before = {k: v for k, v in chosen.items() if k not in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp") + TIER_KEYS}
     store.path.write_text(json.dumps(document(before)), encoding="utf-8")
     loaded = StrategyConfigStore(store.path).get()
     assert loaded["savedRevision"] == 1 and loaded["config"]["maxAsk"] == 0.8, loaded["config"]
-    assert loaded["config"] == {**before, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0}
+    assert loaded["config"] == {**before, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0,
+                                "midEdge": 0.08, "midShares": 0, "highEdge": 0.13, "highShares": 0}
     read = engine("const { readStrategyConfig } = await load('cli/platform.js');\n"
                   "console.log(JSON.stringify(readStrategyConfig(payload)));", str(store.path))
     assert read["config"]["maxAsk"] == 0.8, "the engine reads the same file with the same default"

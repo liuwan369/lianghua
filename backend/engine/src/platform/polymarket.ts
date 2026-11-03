@@ -561,6 +561,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
     if (raw.kind === "lead") {
       platform.ingest({ kind: "lead", assetId: options.assetId ?? "btc", direction: raw.direction, price: raw.price,
         refPrice: raw.refPrice, moveBp: raw.moveBp, ...(raw.openPrice !== undefined ? { openPrice: raw.openPrice } : {}),
+        ...(raw.fairUp !== undefined ? { fairUp: raw.fairUp } : {}),
         tradeId: raw.tradeId, tradeTimeMs: raw.tradeTimeMs,
         receivedAtUnix: raw.receivedAtUnix, receivedAtMonoMs: raw.receivedAtMonoMs });
       return;

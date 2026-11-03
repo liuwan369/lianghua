@@ -14,15 +14,16 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const FIELDS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "leadSource", "openBandBp",
-  "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "midEdge", "midShares", "highEdge", "highShares", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"];
 const DEFAULTS = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
-  maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot", openBandBp: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: null, dailyLossUsd: null,
+  maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot", openBandBp: 0, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: null, dailyLossUsd: null,
   durationMinutes: 0, maxRounds: 0, mode: "live" };
 const INPUTS = { shares: "[data-lead=\"shares\"]", thresholdBp: "[data-lead=\"thresholdBp\"]", windowMs: "[data-lead=\"windowMs\"]",
   limitCents: "[data-lead=\"limitPremium\"]", fromSec: "[data-lead=\"fromSec\"]", toSec: "[data-lead=\"toSec\"]",
   maxAskCents: "[data-lead=\"maxAsk\"]", makerHoldSec: "[data-lead=\"makerHoldSec\"]", leadSource: "[data-lead=\"leadSource\"]",
-  openBandBp: "[data-lead=\"openBandBp\"]",
+  openBandBp: "[data-lead=\"openBandBp\"]", midEdge: "[data-lead=\"midEdge\"]", midShares: "[data-lead=\"midShares\"]",
+  highEdge: "[data-lead=\"highEdge\"]", highShares: "[data-lead=\"highShares\"]",
   roundBudget: '[data-runtime-field="roundBudget"]', totalBudget: '[data-runtime-field="totalBudget"]',
   lossLimit: '[data-runtime-field="lossLimit"]', rounds: '[data-runtime-field="rounds"]' };
 
@@ -142,6 +143,14 @@ function controlPlane(published, revision) {
     assert.ok([...ui.written.values()].some((text) => text.includes("开盘价范围")), "and the page says which field");
   }
   ui.type("openBandBp", 5);
+  // 档位份额 must be in [0, 10000].
+  for (const bad of [-1, 10001]) {
+    ui.type("highShares", bad);
+    await ui.click("[data-save]");
+    assert.equal(plane.state.drafts.length, 0, `高档份额 ${bad} is not sent`);
+    assert.ok([...ui.written.values()].some((text) => text.includes("高档份额")), "and the page says which field");
+  }
+  ui.type("midEdge", 0.08); ui.type("midShares", 10); ui.type("highEdge", 0.13); ui.type("highShares", 20);
   await ui.click("[data-save]");
   const sent = plane.state.drafts.at(-1);
   assert.ok(sent, "a draft is sent");
@@ -150,7 +159,8 @@ function controlPlane(published, revision) {
   assert.equal(sent.expectedRevision, 4);
   assert.deepEqual(Object.keys(sent.config).sort(), [...FIELDS].sort(), "exactly binance-lead's fields");
   assert.deepEqual(sent.config, { ...DEFAULTS, shares: 7, thresholdBp: 2.5, windowMs: 300, limitPremium: 0.02, fromSec: 20, toSec: 260,
-    maxAsk: 0.75, makerHoldSec: 3, leadSource: "bybit-perp", openBandBp: 5, roundBudgetUsd: 5, totalBudgetUsd: 50, dailyLossUsd: 10, maxRounds: 12 });
+    maxAsk: 0.75, makerHoldSec: 3, leadSource: "bybit-perp", openBandBp: 5, midEdge: 0.08, midShares: 10, highEdge: 0.13, highShares: 20,
+    roundBudgetUsd: 5, totalBudgetUsd: 50, dailyLossUsd: 10, maxRounds: 12 });
   assert.equal(ui.lookup("[data-activate]").disabled, false, "the saved draft can be published");
   await ui.click("[data-activate]");
   assert.equal(plane.state.revision, 5, "published");
@@ -158,8 +168,10 @@ function controlPlane(published, revision) {
   // A fresh page reads the published revision back.
   const again = page(plane.handler);
   await wait(300);
-  assert.deepEqual(["shares", "thresholdBp", "windowMs", "limitCents", "fromSec", "toSec", "maxAskCents", "makerHoldSec", "leadSource", "openBandBp", "roundBudget", "totalBudget",
-    "lossLimit", "rounds"].map(again.read), ["7", "2.5", "300", "2", "20", "260", "75", "3", "bybit-perp", "5", "5", "50", "10", "12"], "read back exactly as saved");
+  assert.deepEqual(["shares", "thresholdBp", "windowMs", "limitCents", "fromSec", "toSec", "maxAskCents", "makerHoldSec", "leadSource", "openBandBp",
+    "midEdge", "midShares", "highEdge", "highShares", "roundBudget", "totalBudget", "lossLimit", "rounds"].map(again.read),
+    ["7", "2.5", "300", "2", "20", "260", "75", "3", "bybit-perp", "5", "0.08", "10", "0.13", "20", "5", "50", "10", "12"], "read back exactly as saved");
+  assert.equal(plane.state.published.highShares, 20, "and the edge tiers");
   assert.equal(plane.state.published.maxAsk, 0.75, "the published config carries the cap");
   assert.equal(plane.state.published.makerHoldSec, 3, "and the maker hold");
   assert.equal(plane.state.published.leadSource, "bybit-perp", "and the signal source");
@@ -192,6 +204,8 @@ function controlPlane(published, revision) {
   assert.equal(plane.state.drafts[0].config.makerHoldSec, 0, "and the FAK rule");
   assert.equal(plane.state.drafts[0].config.leadSource, "binance-spot", "and Binance spot");
   assert.equal(plane.state.drafts[0].config.openBandBp, 0, "and no open-price filter");
+  assert.equal(plane.state.drafts[0].config.midShares, 0, "and the edge tiers off");
+  assert.equal(plane.state.drafts[0].config.highShares, 0);
   await ui.click("[data-activate]");
   assert.equal(plane.state.revision, 1, "the first binance-lead revision is published");
 }

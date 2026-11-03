@@ -42,6 +42,18 @@ export interface BinanceLeadConfig {
    * +525 vs +406 unfiltered, 16/16 days, ±4..±6 a plateau). Far from the open the
    * price has already priced the outcome (edge +4 points vs +13..16 near it). */
   openBandBp: number;
+  /** Size a FAK by the fair-value edge (user 2026-11-03; backtest
+   * E:/pm-backup/research-1103/fv_trade.py "band tier 5/10/20", S = the signal
+   * trade's price as live: +1301 vs +936 for a flat 10 shares, 16 days, fewer
+   * shares, +200 ms stress +800 vs +521). edge = P(signal side wins) -
+   * ask - 0.07 ask (1 - ask), P from the signal's fairUp. edge >= highEdge buys
+   * highShares, else edge >= midEdge buys midShares, else `shares`; a tier with
+   * 0 shares is off. A signal without fairUp (under ~6 minutes of lead
+   * history) buys `shares`. Maker orders always rest `shares`. */
+  midEdge: number;
+  midShares: number;
+  highEdge: number;
+  highShares: number;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -69,6 +81,8 @@ export interface LeadStage {
   cancelRequestedAt?: number;
   signal: LeadSignalRecord;
   askAtSignal: number;
+  /** The fair-value edge that sized this order (absent: no fairUp, or maker). */
+  fairEdge?: number;
   /** Maker stage: the bid it rests at, and when its hold is up (strategy clock). */
   bidAtSignal?: number;
   cancelAt?: number;
@@ -115,8 +129,10 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot",
-  openBandBp: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  openBandBp: 0, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
+/** The taker fee rate of the edge (fv_trade.py FEE; the venue's 5m crypto rate). */
+const FAIR_FEE = 0.07;
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
 const CONFIG_FREEZE_SEC = 10;
@@ -152,11 +168,30 @@ export function leadShares(configured: number, price: number): number {
   return Math.max(configured, Math.ceil(MIN_MARKETABLE_BUY_USD / price - 1e-9));
 }
 
+type SizeConfig = Pick<BinanceLeadConfig, "shares" | "midEdge" | "midShares" | "highEdge" | "highShares">;
+
+/** P(signal side wins) - ask - fee at the ask; undefined without fairUp. */
+export function leadFairEdge(fairUp: number | undefined, direction: LeadDirection, ask: number): number | undefined {
+  if (!finite(fairUp) || fairUp < 0 || fairUp > 1) return undefined;
+  return (direction === "UP" ? fairUp : 1 - fairUp) - ask - FAIR_FEE * ask * (1 - ask);
+}
+
+/** Configured size for this edge, before the 1 USD minimum (leadShares). */
+export function leadTierShares(config: SizeConfig, edge: number | undefined): number {
+  if (edge === undefined) return config.shares;
+  if (config.highShares > 0 && edge >= config.highEdge) return config.highShares;
+  if (config.midShares > 0 && edge >= config.midEdge) return config.midShares;
+  return config.shares;
+}
+
+/** Every configured size a FAK can have: shares and each tier that is on. */
+const tierSizes = (config: SizeConfig) => [...new Set([config.shares, config.midShares, config.highShares].filter(n => n > 0))];
+
 /** The FAK limits a round can send on each side, for signing ahead: every
  * ask the strategy would buy (one tick up to maxAsk) gives leadLimitPrice(ask),
- * at leadShares. 0.01 tick, cap 0.80: 80 prices a side. A maker round signs
- * nothing (its price is the bid, posted rarely). */
-export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitPremium" | "makerHoldSec" | "shares">, tickSize: number) {
+ * at leadShares of each tier size. 0.01 tick, cap 0.80: 80 prices a side. A
+ * maker round signs nothing (its price is the bid, posted rarely). */
+export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitPremium" | "makerHoldSec"> & SizeConfig, tickSize: number) {
   if (!(tickSize > 0) || config.makerHoldSec > 0) return [];
   const prices = new Set<number>();
   const decimals = Math.max(0, Math.ceil(-Math.log10(tickSize) - 1e-9));
@@ -165,7 +200,10 @@ export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitP
     const limit = leadLimitPrice(ask, config.limitPremium, tickSize);
     if (limit >= ask - EPS) prices.add(limit);
   }
-  return [...prices].map(price => ({ price, shares: leadShares(config.shares, price) }));
+  // One entry per (price, size), the base size first: the 1 USD minimum can
+  // merge tiers at a cheap price (0.04: 25 shares whatever the tier).
+  const sizes = tierSizes(config);
+  return [...prices].flatMap(price => [...new Set(sizes.map(size => leadShares(size, price)))].map(shares => ({ price, shares })));
 }
 
 export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {}): BinanceLeadConfig {
@@ -190,6 +228,15 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (!LEAD_SOURCES.includes(config.leadSource)) throw new Error(`leadSource must be one of ${LEAD_SOURCES.join(", ")}`);
   if (!finite(config.openBandBp) || config.openBandBp < 0 || config.openBandBp > 1000) {
     throw new Error("openBandBp must be in [0, 1000]");
+  }
+  for (const key of ["midEdge", "highEdge"] as const) {
+    if (!finite(config[key]) || config[key] < -1 || config[key] > 1) throw new Error(`${key} must be in [-1, 1]`);
+  }
+  for (const key of ["midShares", "highShares"] as const) {
+    if (!finite(config[key]) || config[key] < 0 || config[key] > 10_000) throw new Error(`${key} must be in [0, 10000]`);
+  }
+  if (config.midShares > 0 && config.highShares > 0 && config.highEdge < config.midEdge) {
+    throw new Error("highEdge must not be below midEdge");
   }
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
@@ -469,7 +516,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     // A FAK under the ask cannot fill: keep the round's attempt for a later signal.
     if (!maker && price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
     // A resting order is not marketable: the venue's 1 USD floor is for takers.
-    const shares = maker ? config.shares : leadShares(config.shares, price);
+    const fairEdge = maker ? undefined : leadFairEdge(event.fairUp, direction, ask);
+    const shares = maker ? config.shares : leadShares(leadTierShares(config, fairEdge), price);
     if (!this.validSizeAndPrice(instrument, shares, price)) {
       round.reason = "数量或限价不符合交易所规则"; return undefined;
     }
@@ -477,6 +525,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const stage: LeadStage = { stage: 1, direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
       price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
       signal: { ...signal }, askAtSignal: ask,
+      ...(fairEdge !== undefined ? { fairEdge } : {}),
       ...(maker ? { bidAtSignal: price, cancelAt: context.now + config.makerHoldSec } : {}) };
     const order = this.orderIntent(round, stage);
     let feeReserve: number;
@@ -679,7 +728,10 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || !validDirection(stage.direction)
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
           || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS
-          || stage.shares !== (stage.cancelAt === undefined ? leadShares(round.config.shares, stage.price) : round.config.shares)
+          || (stage.cancelAt === undefined
+            ? !tierSizes(round.config).some(size => stage.shares === leadShares(size, stage.price))
+            : stage.shares !== round.config.shares)
+          || (stage.fairEdge !== undefined && !finite(stage.fairEdge))
           || !unitPrice(stage.askAtSignal) || stage.price > stage.askAtSignal + round.config.limitPremium + EPS
           || (stage.cancelAt !== undefined && (!Number.isFinite(stage.cancelAt) || stage.bidAtSignal !== stage.price))
           || (stage.cancelAt === undefined && stage.bidAtSignal !== undefined)

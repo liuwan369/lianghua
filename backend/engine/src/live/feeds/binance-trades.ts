@@ -30,6 +30,9 @@ export interface LeadSignal {
    * (trade time), as the backtest (E:/pm-backup/research-1101/band.py). Absent
    * when the feed started inside the round. */
   openPrice?: number;
+  /** Fair-value model P(the round settles UP) with trades up to this one
+   * (leadFairUp). Absent without the history it needs (about 6 minutes). */
+  fairUp?: number;
   tradeId: number;
   tradeTimeMs: number;
   receivedAtUnix: number;
@@ -57,6 +60,78 @@ const MAX_TRADE_AGE_MS = 1_000;
 const MAX_TRADE_LEAD_MS = 1_000;
 /** BTCUSDT runs ~10 aggregate trades a second; a bigger id jump is a bad frame. */
 const MAX_ID_JUMP = 1_000_000;
+/** Seconds of per-second history kept for the fair-value model: it reads back
+ * to R - 59 (the price to beat) and floor(T) - 300 (volatility), at most 325 s. */
+const SEC_RING = 1024;
+/** No trade for longer than this is a dead feed, not a quiet market (Bybit perp
+ * 10-18/25, 11-01: longest quiet gap 29 s): the history restarts. */
+const MAX_HISTORY_GAP_MS = 60_000;
+
+/** Fair-value model of the lead venue's settlement (E:/pm-backup/research-1103
+ * fv_trade.py p_up, fitted fv_calib.py): the round settles on the mean of the
+ * last 60 s, (R+240, R+300], against the mean of the 60 s before the open,
+ * (R-60, R]. With price(g) the last trade at or before whole second g:
+ *   O = mean price(R-59..R); sigma = std (ddof 0) of the 1 s log returns ending
+ *   at floor(T)-299..floor(T); e = seconds of the closing window already past,
+ *   A their mean; E[F] = (e A + n S) / 60 with n = 60 - e, S the trade's price;
+ *   sd(F) = (n/60) S sigma sqrt(sum_ij min(t_i, t_j)) / n, t_i = seconds from
+ *   floor(T - R) to each future second of the window;
+ *   P(UP) = Phi(C (E[F] - O) / sd(F)), C = 0.859 (fitted in-sample).
+ * Information cutoff is the trade time T (ms). undefined when a second it needs
+ * is outside the history. */
+export function leadFairUp(price: (g: number) => number | undefined, tradeTimeMs: number, tradePrice: number): number | undefined {
+  const R = Math.floor(tradeTimeMs / 300_000) * 300;
+  const gv = Math.floor(tradeTimeMs / 1000);
+  let open = 0;
+  for (let g = R - 59; g <= R; g += 1) {
+    const p = price(g); if (p === undefined) return undefined;
+    open += p;
+  }
+  open /= 60;
+  let previous = price(gv - 300);
+  if (previous === undefined) return undefined;
+  let sum = 0, sumSq = 0;
+  for (let g = gv - 299; g <= gv; g += 1) {
+    const p = price(g); if (p === undefined) return undefined;
+    const r = Math.log(p / previous); sum += r; sumSq += r * r; previous = p;
+  }
+  const mean = sum / 300;
+  const sigma = Math.sqrt(Math.max(0, sumSq / 300 - mean * mean));
+  const e = Math.max(0, Math.min(60, gv - (R + 240)));
+  let past = 0;
+  for (let g = R + 241; g <= R + 240 + e; g += 1) {
+    const p = price(g); if (p === undefined) return undefined;
+    past += p;
+  }
+  const n = 60 - e;
+  const expected = (past + n * tradePrice) / 60;
+  const sd = (n / 60) * tradePrice * sigma * windowFactor(Math.floor(tradeTimeMs / 1000 - R), n);
+  // sd 0 (no move in 300 s: a stuck feed, not BTC) or NaN: no estimate, so the
+  // order keeps the base size instead of a certain 1/0 buying the top tier.
+  if (!(sd > 0)) return undefined;
+  const p = normalCdf(FAIR_C * (expected - open) / sd);
+  return Number.isFinite(p) ? p : undefined;
+}
+const FAIR_C = 0.859;
+
+/** sqrt(sum_ij min(t_i, t_j)) / n for the last n seconds of (R+240, R+300]
+ * seen from second k (fv_calib.py vfactor). Ascending t: sum = sum_i t_i (2(n-i)+1). */
+function windowFactor(k: number, n: number): number {
+  if (n <= 0) return 0;
+  const first = Math.max(241, k + 1) + Math.max(0, 301 - Math.max(241, k + 1) - n);
+  let total = 0;
+  for (let i = 0; i < n; i += 1) total += (first + i - k) * (2 * (n - 1 - i) + 1);
+  return Math.sqrt(total) / n;
+}
+
+/** Phi(x) via erfc (Numerical Recipes erfcc, fractional error < 1.2e-7). */
+function normalCdf(x: number): number {
+  const z = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.5 * z);
+  const erfc = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806
+    + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
+  return x >= 0 ? 1 - erfc / 2 : erfc / 2;
+}
 
 /** Parse one aggTrade frame and pass it on only if its id is newer than every
  * id already delivered and it happened within MAX_TRADE_AGE_MS. Both lines
@@ -210,6 +285,14 @@ export class LeadSignalDetector {
   private lastPrice?: number;
   private openRoundMs?: number;
   private openPrice?: number;
+  // Per-second lead price for the fair-value model, as the backtest's grid:
+  // the price of second g is the last trade at or before g (whole seconds).
+  // secPrice[g % SEC_RING] holds it once a later trade closed the second, with
+  // secTag = g; historyStartSec is the first second covered since the feed
+  // started or last went silent.
+  private readonly secPrice = new Float64Array(SEC_RING);
+  private readonly secTag = new Float64Array(SEC_RING).fill(-1);
+  private historyStartSec?: number;
 
   constructor(params: LeadSignalParams) { this.params = LeadSignalDetector.check(params); }
 
@@ -228,6 +311,7 @@ export class LeadSignalDetector {
         : this.lastTradeMs !== undefined && this.lastTradeMs <= roundMs && this.lastTradeMs > roundMs - 300_000
           ? this.lastPrice : undefined;
     }
+    this.recordSeconds(t);
     this.lastTradeMs = t; this.lastPrice = p;
     const cutoff = t - windowMs;
     while (this.head < this.next && this.times[this.head - this.base]! < cutoff) this.head += 1;
@@ -252,9 +336,34 @@ export class LeadSignalDetector {
     this.minHead = 0; this.maxHead = 0;
     this.base = this.head = this.next;
     this.append(t, p);
+    const fairUp = leadFairUp(g => this.secondPrice(g), t, p);
     return { direction, price: p, refPrice, moveBp: move * 1e4, tradeId: trade.id, tradeTimeMs: t,
       ...(this.openPrice !== undefined ? { openPrice: this.openPrice } : {}),
+      ...(fairUp !== undefined ? { fairUp } : {}),
       receivedAtUnix: trade.receivedAtUnix, receivedAtMonoMs: trade.receivedAtMonoMs };
+  }
+
+  /** Close the seconds g with lastTradeMs <= g*1000 < t on the previous trade's
+   * price. A gap over MAX_HISTORY_GAP_MS (feed down: trades were missed) starts
+   * the history again at this trade. */
+  private recordSeconds(t: number): void {
+    const prevMs = this.lastTradeMs, prevPrice = this.lastPrice;
+    if (prevMs === undefined || prevPrice === undefined || t - prevMs > MAX_HISTORY_GAP_MS) {
+      this.historyStartSec = Math.ceil(t / 1000);
+      return;
+    }
+    const last = Math.ceil(t / 1000) - 1;
+    for (let g = Math.max(Math.ceil(prevMs / 1000), last - SEC_RING + 1); g <= last; g += 1) {
+      this.secPrice[g % SEC_RING] = prevPrice; this.secTag[g % SEC_RING] = g;
+    }
+  }
+
+  /** The last trade at or before second g, or undefined outside the history. */
+  private secondPrice(g: number): number | undefined {
+    if (this.historyStartSec === undefined || this.lastTradeMs === undefined || g < this.historyStartSec) return undefined;
+    // Not closed yet: no later trade so far, so the latest trade is the last at or before g.
+    if (g * 1000 >= this.lastTradeMs) return this.lastPrice;
+    return this.secTag[g % SEC_RING] === g ? this.secPrice[g % SEC_RING] : undefined;
   }
 
   private append(t: number, p: number): void {

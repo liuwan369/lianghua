@@ -356,7 +356,8 @@ def _strategy_projection(value):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "openBandBp", "maxQuoteAgeSeconds",
+            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "openBandBp",
+            "midEdge", "midShares", "highEdge", "highShares", "maxQuoteAgeSeconds",
             "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
         result["leadSource"] = source.get("leadSource") if source.get("leadSource") in ("binance-spot", "bybit-perp") else None
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
@@ -365,7 +366,7 @@ def _strategy_projection(value):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "price", "refPrice", "moveBp", "tradeId", "tradeTimeMs", "receivedAtUnix")}
+            "price", "refPrice", "moveBp", "openPrice", "fairUp", "tradeId", "tradeTimeMs", "receivedAtUnix")}
         result["direction"] = source.get("direction") if source.get("direction") in ("UP", "DOWN") else None
         return result
     def round_view(source):
@@ -396,7 +397,7 @@ def _strategy_projection(value):
         stages = source.get("stages") if isinstance(source.get("stages"), list) else []
         result["stages"] = [{**{key: _text(stage.get(key)) for key in (
             "tokenId", "clientOrderId", "orderId", "status", "error")},
-            **{key: _number(stage.get(key)) for key in ("price", "askAtSignal", "shares", "createdAt", "filledShares")},
+            **{key: _number(stage.get(key)) for key in ("price", "askAtSignal", "fairEdge", "shares", "createdAt", "filledShares")},
             "direction": stage.get("direction") if stage.get("direction") in ("UP", "DOWN") else None,
             "signal": signal_view(stage.get("signal"))}
             for stage in stages[:1] if isinstance(stage, dict)]
@@ -587,8 +588,12 @@ def _projection(record):
         result["reason"] = _text(record.get("reason"))
         result["round_status"] = _text(record.get("round_status"))
         result["attempted"] = record.get("attempted") if isinstance(record.get("attempted"), bool) else None
-        for field in ("move_bp", "ref_price", "received_at", "trade_time_ms", "limit_price", "ask_at_signal"):
+        for field in ("move_bp", "ref_price", "open_price", "fair_up", "fair_edge", "received_at", "trade_time_ms",
+                      "limit_price", "ask_at_signal"):
             result[field] = _number(record.get(field))
+        # The size the order was sent with (edge tiers: 5/10/20); `shares` stays
+        # None so a signal row never becomes an amount.
+        result["order_shares"] = result["shares"]
         result["binance_price"] = result["price"]
         result["price"] = result["shares"] = result["amount"] = result["pnl"] = None
         return result
@@ -1804,7 +1809,8 @@ class Ledger:
             # Why a round placed nothing: the strategy's verdict on each recent signal.
             runtime["lead_signals"] = [
                 {key: signal.get(key) for key in ("trade_id", "direction", "move_bp", "received_at", "round_id",
-                                                  "market_id", "outcome", "reason", "limit_price", "ask_at_signal")}
+                                                  "market_id", "outcome", "reason", "limit_price", "ask_at_signal",
+                                                  "fair_up", "fair_edge", "order_shares")}
                 for signal in self.events(run_id, limit=LEAD_SIGNALS_KEPT, kinds=["lead_signal"])["events"]]
         events = self.events(run_id, limit=20)["events"]
         for event in events:
