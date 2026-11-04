@@ -111,7 +111,8 @@ export async function gammaMarketRow(marketId: string, fetchImpl: typeof fetch =
   : Promise<Record<string, unknown> | undefined> {
   const base = `https://gamma-api.polymarket.com/markets?condition_ids=${encodeURIComponent(marketId)}&limit=1`;
   for (const url of [base, `${base}&closed=true`]) {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(12_000) });
+    // A User-Agent, as every public read (the Data API 429'd bare Node fetches 2026-11-04).
+    const response = await fetchImpl(url, { headers: { "User-Agent": "pm-system/1.0 (+settlement)" }, signal: AbortSignal.timeout(12_000) });
     if (!response.ok) throw new Error("settlement_market_unavailable");
     const rows = await response.json() as Record<string, unknown>[];
     const row = rows.find(item => String(item.conditionId).toLowerCase() === marketId.toLowerCase());

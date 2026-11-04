@@ -173,4 +173,32 @@ const pager = (pages) => {
   assert.equal(out.externalFlows[0].kind, "deposit");
   assert.equal(out.externalFlows[0].amountUsd, 5);
 }
+// --- 2026-11-04 16:16: Node fetch without a User-Agent got 429 (empty body) on
+// /v2/positions for minutes while curl and a UA'd fetch got 200; the opening
+// read failed and the engine halted. Every public Data API read sends a
+// User-Agent, and one 429 / 5xx is retried after a pause before failing.
+{
+  const { publicJson } = await import("../../dist/live/account-data.js");
+  const realFetch = globalThis.fetch;
+  try {
+    const seen = [];
+    let n = 0;
+    globalThis.fetch = async (url, init) => {
+      seen.push({ url: String(url), ua: new Headers(init?.headers).get("user-agent") });
+      n += 1;
+      return n === 1 ? new Response("", { status: 429 }) : new Response(JSON.stringify({ data: [], pagination: { has_more: false } }), { status: 200 });
+    };
+    const body = await publicJson("https://data-api.polymarket.com", "/v2/positions", { user: W });
+    assert.deepEqual(body.data, []);
+    assert.equal(seen.length, 2, "one 429 is retried");
+    for (const s of seen) assert.ok(s.ua && s.ua.length > 3, "a User-Agent is sent");
+    // Three 429s in a row: fail (the section goes incomplete), no endless retry.
+    n = -10; seen.length = 0;
+    globalThis.fetch = async () => new Response("", { status: 429 });
+    await assert.rejects(publicJson("https://data-api.polymarket.com", "/v2/positions", { user: W }), /http_429/);
+    // The cash-flow activity window uses the same reader.
+    const { ACTIVITY_URL } = await import("../../dist/platform/cash-flows.js");
+    assert.ok(ACTIVITY_URL.startsWith("https://data-api.polymarket.com/v2/"));
+  } finally { globalThis.fetch = realFetch; }
+}
 console.log("data-api-v2 OK");

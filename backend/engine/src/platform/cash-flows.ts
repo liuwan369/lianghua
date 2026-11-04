@@ -1,6 +1,6 @@
 /** Confirmed external funding for the pUSD ledger; never infer deposits from a balance change. */
 import { receiptEvidence, scanConfirmedTransfers } from "../live/account-finance.js";
-import { fromV2Row } from "../live/account-data.js";
+import { fromV2Row, publicJson } from "../live/account-data.js";
 import { COLLATERAL_OFFRAMP, COLLATERAL_ONRAMP, CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD, USDC_E } from "../live/contracts.js";
 import type { CashFlowCoverage, ExternalCashFlow } from "./contracts.js";
 import { COLLATERAL_ADAPTER, NEG_RISK_COLLATERAL_ADAPTER } from "./settlement.js";
@@ -214,11 +214,7 @@ export interface ReadCashFlowOptions {
 /** Data API v2 activity (v1 retired 2026-11-02): {data, pagination}, cursor pages. */
 export const ACTIVITY_URL = "https://data-api.polymarket.com/v2/activity";
 async function officialActivity(params: Record<string, string>): Promise<unknown> {
-  const url = new URL(ACTIVITY_URL);
-  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-  const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
-  if (!response.ok) throw new Error(`http_${response.status}`);
-  return response.json();
+  return publicJson("https://data-api.polymarket.com", "/v2/activity", params);
 }
 
 /** A v2 activity row in the v1 names the classifier reads (one mapping, account-data.ts). */

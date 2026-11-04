@@ -1,5 +1,5 @@
 import { ClobWrapper, geocheck } from "../live/clob/client.js";
-import { connectAccountReader } from "../live/account-data.js";
+import { connectAccountReader, publicJson } from "../live/account-data.js";
 import * as marketDiscovery from "../live/discovery.js";
 import { runPolymarketFeed } from "../live/feeds/polymarket.js";
 import { parseAuthenticatedTrade, runUserFeed, type UserFeedControl } from "../live/feeds/user.js";
@@ -468,11 +468,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       fromAt, fromBlock: tracking?.cursorBlock == null ? tracking?.baselineBlock : tracking.cursorBlock + 1, rpc, raw,
       getActivity: async params => {
         cashFlowAbort.signal.throwIfAborted();
-        const url = new URL(ACTIVITY_URL);
-        for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-        const response = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(8000), cashFlowAbort.signal]) });
-        if (!response.ok) throw new Error(`http_${response.status}`);
-        return response.json();
+        return publicJson(new URL(ACTIVITY_URL).origin, new URL(ACTIVITY_URL).pathname, params, cashFlowAbort.signal);
       } });
     if (!stopped && !recoveryJob) latestCashFlowEvidence = evidence;
     return { ...ordinary, cashFlowCoverage: evidence.cashFlowCoverage, externalFlows: evidence.externalFlows };

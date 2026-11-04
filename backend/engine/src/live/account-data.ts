@@ -170,6 +170,37 @@ async function getJson(host: string, path: string, params: Record<string, string
   return response.json();
 }
 
+/** User-Agent of every public Data API read. 2026-11-04 16:16 the Data API
+ * answered Node's bare fetch (no User-Agent) with 429 and an empty body for
+ * minutes while curl and a fetch with a User-Agent got 200 from the same box;
+ * the opening account read failed and the engine halted. */
+export const PUBLIC_USER_AGENT = "pm-system/1.0 (+account-reader)";
+const PUBLIC_TRIES = 3;
+/** A public GET with a User-Agent; a 429 or 5xx is retried (Retry-After, at
+ * most 2 s, else 400 ms then 800 ms) before it fails with http_<status>. */
+export async function publicJson(host: string, path: string, params: Record<string, string> = {},
+  signal?: AbortSignal): Promise<unknown> {
+  const url = new URL(path, host);
+  for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+  let status = 0;
+  for (let attempt = 0; attempt < PUBLIC_TRIES; attempt++) {
+    const timeout = AbortSignal.timeout(8000);
+    const response = await fetch(url, { method: "GET", headers: { "User-Agent": PUBLIC_USER_AGENT, accept: "application/json" },
+      signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
+    if (response.ok) return response.json();
+    status = response.status;
+    await response.arrayBuffer().catch(() => undefined);
+    if (status !== 429 && status < 500) break;
+    if (attempt + 1 < PUBLIC_TRIES) {
+      const after = Number(response.headers.get("retry-after"));
+      const wait = Number.isFinite(after) && after > 0 ? Math.min(2000, after * 1000) : 400 * 2 ** attempt;
+      await new Promise<void>(resolve => setTimeout(resolve, wait));
+      signal?.throwIfAborted();
+    }
+  }
+  throw new Error(`http_${status}`);
+}
+
 interface ObservedOrder { item?: Row; checked: number; attempted: number; failed: boolean; unavailable?: boolean; }
 export interface OrderHistorySection extends Section {
   coverage: "observed_order_ids"; historical_complete: false; persistence: "reader_session" | "account_file";
@@ -305,8 +336,8 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
     const headers = await createL2Headers(signer, creds, { method: "GET", requestPath: path });
     return getJson(host, path, params, headers as unknown as Record<string, string>);
   };
-  // Data API v2 (v1 retired 2026-11-02, 410).
-  const publicGet: Getter = (path, params) => getJson("https://data-api.polymarket.com", path, params);
+  // Data API v2 (v1 retired 2026-11-02, 410), with a User-Agent and a 429 retry.
+  const publicGet: Getter = (path, params) => publicJson("https://data-api.polymarket.com", path, params);
   const historyReader = new OrderHistoryReader(wallet, 2000, 8,
     join(process.env.PM_ACCOUNT_HISTORY_DIR || 'results/account-history', `${wallet.toLowerCase()}.json`));
   const financeReader = new AccountFinanceReader(wallet);
