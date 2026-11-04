@@ -1,5 +1,6 @@
 /** Confirmed external funding for the pUSD ledger; never infer deposits from a balance change. */
 import { receiptEvidence, scanConfirmedTransfers } from "../live/account-finance.js";
+import { fromV2Row } from "../live/account-data.js";
 import { COLLATERAL_OFFRAMP, COLLATERAL_ONRAMP, CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD, USDC_E } from "../live/contracts.js";
 import type { CashFlowCoverage, ExternalCashFlow } from "./contracts.js";
 import { COLLATERAL_ADAPTER, NEG_RISK_COLLATERAL_ADAPTER } from "./settlement.js";
@@ -210,12 +211,19 @@ export interface ReadCashFlowOptions {
   activityPageSize?: number; activityMaxPages?: number;
 }
 
+/** Data API v2 activity (v1 retired 2026-11-02): {data, pagination}, cursor pages. */
+export const ACTIVITY_URL = "https://data-api.polymarket.com/v2/activity";
 async function officialActivity(params: Record<string, string>): Promise<unknown> {
-  const url = new URL("https://data-api.polymarket.com/activity");
+  const url = new URL(ACTIVITY_URL);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
   if (!response.ok) throw new Error(`http_${response.status}`);
   return response.json();
+}
+
+/** A v2 activity row in the v1 names the classifier reads (one mapping, account-data.ts). */
+function activityRow(value: unknown): Row | undefined {
+  return object(value) ? fromV2Row(value, "activity") : undefined;
 }
 
 /** Fetch only when receipt-proven cash transfers need activity attribution.
@@ -230,13 +238,20 @@ async function activityWindow(options: ReadCashFlowOptions, fromAt: number, toAt
   const maxPages = integer(options.activityMaxPages) && options.activityMaxPages! > 0 ? Math.min(options.activityMaxPages!, 101) : 101;
   const get = options.getActivity ?? officialActivity;
   try {
-    for (let page = 0; page < maxPages && page * limit <= 10_000; page++) {
-      const data = await get({ user: options.wallet, start: String(fromAt), end: String(toAt), limit: String(limit),
-        offset: String(page * limit), sortBy: "TIMESTAMP", sortDirection: "ASC" });
-      if (!Array.isArray(data) || data.length > limit) throw new Error("activity_page_invalid");
+    // v2 pages by cursor only; an offset parameter is a 400 (docs migrate/data-api-v1-to-v2).
+    let cursor: string | undefined;
+    const cursors = new Set<string>();
+    for (let page = 0; page < maxPages; page++) {
+      // v2 drops DEPOSIT/WITHDRAWAL rows by default; they are exactly the
+      // evidence this window exists for (our wallet 11-04: 595 rows by
+      // default, 599 with the 4 deposits).
+      const body = object(await get({ user: options.wallet, start: String(fromAt), end: String(toAt), limit: String(limit),
+        sort_by: "TIMESTAMP", sort_direction: "ASC", exclude_deposits_withdrawals: "false", ...(cursor ? { cursor } : {}) }));
+      const data = body?.data, pagination = object(body?.pagination);
+      if (!Array.isArray(data) || data.length > limit || !pagination) throw new Error("activity_page_invalid");
       evidence.pages++;
       for (const value of data) {
-        const row = object(value), identity = row?.proxyWallet ?? row?.wallet;
+        const row = activityRow(value), identity = row?.proxyWallet ?? row?.wallet;
         const timestamp = integer(row?.timestamp);
         if (!row || !txOf(row) || timestamp === undefined || timestamp < fromAt || timestamp > toAt
           || identity !== undefined && address(identity) !== address(options.wallet)) throw new Error("activity_row_outside_account_or_window");
@@ -244,7 +259,14 @@ async function activityWindow(options: ReadCashFlowOptions, fromAt: number, toAt
         if (seen.has(key)) throw new Error("activity_pagination_overlap");
         seen.add(key); items.push(row);
       }
-      if (data.length < limit) { evidence.complete = true; evidence.reason = "official_activity_window_complete"; break; }
+      // has_more is the required end flag; "more" without a new cursor is a short list.
+      if (typeof pagination.has_more !== "boolean") throw new Error("activity_page_invalid");
+      if (pagination.has_more === false) {
+        evidence.complete = true; evidence.reason = "official_activity_window_complete"; break;
+      }
+      const next = pagination.next_cursor;
+      if (typeof next !== "string" || !next || cursors.has(next)) throw new Error("activity_pagination_loop");
+      cursors.add(next); cursor = next;
     }
   } catch (error) { evidence.reason = error instanceof Error ? error.message : "activity_window_fetch_failed"; }
   evidence.items = items.length;

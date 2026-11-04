@@ -10,7 +10,7 @@ import type { AccountSnapshot, AssetId, CoreState, ExecutionTiming, GatewayAck, 
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
 import { normalizeVenueOrderStatus } from "./contracts.js";
 import { TradingPlatform } from "./platform.js";
-import { readCashFlowEvidence } from "./cash-flows.js";
+import { ACTIVITY_URL, readCashFlowEvidence } from "./cash-flows.js";
 import { isSnapshotFreshAfter, validateMarketSnapshot, type SnapshotGateIdentity, type SnapshotRejectReason, type SnapshotWatermark } from "./snapshot-gate.js";
 
 type Row = Record<string, unknown>;
@@ -468,7 +468,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       fromAt, fromBlock: tracking?.cursorBlock == null ? tracking?.baselineBlock : tracking.cursorBlock + 1, rpc, raw,
       getActivity: async params => {
         cashFlowAbort.signal.throwIfAborted();
-        const url = new URL("https://data-api.polymarket.com/activity");
+        const url = new URL(ACTIVITY_URL);
         for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
         const response = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(8000), cashFlowAbort.signal]) });
         if (!response.ok) throw new Error(`http_${response.status}`);

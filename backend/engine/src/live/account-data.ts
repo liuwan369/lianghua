@@ -87,25 +87,57 @@ export async function cursorPages(get: Getter, path: string, kind: string, walle
   return result;
 }
 
-export async function offsetPages(get: Getter, path: string, kind: string, wallet: string, limit = 100, maxOffset = 10000): Promise<Section> {
-  const result: Section = { available: false, complete: false, items: [], pages: 0, checked_at: new Date().toISOString(), source: "polymarket-data-api" };
-  const seen = new Set<string>();
+/** Data API v2 row -> the v1 names the account snapshot, finance reader and
+ * official PnL read (docs migrate/data-api-v1-to-v2; checked on our wallet
+ * 2026-11-04: the same closed position gives totalBought = total_size 119.95,
+ * timestamp = last_event_at; a held row cashPnl = unrealized_pnl,
+ * initialValue = entry_cost_usdc). A field v2 does not carry stays absent. */
+const V2_NAMES: Record<string, Record<string, string>> = {
+  positions: { token_id: "asset", condition_id: "conditionId", current_size: "size", avg_price: "avgPrice",
+    entry_cost_usdc: "initialValue", current_value: "currentValue", unrealized_pnl: "cashPnl", percent_pnl: "percentPnl",
+    total_size: "totalBought", realized_pnl: "realizedPnl", percent_realized_pnl: "percentRealizedPnl",
+    current_price: "curPrice", redeemable: "redeemable", mergeable: "mergeable", title: "title", slug: "slug",
+    event_slug: "eventSlug", outcome: "outcome", outcome_index: "outcomeIndex", opposite_outcome: "oppositeOutcome",
+    opposite_token_id: "oppositeAsset", end_date: "endDate", negative_risk: "negativeRisk", proxy_wallet: "proxyWallet" },
+  closed_positions: { token_id: "asset", condition_id: "conditionId", avg_price: "avgPrice", total_size: "totalBought",
+    realized_pnl: "realizedPnl", current_price: "curPrice", last_event_at: "timestamp", title: "title", slug: "slug",
+    event_slug: "eventSlug", outcome: "outcome", outcome_index: "outcomeIndex", opposite_outcome: "oppositeOutcome",
+    opposite_token_id: "oppositeAsset", end_date: "endDate", proxy_wallet: "proxyWallet" },
+  activity: { timestamp: "timestamp", condition_id: "conditionId", type: "type", size: "size", usdc_size: "usdcSize",
+    transaction_hash: "transactionHash", price: "price", token_id: "asset", side: "side", outcome_index: "outcomeIndex",
+    title: "title", slug: "slug", event_slug: "eventSlug", outcome: "outcome", proxy_wallet: "proxyWallet" },
+};
+export function fromV2Row(row: unknown, kind: string): Row {
+  if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("invalid_row");
+  const input = row as Row, names = V2_NAMES[kind] ?? {}, output: Row = {};
+  for (const [from, to] of Object.entries(names)) if (input[from] !== undefined) output[to] = input[from];
+  return output;
+}
+
+/** Every page of a Data API v2 list (/v2/positions, /v2/activity), rows in v1
+ * names. v2 pages by cursor only: an `offset` parameter, even 0, is a 400, so
+ * none is sent; follow pagination.next_cursor until it is null. A page that is
+ * not the {data: [...], pagination} envelope, a repeated cursor, an error or
+ * the deadline leaves the section incomplete, never a silently short list. */
+export async function v2Pages(get: Getter, path: string, kind: string, wallet: string,
+  params: Record<string, string>, limit = 500, maxPages = 40): Promise<Section> {
+  const result: Section = { available: false, complete: false, items: [], pages: 0, checked_at: new Date().toISOString(), source: "polymarket-data-api-v2" };
+  const cursors = new Set<string>();
   const rows = new Set<string>();
   let overlap = false;
   const deadline = Date.now() + 60000;
   try {
-    for (let offset = 0; offset <= maxOffset; offset += limit) {
+    let cursor: string | undefined;
+    while (result.pages < maxPages) {
       if (Date.now() >= deadline) throw new Error("pagination_deadline");
-      const data = await get(path, { user: wallet, limit: String(limit), offset: String(offset), ...(kind === "positions" ? { sizeThreshold: "0" } : {}) });
-      if (!Array.isArray(data)) throw new Error("invalid_page");
-      const signature = JSON.stringify(data);
-      if (data.length && seen.has(signature)) throw new Error("pagination_loop");
-      seen.add(signature);
-      for (const row of data) {
-        const item = sanitize(row, kind, wallet);
-        // Position identity survives price/PnL changes between offset requests.
-        // Activity has no stable event index; identical records are ambiguous,
-        // so retain one and mark incomplete rather than double-count amounts.
+      const page = await get(path, { user: wallet, limit: String(limit), ...params, ...(cursor ? { cursor } : {}) }) as Row;
+      const data = page?.data, pagination = page?.pagination as Row | undefined;
+      if (!Array.isArray(data) || !pagination || typeof pagination !== "object") throw new Error("invalid_page");
+      for (const value of data) {
+        const item = sanitize(fromV2Row(value, kind), kind, wallet);
+        // Position identity survives price/PnL changes between pages. Activity
+        // has no stable event index; identical records are ambiguous, so keep
+        // one and mark incomplete rather than double-count amounts.
         const identity = kind === "positions" || kind === "closed_positions"
           ? JSON.stringify([item.asset, item.conditionId]) : JSON.stringify(item);
         if (rows.has(identity)) { overlap = true; continue; }
@@ -114,7 +146,15 @@ export async function offsetPages(get: Getter, path: string, kind: string, walle
       }
       result.available = true;
       result.pages++;
-      if (data.length < limit) { result.complete = !overlap; if (overlap) result.error_code = "pagination_overlap"; break; }
+      // has_more is the required end flag (openapi Pagination); a page that
+      // says more but gives no new cursor is a short list, not the end.
+      if (typeof pagination.has_more !== "boolean") throw new Error("invalid_page");
+      if (pagination.has_more === false) {
+        result.complete = !overlap; if (overlap) result.error_code = "pagination_overlap"; break;
+      }
+      const next = pagination.next_cursor;
+      if (typeof next !== "string" || !next || cursors.has(next)) throw new Error("pagination_loop");
+      cursors.add(next); cursor = next;
     }
     if (!result.complete && !result.error_code) result.error_code = "page_limit";
   } catch { result.error_code = "fetch_or_pagination_failed"; }
@@ -265,6 +305,7 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
     const headers = await createL2Headers(signer, creds, { method: "GET", requestPath: path });
     return getJson(host, path, params, headers as unknown as Record<string, string>);
   };
+  // Data API v2 (v1 retired 2026-11-02, 410).
   const publicGet: Getter = (path, params) => getJson("https://data-api.polymarket.com", path, params);
   const historyReader = new OrderHistoryReader(wallet, 2000, 8,
     join(process.env.PM_ACCOUNT_HISTORY_DIR || 'results/account-history', `${wallet.toLowerCase()}.json`));
@@ -300,12 +341,11 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
     }
     throw lastError;
   };
-  const currentPositions = async (): Promise<Section> => {
-    // Keep inventory bounded and current while still handling the provider's
-    // maximum page size. Two 500-row pages are enough for execution; a larger
-    // account is reported incomplete instead of silently dropping positions.
-    return offsetPages(publicGet, "/positions", "positions", wallet, 500, 500);
-  };
+  // /v2/positions without a status lists every held position, redeemable ones
+  // included, as v1 /positions did (our wallet 2026-11-04: 82 rows, the same 82
+  // under OPEN/REDEEMABLE). Execution needs at most two 500-row pages; a larger
+  // account is reported incomplete instead of silently dropping positions.
+  const currentPositions = (): Promise<Section> => v2Pages(publicGet, "/v2/positions", "positions", wallet, {}, 500, 2);
   return async () => {
     const began = Date.now();
     const balance = (async (): Promise<Section> => {
@@ -320,7 +360,7 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
       } catch { return { ...output, error_code: "balance_fetch_failed" }; }
     })();
     const [collateral, open_orders, positions] = await Promise.all([
-      balance, cursorPages(get, "/data/orders", "orders", wallet), options.realtime ? currentPositions() : offsetPages(publicGet, "/positions", "positions", wallet),
+      balance, cursorPages(get, "/data/orders", "orders", wallet), options.realtime ? currentPositions() : v2Pages(publicGet, "/v2/positions", "positions", wallet, {}),
     ]);
     if (options.realtime) {
       const empty = (source: string): Section => ({ source, available: false, complete: false, items: [], pages: 0,
@@ -335,7 +375,9 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
         reconciliation: { available: false, complete: false, items: [], reason: "background_section_skipped" } };
     }
     const [trades, closed_positions, activity] = await Promise.all([
-      cursorPages(get, "/data/trades", "trades", wallet), offsetPages(publicGet, "/closed-positions", "closed_positions", wallet, 50), offsetPages(publicGet, "/activity", "activity", wallet),
+      cursorPages(get, "/data/trades", "trades", wallet), v2Pages(publicGet, "/v2/positions", "closed_positions", wallet, { status: "CLOSED" }),
+      // v2 drops DEPOSIT/WITHDRAWAL by default (v1 listed them): keep them.
+      v2Pages(publicGet, "/v2/activity", "activity", wallet, { exclude_deposits_withdrawals: "false" }),
     ]);
     // Both enrichments consume the same immutable account sections. Running
     // them together keeps slow order-detail or receipt RPC work off the

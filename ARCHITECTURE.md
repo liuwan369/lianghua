@@ -180,7 +180,9 @@ FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易�
 
 ## 盈亏口径
 
-已结算盈亏以 Polymarket 官方 Data API 为准（`scripts/dashboard/official_pnl.py`）：`closed-positions` 的 `realizedPnl`，加上 `positions` 里已判定未赎回的 `cashPnl + realizedPnl`（输掉的 token 永远在这里），按 slug `<币>-updown-5m-<roundId>` 对到场次。数据来自账户读取器的快照，不额外请求。
+已结算盈亏以 Polymarket 官方 Data API 为准（`scripts/dashboard/official_pnl.py`）：已平仓（`/v2/positions?status=CLOSED`）的 `realizedPnl`，加上持仓（`/v2/positions`）里已判定未赎回的 `cashPnl + realizedPnl`（输掉的 token 永远在这里），按 slug `<币>-updown-5m-<roundId>` 对到场次。数据来自账户读取器的快照，不额外请求。
+
+Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-data.ts v2Pages`）：返回包一层 `{data, pagination}`，只能按 `next_cursor` 翻页（带 `offset` 直接 400），以 `has_more` 判断有没有下一页；字段是下划线写法，入口处由 `fromV2Row` 转回 v1 名字，下游不改（`token_id→asset`、`current_size→size`、`avg_price→avgPrice`、`current_price→curPrice`、`entry_cost_usdc→initialValue`、`unrealized_pnl→cashPnl`、`total_size→totalBought`、已平仓 `last_event_at→timestamp`）。活动记录 `/v2/activity` 默认不返回充值、提现，要带 `exclude_deposits_withdrawals=false`。
 
 - 账户快照完整且新鲜才算一次有效读取；读取失败时沿用上一次成功结果，标 `stale=true`、`pnl_source_error="official_data_stale"`、`pnl_source_as_of`。
 - 从未成功读取时才退回账本口径：`pnl_source="ledger"`、`pnl_source_error="official_data_unavailable"`。
