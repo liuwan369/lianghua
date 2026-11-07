@@ -13,11 +13,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const FIELDS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "leadSource", "openBandBp",
+const FIELDS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "leadSource", "openBandBp", "openLine", "reverseMaxAsk", "reverseToSec",
   "midEdge", "midShares", "highEdge", "highShares", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"];
 const DEFAULTS = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
-  maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot", openBandBp: 0, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: null, dailyLossUsd: null,
+  maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot", openBandBp: 0, openLine: "tick", reverseMaxAsk: 0, reverseToSec: 285, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: null, dailyLossUsd: null,
   durationMinutes: 0, maxRounds: 0, mode: "live" };
 const INPUTS = { shares: "[data-lead=\"shares\"]", thresholdBp: "[data-lead=\"thresholdBp\"]", windowMs: "[data-lead=\"windowMs\"]",
   limitCents: "[data-lead=\"limitPremium\"]", fromSec: "[data-lead=\"fromSec\"]", toSec: "[data-lead=\"toSec\"]",

@@ -11,7 +11,7 @@
   // binance-lead's own fields (backend/engine/src/strategies/binance-lead.ts,
   // ranges as normalizeBinanceLeadConfig). limitPremium and maxAsk are edited in cents.
   var LEAD_FIELDS = [
-    { key: "shares", label: "每场份额", unit: "股", step: "any", note: "信号出现时 FAK 吃单买入的股数，一场最多一笔。", check: (v) => v > 0 && v <= 10000, error: "每场份额须大于 0 且不超过 10000。" },
+    { key: "shares", label: "每场份额", unit: "股", step: "any", note: "信号出现时 FAK 吃单买入的股数。开了反转时一场最多两笔，否则一笔。", check: (v) => v > 0 && v <= 10000, error: "每场份额须大于 0 且不超过 10000。" },
     { key: "thresholdBp", label: "触发阈值", unit: "bp", step: "any", note: "币安成交价比窗口内最低价高（涨）或比最高价低（跌）至少这么多 bp。", check: (v) => v > 0 && v <= 1000, error: "触发阈值须在 0 到 1000 bp 之间（不含 0）。" },
     { key: "windowMs", label: "观察窗口", unit: "ms", step: "any", note: "和此前这么多毫秒内的币安成交比较（按成交时间）。", check: (v) => v > 0 && v <= 60000, error: "观察窗口须在 0 到 60000 ms 之间（不含 0）。" },
     { key: "limitPremium", label: "限价加价", unit: "¢", step: "any", cents: true, note: "限价 = 信号时这一边的卖价 + 加价，向下取到 tick，最高 0.99。", check: (v) => v >= 0 && v < 100, error: "限价加价须在 0 到 100 美分之间（不含 100）。" },
@@ -21,6 +21,9 @@
     { key: "makerHoldSec", label: "挂单秒数", unit: "秒", step: "any", note: "0 = 吃单（FAK，卖价 + 加价）。大于 0 = 只挂单：在这一边买一价挂买单，挂这么多秒后撤掉，没成交不花钱。", check: (v) => v >= 0 && v <= 300, error: "挂单秒数须在 0 到 300 之间。" },
     { key: "leadSource", label: "信号来源", unit: "", options: [["binance-spot", "币安现货"], ["bybit-perp", "Bybit 合约"]], note: "用哪家交易所的逐笔成交出信号，规则相同。引擎启动时读取，改了要下次启动才生效。", error: "信号来源只能是币安现货或 Bybit 合约。" },
     { key: "openBandBp", label: "开盘价范围", unit: "bp", step: "any", note: "只做信号时价格离本场开盘价在 ±这么多 bp 以内的（按信号方向算，领先或落后都算）。0 = 不过滤。离开盘价远的结果基本已定，没有优势。", check: (v) => v >= 0 && v <= 1000, error: "开盘价范围须在 0 到 1000 bp 之间。" },
+    { key: "openLine", label: "开盘线", unit: "", options: [["tick", "开盘那一刻的价格"], ["mean60", "开盘前 60 秒均价"]], note: "开盘价范围从哪条线量起。官方目标价是开盘前 60 秒的 Chainlink 均价，60 秒均价和它对得更准。", error: "开盘线只能是开盘价或开盘前 60 秒均价。" },
+    { key: "reverseMaxAsk", label: "反转卖价上限", unit: "¢", step: "any", cents: true, note: "第一单买到后，本场第一个反方向信号、而且那一边卖价不高于它时，买那一边同样股数（吃单，卖价 + 加价，不看开盘价范围）。一场最多两单。0 = 关闭。", check: (v) => v >= 0 && v < 100, error: "反转卖价上限须在 0 到 100 美分之间（不含 100）。" },
+    { key: "reverseToSec", label: "反转截止秒", unit: "秒", step: "1", note: "反转单只在开盘后这一秒之前下。", check: (v) => v > 0 && v <= 300, error: "反转截止秒须大于 0 且不超过 300。" },
     { key: "midEdge", label: "中档优势", unit: "", step: "any", note: "模型算出的优势（胜率 − 卖价 − 手续费）不低于它，买中档份额。", check: (v) => v >= -1 && v <= 1, error: "中档优势须在 -1 到 1 之间。" },
     { key: "midShares", label: "中档份额", unit: "股", step: "any", note: "优势达到中档时买的股数。0 = 关闭这一档。", check: (v) => v >= 0 && v <= 10000, error: "中档份额须在 0 到 10000 之间。" },
     { key: "highEdge", label: "高档优势", unit: "", step: "any", note: "优势不低于它，买高档份额；两档都开时不能低于中档优势。", check: (v) => v >= -1 && v <= 1, error: "高档优势须在 -1 到 1 之间。" },
@@ -28,7 +31,7 @@
   ];
   // Fields a revision published before them lacks, as the server backfills
   // them (strategy_config.py ADDED_FIELDS).
-  const BACKFILL = { openBandBp: 0, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0 };
+  const BACKFILL = { openBandBp: 0, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0, openLine: "tick", reverseMaxAsk: 0, reverseToSec: 285 };
   const fieldInput = (item) => item.options
     ? `<select data-lead="${item.key}">${item.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}</select>`
     : `<input type="number" step="${item.step}" placeholder="--" data-lead="${item.key}">`;
@@ -49,7 +52,7 @@
       </header>
 
       <section class="strategy-identity-panel">
-        <div class="strategy-identity-icon">↯</div><div class="strategy-identity-copy"><p class="eyebrow">当前策略</p><h2 data-asset-title>BTC 币安领先</h2><p>币安成交价在短窗口内急涨或急跌时，买 Polymarket 同方向那一边，持有到结算；一场最多一笔。</p></div><div class="identity-tags"><span class="identity-tag active-tag"><i></i>唯一运行策略</span><span class="identity-tag">已发布版本待读取</span></div>
+        <div class="strategy-identity-icon">↯</div><div class="strategy-identity-copy"><p class="eyebrow">当前策略</p><h2 data-asset-title>BTC 币安领先</h2><p>币安成交价在短窗口内急涨或急跌时，买 Polymarket 同方向那一边，持有到结算；开了反转时，第一个反方向信号再买另一边一次。</p></div><div class="identity-tags"><span class="identity-tag active-tag"><i></i>唯一运行策略</span><span class="identity-tag">已发布版本待读取</span></div>
       </section>
 
       <section class="strategy-layout">

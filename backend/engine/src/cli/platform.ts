@@ -558,8 +558,12 @@ export function leadFeedFor(source: BinanceLeadConfig["leadSource"], detector: L
     symbol: source === "bybit-perp" ? products.bybit : products.binance };
 }
 
-const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec">): LeadSignalParams =>
-  ({ windowMs: config.windowMs, thresholdBp: config.thresholdBp, fromSec: config.fromSec, toSec: config.toSec });
+/** The detector's period covers the reverse leg's too (it may end after toSec);
+ * the strategy holds the first order to [fromSec, toSec) itself. */
+export const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec"
+  | "reverseMaxAsk" | "reverseToSec">): LeadSignalParams =>
+  ({ windowMs: config.windowMs, thresholdBp: config.thresholdBp, fromSec: config.fromSec,
+    toSec: config.reverseMaxAsk > 0 ? Math.max(config.toSec, config.reverseToSec) : config.toSec });
 
 /** One journal line per lead signal: the signal, the round it fell in, and what
  * the strategy did with it (the order it placed, or the round's reason for not
@@ -570,7 +574,8 @@ export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>
   stopping: boolean): Record<string, unknown> {
   const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId);
   return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
-    move_bp: event.moveBp, open_price: event.openPrice ?? null, fair_up: event.fairUp ?? null,
+    move_bp: event.moveBp, open_price: event.openPrice ?? null, open_mean60: event.openMean60 ?? null,
+    fair_up: event.fairUp ?? null, stage: placed?.stage ?? null,
     trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
     received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
     market_id: round?.marketId ?? null, round_id: round?.roundId ?? null, round_status: round?.status ?? null,
@@ -919,9 +924,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       // its open), the saved ones between rounds. A hot reload or a new round
       // reaches it on the next event; every round's close has its own timer.
       syncDetector = (config: Readonly<BinanceLeadConfig>) => {
-        if (config.windowMs === detectorParams.windowMs && config.thresholdBp === detectorParams.thresholdBp
-          && config.fromSec === detectorParams.fromSec && config.toSec === detectorParams.toSec) return;
-        detectorParams = leadSignalParams(config);
+        const next = leadSignalParams(config);
+        if (next.windowMs === detectorParams.windowMs && next.thresholdBp === detectorParams.thresholdBp
+          && next.fromSec === detectorParams.fromSec && next.toSec === detectorParams.toSec) return;
+        detectorParams = next;
         detector.update(detectorParams);
       };
       // The strategy's verdict is read right after it handled the signal (the

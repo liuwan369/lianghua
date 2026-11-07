@@ -57,7 +57,9 @@ assert.equal(body.config.maxAsk, 0.8, "maxAsk is part of the saved config");
 assert.equal(body.config.openBandBp, 0, "openBandBp defaults to 0 (no filter)");
 assert.equal(body.config.midShares, 0, "edge tiers default off");
 assert.equal(body.config.highShares, 0);
+assert.equal(body.config.reverseMaxAsk, 0, "reverse leg defaults off");
+assert.equal(body.config.openLine, "tick");
 assert.deepEqual(Object.keys(body.config).sort(), ["assetId", "dailyLossUsd", "durationMinutes", "fromSec", "highEdge", "highShares", "leadSource", "limitPremium",
-  "makerHoldSec", "maxAsk", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "maxRounds", "midEdge", "midShares", "mode", "openBandBp", "roundBudgetUsd", "shares", "thresholdBp", "toSec",
+  "makerHoldSec", "maxAsk", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "maxRounds", "midEdge", "midShares", "mode", "openBandBp", "openLine", "reverseMaxAsk", "reverseToSec", "roundBudgetUsd", "shares", "thresholdBp", "toSec",
   "totalBudgetUsd", "windowMs"], "exactly binance-lead's fields");
 console.log("P1-1 OK");

@@ -393,6 +393,8 @@ export type TradingEvent =
   | { kind: "lead"; assetId: AssetId; direction: "UP" | "DOWN"; price: number; refPrice: number; moveBp: number;
       /** The lead venue's price at the round open (absent if the feed started mid-round). */
       openPrice?: number;
+      /** Mean lead price over (R-60, R] (absent unless the feed covered that minute). */
+      openMean60?: number;
       /** Fair-value model P(the round settles UP) at the signal (absent without ~6 min of lead history). */
       fairUp?: number;
       tradeId: number; tradeTimeMs: number; receivedAtUnix: number; receivedAtMonoMs: number }

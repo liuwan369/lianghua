@@ -30,6 +30,12 @@ export interface LeadSignal {
    * (trade time), as the backtest (E:/pm-backup/research-1101/band.py). Absent
    * when the feed started inside the round. */
   openPrice?: number;
+  /** Mean lead price over the 60 whole seconds (R-60, R], each second the last
+   * trade at or before it: the window of the official price to beat (Chainlink
+   * 60 s TWAP; E:/pm-backup/research-1104/target_basis.py, after the hour's
+   * basis |error| p50 0.47 bp vs 1.44 bp for openPrice). Absent unless the
+   * history covers the whole window. */
+  openMean60?: number;
   /** Fair-value model P(the round settles UP) with trades up to this one
    * (leadFairUp). Absent without the history it needs (about 6 minutes). */
   fairUp?: number;
@@ -82,12 +88,8 @@ const MAX_HISTORY_GAP_MS = 60_000;
 export function leadFairUp(price: (g: number) => number | undefined, tradeTimeMs: number, tradePrice: number): number | undefined {
   const R = Math.floor(tradeTimeMs / 300_000) * 300;
   const gv = Math.floor(tradeTimeMs / 1000);
-  let open = 0;
-  for (let g = R - 59; g <= R; g += 1) {
-    const p = price(g); if (p === undefined) return undefined;
-    open += p;
-  }
-  open /= 60;
+  const open = leadOpenMean60(price, R);
+  if (open === undefined) return undefined;
   let previous = price(gv - 300);
   if (previous === undefined) return undefined;
   let sum = 0, sumSq = 0;
@@ -113,6 +115,16 @@ export function leadFairUp(price: (g: number) => number | undefined, tradeTimeMs
   return Number.isFinite(p) ? p : undefined;
 }
 const FAIR_C = 0.859;
+
+/** Mean of price(g) for g = R-59..R (the 60 s before the open R, unix seconds). */
+export function leadOpenMean60(price: (g: number) => number | undefined, R: number): number | undefined {
+  let sum = 0;
+  for (let g = R - 59; g <= R; g += 1) {
+    const p = price(g); if (p === undefined) return undefined;
+    sum += p;
+  }
+  return sum / 60;
+}
 
 /** sqrt(sum_ij min(t_i, t_j)) / n for the last n seconds of (R+240, R+300]
  * seen from second k (fv_calib.py vfactor). Ascending t: sum = sum_i t_i (2(n-i)+1). */
@@ -337,8 +349,10 @@ export class LeadSignalDetector {
     this.base = this.head = this.next;
     this.append(t, p);
     const fairUp = leadFairUp(g => this.secondPrice(g), t, p);
+    const openMean60 = leadOpenMean60(g => this.secondPrice(g), roundMs / 1000);
     return { direction, price: p, refPrice, moveBp: move * 1e4, tradeId: trade.id, tradeTimeMs: t,
       ...(this.openPrice !== undefined ? { openPrice: this.openPrice } : {}),
+      ...(openMean60 !== undefined ? { openMean60 } : {}),
       ...(fairUp !== undefined ? { fairUp } : {}),
       receivedAtUnix: trade.receivedAtUnix, receivedAtMonoMs: trade.receivedAtMonoMs };
   }

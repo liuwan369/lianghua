@@ -28,6 +28,7 @@ def default_config() -> dict:
     # the control plane's run settings, which reach the engine as flags.
     return {"assetId": "btc", "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
             "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0,
+            "openLine": "tick", "reverseMaxAsk": 0, "reverseToSec": 285,
             "midEdge": 0.08, "midShares": 0, "highEdge": 0.13, "highShares": 0,
             "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
@@ -36,9 +37,13 @@ def default_config() -> dict:
 
 # Fields added after a binance-lead revision was published (the server's
 # revision 1 has no maxAsk, revision 2 no makerHoldSec or leadSource, revisions
-# up to 8 no openBandBp, up to 9 no edge tiers): a config missing only these
+# up to 8 no openBandBp, up to 9 no edge tiers, up to 11 no openLine or
+# reverse leg): a config missing only these
 # gets their defaults, any other key mismatch is still rejected.
-ADDED_FIELDS = ("maxAsk", "makerHoldSec", "leadSource", "openBandBp", "midEdge", "midShares", "highEdge", "highShares")
+ADDED_FIELDS = ("maxAsk", "makerHoldSec", "leadSource", "openBandBp", "midEdge", "midShares", "highEdge", "highShares",
+                "openLine", "reverseMaxAsk", "reverseToSec")
+# binance-lead.ts OPEN_LINES: the tick at the open, or the 60 s mean before it.
+OPEN_LINES = ("tick", "mean60")
 # binance-lead.ts LEAD_SOURCES: Binance spot aggTrade, or Bybit USDT perpetual.
 LEAD_SOURCES = ("binance-spot", "bybit-perp")
 
@@ -92,6 +97,13 @@ def validate_config(config: dict) -> dict:
     if result["leadSource"] not in LEAD_SOURCES:
         raise ConfigValidationError("信号来源只能是币安现货或 Bybit 合约")
     within("openBandBp", "开盘价范围bp", 0, 1000, low_open=False)
+    if result["openLine"] not in OPEN_LINES:
+        raise ConfigValidationError("开盘线只能是开盘价或开盘前 60 秒均价")
+    # Reverse leg (binance-lead.ts decideReverse): 0 = off; a FAK, so taker mode only.
+    within("reverseMaxAsk", "反转卖价上限", 0, 1, low_open=False, high_open=True)
+    within("reverseToSec", "反转截止秒", 0, 300)
+    if result["reverseMaxAsk"] > 0 and result["makerHoldSec"] > 0:
+        raise ConfigValidationError("反转单只支持吃单（挂单秒数须为 0）")
     # Size by the fair-value edge (binance-lead.ts leadTierShares): 0 shares = tier off.
     within("midEdge", "中档优势", -1, 1, low_open=False)
     within("highEdge", "高档优势", -1, 1, low_open=False)

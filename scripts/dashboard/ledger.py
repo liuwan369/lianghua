@@ -357,16 +357,18 @@ def _strategy_projection(value):
             return None
         result = {key: _number(source.get(key)) for key in (
             "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "openBandBp",
+            "reverseMaxAsk", "reverseToSec",
             "midEdge", "midShares", "highEdge", "highShares", "maxQuoteAgeSeconds",
             "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
         result["leadSource"] = source.get("leadSource") if source.get("leadSource") in ("binance-spot", "bybit-perp") else None
+        result["openLine"] = source.get("openLine") if source.get("openLine") in ("tick", "mean60") else None
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
         return result
     def signal_view(source):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "price", "refPrice", "moveBp", "openPrice", "fairUp", "tradeId", "tradeTimeMs", "receivedAtUnix")}
+            "price", "refPrice", "moveBp", "openPrice", "openMean60", "fairUp", "tradeId", "tradeTimeMs", "receivedAtUnix")}
         result["direction"] = source.get("direction") if source.get("direction") in ("UP", "DOWN") else None
         return result
     def round_view(source):
@@ -393,14 +395,14 @@ def _strategy_projection(value):
                             **{key: latest.get(key) if isinstance(latest.get(key), bool) else None
                                for key in ("twoSided", "freshOnArrival")},
                             "staleReason": _text(latest.get("staleReason"))} if isinstance(latest, dict) else None
-        # At most one: one attempt per round.
+        # The first order, then at most the reverse leg.
         stages = source.get("stages") if isinstance(source.get("stages"), list) else []
         result["stages"] = [{**{key: _text(stage.get(key)) for key in (
             "tokenId", "clientOrderId", "orderId", "status", "error")},
-            **{key: _number(stage.get(key)) for key in ("price", "askAtSignal", "fairEdge", "shares", "createdAt", "filledShares")},
+            **{key: _number(stage.get(key)) for key in ("stage", "price", "askAtSignal", "fairEdge", "shares", "createdAt", "filledShares")},
             "direction": stage.get("direction") if stage.get("direction") in ("UP", "DOWN") else None,
             "signal": signal_view(stage.get("signal"))}
-            for stage in stages[:1] if isinstance(stage, dict)]
+            for stage in stages[:2] if isinstance(stage, dict)]
         return result
     rounds = value.get("rounds") if isinstance(value.get("rounds"), list) else []
     result = {"strategyId": STRATEGY_ID, "schemaVersion": 1,
@@ -588,7 +590,7 @@ def _projection(record):
         result["reason"] = _text(record.get("reason"))
         result["round_status"] = _text(record.get("round_status"))
         result["attempted"] = record.get("attempted") if isinstance(record.get("attempted"), bool) else None
-        for field in ("move_bp", "ref_price", "open_price", "fair_up", "fair_edge", "received_at", "trade_time_ms",
+        for field in ("move_bp", "ref_price", "open_price", "open_mean60", "fair_up", "fair_edge", "stage", "received_at", "trade_time_ms",
                       "limit_price", "ask_at_signal"):
             result[field] = _number(record.get(field))
         # The size the order was sent with (edge tiers: 5/10/20); `shares` stays
