@@ -1,16 +1,13 @@
-import type { AssetId, Instrument, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
-  StrategyContext, StrategyPlugin, TradingEvent } from "../platform/contracts.js";
+import { LEAD_VENUES, type AssetId, type Instrument, type LeadVenue, type MarketInfo, type OrderRecord, type OrderRequest,
+  type OrderStatus, type StrategyAction, type StrategyContext, type StrategyPlugin, type TradingEvent } from "../platform/contracts.js";
 
 /** Binance lead (rule frozen 2026-10-25, E:/pm-backup/forward-binance-agg.py):
  * the round's first valid lead signal whose book in force is two-sided and was
  * fresh on arrival gets one FAK BUY on the signal's side at ask + premium, held
- * to the close. One order per round, filled or not. The window lives in
- * LeadSignalDetector on the feed side; this plugin only sees the rare signals. */
+ * to the close. One order per round, filled or not, whichever venue's signal
+ * it was. The windows live in one LeadSignalDetector per venue on the feed
+ * side; this plugin only sees the rare signals. */
 export type LeadDirection = "UP" | "DOWN";
-/** Where the lead trades come from: Bybit USDT perpetual (user 2026-10-29).
- * Read when the engine starts. */
-export type LeadSource = "bybit-perp";
-export const LEAD_SOURCES: readonly LeadSource[] = ["bybit-perp"];
 export type OpenLine = "tick" | "mean60";
 export const OPEN_LINES: readonly OpenLine[] = ["tick", "mean60"];
 export interface BinanceLeadConfig {
@@ -26,7 +23,12 @@ export interface BinanceLeadConfig {
   toSec: number;
   /** Highest ask (inclusive) of the signal's side that is bought (user 2026-10-26). */
   maxAsk: number;
-  leadSource: LeadSource;
+  /** Venues whose USDT perpetual trades signal, each with its own detector
+   * (non-empty, unique). Read when the engine starts. */
+  leadVenues: LeadVenue[];
+  /** Also take each venue's trades relayed from Tokyo (first copy wins).
+   * Read when the engine starts; needs PM_RELAY_KEY_FILE there. */
+  tokyoRelay: boolean;
   /** Trade only a signal whose lead price is within this many bp of the round's
    * opening lead price, signed by the signal (+ = its side already ahead):
    * -openBandBp <= d < openBandBp. 0 = no filter. User 2026-11-01: 5 (backtest
@@ -107,7 +109,7 @@ export interface BinanceLeadOptions {
 
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
-  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadSource: "bybit-perp",
+  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadVenues: [...LEAD_VENUES], tokyoRelay: true,
   openBandBp: 0, openLine: "tick", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
@@ -180,7 +182,11 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (!finite(config.fromSec) || !finite(config.toSec) || config.fromSec < 0 || config.fromSec >= config.toSec
     || config.toSec > 300) throw new Error("fromSec/toSec must satisfy 0 <= fromSec < toSec <= 300");
   if (!unitPrice(config.maxAsk)) throw new Error("maxAsk must be in (0, 1)");
-  if (!LEAD_SOURCES.includes(config.leadSource)) throw new Error(`leadSource must be one of ${LEAD_SOURCES.join(", ")}`);
+  if (!Array.isArray(config.leadVenues) || !config.leadVenues.length
+    || config.leadVenues.some((venue, k) => !LEAD_VENUES.includes(venue) || config.leadVenues.indexOf(venue) !== k)) {
+    throw new Error(`leadVenues must be a non-empty list of distinct venues from ${LEAD_VENUES.join(", ")}`);
+  }
+  if (typeof config.tokyoRelay !== "boolean") throw new Error("tokyoRelay must be true or false");
   if (!finite(config.openBandBp) || config.openBandBp < 0 || config.openBandBp > 1000) {
     throw new Error("openBandBp must be in [0, 1000]");
   }
@@ -603,8 +609,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       price: order.price, shares: order.shares, createdAt: order.createdAt, status: order.status, filledShares: order.filledShares,
       ...(order.orderId ? { orderId: order.orderId } : {}),
       error: "重启时本场订单已在交易所记录中，策略记录丢失，按订单恢复",
-      signal: { direction, price: 0, refPrice: 0, moveBp: 0, tradeId: 0, tradeTimeMs: 0, receivedAtUnix: order.createdAt,
-        receivedAtMonoMs: 0 },
+      signal: { direction, price: 0, refPrice: 0, moveBp: 0, venue: "bybit", line: "direct", tradeId: 0, tradeTimeMs: 0,
+        receivedAtUnix: order.createdAt, receivedAtMonoMs: 0 },
       askAtSignal: order.price };
     round.stages.push(stage);
     this.indexStage(round, stage);
@@ -678,7 +684,11 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || !STAGE_STATUSES.includes(stage.status)
           || !signal || signal.direction !== stage.direction
           || ![signal.price, signal.refPrice, signal.moveBp, signal.tradeId, signal.tradeTimeMs,
-            signal.receivedAtUnix, signal.receivedAtMonoMs].every(finite)) throw new Error("invalid persisted binance-lead stage");
+            signal.receivedAtUnix, signal.receivedAtMonoMs].every(finite)
+          || (signal.venue !== undefined && !LEAD_VENUES.includes(signal.venue))
+          || (signal.line !== undefined && signal.line !== "direct" && signal.line !== "tokyo")) throw new Error("invalid persisted binance-lead stage");
+        // A signal saved before venues existed was Bybit's, direct.
+        signal.venue ??= "bybit"; signal.line ??= "direct";
         delete legacy.stage; delete legacy.fairEdge;
         delete (signal as LeadSignalRecord & { fairUp?: unknown }).fairUp;
       }

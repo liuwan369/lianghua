@@ -1,26 +1,28 @@
-// Bybit USDT perpetual trades as the lead source (user 2026-10-29): the same
-// 250 ms / 2 bp detector on Bybit linear publicTrade, two lines deduplicated.
+// Bybit USDT perpetual trades, one of the three lead venues: the same
+// 250 ms / 2 bp detector on Bybit linear publicTrade, its lines deduplicated.
 // Bybit frames carry many trades; one sweep shares a `seq` and a time (live
 // 2026-10-29: 59 of 66 multi-trade frames), so a trade is new when its seq is
 // above the last one delivered, or equal with an id not yet delivered.
-// Runs the real compiled ingest, runBybitTrades against two loopback servers,
-// bybitLeadFeed, and readStrategyConfig picking the source. No Bybit connection.
+// Runs the real compiled VenueIngest, runLeadTrades against two loopback
+// servers, and the detector on Bybit prices. No Bybit connection.
 //   node scripts/regress/bybit-trades.mjs   (after npm run build)
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { WebSocketServer } from "ws";
-import { createBybitTradeIngest, runBybitTrades, bybitLeadFeed, bybitTradeUrls, LeadSignalDetector }
-  from "../../dist/live/feeds/binance-trades.js";
-import { readStrategyConfig } from "../../dist/cli/platform.js";
-import { normalizeBinanceLeadConfig, BINANCE_LEAD_DEFAULTS } from "../../dist/strategies/binance-lead.js";
+import { LeadSignalDetector } from "../../dist/live/feeds/binance-trades.js";
+import { VenueIngest, runLeadTrades, bybitTradeUrls } from "../../dist/live/feeds/lead-trades.js";
+import { leadPerpProducts } from "../../dist/live/feeds/btc.js";
 
 const T0 = 1_800_000_020_000;
 const trade = (seq, i, p = "80000.0", T = T0 + seq) => ({ T, s: "BTCUSDT", S: "Buy", v: "0.010", p, L: "PlusTick", i, BT: false, RPI: false, seq });
 const frame = (...data) => JSON.stringify({ topic: "publicTrade.BTCUSDT", type: "snapshot", ts: T0, data });
 const at = (ms) => ms / 1000;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+// The venue's shared ingest, fed as one direct line.
+const createBybitTradeIngest = (onTrade) => {
+  const v = new VenueIngest("bybit", "BTCUSDT", onTrade);
+  return Object.assign((raw, unix, mono) => v.frame(raw, "direct", unix, mono), { lastWasCurrent: () => v.lastWasCurrent() });
+};
+const runBybitTrades = (onTrade, urls) => runLeadTrades({ venues: ["bybit"], products: leadPerpProducts("btc"), urls: { bybit: urls } }, onTrade);
 const until = async (fn, ms = 5000) => { const end = Date.now() + ms; while (!fn()) { if (Date.now() > end) return false; await sleep(10); } return true; };
 
 assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "wss://stream.bytick.com/v5/public/linear"]);
@@ -40,7 +42,8 @@ assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "
   assert.equal(ingest(frame(trade(9, "z", "1.0")), at(T0 + 114), 5), false);
   assert.equal(ingest(frame(trade(11, "e", "80002.0")), at(T0 + 115), 6), true);
   assert.deepEqual(got.map(t => t.id), [1, 2, 3, 4, 5], "ids are delivery order");
-  assert.deepEqual(got[0], { id: 1, price: 80000, tradeTimeMs: T0 + 10, receivedAtUnix: at(T0 + 110), receivedAtMonoMs: 1 });
+  assert.deepEqual(got[0], { venue: "bybit", id: 1, price: 80000, tradeTimeMs: T0 + 10, line: "direct",
+    receivedAtUnix: at(T0 + 110), receivedAtMonoMs: 1 });
   for (const bad of ["not json", "{}", JSON.stringify({ op: "subscribe", success: true }),
     JSON.stringify({ topic: "publicTrade.ETHUSDT", data: [trade(20, "x")] }),
     frame({ ...trade(20, "x"), s: "ETHUSDT" }), frame({ ...trade(20, "x"), p: "x" }), frame({ ...trade(20, "x"), p: "0" }),
@@ -105,7 +108,7 @@ assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "
   await Promise.all(servers.map(s => new Promise(r => s.on("listening", r))));
   const urls = servers.map(s => `ws://127.0.0.1:${s.address().port}`);
   const got = [];
-  const feed = runBybitTrades(t => got.push(t), "BTCUSDT", urls);
+  const feed = runBybitTrades(t => got.push(t), urls);
   assert.ok(await until(() => sockets[0].length && sockets[1].length), "both lines connect");
   assert.ok(await until(() => subscribed[0].length && subscribed[1].length), "both subscribe");
   assert.deepEqual(JSON.parse(subscribed[0][0]), { op: "subscribe", args: ["publicTrade.BTCUSDT"] });
@@ -126,7 +129,7 @@ assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "
   assert.equal(feed.isHealthy(), false);
   await Promise.all(servers.map(s => new Promise(r => s.close(r))));
 }
-// --- bybitLeadFeed: the same detector rule on Bybit prices ---
+// --- the same detector rule on Bybit prices ---
 {
   const detector = new LeadSignalDetector({ windowMs: 250, thresholdBp: 2, fromSec: 0, toSec: 300 });
   const events = [];
@@ -139,27 +142,7 @@ assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "
   assert.equal(events[0].refPrice, 80000);
   assert.ok(events[0].moveBp >= 2 && events[0].moveBp < 2.1);
   assert.equal(events[0].receivedAtUnix, at(T0 + 295), "S = when we saw the Bybit trade");
-  assert.equal(typeof bybitLeadFeed(detector), "function");
-}
-// --- the only source is Bybit perp; a file without leadSource reads it, Binance spot is refused ---
-{
-  assert.equal(BINANCE_LEAD_DEFAULTS.leadSource, "bybit-perp", "the default is the live Bybit perp feed");
-  assert.equal(normalizeBinanceLeadConfig({ leadSource: "bybit-perp" }).leadSource, "bybit-perp");
-  for (const bad of ["binance-spot", "okx", "", null, 1, "BYBIT-PERP"]) assert.throws(() => normalizeBinanceLeadConfig({ leadSource: bad }), String(bad));
-  const dir = mkdtempSync(join(tmpdir(), "lead-source-"));
-  const file = join(dir, "binance-lead-config.json");
-  const base = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
-    maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5, roundBudgetUsd: 5, totalBudgetUsd: 100, dailyLossUsd: 60,
-    durationMinutes: 0, maxRounds: 24, mode: "live" };
-  const doc = (config) => JSON.stringify({ schemaVersion: 1, strategyId: "binance-lead", savedRevision: 3, savedAt: "2026-10-29T00:00:00Z", config });
-  writeFileSync(file, doc(base));
-  assert.equal(readStrategyConfig(file).config.leadSource, "bybit-perp", "a file without leadSource reads the default");
-  writeFileSync(file, doc({ ...base, leadSource: "binance-spot" }));
-  assert.throws(() => readStrategyConfig(file), /leadSource/, "Binance spot is retired: no silent switch");
-  writeFileSync(file, doc({ ...base, leadSource: "bybit-perp" }));
-  assert.equal(readStrategyConfig(file).config.leadSource, "bybit-perp");
-  writeFileSync(file, doc({ ...base, leadSource: "kraken" }));
-  assert.throws(() => readStrategyConfig(file), /leadSource/);
-  rmSync(dir, { recursive: true, force: true });
+  assert.equal(events[0].venue, "bybit");
+  assert.equal(events[0].line, "direct");
 }
 console.log("bybit-trades OK");

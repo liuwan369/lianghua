@@ -85,7 +85,7 @@ try {
     now = START + 21;
     postCalledAt = undefined; bodySentAt = undefined;
     const recv = performance.now();
-    platform.ingest({ kind: "lead", assetId: "btc", direction: "UP", price: 100030, refPrice: 100000, moveBp: 3, tradeId: k + 1,
+    platform.ingest({ kind: "lead", assetId: "btc", direction: "UP", price: 100030, refPrice: 100000, moveBp: 3, venue: "bybit", line: "direct", tradeId: k + 1,
       tradeTimeMs: now * 1000 - 95, receivedAtUnix: now, receivedAtMonoMs: recv });
     await platform.idle();
     const o = platform.core.orders()[0];

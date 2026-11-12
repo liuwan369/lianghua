@@ -1,6 +1,6 @@
 /** Exchange product codes per coin. The collector (cli/market-snapshot.ts)
  * subscribes to each coin's Binance 1 s kline with them; the engine
- * (cli/platform.ts) subscribes to the coin's Binance aggTrade. */
+ * (cli/platform.ts) reads the coin's USDT perpetual trades (leadPerpProducts). */
 
 export interface ReferenceVenueProducts {
   binance: string;
@@ -28,4 +28,12 @@ export function referenceVenueProducts(asset = "btc"): ReferenceVenueProducts {
   const products = Object.hasOwn(REFERENCE_ASSETS, normalized) ? REFERENCE_ASSETS[normalized] : undefined;
   if (!products) throw new Error(`no exchange products for ${asset}`);
   return { ...products };
+}
+
+/** The lead venues' USDT perpetuals: Bybit linear symbol, Binance USD-M stream
+ * name (lowercase), OKX swap instId. */
+export interface LeadPerpProducts { bybit: string; binance: string; okx: string }
+export function leadPerpProducts(asset = "btc"): LeadPerpProducts {
+  const products = referenceVenueProducts(asset);
+  return { bybit: products.bybit, binance: products.binance, okx: `${products.okx}-SWAP` };
 }

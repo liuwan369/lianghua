@@ -188,7 +188,7 @@ export interface ConnectOptions {
   durationSec?: number;
   /** Selected asset is checked against every supplied market. */
   assetId?: AssetId;
-  /** Market-independent lead signals (binance-trades.ts bybitLeadFeed); started after the markets. */
+  /** Market-independent lead signals (lead-trades.ts leadSignalFeed); started after the markets. */
   leadFeed?: (sink: (event: FeedEvent) => void) => { stop: () => void; isHealthy?: () => boolean };
   /** BUY orders to sign ahead for a new market: per token, the prices and the
    * size at each (binance-lead presignPlan). Signed in the background. */
@@ -558,6 +558,7 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       platform.ingest({ kind: "lead", assetId: options.assetId ?? "btc", direction: raw.direction, price: raw.price,
         refPrice: raw.refPrice, moveBp: raw.moveBp, ...(raw.openPrice !== undefined ? { openPrice: raw.openPrice } : {}),
         ...(raw.openMean60 !== undefined ? { openMean60: raw.openMean60 } : {}),
+        venue: raw.venue, line: raw.line, ...(raw.relayRecvMs !== undefined ? { relayRecvMs: raw.relayRecvMs } : {}),
         tradeId: raw.tradeId, tradeTimeMs: raw.tradeTimeMs,
         receivedAtUnix: raw.receivedAtUnix, receivedAtMonoMs: raw.receivedAtMonoMs });
       return;

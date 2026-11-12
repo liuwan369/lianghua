@@ -121,6 +121,11 @@ export interface OrderRequest {
   /** Optional strategy round cap; execution includes fee and unknown-order reserves. */
   roundBudgetUsd?: number;
 }
+/** Lead trade venues (USDT perpetuals) and the two lines each arrives on:
+ * direct WebSocket here, or relayed from Tokyo. */
+export type LeadVenue = "bybit" | "binance" | "okx";
+export type LeadLine = "direct" | "tokyo";
+export const LEAD_VENUES: readonly LeadVenue[] = ["bybit", "binance", "okx"];
 export type OrderStatus = "SUBMITTING" | "OPEN" | "PARTIAL" | "FILLED" | "CANCELLED" | "REJECTED" | "UNKNOWN";
 export type VenueOrderStatus = "live" | "matched" | "delayed" | "unmatched" | "canceled" | "cancelled" | "expired";
 export type VenueStateSource = "http_ack" | "user_ws" | "account_read";
@@ -391,10 +396,15 @@ export type TradingEvent =
   | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; assetId?: AssetId; book?: undefined }
   /** Lead signal; receivedAtUnix is when we saw the trade (S). */
   | { kind: "lead"; assetId: AssetId; direction: "UP" | "DOWN"; price: number; refPrice: number; moveBp: number;
-      /** The lead venue's price at the round open (absent if the feed started mid-round). */
+      /** The signal's venue's price at the round open (absent if the feed started mid-round). */
       openPrice?: number;
-      /** Mean lead price over (R-60, R] (absent unless the feed covered that minute). */
+      /** Mean venue price over (R-60, R] (absent unless the feed covered that minute). */
       openMean60?: number;
+      /** The venue whose detector fired and the line its trade came in on first.
+       * tradeId is per venue: (venue, tradeId) identifies a signal. */
+      venue: LeadVenue; line: LeadLine;
+      /** Tokyo relay receive time (ms) when line is "tokyo". */
+      relayRecvMs?: number;
       tradeId: number; tradeTimeMs: number; receivedAtUnix: number; receivedAtMonoMs: number }
   | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string; assetId?: AssetId }
   | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string; assetId?: AssetId }

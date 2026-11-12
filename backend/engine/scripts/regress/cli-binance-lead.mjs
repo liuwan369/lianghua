@@ -11,9 +11,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { leadFeedFor, leadJournalFields, parsePlatformOptions, readStrategyConfig, resolveStrategyLimits, STRATEGY_ID }
-  from "../../dist/cli/platform.js";
-import { LeadSignalDetector } from "../../dist/live/feeds/binance-trades.js";
+import { leadFeedFor, leadJournalFields, parsePlatformOptions, readStrategyConfig, relayListenerFromEnv, resolveStrategyLimits,
+  STRATEGY_ID } from "../../dist/cli/platform.js";
 import { createStrategy } from "../../dist/strategies/binance-lead.js";
 
 const dir = mkdtempSync(join(tmpdir(), "cli-lead-"));
@@ -39,11 +38,33 @@ try {
   assert.equal(read.config.shares, 7);
   assert.equal(read.config.thresholdBp, 2.5);
   assert.equal(read.config.windowMs, 250, "defaults fill what the file leaves out");
-  // --- the run's lead source: Bybit perp ---
-  assert.equal(read.config.leadSource, "bybit-perp");
-  const detector = new LeadSignalDetector({ windowMs: 250, thresholdBp: 2, fromSec: 15, toSec: 265 });
-  assert.equal(leadFeedFor("bybit-perp", detector, "btc").symbol, "BTCUSDT", "Bybit's product code");
-  assert.equal(typeof leadFeedFor("bybit-perp", detector, "btc").feed, "function");
+  // --- the run's lead venues: one detector each, BTC perpetual products ---
+  assert.deepEqual(read.config.leadVenues, ["bybit", "binance", "okx"]);
+  assert.equal(read.config.tokyoRelay, true);
+  const params = { windowMs: 250, thresholdBp: 2, fromSec: 15, toSec: 265 };
+  const feed = leadFeedFor(read.config, params, "btc", undefined);
+  assert.deepEqual(Object.keys(feed.detectors), ["bybit", "binance", "okx"]);
+  assert.notEqual(feed.detectors.bybit, feed.detectors.okx, "a detector per venue");
+  assert.deepEqual(feed.products, { bybit: "BTCUSDT", binance: "btcusdt", okx: "BTC-USDT-SWAP" });
+  assert.equal(feed.relay, false, "no relay key: direct lines only");
+  assert.equal(typeof feed.feed, "function");
+  assert.equal(feed.stats(), null, "no stats before the feed runs");
+  assert.equal(leadFeedFor({ leadVenues: ["okx"], tokyoRelay: true }, params, "btc", { port: 0, key: {} }).relay, true);
+  assert.equal(leadFeedFor({ leadVenues: ["okx"], tokyoRelay: false }, params, "btc", { port: 0, key: {} }).relay, false,
+    "tokyoRelay false: no relay line even with a key");
+  // A saved file with the retired leadSource still loads.
+  assert.deepEqual(readStrategyConfig(file("legacy-source.json", saved({ leadSource: "bybit-perp" }))).config.leadVenues,
+    ["bybit", "binance", "okx"]);
+  assert.throws(() => readStrategyConfig(file("bad-venues.json", saved({ leadVenues: ["okx", "okx"] }))), /leadVenues/);
+  // Relay settings from the environment; the key path's content never reaches an error.
+  assert.equal(relayListenerFromEnv({}), undefined, "no key file: no relay");
+  const keyPath = file("relay.key", "ab".repeat(32));
+  const relay = relayListenerFromEnv({ PM_RELAY_KEY_FILE: keyPath, PM_RELAY_ALLOW_IP: "203.0.113.7" });
+  assert.equal(relay.port, 47001);
+  assert.equal(relay.allowedIp, "203.0.113.7");
+  assert.equal(relay.key.type, "secret");
+  assert.throws(() => relayListenerFromEnv({ PM_RELAY_KEY_FILE: join(dir, "missing.key") }), /PM_RELAY_KEY_FILE/);
+  assert.throws(() => relayListenerFromEnv({ PM_RELAY_KEY_FILE: keyPath, PM_RELAY_PORT: "x" }), /PM_RELAY_PORT/);
   assert.equal(read.config.revision, "4", "the saved revision is the config revision");
   assert.equal(read.savedRevision, "4");
   assert.equal(read.dailyLossUsd, 10);
@@ -72,8 +93,9 @@ try {
     roundId: ROUND, sourceAt: t, expiresAt: t + 2, tsUnix: t, receivedAtUnix: t, receivedAtMonoMs: 0, marketAgeMs: 50,
     YES: { assetId: UP, bid: 0.56, ask: 0.57, sourceAt: t, expiresAt: t + 2 },
     NO: { assetId: DOWN, bid: 0.44, ask: downAsk, sourceAt: t, expiresAt: t + 2 } } });
-  const lead = (S, tradeId) => ({ kind: "lead", assetId: "btc", direction: "UP", price: 100030, refPrice: 100000, moveBp: 2.9996,
-    tradeId, tradeTimeMs: S * 1000 - 100, receivedAtUnix: S, receivedAtMonoMs: 5 });
+  const lead = (S, tradeId, venue = "bybit", line = "direct", extra = {}) => ({ kind: "lead", assetId: "btc", direction: "UP",
+    price: 100030, refPrice: 100000, moveBp: 2.9996, venue, line, tradeId, tradeTimeMs: S * 1000 - 100, receivedAtUnix: S,
+    receivedAtMonoMs: 5, ...extra });
   const s = createStrategy();
   s.onEvent({ kind: "timer", ts: START - 20 }, ctx(START - 20));
   s.onEvent(book(START + 20, undefined), ctx(START + 20));               // one-sided: the first signal is skipped
@@ -85,13 +107,21 @@ try {
   assert.equal(skipped.attempted, false);
   assert.equal(skipped.client_order_id, null);
   s.onEvent(book(START + 22, 0.45), ctx(START + 22));
-  const second = lead(START + 23, 42);
+  const second = lead(START + 23, 42, "okx", "tokyo", { relayRecvMs: (START + 23) * 1000 - 40 });
   s.onEvent(second, ctx(START + 23));
   assert.deepEqual(leadJournalFields(second, s.roundAt(second.receivedAtUnix), false), { asset_id: "btc", direction: "UP",
-    price: 100030, ref_price: 100000, move_bp: 2.9996, open_price: null, open_mean60: null, trade_id: 42, trade_time_ms: (START + 23) * 1000 - 100,
+    price: 100030, ref_price: 100000, move_bp: 2.9996, open_price: null, open_mean60: null,
+    venue: "okx", line: "tokyo", relay_recv_ms: (START + 23) * 1000 - 40, trade_id: 42, trade_time_ms: (START + 23) * 1000 - 100,
     received_at: START + 23, received_at_mono_ms: 5, market_id: "0xm", round_id: ROUND, round_status: "running",
     outcome: "order_submitted", reason: "已下单（FAK），等待成交回报", attempted: true, client_order_id: "binance-lead:0xm:1",
     token_id: UP, limit_price: 0.6, ask_at_signal: 0.57, shares: 5 });
+  // Another venue's signal with the same trade id is not the one that placed.
+  const twin = lead(START + 23.5, 42, "bybit");
+  s.onEvent(twin, ctx(START + 23.5));
+  const twinFields = leadJournalFields(twin, s.roundAt(twin.receivedAtUnix), false);
+  assert.equal(twinFields.outcome, "skipped", "same tradeId, other venue: not the placing signal");
+  assert.equal(twinFields.client_order_id, null);
+  assert.equal(twinFields.relay_recv_ms, null);
   const third = lead(START + 24, 43);
   s.onEvent(third, ctx(START + 24));
   const after = leadJournalFields(third, s.roundAt(third.receivedAtUnix), false);

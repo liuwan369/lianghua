@@ -3,9 +3,10 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { bybitLeadFeed, LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
-import { referenceVenueProducts } from "../live/feeds/btc.js";
-import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, SettlementResult, TradingEvent,
+import { LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
+import { leadPerpProducts } from "../live/feeds/btc.js";
+import { leadSignalFeed, readRelayKey, type RelayListenerOptions } from "../live/feeds/lead-trades.js";
+import type { AssetId, CoreState, HardLimits, LeadVenue, MarketInfo, OrderRecord, SettlementResult, TradingEvent,
   TradingMode } from "../platform/contracts.js";
 import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
@@ -550,11 +551,34 @@ export function readStrategyConfig(path: string): StrategyConfigFile {
   return { config, dailyLossUsd, savedRevision: String(raw.savedRevision ?? input.revision) };
 }
 
-/** The lead trades for the run (chosen once, at start: the detector's window
- * holds one venue's prices; a hot reload that changes it acts on the next run). */
-export function leadFeedFor(source: BinanceLeadConfig["leadSource"], detector: LeadSignalDetector, assetId: AssetId) {
-  const products = referenceVenueProducts(assetId);
-  return { venue: source, feed: bybitLeadFeed(detector, products.bybit), symbol: products.bybit };
+/** The Tokyo relay listener from the environment: PM_RELAY_KEY_FILE (hex or
+ * raw key, read once; never logged), PM_RELAY_PORT (default 47001, UDP and
+ * TCP), PM_RELAY_BIND (default 0.0.0.0), PM_RELAY_ALLOW_IP (only this source,
+ * optional). No key file = no relay line. */
+export function relayListenerFromEnv(env: NodeJS.ProcessEnv = process.env): RelayListenerOptions | undefined {
+  const keyFile = env.PM_RELAY_KEY_FILE?.trim();
+  if (!keyFile) return undefined;
+  let key: RelayListenerOptions["key"];
+  try { key = readRelayKey(keyFile); }
+  catch { throw new CliInputError("PM_RELAY_KEY_FILE must name a readable relay key file (hex, at least 16 bytes)"); }
+  const port = env.PM_RELAY_PORT?.trim() ? Number(env.PM_RELAY_PORT) : 47001;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new CliInputError("PM_RELAY_PORT must be a port number");
+  const allowedIp = env.PM_RELAY_ALLOW_IP?.trim();
+  return { port, key, ...(env.PM_RELAY_BIND?.trim() ? { host: env.PM_RELAY_BIND.trim() } : {}),
+    ...(allowedIp ? { allowedIp } : {}) };
+}
+
+/** The lead trades for the run (chosen once, at start; a hot reload that
+ * changes the venues or the relay acts on the next run): one detector per
+ * venue, each venue on its direct lines and, when given, the relay line. */
+export function leadFeedFor(config: Pick<BinanceLeadConfig, "leadVenues" | "tokyoRelay">, params: LeadSignalParams,
+  assetId: AssetId, relay: RelayListenerOptions | undefined) {
+  const detectors: Partial<Record<LeadVenue, LeadSignalDetector>> = {};
+  for (const venue of config.leadVenues) detectors[venue] = new LeadSignalDetector(params);
+  const products = leadPerpProducts(assetId);
+  const relayLine = config.tokyoRelay ? relay : undefined;
+  return { detectors, products, relay: relayLine !== undefined,
+    ...leadSignalFeed(detectors, { venues: config.leadVenues, products, ...(relayLine ? { relay: relayLine } : {}) }) };
 }
 
 export const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec">): LeadSignalParams =>
@@ -567,9 +591,10 @@ export const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "t
 export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>,
   round: Pick<LeadRound, "marketId" | "roundId" | "status" | "reason" | "stages"> | undefined,
   stopping: boolean): Record<string, unknown> {
-  const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId);
+  const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId && stage.signal.venue === event.venue);
   return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
     move_bp: event.moveBp, open_price: event.openPrice ?? null, open_mean60: event.openMean60 ?? null,
+    venue: event.venue, line: event.line, relay_recv_ms: event.relayRecvMs ?? null,
     trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
     received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
     market_id: round?.marketId ?? null, round_id: round?.roundId ?? null, round_status: round?.status ?? null,
@@ -585,9 +610,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const operatorLimits: Readonly<HardLimits> = { ...options.limits };
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
   let strategy: BinanceLeadStrategy | undefined;
-  let leadFeed: ReturnType<typeof bybitLeadFeed> | undefined;
-  // The venue the running feed reads (fixed at start; the saved config can differ).
-  let leadSourceInUse: BinanceLeadConfig["leadSource"] | null = null;
+  let leadFeed: ReturnType<typeof leadFeedFor> | undefined;
   let syncDetector: ((config: Readonly<BinanceLeadConfig>) => void) | undefined;
   let strategyConfig = options.strategyConfigFile ? readStrategyConfig(options.strategyConfigFile) : undefined;
   if (strategyConfig) {
@@ -846,7 +869,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       } : null,
       strategy_runtime: strategyRuntime,
       lead_feed_healthy: connection?.leadFeedHealthy() ?? null,
-      lead_source: leadSourceInUse,
+      // The running feed's venues and lines (fixed at start; the saved config can differ).
+      lead_venues: leadFeed ? Object.keys(leadFeed.detectors) : null,
+      lead_relay: leadFeed ? leadFeed.relay : null,
+      lead_lines: leadFeed?.stats() ?? null,
       journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: view.markets,
@@ -910,18 +936,16 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         { persist: state => connection?.platform.core.setStrategyState(STRATEGY_ID, state) });
       const roundConfig = (now: number) => lead.activeRoundConfig(now) ?? strategyConfig!.config;
       let detectorParams = leadSignalParams(roundConfig(Date.now() / 1000));
-      const detector = new LeadSignalDetector(detectorParams);
-      leadSourceInUse = strategyConfig.config.leadSource;
-      leadFeed = leadFeedFor(leadSourceInUse, detector, options.assetId).feed;
-      // The detector runs the running round's parameters (frozen 10 s before
-      // its open), the saved ones between rounds. A hot reload or a new round
-      // reaches it on the next event; every round's close has its own timer.
+      const feed = leadFeed = leadFeedFor(strategyConfig.config, detectorParams, options.assetId, relayListenerFromEnv());
+      // Every venue's detector runs the running round's parameters (frozen
+      // 10 s before its open), the saved ones between rounds. A hot reload or a
+      // new round reaches them on the next event; every round's close has its own timer.
       syncDetector = (config: Readonly<BinanceLeadConfig>) => {
         const next = leadSignalParams(config);
         if (next.windowMs === detectorParams.windowMs && next.thresholdBp === detectorParams.thresholdBp
           && next.fromSec === detectorParams.fromSec && next.toSec === detectorParams.toSec) return;
         detectorParams = next;
-        detector.update(detectorParams);
+        for (const detector of Object.values(feed.detectors)) detector.update(detectorParams);
       };
       // The strategy's verdict is read right after it handled the signal (the
       // next signal may change the round); the line is written once the
@@ -929,7 +953,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       const journalLead = (event: Extract<TradingEvent, { kind: "lead" }>, stopping: boolean) => {
         if (!journal) return;
         const fields = { ...leadJournalFields(event, lead.roundAt(event.receivedAtUnix), stopping), engine_ts: Date.now() / 1000 };
-        setImmediate(() => journal?.write("lead_signal", fields, `lead:${JSON.stringify([event.assetId, event.tradeId])}`));
+        setImmediate(() => journal?.write("lead_signal", fields, `lead:${JSON.stringify([event.assetId, event.venue, event.tradeId])}`));
       };
       const onEvent = lead.onEvent.bind(lead);
       lead.onEvent = (event, context) => {
@@ -1014,7 +1038,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         // afterwards the subscription includes publish-only plugin/settlement events.
         record: event => { if (!connection) record(event); },
         durationSec: options.durationSec === 0 ? Infinity : options.durationSec,
-        assetId: options.assetId, strategyId: strategy?.id, leadFeed,
+        assetId: options.assetId, strategyId: strategy?.id, leadFeed: leadFeed?.feed,
         // The saved config's limits; a round frozen with other values signs on the spot.
         presignPlan: strategyConfig ? market => market.instruments.map(instrument => {
           const size = new Map(presignPrices(strategyConfig!.config, instrument.tickSize).map(item => [item.price, item.shares]));

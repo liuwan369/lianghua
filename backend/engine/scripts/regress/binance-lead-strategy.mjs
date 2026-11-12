@@ -459,8 +459,23 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   for (const key of Object.keys(legacyKeys)) assert.equal(key in cleaned, false, `${key} dropped`);
   assert.deepEqual(Object.keys(normalizeBinanceLeadConfig({ roundBudgetUsd: 10, dailyLossUsd: null })).sort(),
     [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "dailyLossUsd"].sort(), "optional budget keys kept");
-  assert.equal(BINANCE_LEAD_DEFAULTS.leadSource, "bybit-perp");
-  assert.throws(() => normalizeBinanceLeadConfig({ leadSource: "binance-spot" }), /leadSource/, "Binance spot is retired");
+  // Lead venues: all three by default, with the Tokyo relay; leadSource is a retired key.
+  assert.deepEqual(BINANCE_LEAD_DEFAULTS.leadVenues, ["bybit", "binance", "okx"]);
+  assert.equal(BINANCE_LEAD_DEFAULTS.tokyoRelay, true);
+  const legacySource = normalizeBinanceLeadConfig({ leadSource: "bybit-perp" });
+  assert.equal("leadSource" in legacySource, false, "a saved leadSource is dropped");
+  assert.deepEqual(legacySource.leadVenues, ["bybit", "binance", "okx"]);
+  assert.deepEqual(normalizeBinanceLeadConfig({ leadVenues: ["okx"], tokyoRelay: false }).leadVenues, ["okx"]);
+  for (const bad of [[], ["kraken"], ["bybit", "bybit"], "bybit", null, ["BYBIT"]]) {
+    assert.throws(() => normalizeBinanceLeadConfig({ leadVenues: bad }), /leadVenues/, JSON.stringify(bad));
+  }
+  assert.throws(() => normalizeBinanceLeadConfig({ tokyoRelay: "yes" }), /tokyoRelay/);
+  // The array is the config's own: a caller mutating its input or output does not reach the other.
+  const input = { leadVenues: ["bybit", "okx"] };
+  const normalized = normalizeBinanceLeadConfig(input);
+  input.leadVenues.push("binance"); normalized.leadVenues.push("binance");
+  assert.deepEqual(normalizeBinanceLeadConfig({}).leadVenues, ["bybit", "binance", "okx"], "defaults untouched");
+  assert.deepEqual(createStrategy({ leadVenues: ["okx", "bybit"] }).exportState().config.leadVenues, ["okx", "bybit"]);
 }
 // --- through the real platform: FAK reaches the gateway with the lead's receive time as trigger ---
 {
