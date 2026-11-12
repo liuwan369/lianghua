@@ -166,7 +166,7 @@ export async function fetchRestBooks(tokens: string[], signal?: AbortSignal): Pr
 
 const defaults: MarketSnapshotDependencies = {
   now: () => Date.now() / 1000,
-  discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, false, directOnly, signal, asset),
+  discover: (at, directOnly = false, signal, asset = "btc") => findMarket(at, directOnly, signal, asset),
   feed: runPolymarketFeed,
   publish: publishSnapshot,
   reference: runBinanceKlines,

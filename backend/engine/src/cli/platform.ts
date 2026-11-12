@@ -27,11 +27,6 @@ const DISCOVERY_POST_BOUNDARY_MS = 20_000;
 export const SETTLEMENT_DRAIN_MAX_MS = 5 * 60_000;
 const SETTLEMENT_DRAIN_POLL_MS = 15_000;
 export const SHUTDOWN_STAGE_MAX_MS = 30_000;
-const BEST_EFFORT_LATENCY_METRICS = new Set([
-  "book_batch_apply", "book_processing", "market_age", "strategy_decision", "ws_receive_to_decision",
-]);
-const PER_BOOK_LATENCY_SAMPLE_EVERY = 10;
-const perBookLatencySeen = new Map<string, number>();
 
 export function countActiveOrders(state: Pick<CoreState, "orders" | "quarantinedOrderIds">): number {
   return state.orders.filter(order => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status)
@@ -102,6 +97,19 @@ export function summaryView<R extends { marketId: string }, M extends { id: stri
   // 41 KB line every 2 s (217 MB of journal in 2.7 h, 2026-10-13).
   const quotedMarketIds = markets.filter(market => market.endsAt > input.now).map(market => market.id);
   return { rounds, markets, quotedMarketIds };
+}
+
+/** Stdout repeats an unchanged status at most this often. */
+export const STATUS_STDOUT_EVERY_MS = 60_000;
+
+/** Print a platform_status line to stdout? The journal gets every one; stdout
+ * only on a status or reason change and once a minute otherwise (2 s printing
+ * was 42,851 lines, ~90 MB, in two days). The control plane reads the console
+ * log only for the last stopped/failed line, so a terminal status always prints. */
+export function statusStdoutDue(last: { status: string; reason: string | null; atMs: number } | undefined,
+  status: string, reason: string | null, nowMs: number): boolean {
+  if (!last || status === "stopped" || status === "failed") return true;
+  return status !== last.status || reason !== last.reason || nowMs - last.atMs >= STATUS_STDOUT_EVERY_MS;
 }
 
 /** Should this settlement pass look at the market at all? Not before it ends,
@@ -879,18 +887,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         market_slug: marketIdentity(fill.tokenId).market_slug, side: marketIdentity(fill.tokenId).side,
         created_at: fill.ts, engine_ts: fill.ts }, `fill:${JSON.stringify([fill.tradeId, fill.orderId])}${fill.status ? `:${fill.status}:${fill.feeSource ?? "estimate"}:${fill.feeUsd}` : ""}`);
     } else if (event.kind === "latency") {
-      const fields = { metric: event.metric, duration_ms: event.durationMs,
+      journal?.write("latency", { metric: event.metric, duration_ms: event.durationMs,
         market_id: event.marketId ?? null, token_id: event.tokenId ?? null,
         strategy_id: event.strategyId ?? null, client_order_id: event.clientOrderId ?? null,
-        order_id: event.orderId ?? null, outcome: event.outcome ?? null, engine_ts: event.ts };
-      if (BEST_EFFORT_LATENCY_METRICS.has(event.metric)) {
-        // Per-book metrics were 64% of the journal (69-113 MB/h while trading).
-        // One in ten still gives thousands of samples per run for the p50/p95
-        // the console shows (second audit, journal growth).
-        const seen = (perBookLatencySeen.get(event.metric) ?? 0) + 1;
-        perBookLatencySeen.set(event.metric, seen);
-        if (seen % PER_BOOK_LATENCY_SAMPLE_EVERY === 1) journal?.writeTelemetry("latency", fields);
-      } else journal?.write("latency", fields);
+        order_id: event.orderId ?? null, outcome: event.outcome ?? null, engine_ts: event.ts });
     } else if (event.kind === "error") {
       if (event.code === "order_abandoned") {
         journal?.write("order_abandoned", { client_order_id: event.clientOrderId ?? null,
@@ -922,6 +922,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         event.result.state, event.result.transactionId ?? null])}`);
     }
   };
+  let lastStdoutStatus: { status: string; reason: string | null; atMs: number } | undefined;
   const summary = (status: "starting" | "running" | "stopped" | "failed") => {
     const platform = connection?.platform;
     const state = platform?.account.current();
@@ -987,7 +988,6 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       lead_venues: leadFeed ? Object.keys(leadFeed.detectors) : null,
       lead_relay: leadFeed ? leadFeed.relay : null,
       lead_lines: leadFeed?.stats() ?? null,
-      journal: journal?.stats() ?? null,
       saved_revision: strategyConfig?.savedRevision ?? null,
       markets: view.markets,
       current_market: currentMarket ? {
@@ -1009,6 +1009,9 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
           stale: expired || ageMs === null || ageMs > 10_000 || receivedAt > now + 1 };
       }) };
     journal?.write("platform_status", { runtime });
+    const reason = signalReason ?? null, printedAtMs = Date.now();
+    if (!statusStdoutDue(lastStdoutStatus, status, reason, printedAtMs)) return;
+    lastStdoutStatus = { status, reason, atMs: printedAtMs };
     console.log(JSON.stringify({ kind: "platform_status", status, mode: options.mode,
       strategy: strategy?.id ?? null, markets: runtime.markets.map(market => market.id),
       cashUsd: runtime.cash_usd, positions: runtime.positions_count, orders: runtime.orders_count,
@@ -1016,9 +1019,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       currentMarket: runtime.current_market,
       currentMarketId: runtime.current_market_id,
       currentRoundId: runtime.current_round_id,
-      journal: runtime.journal,
       telemetry: platform?.telemetry.snapshot() ?? null, capabilities: platform?.capabilities() ?? null,
-      reason: signalReason ?? null }));
+      reason }));
   };
   try {
     phase = "journal_open";

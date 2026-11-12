@@ -173,58 +173,8 @@ async function fetchBySlug(slug: string, asset: string, signal?: AbortSignal): P
     .find((c): c is Candidate => c != null);
 }
 
-/** Fallback for environments where Gamma is unreachable but our local read-only
- * collector is available. This endpoint never places orders; it only supplies
- * the current market identifiers collected from Gamma. */
-async function fetchFromCollector(asset: string, signal?: AbortSignal): Promise<Candidate | undefined> {
-  const base = process.env.PM_LIVE_URL ?? "http://127.0.0.1:18766/api/live";
-  try {
-    // The local collector is the low-latency source on the trading host. Keep
-    // this probe short so a stale/unavailable dashboard cannot delay discovery.
-    // The dashboard may need one SSH-backed refresh on a cold start. Allow it
-    // to complete; later requests are served from the five-second cache.
-    const resp = await fetch(base, { signal: requestSignal(signal, 30_000) });
-    if (!resp.ok) return undefined;
-    const payload = (await resp.json()) as { collector_online?: boolean; current_markets?: Array<Record<string, unknown>> };
-    if (payload.collector_online !== true) return undefined;
-    const now = Math.floor(Date.now() / 1000);
-    const prefix = `${asset}-updown-5m-`;
-    for (const item of payload.current_markets ?? []) {
-      const slug = typeof item.slug === "string" ? item.slug : "";
-      const normalizedSlug = slug.toLowerCase();
-      if (!normalizedSlug.startsWith(prefix)) continue;
-      const upToken = typeof item.up_token === "string" ? item.up_token : "";
-      const downToken = typeof item.down_token === "string" ? item.down_token : "";
-      const start = Number(item.start);
-      const end = Number(item.end);
-      const roundRaw = normalizedSlug.slice(prefix.length);
-      const quoteAt = typeof item.quote_at === "string" ? Date.parse(item.quote_at) : NaN;
-      const quoteAgeSec = Number.isFinite(quoteAt) ? (Date.now() - quoteAt) / 1000 : Number.POSITIVE_INFINITY;
-      const conditionId = typeof item.condition_id === "string" ? item.condition_id : "";
-      if (/^\d+$/.test(roundRaw) && slug && upToken && downToken && upToken !== downToken && conditionId && Number.isSafeInteger(start) &&
-          Number.isFinite(end) && end - start === FIVE_MINUTES_SEC && start === Number(roundRaw) &&
-          start % FIVE_MINUTES_SEC === 0 &&
-          start <= now && now < end && quoteAgeSec >= 0 && quoteAgeSec <= 20) {
-        return {
-          asset,
-          slug,
-          slugStart: start,
-          upToken,
-          downToken,
-          conditionId,
-        };
-      }
-    }
-  } catch (e) {
-    signal?.throwIfAborted();
-    console.warn("Collector market discovery failed:", e);
-  }
-  return undefined;
-}
-
 export interface FindMarketOptions {
   now?: number;
-  allowCollectorFallback?: boolean;
   directOnly?: boolean;
   signal?: AbortSignal;
 }
@@ -236,20 +186,11 @@ export async function findFiveMinuteMarket(
 ): Promise<Market | undefined> {
   const normalizedAsset = normalizeMarketAsset(asset);
   const now = options.now ?? Date.now() / 1000;
-  const allowCollectorFallback = options.allowCollectorFallback ?? true;
   const directOnly = options.directOnly ?? false;
   const signal = options.signal;
   signal?.throwIfAborted();
   const fc = Math.floor(now / FIVE_MINUTES_SEC) * FIVE_MINUTES_SEC;
   const slug = fiveMinuteMarketSlug(normalizedAsset, fc);
-
-  // Collector fallback is an operator-selected discovery source.
-  if (allowCollectorFallback) {
-    const collector = await fetchFromCollector(normalizedAsset, signal);
-    if (collector && isWindowLive(collector.slugStart, now)) {
-      return marketFrom(collector);
-    }
-  }
 
   let direct: Candidate | undefined;
   try {
@@ -304,10 +245,9 @@ export async function findFiveMinuteMarket(
 /** Backward-compatible BTC discovery entry point used by existing callers. */
 export async function findMarket(
   now: number,
-  allowCollectorFallback = true,
   directOnly = false,
   signal?: AbortSignal,
   asset = DEFAULT_MARKET_ASSET,
 ): Promise<Market | undefined> {
-  return findFiveMinuteMarket(asset, { now, allowCollectorFallback, directOnly, signal });
+  return findFiveMinuteMarket(asset, { now, directOnly, signal });
 }

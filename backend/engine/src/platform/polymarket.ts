@@ -31,7 +31,7 @@ type FiveMinuteDiscovery = {
   slug?: string;
 };
 type DiscoveryModule = typeof marketDiscovery & {
-  findFiveMinuteMarket?: (asset: string, options: { now: number; allowCollectorFallback: boolean; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
+  findFiveMinuteMarket?: (asset: string, options: { now: number; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
 };
 type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string };
 
@@ -47,10 +47,6 @@ export function binaryMarketSides(market: MarketInfo): { up: Instrument; down: I
   return { up, down };
 }
 
-export function discoveryOptions(directOnly = false): { allowCollectorFallback: boolean; directOnly: boolean } {
-  return { allowCollectorFallback: !directOnly, directOnly };
-}
-
 /** Explicit market selector used by the existing BTC command, outside the generic platform. */
 export async function discoverMarket(
   asset: AssetId = "btc",
@@ -60,14 +56,14 @@ export async function discoverMarket(
 ): Promise<MarketInfo[]> {
   const discovery = marketDiscovery as DiscoveryModule;
   // Trading runtime requires the identity-aware market-data handoff. Do not
-  // silently fall back to the old listing/collector discovery path: that path
+  // silently fall back to the old listing discovery path: that path
   // cannot provide the marketId/roundId contract required by execution gates.
   if (typeof discovery.findFiveMinuteMarket !== "function") {
     throw new Error("identity-aware market discovery unavailable; deploy with codex/market-data");
   }
   const market = await discovery.findFiveMinuteMarket(asset, {
     now: at,
-    ...discoveryOptions(directOnly),
+    directOnly,
     signal,
   });
   if (!market) return [];

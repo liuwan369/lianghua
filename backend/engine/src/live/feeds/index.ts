@@ -21,7 +21,7 @@ export interface BookSnapshot {
   receivedAtMonoMs?: number;
   processedAtMonoMs?: number;
   marketAgeMs?: number;
-  source?: "polymarket-ws" | "clob-rest" | "collector-rest";
+  source?: "polymarket-ws" | "clob-rest";
   /** Exchange timestamps for ordering; local receive age is checked separately. */
   upExchangeTsUnix?: number;
   downExchangeTsUnix?: number;

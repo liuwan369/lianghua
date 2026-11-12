@@ -37,7 +37,7 @@ export interface Book {
   processingLatencyMs?: number;
   /** Local receive age calculated from exchange and local clocks; may be unavailable. */
   sourceAgeMs?: number;
-  source?: "polymarket-ws" | "clob-rest" | "collector-rest";
+  source?: "polymarket-ws" | "clob-rest";
   bid?: number;
   ask?: number;
   bidSize?: number;
@@ -80,7 +80,7 @@ export interface MarketBookSnapshot {
   receivedAtMonoMs?: number;
   processedAtMonoMs?: number;
   marketAgeMs?: number;
-  source?: "polymarket-ws" | "clob-rest" | "collector-rest";
+  source?: "polymarket-ws" | "clob-rest";
   /** Legacy fields remain readable by old observers only. */
   upExchangeTsUnix?: number;
   downExchangeTsUnix?: number;

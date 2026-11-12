@@ -31,7 +31,7 @@
 | 账本投影 | 控制面拉起 `scripts/dashboard/projection_worker.py`，约 250 ms 一轮 | 读 journal，写 `results/dashboard/ledger.sqlite3` |
 | 账户读取 | 控制面常驻子进程 `dist/cli/account-data.js`，每 15 s | 余额、挂单、持仓、成交、Data API 平仓结果 |
 
-引擎下单用自己的行情 WS，不读采集器文件。采集器文件只给控制台看，另外在 Gamma 发现失败时给引擎兜底（`live/discovery.ts` 读 `/api/live`）。
+引擎下单用自己的行情 WS，不读采集器文件，也不依赖采集器在跑：市场发现只走 Gamma（`live/discovery.ts`）。采集器文件只给控制台看。
 
 引擎跑在独立 systemd scope `pm-engine-<run_id>` 里（`systemd-run --scope` 原地 exec，pid 不变；`choom -n -500` 降低被 OOM 杀的优先级），所以重启控制面不会停掉引擎，控制面重启后按 pid 重新接管。
 
@@ -84,7 +84,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/feeds/binance-trades.ts` | 领先成交：币安 aggTrade 两条线路按成交 id 去重（`binanceLeadFeed`），Bybit 永续 publicTrade 两条线路按 `seq` + 成交 id 去重（`bybitLeadFeed`）；`LeadSignalDetector`（250 ms 窗口判信号） |
 | `live/feeds/btc.ts` | 各币在交易所的代码（采集器订阅币安 1 秒 K 线、引擎订阅币安 aggTrade 用） |
 | `live/orderbook.ts` | 本地 L2 盘口副本 |
-| `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘，采集器兜底 |
+| `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘 |
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
 | `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
 | `strategies/binance-lead.ts` | 策略本体 |
@@ -196,7 +196,7 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 
 | 路径 | 说明 |
 |---|---|
-| `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 前只保留最新 20 个。每个盘口的延迟指标按 1/10 抽样写入 |
+| `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 前只保留最新 20 个。延迟只记下单路径（每笔订单一次），不记每个盘口；platform_status 每 --status-sec 写 journal，stdout（`.console.log`）只在状态或原因变化时、否则每 60 s 打一行，停止/失败那一行必打 |
 | `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎状态，按账户跨 run、跨策略共用（名字是历史遗留，见"启动与停止"） |
 | `…platform-state.json.settlements.json` | 结算记录，清空数据时保留 |
 | `E/results/dashboard/binance-lead-config.json`、`binance-lead-config.draft.json` | 已发布配置、草稿（旧的 `btc-reversal-config*.json` 不再读，留在原处） |

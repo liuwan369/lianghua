@@ -179,7 +179,6 @@ export class TradingPlatform {
   }
   /** Apply all token books from one venue frame before one strategy callback. */
   ingestBooks(books: readonly Book[]): void {
-    const appliedAt = performance.now();
     if (!books.length || !this.core.markBatch(books)) return;
     for (const book of books) {
       const snapshot = clone(book);
@@ -189,18 +188,7 @@ export class TradingPlatform {
       catch { /* Background logging is not an order gate. */ }
     }
     const trigger = books.reduce((latest, book) => (book.receivedAtMonoMs ?? -Infinity) >= (latest.receivedAtMonoMs ?? -Infinity) ? book : latest);
-    const completedAt = performance.now();
     this.publish({ kind: "book", book: clone(trigger) });
-    const ts = this.options.now?.() ?? Date.now() / 1000;
-    const marketId = this.core.instrument(trigger.tokenId)?.marketId;
-    this.publish({ kind: "latency", metric: "book_batch_apply", durationMs: completedAt - appliedAt, ts, marketId });
-    if (trigger.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "book_processing",
-      durationMs: Math.max(0, completedAt - trigger.receivedAtMonoMs), ts, marketId });
-    for (const book of books) if (book.sourceAgeMs != null && book.sourceAgeMs >= 0
-      && book.receivedAtMonoMs === trigger.receivedAtMonoMs) {
-      this.publish({ kind: "latency", metric: "market_age", durationMs: book.sourceAgeMs, ts, marketId,
-        tokenId: book.tokenId });
-    }
   }
   /** Apply one already-gated paired snapshot and publish that same shape to observers and strategies. */
   ingestSnapshot(snapshot: MarketBookSnapshot, marketId = snapshot.marketId, roundId = snapshot.roundId): boolean {
@@ -254,7 +242,6 @@ export class TradingPlatform {
       return { ...book, bidSize: undefined, askSize: undefined, bids: undefined, asks: undefined,
         depthSourceAt: undefined, depthExpiresAt: undefined };
     });
-    const appliedAt = performance.now();
     if (!this.core.markBatch(executionBooks)) return false;
     // Preserve venue identity and timestamps; enrich only the runtime symbol
     // from the registered market whose outcome tokens were checked above.
@@ -269,14 +256,7 @@ export class TradingPlatform {
       try { this.options.adapters.record?.(recordEvent); }
       catch { /* Background logging is outside the decision gate. */ }
     });
-    const completedAt = performance.now();
     this.publish({ kind: "book", snapshot: clone(snapshot), marketId, roundId, assetId: market.assetId });
-    const ts = this.options.now?.() ?? Date.now() / 1000;
-    this.publish({ kind: "latency", metric: "book_batch_apply", durationMs: completedAt - appliedAt, ts, marketId });
-    if (snapshot.receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "book_processing",
-      durationMs: Math.max(0, completedAt - snapshot.receivedAtMonoMs), ts, marketId });
-    if (snapshot.marketAgeMs != null && snapshot.marketAgeMs >= 0) this.publish({ kind: "latency", metric: "market_age",
-      durationMs: snapshot.marketAgeMs, ts, marketId });
     return true;
   }
   /** Forget ended, settled markets here and in the core (see TradingCore.forgetMarkets). */
@@ -340,7 +320,6 @@ export class TradingPlatform {
         for (const strategy of this.plugins.values()) {
           if (current.kind === "error" && current.strategyId !== strategy.id) continue;
           try {
-            const decisionStarted = performance.now();
             const actions = strategy.onEvent(shared, this.context());
             const decisionAtMonoMs = performance.now();
             if (!Array.isArray(actions)) throw new Error("strategy callbacks must be synchronous action arrays");
@@ -352,17 +331,6 @@ export class TradingPlatform {
             } : current.kind === "lead" ? { triggerReceivedAtMonoMs: current.receivedAtMonoMs, decisionAtMonoMs }
               : undefined;
             for (const action of actions) this.dispatch(strategy.id, action, timing);
-            if (current.kind === "book") {
-              const marketId = currentSnapshot?.marketId ?? (currentBook ? this.core.instrument(currentBook.tokenId)?.marketId : undefined);
-              this.publish({ kind: "latency", metric: "strategy_decision", durationMs: decisionAtMonoMs - decisionStarted,
-                ts: this.options.now?.() ?? Date.now() / 1000, marketId,
-                tokenId: currentSnapshot?.YES?.assetId ?? currentBook?.tokenId, strategyId: strategy.id });
-              const receivedAtMonoMs = currentSnapshot?.receivedAtMonoMs ?? currentBook?.receivedAtMonoMs;
-              if (receivedAtMonoMs != null) this.publish({ kind: "latency", metric: "ws_receive_to_decision",
-                durationMs: Math.max(0, decisionAtMonoMs - receivedAtMonoMs),
-                ts: this.options.now?.() ?? Date.now() / 1000, marketId,
-                tokenId: currentSnapshot?.YES?.assetId ?? currentBook?.tokenId, strategyId: strategy.id });
-            }
           } catch (error) {
             const message = error instanceof Error ? error.message : "failed";
             // A single malformed event or failed action must not unregister the

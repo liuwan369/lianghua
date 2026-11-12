@@ -5,12 +5,7 @@ import { dirname } from "node:path";
 export interface JournalOptions {
   onFailure: (error: Error) => void;
   maxBufferedBytes?: number;
-  maxTelemetryBufferedBytes?: number;
   now?: () => number;
-}
-
-export interface JournalStats {
-  telemetryDropped: number;
 }
 
 /** Bounded asynchronous JSONL output, separate from feed diagnostic stdout. */
@@ -19,7 +14,6 @@ export class PlatformJournal {
   private readonly completion: Promise<void>;
   private readonly runId = randomUUID();
   private sequence = 0;
-  private telemetryDropped = 0;
   private closed = false;
   private failure?: Error;
 
@@ -63,32 +57,6 @@ export class PlatformJournal {
     }
     this.stream.write(line);
     return true;
-  }
-
-  /** Best-effort high-volume telemetry that cannot consume the critical record reserve. */
-  writeTelemetry(event: string, fields: Record<string, unknown>, eventId?: string): boolean {
-    if (this.failure || this.closed) return false;
-    let line: string;
-    try {
-      line = this.serialize(event, fields, eventId);
-    } catch {
-      this.telemetryDropped += 1;
-      return false;
-    }
-    const telemetryLimit = Math.min(
-      this.options.maxTelemetryBufferedBytes ?? 256 * 1024,
-      this.options.maxBufferedBytes ?? 1024 * 1024,
-    );
-    if (this.stream.writableLength + Buffer.byteLength(line) > telemetryLimit) {
-      this.telemetryDropped += 1;
-      return false;
-    }
-    this.stream.write(line);
-    return true;
-  }
-
-  stats(): JournalStats {
-    return { telemetryDropped: this.telemetryDropped };
   }
 
   async close(): Promise<void> {

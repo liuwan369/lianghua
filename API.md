@@ -40,7 +40,7 @@
 | `/api/events?runId=&cursor=&limit=` | 事件分页 `items[]`、`cursor`。币安信号（账本事件 `lead_signal`，一天几百条）不在这里，看 `/api/runtime/status` 的 `leadSignals` |
 | `/api/fills?…` | 成交事件分页（同一成交可能有多条修订） |
 | `/api/settlements?…` | 每场最新结算；`pnl` 取官方结果，`pnlSource` |
-| `/api/live` | 采集器快照（引擎发现兜底用） |
+| `/api/live` | 采集器快照 |
 
 ## POST / PUT
 
