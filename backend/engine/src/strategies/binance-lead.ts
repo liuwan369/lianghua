@@ -67,6 +67,11 @@ export interface LeadStage {
   cancelRequestedAt?: number;
   signal: LeadSignalRecord;
   askAtSignal: number;
+  /** Receive time (wall s) of the round's first frame after the signal whose
+   * ask on this side was gone or above the limit, within ASK_GONE_WATCH_SEC of
+   * createdAt; askGoneVenueAt is that side's venue time (s). */
+  askGoneAtUnix?: number;
+  askGoneVenueAt?: number;
 }
 /** Summary of the round's latest frame; never restored across a restart. */
 export interface LeadQuote {
@@ -120,6 +125,8 @@ const CONFIG_FREEZE_SEC = 10;
 /** A frame whose two asks sum above this was not fresh on arrival (backtest `ok`). */
 const WIDE_SUM = 1.05;
 const MAX_LIMIT = 0.99;
+/** How long after a stage's decision its side's ask is watched for going away. */
+export const ASK_GONE_WATCH_SEC = 10;
 /** The venue refuses a marketable BUY under this many USD (2026-10-26 live:
  * "invalid amount for a marketable BUY order ($0.65), min size: 1"). */
 const MIN_MARKETABLE_BUY_USD = 1;
@@ -257,6 +264,10 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   roundAt(ts: number): Readonly<LeadRound> | undefined {
     return this.state.rounds.find(round => round.startsAt <= ts && ts < round.endsAt);
   }
+  /** The stage that placed this order and its round, without cloning. Callers must not mutate it. */
+  stageFor(clientOrderId: string): Readonly<{ round: Readonly<LeadRound>; stage: Readonly<LeadStage> }> | undefined {
+    return this.stagesByClient.get(clientOrderId);
+  }
   /** The running round's config without cloning the state. Callers must not mutate it. */
   activeRoundConfig(now: number): Readonly<BinanceLeadConfig> | undefined {
     return this.roundAt(now)?.config;
@@ -383,7 +394,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         round.status = "running"; round.reason = WAITING; changed = true;
       }
       // The book in force is tracked while paused or blocked too.
-      if (event.kind === "book") this.updateLatest(round, event, context.now);
+      if (event.kind === "book") changed = this.updateLatest(round, event, context.now) || changed;
       const marketBlocked = context.account.risk.blockedMarketIds?.includes(round.marketId) === true;
       const blocked = this.state.paused ? "已暂停新增交易"
         : marketBlocked ? "本场订单等待交易所确认"
@@ -502,18 +513,34 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     return { stage, order };
   }
 
-  /** Every frame of this round replaces the book in force, one-sided included. */
-  private updateLatest(round: LeadRound, event: Extract<TradingEvent, { kind: "book" }>, now: number): void {
+  /** Every frame of this round replaces the book in force, one-sided included.
+   * True when the round's stage just recorded its ask going away. */
+  private updateLatest(round: LeadRound, event: Extract<TradingEvent, { kind: "book" }>, now: number): boolean {
     const snapshot = event.snapshot;
     if (!snapshot || event.marketId !== round.marketId || event.roundId !== round.roundId
       || snapshot.marketId !== round.marketId || snapshot.roundId !== round.roundId
       || snapshot.assetId !== undefined && snapshot.assetId !== round.assetId
-      || round.assetId !== "btc" && snapshot.assetId !== round.assetId) return;
+      || round.assetId !== "btc" && snapshot.assetId !== round.assetId) return false;
     // Only frames of the round itself (backtest: start <= t < start + 300).
-    if ((snapshot.receivedAtUnix ?? now) < round.startsAt) return;
+    const receivedAt = snapshot.receivedAtUnix ?? now;
+    if (receivedAt < round.startsAt) return false;
     const yes = snapshot.YES, no = snapshot.NO;
-    if ((yes && yes.assetId !== round.upTokenId) || (no && no.assetId !== round.downTokenId)) return;
+    if ((yes && yes.assetId !== round.upTokenId) || (no && no.assetId !== round.downTokenId)) return false;
     const upAsk = yes?.ask, downAsk = no?.ask, upBid = yes?.bid, downBid = no?.bid;
+    // The first frame after the signal where the ask we bought at is gone: a
+    // missed FAK was late by (its ACK - this frame). Watched ASK_GONE_WATCH_SEC.
+    let askGone = false;
+    const stage = round.stages[0];
+    if (stage && stage.askGoneAtUnix === undefined && receivedAt > stage.signal.receivedAtUnix
+      && receivedAt <= stage.createdAt + ASK_GONE_WATCH_SEC) {
+      const side = stage.direction === "UP" ? yes : no;
+      const ask = side?.ask;
+      if (ask === undefined || ask > stage.price + EPS) {
+        stage.askGoneAtUnix = receivedAt;
+        if (finite(side?.sourceAt)) stage.askGoneVenueAt = side.sourceAt;
+        askGone = true;
+      }
+    }
     const twoSided = unitPrice(upAsk) && unitPrice(downAsk);
     let staleReason: string | undefined;
     if (twoSided) {
@@ -529,6 +556,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     }
     round.latest = { upAsk, downAsk, upBid, downBid, twoSided, freshOnArrival: twoSided && staleReason === undefined,
       ...(staleReason ? { staleReason } : {}) };
+    return askGone;
   }
 
   private discover(context: StrategyContext): boolean {
@@ -681,6 +709,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           // (2026-10-26: 5.25 of 5); the core bounds every fill by that budget.
           || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares) || stage.filledShares < 0
           || (stage.feeReserveUsd !== undefined && (!Number.isFinite(stage.feeReserveUsd) || stage.feeReserveUsd < 0))
+          || (stage.askGoneAtUnix !== undefined && !finite(stage.askGoneAtUnix))
+          || (stage.askGoneVenueAt !== undefined && !finite(stage.askGoneVenueAt))
           || !STAGE_STATUSES.includes(stage.status)
           || !signal || signal.direction !== stage.direction
           || ![signal.price, signal.refPrice, signal.moveBp, signal.tradeId, signal.tradeTimeMs,

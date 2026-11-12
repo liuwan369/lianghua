@@ -59,6 +59,8 @@ export interface LiveSettlementRecord {
   reason?: string;
   /** Set when the payout is proven 0 without any transaction. */
   payoutProof?: "zero_payout";
+  /** The token the payout vector pays in full, when it was read (absent on a 50/50 or unread vector). */
+  winningTokenId?: string;
 }
 export interface LiveSettlementState {
   schemaVersion: 1;
@@ -195,6 +197,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     return { marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, state: status, reason,
       transactionId: record?.transactionHash ?? record?.relayerId,
       payoutVerified: verified,
+      ...(record?.winningTokenId ? { winningTokenId: record.winningTokenId } : {}),
       ...(verified && zeroPayout ? { payoutProof: "zero_payout" as const } : {}),
       ...(verified ? { creditedUsd: usd(record!.creditedPusd), expectedPayoutUsd: usd(record!.expectedPayout),
         cashBeforeUsd: usd(record!.cashBefore), cashAfterUsd: usd(record!.cashAfter) } : {}) };
@@ -329,6 +332,8 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     }
     if (market.negRisk) return result(request, "unsupported", "neg_risk_redemption_not_supported_by_this_sender");
     if (market.denominator === 0n) return result(request, "pending", "等待官方结算结果");
+    const winnerIndex = market.numerators.length === 2 ? market.numerators.findIndex(value => value === market.denominator) : -1;
+    const winner = winnerIndex >= 0 && market.tokenIds[winnerIndex] ? { winningTokenId: market.tokenIds[winnerIndex]! } : {};
     const before = await backend.balances(market.tokenIds);
     if (before.balances.every(amount => amount === 0n)) {
       // Empty by the time we look: either we never held these, or the venue's
@@ -337,7 +342,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       const lookback = before.block > REDEMPTION_LOOKBACK_BLOCKS ? before.block - REDEMPTION_LOOKBACK_BLOCKS : 0n;
       const scan: LiveSettlementRecord = {
         marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
-        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem",
+        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", ...winner,
         prepared: { kind: "eoa" }, fromBlock: lookback.toString(),
         balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(), expectedPayout: "0",
       };
@@ -370,7 +375,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       const lookback = before.block > REDEMPTION_LOOKBACK_BLOCKS ? before.block - REDEMPTION_LOOKBACK_BLOCKS : 0n;
       const held: LiveSettlementRecord = {
         marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
-        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" },
+        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" }, ...winner,
         fromBlock: lookback.toString(), balancesBefore: before.balances.map(String),
         cashBefore: before.cash.toString(), expectedPayout: "0", creditedPusd: "0", cashAfter: before.cash.toString(),
       };
@@ -395,7 +400,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
     };
     const prepared = await backend.prepare(call);
     record = {
-      marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval",
+      marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval", ...winner,
       prepared, fromBlock: before.block.toString(), balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(),
       expectedPayout: expectedPayout.toString(), transactionHash: prepared.transactionHash,
     };

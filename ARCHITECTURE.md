@@ -158,6 +158,7 @@ FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易�
 - 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
 - 重启时未提交的 `CREATED` 意图标为 `ABANDONED`，从不补发。
 - journal 每个信号一行 `lead_signal`：信号字段、所在场次、结果（`order_submitted`/`skipped`/`no_round`/`stopping`）和本场 reason、下单的限价与卖价。账本把它存成事件 `lead_signal`（不建场次行、不算成交），控制台用它显示"这场为什么没下单"。
+- journal 每笔订单一行 `lead_order`（`cli/platform.ts` leadOrderFields，event_id `lead_order:<clientOrderId>`）：订单到 FILLED/CANCELLED/REJECTED 或意图 ABANDONED 时写，否则在场次结束或停机时按当时状态写。带信号来源（venue/line）、各阶段时间（毫秒 epoch：成交 `trade_time_ms` 是交易所时钟，`signal_recv_ms`/`decision_ms`/`post_sent_ms`/`ack_ms` 是本机墙钟）、`t_*` 差值、卖价消失时间 `ask_gone_ms`（策略 stage.askGoneAtUnix：信号后本方卖价没了或高过限价的第一帧，只看下单后 10 秒）和没买满时的 `late_by_ms = ack_ms - ask_gone_ms`。`platform_settlement` 带 `winning_token_id`/`winning_side`（读到赔付向量时），控制台按 market_id 关联输赢。
 - 状态行 `strategy_runtime` 是 `getStatus()`：每场 `stages`（至多 1 个，含 `signal`、`askAtSignal`）、`reason`、`latest`（当前盘口摘要），加上 `roundOutcome` 的 `upShares/downShares/costUsd/netIfUpUsd/netIfDownUsd`；结算盈亏的 coverage 用 `upTokenId/downTokenId` + `upShares/downShares`。
 
 ## 风控（`platform/core.ts`）

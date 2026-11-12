@@ -193,6 +193,7 @@ export class TradingCore {
         || (o.venueStatusLatencyMs !== undefined && (!finite(o.venueStatusLatencyMs) || o.venueStatusLatencyMs < 0))
         || (o.venueStatusAfterAckLatencyMs !== undefined && (!finite(o.venueStatusAfterAckLatencyMs) || o.venueStatusAfterAckLatencyMs < 0))
         || (o.httpAckAt !== undefined && (!finite(o.httpAckAt) || o.httpAckAt < 0))
+        || (o.postSentAt !== undefined && (!finite(o.postSentAt) || o.postSentAt < 0))
         || (o.venueStatusSource !== undefined && !["http_ack", "user_ws", "account_read"].includes(o.venueStatusSource))
         || (o.cancellationSource !== undefined && !["local_http", "user_ws", "account_read"].includes(o.cancellationSource))
         || [o.signLatencyMs, o.ackLatencyMs, o.totalLatencyMs, o.triggerToPostLatencyMs, o.reactionLatencyMs,
@@ -1064,6 +1065,7 @@ export class TradingCore {
       }
       order.totalLatencyMs = ack.totalLatencyMs; order.triggerToPostLatencyMs = ack.triggerToPostLatencyMs;
       order.decisionToPostLatencyMs = ack.decisionToPostLatencyMs; order.reactionLatencyMs = ack.reactionLatencyMs;
+      if (ack.postSentAt !== undefined) order.postSentAt = ack.postSentAt;
       if (order.prepared && ack.orderId && order.prepared.orderHash !== ack.orderId) {
         order.orderId = ack.orderId;
         order.status = "UNKNOWN"; order.error = "signed hash differs from venue order ID";

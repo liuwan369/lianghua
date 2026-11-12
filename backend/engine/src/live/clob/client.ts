@@ -177,6 +177,9 @@ export interface SubmitOrderResult {
   triggerToPostLatencyMs?: number;
   decisionToPostLatencyMs?: number;
   reactionLatencyMs?: number;
+  /** Wall clock (Date.now() s) when the order POST was started, the instant
+   * trigger/decisionToPostLatencyMs measure to on the monotonic clock. */
+  postSentAt?: number;
   /** Time spent resolving signing metadata before the order was built. */
   riskMetadataLatencyMs?: number;
   /** Last phase reached when a submission failed or became unknown. */
@@ -831,6 +834,7 @@ export class ClobWrapper {
     let responseBodyLatencyMs = 0;
     let postLatencyMs = 0;
     let activePostStarted: number | undefined;
+    let postSentAt: number | undefined;
     const riskStarted = performance.now();
     try {
       const negRisk = await this.negRisk(args.tokenId);
@@ -877,6 +881,7 @@ export class ClobWrapper {
           ackStarted = requestStartedAt;
           postStarted = requestStartedAt;
           activePostStarted = requestStartedAt;
+          postSentAt ??= Date.now() / 1000;
           triggerToPostLatencyMs ??= args.triggerReceivedAtMonoMs == null
             ? undefined : Math.max(0, requestStartedAt - args.triggerReceivedAtMonoMs);
           decisionToPostLatencyMs ??= args.decisionAtMonoMs == null
@@ -913,6 +918,7 @@ export class ClobWrapper {
             postLatencyMs: postLatencyMs || undefined,
             triggerToPostLatencyMs,
             decisionToPostLatencyMs,
+            postSentAt,
             reactionLatencyMs: success && args.triggerReceivedAtMonoMs != null
               ? Math.max(0, performance.now() - args.triggerReceivedAtMonoMs) : undefined,
             riskMetadataLatencyMs,
@@ -939,6 +945,7 @@ export class ClobWrapper {
         responseHeadersLatencyMs: responseHeadersLatencyMs || undefined,
         responseBodyLatencyMs: responseBodyLatencyMs || undefined,
         postLatencyMs: postLatencyMs || undefined,
+        postSentAt,
         riskMetadataLatencyMs,
         failurePhase,
       };

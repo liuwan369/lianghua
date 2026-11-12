@@ -170,7 +170,7 @@ export class PolymarketGateway implements OrderGateway {
       riskMetadataLatencyMs: response.riskMetadataLatencyMs, failurePhase: response.failurePhase,
       totalLatencyMs: response.latencyMs, triggerToPostLatencyMs: response.triggerToPostLatencyMs,
       decisionToPostLatencyMs: response.decisionToPostLatencyMs,
-      reactionLatencyMs: response.reactionLatencyMs };
+      reactionLatencyMs: response.reactionLatencyMs, postSentAt: response.postSentAt };
   }
   cancel(orderId: string): Promise<boolean> { return this.client.cancel(orderId); }
 }

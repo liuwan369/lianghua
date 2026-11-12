@@ -6,13 +6,13 @@ import { Command, CommanderError } from "commander";
 import { LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
 import { leadPerpProducts } from "../live/feeds/btc.js";
 import { leadSignalFeed, readRelayKey, type RelayListenerOptions } from "../live/feeds/lead-trades.js";
-import type { AssetId, CoreState, HardLimits, LeadVenue, MarketInfo, OrderRecord, SettlementResult, TradingEvent,
+import type { AssetId, CoreState, HardLimits, LeadVenue, MarketInfo, OrderRecord, SettlementResult, TradeFill, TradingEvent,
   TradingMode } from "../platform/contracts.js";
 import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
 import { createStrategy, normalizeBinanceLeadConfig, presignPrices, type BinanceLeadConfig, type BinanceLeadState,
-  type BinanceLeadStrategy, type LeadRound } from "../strategies/binance-lead.js";
+  type BinanceLeadStrategy, type LeadRound, type LeadStage } from "../strategies/binance-lead.js";
 
 /** The only built-in strategy; also its key in CoreState.strategyStates. */
 export const STRATEGY_ID = "binance-lead";
@@ -604,6 +604,115 @@ export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>
     limit_price: placed?.price ?? null, ask_at_signal: placed?.askAtSignal ?? null, shares: placed?.shares ?? null };
 }
 
+const msOf = (seconds: number | undefined) => seconds === undefined || !Number.isFinite(seconds) ? null : seconds * 1000;
+const diffMs = (later: number | null, earlier: number | null) => later === null || earlier === null ? null : later - earlier;
+
+/** One journal line per lead order (`lead_order`), for the console: which
+ * venue/line signalled, the stage times, and for a miss how late we were.
+ * All *_ms are epoch milliseconds; the clock each comes from:
+ * - trade_time_ms: the venue's trade time (venue clock);
+ * - relay_recv_ms: the Tokyo relay's receive time (relay clock);
+ * - signal_recv_ms: our wall clock when the trade arrived (signal.receivedAtUnix);
+ * - decision_ms: our wall clock at the strategy callback that placed the order (stage.createdAt);
+ * - post_sent_ms: our wall clock when the CLOB POST started (order.postSentAt, client.ts);
+ * - ack_ms: our wall clock when the core took the HTTP reply (order.httpAckAt; null without a reply);
+ * - ask_gone_ms: our receive wall clock of the first book frame after the
+ *   signal without our side's ask at or under the limit (stage.askGoneAtUnix);
+ * - ask_gone_venue_ms: that frame's venue time for our side (venue clock).
+ * t_signal_ms and t_total_ms span the venue clock and ours, so they include
+ * the clock offset. late_by_ms only for an order short of its shares. */
+export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: Readonly<LeadStage> | undefined,
+  order: Readonly<OrderRecord> | undefined, fills: readonly TradeFill[]): Record<string, unknown> {
+  const signal = stage?.signal;
+  const config = round?.config;
+  const open = signal && config ? (config.openLine === "mean60" ? signal.openMean60 : signal.openPrice) : undefined;
+  const bandBp = signal && open !== undefined && open > 0 && signal.price > 0
+    ? Math.log(signal.price / open) * 1e4 * (signal.direction === "UP" ? 1 : -1) : null;
+  const filled = fills.filter(fill => fill.status !== "FAILED" && fill.shares > 0);
+  const filledShares = filled.reduce((total, fill) => total + fill.shares, 0);
+  const shares = order?.shares ?? stage?.shares ?? null;
+  const orderFilled = order?.filledShares ?? stage?.filledShares ?? null;
+  const tradeTimeMs = signal && signal.tradeTimeMs > 0 ? signal.tradeTimeMs : null;
+  const signalRecvMs = signal && signal.receivedAtUnix > 0 && signal.tradeTimeMs > 0 ? signal.receivedAtUnix * 1000 : null;
+  const decisionMs = msOf(stage?.createdAt);
+  const postSentMs = msOf(order?.postSentAt);
+  const ackMs = msOf(order?.httpAckAt);
+  const askGoneMs = msOf(stage?.askGoneAtUnix);
+  return { client_order_id: order?.clientOrderId ?? stage?.clientOrderId ?? null, order_id: order?.orderId ?? stage?.orderId ?? null,
+    market_id: order?.marketId ?? round?.marketId ?? null, round_id: order?.roundId ?? round?.roundId ?? null,
+    round_start: round?.startsAt ?? null, direction: stage?.direction ?? null, token_id: order?.tokenId ?? stage?.tokenId ?? null,
+    status: stage?.status === "ABANDONED" ? "ABANDONED" : order?.status ?? stage?.status ?? null,
+    venue_status: order?.venueStatus ?? null, error: safeErrorMessage(order?.error ?? stage?.error) ?? null,
+    venue: signal?.venue ?? null, line: signal?.line ?? null, relay_recv_ms: signal?.relayRecvMs ?? null,
+    trade_id: signal && signal.tradeTimeMs > 0 ? signal.tradeId : null, trade_time_ms: tradeTimeMs, signal_recv_ms: signalRecvMs,
+    move_bp: signal && signal.tradeTimeMs > 0 ? signal.moveBp : null, signal_price: signal && signal.price > 0 ? signal.price : null,
+    open_line: config?.openLine ?? null, open_value: open ?? null, band_bp: bandBp,
+    sec_since_open: signal && round && signal.tradeTimeMs > 0 ? signal.receivedAtUnix - round.startsAt : null,
+    ask_at_signal: stage?.askAtSignal ?? null, limit_price: order?.price ?? stage?.price ?? null, shares,
+    filled_shares: orderFilled, avg_fill_price: filledShares > 0
+      ? filled.reduce((total, fill) => total + fill.price * fill.shares, 0) / filledShares : null,
+    fee_usd: filled.length ? filled.reduce((total, fill) => total + fill.feeUsd, 0) : null,
+    decision_ms: decisionMs, post_sent_ms: postSentMs, ack_ms: ackMs,
+    ask_gone_ms: askGoneMs, ask_gone_venue_ms: msOf(stage?.askGoneVenueAt),
+    t_signal_ms: diffMs(signalRecvMs, tradeTimeMs), t_decide_ms: diffMs(decisionMs, signalRecvMs),
+    t_post_ms: diffMs(postSentMs, decisionMs), t_ack_ms: diffMs(ackMs, postSentMs), t_total_ms: diffMs(ackMs, tradeTimeMs),
+    ask_gone_after_trade_ms: diffMs(askGoneMs, tradeTimeMs),
+    late_by_ms: shares !== null && orderFilled !== null && orderFilled < shares - 1e-8 ? diffMs(ackMs, askGoneMs) : null };
+}
+
+const LEAD_ORDER_TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED"]);
+/** Writes `lead_order` once per binance-lead order (key lead_order:<clientOrderId>):
+ * when its order reaches FILLED/CANCELLED/REJECTED (after its submit returned)
+ * or its stage is ABANDONED, else when its round ends, else at flush()
+ * (shutdown), with the status as is. A restart may write a record again under
+ * the same key; the ledger keeps one per event_id.
+ * observe() runs after the strategy handled the event, so the stage is current. */
+export function createLeadOrderLog(lookup: (clientOrderId: string) =>
+  Readonly<{ round: Readonly<LeadRound>; stage: Readonly<LeadStage> }> | undefined,
+write: (fields: Record<string, unknown>, eventId: string) => void) {
+  const pending = new Map<string, OrderRecord>();
+  const fillsByOrder = new Map<string, Map<string, TradeFill>>();
+  const written = new Set<string>();
+  const emit = (clientOrderId: string) => {
+    const order = pending.get(clientOrderId);
+    pending.delete(clientOrderId);
+    written.add(clientOrderId);
+    const fills = order?.orderId ? [...fillsByOrder.get(order.orderId)?.values() ?? []] : [];
+    if (order?.orderId) fillsByOrder.delete(order.orderId);
+    const indexed = lookup(clientOrderId);
+    write(leadOrderFields(indexed?.round, indexed?.stage, order, fills), `lead_order:${clientOrderId}`);
+  };
+  return {
+    observe(event: TradingEvent, now: number): void {
+      if (event.kind === "order") {
+        const order = event.order;
+        if (order.strategyId !== STRATEGY_ID || written.has(order.clientOrderId)) return;
+        pending.set(order.clientOrderId, order);
+      } else if (event.kind === "error" && event.code === "order_not_submitted" && event.clientOrderId
+        && !written.has(event.clientOrderId) && !pending.has(event.clientOrderId)) {
+        // The core refused it before an order record existed: the stage alone.
+        if (lookup(event.clientOrderId)?.stage.status === "REJECTED") emit(event.clientOrderId);
+        return;
+      } else if (event.kind === "fill" && pending.size) {
+        const fill = event.fill;
+        if (![...pending.values()].some(order => order.orderId === fill.orderId)) return;
+        const fills = fillsByOrder.get(fill.orderId) ?? new Map<string, TradeFill>();
+        fills.set(fill.tradeId, fill);
+        fillsByOrder.set(fill.orderId, fills);
+      }
+      for (const [clientOrderId, order] of pending) {
+        const indexed = lookup(clientOrderId);
+        // A FAK's fill can beat its HTTP reply: wait for the reply's update so ack_ms is known.
+        const submitDone = order.status === "REJECTED" || order.httpAckAt !== undefined || order.totalLatencyMs !== undefined;
+        if ((LEAD_ORDER_TERMINAL.has(order.status) && submitDone) || indexed?.stage.status === "ABANDONED"
+          || (event.kind === "error" && event.code === "order_abandoned" && event.clientOrderId === clientOrderId)
+          || (indexed && now >= indexed.round.endsAt)) emit(clientOrderId);
+      }
+    },
+    flush(): void { for (const clientOrderId of [...pending.keys()]) emit(clientOrderId); },
+  };
+}
+
 export async function runPlatformCli(argv: string[]): Promise<void> {
   const options = parsePlatformOptions(argv);
   if (!options) return;
@@ -611,6 +720,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
   let strategy: BinanceLeadStrategy | undefined;
   let leadFeed: ReturnType<typeof leadFeedFor> | undefined;
+  let leadOrders: ReturnType<typeof createLeadOrderLog> | undefined;
   let syncDetector: ((config: Readonly<BinanceLeadConfig>) => void) | undefined;
   let strategyConfig = options.strategyConfigFile ? readStrategyConfig(options.strategyConfigFile) : undefined;
   if (strategyConfig) {
@@ -803,7 +913,11 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         transaction_id: event.result.transactionId ?? null,
         payout_verified: event.result.payoutVerified === true, payout_proof: event.result.payoutProof ?? null,
         credited_usd: event.result.creditedUsd ?? null, expected_payout_usd: event.result.expectedPayoutUsd ?? null,
-        cash_before_usd: event.result.cashBeforeUsd ?? null, cash_after_usd: event.result.cashAfterUsd ?? null },
+        cash_before_usd: event.result.cashBeforeUsd ?? null, cash_after_usd: event.result.cashAfterUsd ?? null,
+        // The side the payout vector paid, so a lead_order joins its win/loss by market_id.
+        winning_token_id: event.result.winningTokenId ?? null,
+        winning_side: event.result.winningTokenId ? market?.instruments.find(instrument =>
+          instrument.tokenId === event.result.winningTokenId)?.outcome ?? null : null },
       `settlement:${JSON.stringify([event.result.marketId, event.result.roundId ?? market?.roundId ?? null,
         event.result.state, event.result.transactionId ?? null])}`);
     }
@@ -955,8 +1069,16 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         const fields = { ...leadJournalFields(event, lead.roundAt(event.receivedAtUnix), stopping), engine_ts: Date.now() / 1000 };
         setImmediate(() => journal?.write("lead_signal", fields, `lead:${JSON.stringify([event.assetId, event.venue, event.tradeId])}`));
       };
+      const orderLog = leadOrders = createLeadOrderLog(clientOrderId => lead.stageFor(clientOrderId),
+        (fields, eventId) => journal?.write("lead_order", { ...fields, engine_ts: Date.now() / 1000 }, eventId));
       const onEvent = lead.onEvent.bind(lead);
       lead.onEvent = (event, context) => {
+        const actions = handleLead(event, context);
+        // Read once the strategy has applied the event to its stage.
+        try { orderLog.observe(event, context.now); } catch { /* Observability is outside execution. */ }
+        return actions;
+      };
+      const handleLead: typeof onEvent = (event, context) => {
         // Shutdown is local to this run. Do not persist it as an operator
         // pause, or the next run would inherit a permanent admission lock.
         // Still record order/fill/settlement evidence though: short-circuiting
@@ -1382,6 +1504,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       primaryFailure ??= error;
       reportError("state_close", "platform_state_close_failed");
     }
+    try { leadOrders?.flush(); } catch { /* Observability is outside execution. */ }
     try { summary(primaryFailure ? "failed" : "stopped"); }
     catch (error) { primaryFailure ??= error; }
     try { await journal?.close(); }

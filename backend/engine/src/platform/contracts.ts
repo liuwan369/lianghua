@@ -148,6 +148,8 @@ export interface OrderRecord extends OrderRequest {
   venueStatusAfterAckLatencyMs?: number;
   /** Wall-clock time at which the CLOB HTTP order response was accepted. */
   httpAckAt?: number;
+  /** Wall-clock seconds when the order POST was started (CLOB client). */
+  postSentAt?: number;
   filledShares: number;
   reservedUsd: number;
   reservedShares: number;
@@ -329,6 +331,8 @@ export interface GatewayAck {
   triggerToPostLatencyMs?: number;
   decisionToPostLatencyMs?: number;
   reactionLatencyMs?: number;
+  /** Wall-clock seconds when the order POST was started (CLOB client). */
+  postSentAt?: number;
 }
 export interface ExecutionTiming {
   /** Monotonic receive time of the market frame that produced this action. */
@@ -368,6 +372,8 @@ export interface SettlementResult {
   /** "zero_payout": only losing tokens were held, the payout vector proves 0 and
    * no transaction exists. Every other verified payout carries a tx hash. */
   payoutProof?: "zero_payout";
+  /** The token the official payout vector pays in full, once read (absent on 50/50). */
+  winningTokenId?: string;
   creditedUsd?: number;
   expectedPayoutUsd?: number;
   /** Balance observations can include unrelated wallet activity; not round PnL. */
