@@ -1,8 +1,8 @@
-/** Lead trades on two public lines each, deduplicated, and the 250 ms
- * lead-signal detector that runs on them: Binance spot aggTrade (the frozen
- * rule, E:/pm-backup/forward-binance-agg.py signals()) or Bybit USDT perpetual
- * publicTrade (user 2026-10-29: same rule, earlier in Dublin at signals;
- * backtest E:/pm-backup/research-1028/bybit_vs_binance.py). */
+/** Lead trades on two public lines, deduplicated, and the lead-signal detector
+ * that runs on them (the frozen rule, E:/pm-backup/forward-binance-agg.py
+ * signals()). Live source: Bybit USDT perpetual publicTrade (user 2026-10-29:
+ * same rule, earlier in Dublin; E:/pm-backup/research-1028/bybit_vs_binance.py).
+ * createAggTradeIngest parses Binance's aggTrade format (a/p/T). */
 import WebSocket from "ws";
 import type { FeedEvent } from "./index.js";
 
@@ -11,7 +11,7 @@ export interface AggTrade {
    * the trade's position in our delivery order (its venue id is a UUID). */
   id: number;
   price: number;
-  /** Binance trade time `T`, milliseconds. */
+  /** Trade time `T`, milliseconds. */
   tradeTimeMs: number;
   /** Local wall clock when the frame reached us (seconds). */
   receivedAtUnix: number;
@@ -36,9 +36,6 @@ export interface LeadSignal {
    * basis |error| p50 0.47 bp vs 1.44 bp for openPrice). Absent unless the
    * history covers the whole window. */
   openMean60?: number;
-  /** Fair-value model P(the round settles UP) with trades up to this one
-   * (leadFairUp). Absent without the history it needs (about 6 minutes). */
-  fairUp?: number;
   tradeId: number;
   tradeTimeMs: number;
   receivedAtUnix: number;
@@ -52,10 +49,6 @@ export interface LeadSignalParams {
   toSec: number;
 }
 
-export const binanceTradeUrls = (symbol: string): string[] => [
-  `wss://stream.binance.com:9443/ws/${symbol}@aggTrade`,
-  `wss://data-stream.binance.vision/ws/${symbol}@aggTrade`,
-];
 const IDLE_MS = 10_000;
 const CONNECT_TIMEOUT_MS = 10_000;
 /** The rule was measured with a trade seen ~125 ms after it happened (p90
@@ -66,55 +59,12 @@ const MAX_TRADE_AGE_MS = 1_000;
 const MAX_TRADE_LEAD_MS = 1_000;
 /** BTCUSDT runs ~10 aggregate trades a second; a bigger id jump is a bad frame. */
 const MAX_ID_JUMP = 1_000_000;
-/** Seconds of per-second history kept for the fair-value model: it reads back
- * to R - 59 (the price to beat) and floor(T) - 300 (volatility), at most 325 s. */
-const SEC_RING = 1024;
+/** Seconds of per-second history kept for openMean60: it reads back to R - 59,
+ * at most 359 s before a trade in the round; 512 leaves a margin. */
+const SEC_RING = 512;
 /** No trade for longer than this is a dead feed, not a quiet market (Bybit perp
  * 10-18/25, 11-01: longest quiet gap 29 s): the history restarts. */
 const MAX_HISTORY_GAP_MS = 60_000;
-
-/** Fair-value model of the lead venue's settlement (E:/pm-backup/research-1103
- * fv_trade.py p_up, fitted fv_calib.py): the round settles on the mean of the
- * last 60 s, (R+240, R+300], against the mean of the 60 s before the open,
- * (R-60, R]. With price(g) the last trade at or before whole second g:
- *   O = mean price(R-59..R); sigma = std (ddof 0) of the 1 s log returns ending
- *   at floor(T)-299..floor(T); e = seconds of the closing window already past,
- *   A their mean; E[F] = (e A + n S) / 60 with n = 60 - e, S the trade's price;
- *   sd(F) = (n/60) S sigma sqrt(sum_ij min(t_i, t_j)) / n, t_i = seconds from
- *   floor(T - R) to each future second of the window;
- *   P(UP) = Phi(C (E[F] - O) / sd(F)), C = 0.859 (fitted in-sample).
- * Information cutoff is the trade time T (ms). undefined when a second it needs
- * is outside the history. */
-export function leadFairUp(price: (g: number) => number | undefined, tradeTimeMs: number, tradePrice: number): number | undefined {
-  const R = Math.floor(tradeTimeMs / 300_000) * 300;
-  const gv = Math.floor(tradeTimeMs / 1000);
-  const open = leadOpenMean60(price, R);
-  if (open === undefined) return undefined;
-  let previous = price(gv - 300);
-  if (previous === undefined) return undefined;
-  let sum = 0, sumSq = 0;
-  for (let g = gv - 299; g <= gv; g += 1) {
-    const p = price(g); if (p === undefined) return undefined;
-    const r = Math.log(p / previous); sum += r; sumSq += r * r; previous = p;
-  }
-  const mean = sum / 300;
-  const sigma = Math.sqrt(Math.max(0, sumSq / 300 - mean * mean));
-  const e = Math.max(0, Math.min(60, gv - (R + 240)));
-  let past = 0;
-  for (let g = R + 241; g <= R + 240 + e; g += 1) {
-    const p = price(g); if (p === undefined) return undefined;
-    past += p;
-  }
-  const n = 60 - e;
-  const expected = (past + n * tradePrice) / 60;
-  const sd = (n / 60) * tradePrice * sigma * windowFactor(Math.floor(tradeTimeMs / 1000 - R), n);
-  // sd 0 (no move in 300 s: a stuck feed, not BTC) or NaN: no estimate, so the
-  // order keeps the base size instead of a certain 1/0 buying the top tier.
-  if (!(sd > 0)) return undefined;
-  const p = normalCdf(FAIR_C * (expected - open) / sd);
-  return Number.isFinite(p) ? p : undefined;
-}
-const FAIR_C = 0.859;
 
 /** Mean of price(g) for g = R-59..R (the 60 s before the open R, unix seconds). */
 export function leadOpenMean60(price: (g: number) => number | undefined, R: number): number | undefined {
@@ -124,25 +74,6 @@ export function leadOpenMean60(price: (g: number) => number | undefined, R: numb
     sum += p;
   }
   return sum / 60;
-}
-
-/** sqrt(sum_ij min(t_i, t_j)) / n for the last n seconds of (R+240, R+300]
- * seen from second k (fv_calib.py vfactor). Ascending t: sum = sum_i t_i (2(n-i)+1). */
-function windowFactor(k: number, n: number): number {
-  if (n <= 0) return 0;
-  const first = Math.max(241, k + 1) + Math.max(0, 301 - Math.max(241, k + 1) - n);
-  let total = 0;
-  for (let i = 0; i < n; i += 1) total += (first + i - k) * (2 * (n - 1 - i) + 1);
-  return Math.sqrt(total) / n;
-}
-
-/** Phi(x) via erfc (Numerical Recipes erfcc, fractional error < 1.2e-7). */
-function normalCdf(x: number): number {
-  const z = Math.abs(x) / Math.SQRT2;
-  const t = 1 / (1 + 0.5 * z);
-  const erfc = t * Math.exp(-z * z - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806
-    + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
-  return x >= 0 ? 1 - erfc / 2 : erfc / 2;
 }
 
 /** Parse one aggTrade frame and pass it on only if its id is newer than every
@@ -249,12 +180,6 @@ async function lineLoop(url: string, line: number, ingest: LineIngest,
   }
 }
 
-/** Two public aggTrade lines for one symbol; each trade is delivered once. */
-export function runBinanceTrades(onTrade: (trade: AggTrade) => void, symbol = "btcusdt",
-  urls: readonly string[] = binanceTradeUrls(symbol)): { stop: () => void; isHealthy: () => boolean } {
-  return runLines(urls, createAggTradeIngest(onTrade));
-}
-
 function runLines(urls: readonly string[], ingest: LineIngest, subscribe?: string): { stop: () => void; isHealthy: () => boolean } {
   const controller = new AbortController();
   const sockets = new Set<WebSocket>();
@@ -297,7 +222,7 @@ export class LeadSignalDetector {
   private lastPrice?: number;
   private openRoundMs?: number;
   private openPrice?: number;
-  // Per-second lead price for the fair-value model, as the backtest's grid:
+  // Per-second lead price for openMean60, as the backtest's grid:
   // the price of second g is the last trade at or before g (whole seconds).
   // secPrice[g % SEC_RING] holds it once a later trade closed the second, with
   // secTag = g; historyStartSec is the first second covered since the feed
@@ -348,12 +273,10 @@ export class LeadSignalDetector {
     this.minHead = 0; this.maxHead = 0;
     this.base = this.head = this.next;
     this.append(t, p);
-    const fairUp = leadFairUp(g => this.secondPrice(g), t, p);
     const openMean60 = leadOpenMean60(g => this.secondPrice(g), roundMs / 1000);
     return { direction, price: p, refPrice, moveBp: move * 1e4, tradeId: trade.id, tradeTimeMs: t,
       ...(this.openPrice !== undefined ? { openPrice: this.openPrice } : {}),
       ...(openMean60 !== undefined ? { openMean60 } : {}),
-      ...(fairUp !== undefined ? { fairUp } : {}),
       receivedAtUnix: trade.receivedAtUnix, receivedAtMonoMs: trade.receivedAtMonoMs };
   }
 
@@ -402,16 +325,6 @@ export class LeadSignalDetector {
       || !(fromSec >= 0 && fromSec < toSec && toSec <= 300)) throw new Error("invalid lead signal parameters");
     return { windowMs, thresholdBp, fromSec, toSec };
   }
-}
-
-/** The ConnectOptions.leadFeed producer: Binance trades through the detector,
- * signals out as lead feed events. S is the local receive time of the trade. */
-export function binanceLeadFeed(detector: LeadSignalDetector, symbol = "btcusdt") {
-  return (sink: (event: FeedEvent) => void): { stop: () => void; isHealthy: () => boolean } =>
-    runBinanceTrades(trade => {
-      const signal = detector.push(trade, trade.receivedAtUnix);
-      if (signal) sink({ kind: "lead", ...signal });
-    }, symbol);
 }
 
 /** Bybit v5 public linear (USDT perpetual) trades. Two CloudFront hosts carry
@@ -480,7 +393,8 @@ export function runBybitTrades(onTrade: (trade: AggTrade) => void, symbol = "BTC
   return runLines(urls, createBybitTradeIngest(onTrade, symbol), bybitSubscribe(symbol));
 }
 
-/** binanceLeadFeed on Bybit USDT perpetual trades. */
+/** The ConnectOptions.leadFeed producer: Bybit USDT perpetual trades through
+ * the detector, signals out as lead feed events. S is the local receive time. */
 export function bybitLeadFeed(detector: LeadSignalDetector, symbol = "BTCUSDT") {
   return (sink: (event: FeedEvent) => void): { stop: () => void; isHealthy: () => boolean } =>
     runBybitTrades(trade => {

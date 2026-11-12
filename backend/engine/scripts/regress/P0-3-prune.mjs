@@ -42,7 +42,7 @@ const leadRound = (old) => {
   const S = old.startsAt + 30;
   return { assetId: "btc", marketId: old.marketId, roundId: old.roundId, name: old.name, startsAt: old.startsAt, endsAt: old.endsAt,
     upTokenId: old.upTokenId, downTokenId: old.downTokenId, config, status: "ended", reason: "本场已结束，处理余单与结算",
-    stages: order ? [{ stage: 1, direction, tokenId: order.tokenId, clientOrderId: `binance-lead:${old.marketId}:1`, price: 0.7,
+    stages: order ? [{ direction, tokenId: order.tokenId, clientOrderId: `binance-lead:${old.marketId}:1`, price: 0.7,
       shares: 5, createdAt: S, status: "FILLED", filledShares: 5, orderId: order.orderId, askAtSignal: 0.67,
       signal: { direction, price: 100030, refPrice: 100000, moveBp: direction === "UP" ? 3 : -3, tradeId: S, tradeTimeMs: S * 1000,
         receivedAtUnix: S, receivedAtMonoMs: 1 } }] : [] };

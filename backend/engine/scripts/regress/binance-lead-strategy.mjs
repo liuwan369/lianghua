@@ -321,6 +321,33 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   const two = JSON.parse(JSON.stringify(state));
   two.rounds[0].stages.push({ ...two.rounds[0].stages[0] });
   assert.throws(() => createStrategy({}, two));
+  // A state written by the engine with maker/reverse/edge sizing: the stage
+  // number and fair-value edge are dropped, the retired config keys too.
+  const legacy = JSON.parse(JSON.stringify(state));
+  const retired = { makerHoldSec: 0, reverseMaxAsk: 0.5, reverseToSec: 285, midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0 };
+  Object.assign(legacy.config, retired); Object.assign(legacy.rounds[0].config, retired);
+  Object.assign(legacy.rounds[0].stages[0], { stage: 1, fairEdge: 0.11 });
+  legacy.rounds[0].stages[0].signal.fairUp = 0.7;
+  const restored = createStrategy({}, legacy).exportState();
+  const stage = restored.rounds[0].stages[0];
+  assert.equal("stage" in stage, false, "stage number stripped");
+  assert.equal("fairEdge" in stage, false, "fairEdge stripped");
+  assert.equal("fairUp" in stage.signal, false, "fairUp stripped");
+  for (const key of Object.keys(retired)) {
+    assert.equal(key in restored.config, false, `${key} dropped from the config`);
+    assert.equal(key in restored.rounds[0].config, false, `${key} dropped from the round config`);
+  }
+  // A maker stage (timed cancel) or a reverse-leg stage number is not restorable.
+  const maker = JSON.parse(JSON.stringify(state));
+  maker.rounds[0].stages[0].cancelAt = START + 30;
+  assert.throws(() => createStrategy({}, maker), /stage/);
+  const leg = JSON.parse(JSON.stringify(state));
+  leg.rounds[0].stages[0].stage = 2;
+  assert.throws(() => createStrategy({}, leg), /stage/);
+  // Shares must be leadShares(config.shares, price): an edge-tier size is refused.
+  const tier = JSON.parse(JSON.stringify(state));
+  tier.rounds[0].stages[0].shares = 10;
+  assert.throws(() => createStrategy({}, tier), /stage/);
 }
 // --- crash before the stage was saved: the core's order is the round's attempt (review 10-25) ---
 // The core persists the signed order (.intent) before POST but the strategy
@@ -424,6 +451,16 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
   }
   assert.equal(normalizeBinanceLeadConfig({ maxAsk: 0.99 }).maxAsk, 0.99);
   assert.equal(normalizeBinanceLeadConfig({ maxAsk: 0.01 }).maxAsk, 0.01);
+  // Retired settings in a saved config are dropped, not validated or carried along.
+  const legacyKeys = { makerHoldSec: 3, reverseMaxAsk: 0.5, reverseToSec: 285, midEdge: 0.08, midShares: 10, highEdge: 0.13,
+    highShares: 20, someOtherKey: 1 };
+  const cleaned = normalizeBinanceLeadConfig({ ...legacyKeys, shares: 7 });
+  assert.equal(cleaned.shares, 7);
+  for (const key of Object.keys(legacyKeys)) assert.equal(key in cleaned, false, `${key} dropped`);
+  assert.deepEqual(Object.keys(normalizeBinanceLeadConfig({ roundBudgetUsd: 10, dailyLossUsd: null })).sort(),
+    [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "dailyLossUsd"].sort(), "optional budget keys kept");
+  assert.equal(BINANCE_LEAD_DEFAULTS.leadSource, "bybit-perp");
+  assert.throws(() => normalizeBinanceLeadConfig({ leadSource: "binance-spot" }), /leadSource/, "Binance spot is retired");
 }
 // --- through the real platform: FAK reaches the gateway with the lead's receive time as trigger ---
 {

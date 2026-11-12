@@ -92,4 +92,52 @@ const at = (bp) => OPEN * Math.exp(bp / 1e4);            // price this many bp f
   assert.equal(submits(on(s, lead(START + 20, "UP", at(40), OPEN))).length, 1, "band 0 trades any distance");
   assert.throws(() => normalizeBinanceLeadConfig({ openBandBp: -1 }), /openBandBp/);
 }
+
+// --- 3. openLine "mean60" (user 2026-11-07): the band is measured from the mean
+// of the lead price over the 60 whole seconds (R-60, R], each second the last
+// trade at or before it (the official target's 60 s TWAP window). ---
+{
+  const d = new LeadSignalDetector(PARAMS);
+  // 100 000 until R-30.5, then 100 060: seconds R-59..R-31 (29) at 100 000,
+  // R-30..R (31) at 100 060 -> mean 100 000 + 60 * 31 / 60 = 100 031.
+  push(d, R - 200, 100_000);
+  for (let t = R - 199; t <= R - 31; t += 1) push(d, t, 100_000);
+  push(d, R - 30.5, 100_060);
+  for (let t = R - 30; t <= R + 20; t += 1) push(d, t, 100_060);
+  const s = push(d, R + 20.1, 100_090);
+  assert.equal(s?.direction, "UP");
+  assert.equal(s.openPrice, 100_060, "tick open = last trade at or before R");
+  assert.ok(Math.abs(s.openMean60 - 100_031) < 1e-6, `mean60 = 100031, got ${s.openMean60}`);
+  // A late signal (R+260) still reads its own round's window back to R-59.
+  for (let t = R + 21; t <= R + 260; t += 1) push(d, t, 100_090);
+  const late = push(d, R + 260.1, 100_120);
+  assert.equal(late?.direction, "UP");
+  assert.ok(Math.abs(late.openMean60 - 100_031) < 1e-6, `late signal mean60 = 100031, got ${late.openMean60}`);
+  // The feed started 30 s before the open: the window is not covered -> no mean.
+  const e = new LeadSignalDetector(PARAMS);
+  for (let t = R - 30; t <= R + 20; t += 1) push(e, t, 100_000);
+  const g = push(e, R + 20.1, 100_030);
+  assert.equal(g?.direction, "UP");
+  assert.equal(g.openMean60, undefined, "history shorter than the 60 s window: no mean");
+  // The next round gets its own mean.
+  for (let t = R + 21; t <= R + 320; t += 1) push(e, t, 100_000);
+  const h = push(e, R + 320.1, 100_030);
+  assert.ok(Math.abs(h.openMean60 - 100_000) < 1e-6, "next round: mean of its own window");
+}
+{
+  const leadLines = (S, direction, price, openPrice, openMean60) => ({ ...lead(S, direction, price, openPrice),
+    ...(openMean60 !== undefined ? { openMean60 } : {}) });
+  // 4 bp above the tick open but 7 bp above the 60 s mean: tick passes, mean60 does not.
+  const a = begin({ openBandBp: 5, openLine: "tick" });
+  assert.equal(submits(on(a, leadLines(START + 40, "UP", at(4), OPEN, at(-3)))).length, 1, "tick line: +4 bp is inside");
+  const b = begin({ openBandBp: 5, openLine: "mean60" });
+  assert.equal(submits(on(b, leadLines(START + 40, "UP", at(4), OPEN, at(-3)))).length, 0, "mean60 line: +7 bp is outside");
+  assert.match(reason(b), /60 秒均价.*领先 7\.0 bp/);
+  // No 60 s mean (feed younger than the window): skipped, the attempt kept.
+  assert.equal(submits(on(b, leadLines(START + 41, "UP", at(1), OPEN, undefined))).length, 0);
+  assert.match(reason(b), /60 秒均价未知/);
+  assert.equal(submits(on(b, leadLines(START + 42, "UP", at(1), OPEN, OPEN))).length, 1, "inside the mean60 band");
+  assert.equal(normalizeBinanceLeadConfig({}).openLine, "tick");
+  assert.throws(() => normalizeBinanceLeadConfig({ openLine: "close" }), /openLine/);
+}
 console.log("open-band OK");

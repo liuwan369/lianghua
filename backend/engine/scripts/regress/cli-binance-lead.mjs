@@ -39,11 +39,10 @@ try {
   assert.equal(read.config.shares, 7);
   assert.equal(read.config.thresholdBp, 2.5);
   assert.equal(read.config.windowMs, 250, "defaults fill what the file leaves out");
-  // --- the run's lead source: Binance spot by default, Bybit perp when chosen ---
-  assert.equal(read.config.leadSource, "binance-spot");
+  // --- the run's lead source: Bybit perp ---
+  assert.equal(read.config.leadSource, "bybit-perp");
   const detector = new LeadSignalDetector({ windowMs: 250, thresholdBp: 2, fromSec: 15, toSec: 265 });
-  assert.deepEqual([leadFeedFor("binance-spot", detector, "btc").symbol, leadFeedFor("bybit-perp", detector, "btc").symbol],
-    ["btcusdt", "BTCUSDT"], "each venue's own product code");
+  assert.equal(leadFeedFor("bybit-perp", detector, "btc").symbol, "BTCUSDT", "Bybit's product code");
   assert.equal(typeof leadFeedFor("bybit-perp", detector, "btc").feed, "function");
   assert.equal(read.config.revision, "4", "the saved revision is the config revision");
   assert.equal(read.savedRevision, "4");
@@ -89,10 +88,10 @@ try {
   const second = lead(START + 23, 42);
   s.onEvent(second, ctx(START + 23));
   assert.deepEqual(leadJournalFields(second, s.roundAt(second.receivedAtUnix), false), { asset_id: "btc", direction: "UP",
-    price: 100030, ref_price: 100000, move_bp: 2.9996, open_price: null, open_mean60: null, fair_up: null, stage: 1, trade_id: 42, trade_time_ms: (START + 23) * 1000 - 100,
+    price: 100030, ref_price: 100000, move_bp: 2.9996, open_price: null, open_mean60: null, trade_id: 42, trade_time_ms: (START + 23) * 1000 - 100,
     received_at: START + 23, received_at_mono_ms: 5, market_id: "0xm", round_id: ROUND, round_status: "running",
     outcome: "order_submitted", reason: "已下单（FAK），等待成交回报", attempted: true, client_order_id: "binance-lead:0xm:1",
-    token_id: UP, limit_price: 0.6, ask_at_signal: 0.57, shares: 5, fair_edge: null });
+    token_id: UP, limit_price: 0.6, ask_at_signal: 0.57, shares: 5 });
   const third = lead(START + 24, 43);
   s.onEvent(third, ctx(START + 24));
   const after = leadJournalFields(third, s.roundAt(third.receivedAtUnix), false);

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import { binanceLeadFeed, bybitLeadFeed, LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
+import { bybitLeadFeed, LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
 import { referenceVenueProducts } from "../live/feeds/btc.js";
 import type { AssetId, CoreState, HardLimits, MarketInfo, OrderRecord, SettlementResult, TradingEvent,
   TradingMode } from "../platform/contracts.js";
@@ -554,16 +554,11 @@ export function readStrategyConfig(path: string): StrategyConfigFile {
  * holds one venue's prices; a hot reload that changes it acts on the next run). */
 export function leadFeedFor(source: BinanceLeadConfig["leadSource"], detector: LeadSignalDetector, assetId: AssetId) {
   const products = referenceVenueProducts(assetId);
-  return { venue: source, feed: source === "bybit-perp" ? bybitLeadFeed(detector, products.bybit) : binanceLeadFeed(detector, products.binance),
-    symbol: source === "bybit-perp" ? products.bybit : products.binance };
+  return { venue: source, feed: bybitLeadFeed(detector, products.bybit), symbol: products.bybit };
 }
 
-/** The detector's period covers the reverse leg's too (it may end after toSec);
- * the strategy holds the first order to [fromSec, toSec) itself. */
-export const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec"
-  | "reverseMaxAsk" | "reverseToSec">): LeadSignalParams =>
-  ({ windowMs: config.windowMs, thresholdBp: config.thresholdBp, fromSec: config.fromSec,
-    toSec: config.reverseMaxAsk > 0 ? Math.max(config.toSec, config.reverseToSec) : config.toSec });
+export const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec">): LeadSignalParams =>
+  ({ windowMs: config.windowMs, thresholdBp: config.thresholdBp, fromSec: config.fromSec, toSec: config.toSec });
 
 /** One journal line per lead signal: the signal, the round it fell in, and what
  * the strategy did with it (the order it placed, or the round's reason for not
@@ -575,15 +570,13 @@ export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>
   const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId);
   return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
     move_bp: event.moveBp, open_price: event.openPrice ?? null, open_mean60: event.openMean60 ?? null,
-    fair_up: event.fairUp ?? null, stage: placed?.stage ?? null,
     trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
     received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
     market_id: round?.marketId ?? null, round_id: round?.roundId ?? null, round_status: round?.status ?? null,
     outcome: stopping ? "stopping" : placed ? "order_submitted" : round ? "skipped" : "no_round",
     reason: stopping ? "停机中，不处理信号" : round?.reason ?? null, attempted: (round?.stages.length ?? 0) > 0,
     client_order_id: placed?.clientOrderId ?? null, token_id: placed?.tokenId ?? null,
-    limit_price: placed?.price ?? null, ask_at_signal: placed?.askAtSignal ?? null, shares: placed?.shares ?? null,
-    fair_edge: placed?.fairEdge ?? null };
+    limit_price: placed?.price ?? null, ask_at_signal: placed?.askAtSignal ?? null, shares: placed?.shares ?? null };
 }
 
 export async function runPlatformCli(argv: string[]): Promise<void> {
@@ -592,7 +585,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
   const operatorLimits: Readonly<HardLimits> = { ...options.limits };
   const explicitMarkets = options.marketsFile ? readMarkets(options.marketsFile, options.assetId) : undefined;
   let strategy: BinanceLeadStrategy | undefined;
-  let leadFeed: ReturnType<typeof binanceLeadFeed> | undefined;
+  let leadFeed: ReturnType<typeof bybitLeadFeed> | undefined;
   // The venue the running feed reads (fixed at start; the saved config can differ).
   let leadSourceInUse: BinanceLeadConfig["leadSource"] | null = null;
   let syncDetector: ((config: Readonly<BinanceLeadConfig>) => void) | undefined;
@@ -1023,25 +1016,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         durationSec: options.durationSec === 0 ? Infinity : options.durationSec,
         assetId: options.assetId, strategyId: strategy?.id, leadFeed,
         // The saved config's limits; a round frozen with other values signs on the spot.
-        // One plan per size tier (5/10/20 shares): a price signs once per size,
-        // the client skips a slot it already holds.
-        presignPlan: strategyConfig ? market => market.instruments.flatMap(instrument => {
-          // presignPrices gives one entry per (price, size), base size first.
-          const byPrice = new Map<number, number[]>();
-          for (const item of presignPrices(strategyConfig!.config, instrument.tickSize)) {
-            const sizes = byPrice.get(item.price) ?? [];
-            sizes.push(item.shares); byPrice.set(item.price, sizes);
-          }
-          const tiers = Math.max(0, ...[...byPrice.values()].map(sizes => sizes.length));
-          return Array.from({ length: tiers }, (_, tier) => {
-            const prices = [...byPrice.keys()];
-            const size = new Map(prices.map(price => {
-              const sizes = byPrice.get(price)!;
-              return [price, sizes[Math.min(tier, sizes.length - 1)]!] as const;
-            }));
-            return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices,
-              size: (price: number) => size.get(price) ?? strategyConfig!.config.shares };
-          });
+        presignPlan: strategyConfig ? market => market.instruments.map(instrument => {
+          const size = new Map(presignPrices(strategyConfig!.config, instrument.tickSize).map(item => [item.price, item.shares]));
+          return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices: [...size.keys()],
+            size: (price: number) => size.get(price) ?? strategyConfig!.config.shares };
         }) : undefined });
       unsubscribe = connection.platform.subscribe(record);
       if (strategy) connection.platform.core.setStrategyState(STRATEGY_ID, strategy.exportState());

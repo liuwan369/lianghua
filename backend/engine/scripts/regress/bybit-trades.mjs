@@ -141,11 +141,11 @@ assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "
   assert.equal(events[0].receivedAtUnix, at(T0 + 295), "S = when we saw the Bybit trade");
   assert.equal(typeof bybitLeadFeed(detector), "function");
 }
-// --- the config picks the source; an older file without it reads Binance spot ---
+// --- the only source is Bybit perp; a file without leadSource reads it, Binance spot is refused ---
 {
-  assert.equal(BINANCE_LEAD_DEFAULTS.leadSource, "binance-spot", "the default stays the frozen Binance rule");
+  assert.equal(BINANCE_LEAD_DEFAULTS.leadSource, "bybit-perp", "the default is the live Bybit perp feed");
   assert.equal(normalizeBinanceLeadConfig({ leadSource: "bybit-perp" }).leadSource, "bybit-perp");
-  for (const bad of ["okx", "", null, 1, "BYBIT-PERP"]) assert.throws(() => normalizeBinanceLeadConfig({ leadSource: bad }), String(bad));
+  for (const bad of ["binance-spot", "okx", "", null, 1, "BYBIT-PERP"]) assert.throws(() => normalizeBinanceLeadConfig({ leadSource: bad }), String(bad));
   const dir = mkdtempSync(join(tmpdir(), "lead-source-"));
   const file = join(dir, "binance-lead-config.json");
   const base = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265,
@@ -153,7 +153,9 @@ assert.deepEqual(bybitTradeUrls(), ["wss://stream.bybit.com/v5/public/linear", "
     durationMinutes: 0, maxRounds: 24, mode: "live" };
   const doc = (config) => JSON.stringify({ schemaVersion: 1, strategyId: "binance-lead", savedRevision: 3, savedAt: "2026-10-29T00:00:00Z", config });
   writeFileSync(file, doc(base));
-  assert.equal(readStrategyConfig(file).config.leadSource, "binance-spot", "revision 2 on the server has no leadSource");
+  assert.equal(readStrategyConfig(file).config.leadSource, "bybit-perp", "a file without leadSource reads the default");
+  writeFileSync(file, doc({ ...base, leadSource: "binance-spot" }));
+  assert.throws(() => readStrategyConfig(file), /leadSource/, "Binance spot is retired: no silent switch");
   writeFileSync(file, doc({ ...base, leadSource: "bybit-perp" }));
   assert.equal(readStrategyConfig(file).config.leadSource, "bybit-perp");
   writeFileSync(file, doc({ ...base, leadSource: "kraken" }));

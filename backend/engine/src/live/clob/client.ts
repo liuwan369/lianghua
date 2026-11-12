@@ -275,17 +275,6 @@ export function fakMatchedNothing(response: unknown, error: string | undefined):
   return normalizeVenueOrderStatus(record.status) === "unmatched" && nothingMade;
 }
 
-const POST_ONLY_CROSSED = /invalid post-only order: order crosses book/i;
-
-/** A post-only order refused because it would take: HTTP 400 "invalid post-only
- * order: order crosses book" (docs/resources/error-codes, read 2026-10-27).
- * The refusal means it was never placed; the same no-trade proof as a FAK. */
-export function postOnlyCrossed(response: unknown, error: string | undefined): boolean {
-  const record = response && typeof response === "object" ? response as Record<string, unknown> : {};
-  return error !== undefined && POST_ONLY_CROSSED.test(error)
-    && zeroAmount(record.makingAmount) && zeroAmount(record.takingAmount) && responseTradeIds(response).length === 0;
-}
-
 function responseTradeIds(value: unknown): string[] {
   if (!value || typeof value !== "object") return [];
   const raw = (value as Record<string, unknown>).tradeIDs;
@@ -884,7 +873,7 @@ export class ClobWrapper {
         failurePhase = "post";
         const orderType = args.timeInForce === "FOK" ? OrderType.FOK
           : args.timeInForce === "FAK" ? OrderType.FAK : OrderType.GTC;
-        const resp = await this.postSignedOrder(order, orderType, args.postOnly ?? true, requestStartedAt => {
+        const resp = await this.postSignedOrder(order, orderType, args.postOnly ?? false, requestStartedAt => {
           ackStarted = requestStartedAt;
           postStarted = requestStartedAt;
           activePostStarted = requestStartedAt;
@@ -912,8 +901,7 @@ export class ClobWrapper {
           return {
             success,
             orderId,
-            ...((args.timeInForce === "FAK" && fakMatchedNothing(resp, apiError))
-              || (args.postOnly === true && postOnlyCrossed(resp, apiError)) ? { venueRefused: true } : {}),
+            ...(args.timeInForce === "FAK" && fakMatchedNothing(resp, apiError) ? { venueRefused: true } : {}),
             status: normalizeVenueOrderStatus(resp?.status),
             errorMsg: apiError ?? resp?.errorMsg,
             latencyMs: performance.now() - started,

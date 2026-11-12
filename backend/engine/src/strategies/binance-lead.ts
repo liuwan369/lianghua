@@ -1,22 +1,16 @@
 import type { AssetId, Instrument, MarketInfo, OrderRecord, OrderRequest, OrderStatus, StrategyAction,
   StrategyContext, StrategyPlugin, TradingEvent } from "../platform/contracts.js";
 
-/** Binance lead (frozen 2026-10-25, E:/pm-backup/forward-binance-agg.py): the
- * round's first valid Binance signal whose book in force is two-sided and was
+/** Binance lead (rule frozen 2026-10-25, E:/pm-backup/forward-binance-agg.py):
+ * the round's first valid lead signal whose book in force is two-sided and was
  * fresh on arrival gets one FAK BUY on the signal's side at ask + premium, held
- * to the close. The 250 ms window lives in LeadSignalDetector on the feed side;
- * this plugin only sees the rare signals.
- *
- * Maker mode (makerHoldSec > 0, user 2026-10-27): the same signal posts a
- * post-only BUY at that side's best bid instead, cancelled makerHoldSec after
- * the decision; what filled is held to the close. Live FAKs filled 2 of 18
- * (the cheap asks were gone during the venue's taker hold); backtest
- * E:/pm-backup/maker/maker_a_engine.py, 22 days, cap 0.80, 3 s: +219.6, t 5.8. */
+ * to the close. One order per round, filled or not. The window lives in
+ * LeadSignalDetector on the feed side; this plugin only sees the rare signals. */
 export type LeadDirection = "UP" | "DOWN";
-/** Where the lead trades come from: Binance spot aggTrade (the frozen rule) or
- * Bybit USDT perpetual (user 2026-10-29). Read when the engine starts. */
-export type LeadSource = "binance-spot" | "bybit-perp";
-export const LEAD_SOURCES: readonly LeadSource[] = ["binance-spot", "bybit-perp"];
+/** Where the lead trades come from: Bybit USDT perpetual (user 2026-10-29).
+ * Read when the engine starts. */
+export type LeadSource = "bybit-perp";
+export const LEAD_SOURCES: readonly LeadSource[] = ["bybit-perp"];
 export type OpenLine = "tick" | "mean60";
 export const OPEN_LINES: readonly OpenLine[] = ["tick", "mean60"];
 export interface BinanceLeadConfig {
@@ -30,12 +24,8 @@ export interface BinanceLeadConfig {
   limitPremium: number;
   fromSec: number;
   toSec: number;
-  /** Highest price (inclusive) of the signal's side that is bought (user
-   * 2026-10-26): the ask for a FAK, the bid a maker order rests at. */
+  /** Highest ask (inclusive) of the signal's side that is bought (user 2026-10-26). */
   maxAsk: number;
-  /** 0: FAK at ask + limitPremium. > 0: post-only BUY at the best bid, cancelled
-   * after this many seconds (limitPremium unused). */
-  makerHoldSec: number;
   leadSource: LeadSource;
   /** Trade only a signal whose lead price is within this many bp of the round's
    * opening lead price, signed by the signal (+ = its side already ahead):
@@ -47,28 +37,9 @@ export interface BinanceLeadConfig {
   /** What openBandBp is measured from (user 2026-11-07): "tick" the last trade at
    * or before the open (openPrice), "mean60" the mean over (R-60, R]
    * (openMean60), the window of the official price to beat. Backtest
-   * E:/pm-backup/research-1107/band_width.py, 21 days, ±5 + reverse leg:
-   * +760 vs +626 tick; on unseen 11-02..06 mean60 won all 12 cells. */
+   * E:/pm-backup/research-1107/band_width.py, 21 days, ±5: +760 vs +626 tick;
+   * on unseen 11-02..06 mean60 won all 12 cells. */
   openLine: OpenLine;
-  /** Reverse leg (user 2026-11-07): once the first order has bought shares, the
-   * round's first signal on the other side buys `shares` of that side, FAK
-   * ask + limitPremium, when that ask is <= reverseMaxAsk, no band, seen
-   * before reverseToSec. One leg per round. 0 = off. Backtest combo.py /
-   * band_width.py: +40..115 on every band and start, 21/21 days. */
-  reverseMaxAsk: number;
-  reverseToSec: number;
-  /** Size a FAK by the fair-value edge (user 2026-11-03; backtest
-   * E:/pm-backup/research-1103/fv_trade.py "band tier 5/10/20", S = the signal
-   * trade's price as live: +1301 vs +936 for a flat 10 shares, 16 days, fewer
-   * shares, +200 ms stress +800 vs +521). edge = P(signal side wins) -
-   * ask - 0.07 ask (1 - ask), P from the signal's fairUp. edge >= highEdge buys
-   * highShares, else edge >= midEdge buys midShares, else `shares`; a tier with
-   * 0 shares is off. A signal without fairUp (under ~6 minutes of lead
-   * history) buys `shares`. Maker orders always rest `shares`. */
-  midEdge: number;
-  midShares: number;
-  highEdge: number;
-  highShares: number;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -78,13 +49,10 @@ export interface BinanceLeadConfig {
 type LeadEvent = Extract<TradingEvent, { kind: "lead" }>;
 export type LeadSignalRecord = Omit<LeadEvent, "kind" | "assetId">;
 export interface LeadStage {
-  /** 1: the round's first order. 2: the reverse leg, on the other side. */
-  stage: 1 | 2;
   direction: LeadDirection;
   tokenId: string;
   clientOrderId: string;
-  /** Limit: ask at the signal + limitPremium, on tick, at most 0.99; a maker
-   * stage rests at the bid at the signal. */
+  /** Limit: ask at the signal + limitPremium, on tick, at most 0.99. */
   price: number;
   shares: number;
   createdAt: number;
@@ -97,11 +65,6 @@ export interface LeadStage {
   cancelRequestedAt?: number;
   signal: LeadSignalRecord;
   askAtSignal: number;
-  /** The fair-value edge that sized this order (absent: no fairUp, or maker). */
-  fairEdge?: number;
-  /** Maker stage: the bid it rests at, and when its hold is up (strategy clock). */
-  bidAtSignal?: number;
-  cancelAt?: number;
 }
 /** Summary of the round's latest frame; never restored across a restart. */
 export interface LeadQuote {
@@ -125,7 +88,7 @@ export interface LeadRound {
   config: BinanceLeadConfig;
   status: "waiting_start" | "waiting_next_round" | "running" | "ended";
   reason: string;
-  /** The first order, then at most the reverse leg (reverseMaxAsk > 0). */
+  /** The round's one order, once placed (at most one entry). */
   stages: LeadStage[];
   latest?: LeadQuote;
 }
@@ -144,12 +107,11 @@ export interface BinanceLeadOptions {
 
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
-  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, makerHoldSec: 0, leadSource: "binance-spot",
-  openBandBp: 0, openLine: "tick", reverseMaxAsk: 0, reverseToSec: 285,
-  midEdge: 0.08, midShares: 0, highEdge: 0.13, highShares: 0, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadSource: "bybit-perp",
+  openBandBp: 0, openLine: "tick", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
-/** The taker fee rate of the edge (fv_trade.py FEE; the venue's 5m crypto rate). */
-const FAIR_FEE = 0.07;
+/** Every config field; anything else in a saved config (retired settings) is dropped. */
+const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"];
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
 const CONFIG_FREEZE_SEC = 10;
@@ -159,7 +121,7 @@ const MAX_LIMIT = 0.99;
 /** The venue refuses a marketable BUY under this many USD (2026-10-26 live:
  * "invalid amount for a marketable BUY order ($0.65), min size: 1"). */
 const MIN_MARKETABLE_BUY_USD = 1;
-const WAITING = "等待币安信号";
+const WAITING = "等待领先信号";
 const clone = <T>(value: T): T => structuredClone(value);
 const finite = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n);
 const positive = (n: unknown): n is number => finite(n) && n > 0;
@@ -185,31 +147,11 @@ export function leadShares(configured: number, price: number): number {
   return Math.max(configured, Math.ceil(MIN_MARKETABLE_BUY_USD / price - 1e-9));
 }
 
-type SizeConfig = Pick<BinanceLeadConfig, "shares" | "midEdge" | "midShares" | "highEdge" | "highShares">;
-
-/** P(signal side wins) - ask - fee at the ask; undefined without fairUp. */
-export function leadFairEdge(fairUp: number | undefined, direction: LeadDirection, ask: number): number | undefined {
-  if (!finite(fairUp) || fairUp < 0 || fairUp > 1) return undefined;
-  return (direction === "UP" ? fairUp : 1 - fairUp) - ask - FAIR_FEE * ask * (1 - ask);
-}
-
-/** Configured size for this edge, before the 1 USD minimum (leadShares). */
-export function leadTierShares(config: SizeConfig, edge: number | undefined): number {
-  if (edge === undefined) return config.shares;
-  if (config.highShares > 0 && edge >= config.highEdge) return config.highShares;
-  if (config.midShares > 0 && edge >= config.midEdge) return config.midShares;
-  return config.shares;
-}
-
-/** Every configured size a FAK can have: shares and each tier that is on. */
-const tierSizes = (config: SizeConfig) => [...new Set([config.shares, config.midShares, config.highShares].filter(n => n > 0))];
-
-/** The FAK limits a round can send on each side, for signing ahead: every
- * ask the strategy would buy (one tick up to maxAsk) gives leadLimitPrice(ask),
- * at leadShares of each tier size. 0.01 tick, cap 0.80: 80 prices a side. A
- * maker round signs nothing (its price is the bid, posted rarely). */
-export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitPremium" | "makerHoldSec"> & SizeConfig, tickSize: number) {
-  if (!(tickSize > 0) || config.makerHoldSec > 0) return [];
+/** The FAK limits a round can send on each side, for signing ahead: every ask
+ * the strategy would buy (one tick up to maxAsk) gives leadLimitPrice(ask), at
+ * leadShares(shares). 0.01 tick, cap 0.80: 80 prices a side. */
+export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitPremium" | "shares">, tickSize: number) {
+  if (!(tickSize > 0)) return [];
   const prices = new Set<number>();
   const decimals = Math.max(0, Math.ceil(-Math.log10(tickSize) - 1e-9));
   for (let n = 1; n * tickSize <= config.maxAsk + EPS; n += 1) {
@@ -217,14 +159,13 @@ export function presignPrices(config: Pick<BinanceLeadConfig, "maxAsk" | "limitP
     const limit = leadLimitPrice(ask, config.limitPremium, tickSize);
     if (limit >= ask - EPS) prices.add(limit);
   }
-  // One entry per (price, size), the base size first: the 1 USD minimum can
-  // merge tiers at a cheap price (0.04: 25 shares whatever the tier).
-  const sizes = tierSizes(config);
-  return [...prices].flatMap(price => [...new Set(sizes.map(size => leadShares(size, price)))].map(shares => ({ price, shares })));
+  return [...prices].map(price => ({ price, shares: leadShares(config.shares, price) }));
 }
 
 export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {}): BinanceLeadConfig {
-  const config = { ...clone(BINANCE_LEAD_DEFAULTS), ...clone(input) };
+  const merged: Record<string, unknown> = { ...clone(BINANCE_LEAD_DEFAULTS), ...clone(input) };
+  const config = Object.fromEntries(CONFIG_KEYS.filter(key => merged[key] !== undefined)
+    .map(key => [key, merged[key]])) as unknown as BinanceLeadConfig;
   if (typeof config.instanceId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(config.instanceId)
     || typeof config.revision !== "string" || !config.revision.trim()) throw new Error("invalid strategy instance or revision");
   if (typeof config.assetId !== "string" || !/^[a-z0-9_-]{1,32}$/.test(config.assetId)) {
@@ -239,31 +180,11 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (!finite(config.fromSec) || !finite(config.toSec) || config.fromSec < 0 || config.fromSec >= config.toSec
     || config.toSec > 300) throw new Error("fromSec/toSec must satisfy 0 <= fromSec < toSec <= 300");
   if (!unitPrice(config.maxAsk)) throw new Error("maxAsk must be in (0, 1)");
-  if (!finite(config.makerHoldSec) || config.makerHoldSec < 0 || config.makerHoldSec > 300) {
-    throw new Error("makerHoldSec must be in [0, 300]");
-  }
   if (!LEAD_SOURCES.includes(config.leadSource)) throw new Error(`leadSource must be one of ${LEAD_SOURCES.join(", ")}`);
   if (!finite(config.openBandBp) || config.openBandBp < 0 || config.openBandBp > 1000) {
     throw new Error("openBandBp must be in [0, 1000]");
   }
   if (!OPEN_LINES.includes(config.openLine)) throw new Error(`openLine must be one of ${OPEN_LINES.join(", ")}`);
-  if (!finite(config.reverseMaxAsk) || config.reverseMaxAsk < 0 || config.reverseMaxAsk >= 1) {
-    throw new Error("reverseMaxAsk must be in [0, 1)");
-  }
-  if (!finite(config.reverseToSec) || config.reverseToSec <= 0 || config.reverseToSec > 300) {
-    throw new Error("reverseToSec must be in (0, 300]");
-  }
-  // The leg is a FAK at the other side's ask; a maker round has no such order.
-  if (config.reverseMaxAsk > 0 && config.makerHoldSec > 0) throw new Error("reverse leg needs taker mode (makerHoldSec 0)");
-  for (const key of ["midEdge", "highEdge"] as const) {
-    if (!finite(config[key]) || config[key] < -1 || config[key] > 1) throw new Error(`${key} must be in [-1, 1]`);
-  }
-  for (const key of ["midShares", "highShares"] as const) {
-    if (!finite(config[key]) || config[key] < 0 || config[key] > 10_000) throw new Error(`${key} must be in [0, 10000]`);
-  }
-  if (config.midShares > 0 && config.highShares > 0 && config.highEdge < config.midEdge) {
-    throw new Error("highEdge must not be below midEdge");
-  }
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
   }
@@ -429,16 +350,6 @@ export class BinanceLeadStrategy implements StrategyPlugin {
 
     const actions: StrategyAction[] = [];
     for (const round of this.workingRounds.values()) {
-      // A maker stage's hold is up: pull what is still resting (the ended
-      // branch below keeps retrying once the round is over).
-      if (context.now < round.endsAt) for (const stage of round.stages) {
-        if (stage.cancelAt === undefined || context.now < stage.cancelAt || !activeOrder(stage.status) || !stage.orderId
-          || stage.filledShares >= stage.shares - EPS) continue;
-        if (context.account.quarantinedOrderIds?.includes(stage.orderId)) continue;
-        if (stage.cancelRequestedAt !== undefined && context.now - stage.cancelRequestedAt < 1) continue;
-        stage.cancelRequestedAt = context.now; changed = true;
-        actions.push({ kind: "cancel", orderId: stage.orderId });
-      }
       if (this.restoredWaitingMarkets.delete(round.marketId) && round.startsAt < context.now) {
         round.status = "waiting_next_round"; round.reason = "重启时已错过本场开始，等待下一场"; changed = true;
       }
@@ -479,10 +390,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       if (event.kind !== "lead") continue;
       const seenAt = event.receivedAtUnix;
       if (!(round.startsAt <= seenAt && seenAt < round.endsAt)) continue;
-      // One first order per round, filled or not (backtest retry=False); then
-      // at most the reverse leg.
-      const decision = round.stages.length === 0 ? this.decide(round, event, context, knownClients)
-        : round.stages.length === 1 ? this.decideReverse(round, event, context, knownClients) : undefined;
+      // One order per round, filled or not (backtest retry=False).
+      if (round.stages.length) continue;
+      const decision = this.decide(round, event, context, knownClients);
       if (!decision) continue;
       round.stages.push(decision.stage);
       round.reason = BinanceLeadStrategy.roundReason(round);
@@ -529,73 +439,26 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const direction = event.direction;
     const tokenId = direction === "UP" ? round.upTokenId : round.downTokenId;
     const ask = (direction === "UP" ? latest.upAsk : latest.downAsk)!;
-    const maker = config.makerHoldSec > 0;
-    const bid = direction === "UP" ? latest.upBid : latest.downBid;
-    if (maker && !(unitPrice(bid) && bid < ask - EPS)) { round.reason = "这一边没有买价，等下一个信号"; return undefined; }
     // A side already this dear is near decided: backtest fills above 0.9 made
     // +0.004 a share (t 0.15). Keep the round's attempt for a later signal.
-    const dear = maker ? bid! : ask;
-    if (dear > config.maxAsk + EPS) {
-      round.reason = `${maker ? "买价" : "卖价"} ${priceText(dear)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
-    }
-    const instrument = context.markets.find(m => m.id === round.marketId)?.instruments.find(i => i.tokenId === tokenId);
-    if (!instrument || !positive(instrument.tickSize) || !positive(instrument.minOrderSize)) {
-      round.reason = "交易所规则暂不可用"; return undefined;
-    }
-    const price = maker ? bid! : leadLimitPrice(ask, config.limitPremium, instrument.tickSize);
-    if (maker && price > MAX_LIMIT + EPS) { round.reason = `买价 ${bid} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
-    // A FAK under the ask cannot fill: keep the round's attempt for a later signal.
-    if (!maker && price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
-    // A resting order is not marketable: the venue's 1 USD floor is for takers.
-    const fairEdge = maker ? undefined : leadFairEdge(event.fairUp, direction, ask);
-    const shares = maker ? config.shares : leadShares(leadTierShares(config, fairEdge), price);
-    if (!this.validSizeAndPrice(instrument, shares, price)) {
-      round.reason = "数量或限价不符合交易所规则"; return undefined;
-    }
-    const { kind: _kind, assetId: _assetId, ...signal } = event;
-    const stage: LeadStage = { stage: 1, direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
-      price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
-      signal: { ...signal }, askAtSignal: ask,
-      ...(fairEdge !== undefined ? { fairEdge } : {}),
-      ...(maker ? { bidAtSignal: price, cancelAt: context.now + config.makerHoldSec } : {}) };
-    return this.fund(round, stage, context, knownClients);
-  }
-
-  /** The reverse leg: the first order bought shares and this signal is on the
-   * other side, its ask <= reverseMaxAsk, seen before reverseToSec. No band, no
-   * edge tiers: `shares` (raised to the 1 USD minimum) at ask + limitPremium. */
-  private decideReverse(round: LeadRound, event: LeadEvent, context: StrategyContext, knownClients: ReadonlySet<string>):
-    { stage: LeadStage; order: Omit<OrderRequest, "strategyId"> } | undefined {
-    const config = round.config;
-    const first = round.stages[0]!;
-    if (!(config.reverseMaxAsk > 0) || first.stage !== 1 || event.direction === first.direction) return undefined;
-    // Only a confirmed fill opens the leg: an order still in flight may yet be
-    // empty, and an unfilled first order has nothing to hedge.
-    if (!(first.filledShares > EPS)) return undefined;
-    const sinceOpen = event.receivedAtUnix - round.startsAt;
-    if (!(sinceOpen >= config.fromSec && sinceOpen < config.reverseToSec)) return undefined;
-    const latest = round.latest;
-    if (!latest || !latest.twoSided || !latest.freshOnArrival) {
-      round.reason = `${BinanceLeadStrategy.attemptReason(first)}；反转信号到达时盘口不可用，等下一个`; return undefined;
-    }
-    const direction = event.direction;
-    const tokenId = direction === "UP" ? round.upTokenId : round.downTokenId;
-    const ask = (direction === "UP" ? latest.upAsk : latest.downAsk)!;
-    if (ask > config.reverseMaxAsk + EPS) {
-      round.reason = `${BinanceLeadStrategy.attemptReason(first)}；反转这一边卖价 ${priceText(ask)} 高于 ${priceText(config.reverseMaxAsk)}，等下一个`;
-      return undefined;
+    if (ask > config.maxAsk + EPS) {
+      round.reason = `卖价 ${priceText(ask)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
     }
     const instrument = context.markets.find(m => m.id === round.marketId)?.instruments.find(i => i.tokenId === tokenId);
     if (!instrument || !positive(instrument.tickSize) || !positive(instrument.minOrderSize)) {
       round.reason = "交易所规则暂不可用"; return undefined;
     }
     const price = leadLimitPrice(ask, config.limitPremium, instrument.tickSize);
-    if (price < ask - EPS) return undefined;
+    // A FAK under the ask cannot fill: keep the round's attempt for a later signal.
+    if (price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
     const shares = leadShares(config.shares, price);
-    if (!this.validSizeAndPrice(instrument, shares, price)) { round.reason = "数量或限价不符合交易所规则"; return undefined; }
+    if (!this.validSizeAndPrice(instrument, shares, price)) {
+      round.reason = "数量或限价不符合交易所规则"; return undefined;
+    }
     const { kind: _kind, assetId: _assetId, ...signal } = event;
-    const stage: LeadStage = { stage: 2, direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:2`,
-      price, shares, createdAt: context.now, status: "CREATED", filledShares: 0, signal: { ...signal }, askAtSignal: ask };
+    const stage: LeadStage = { direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
+      price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
+      signal: { ...signal }, askAtSignal: ask };
     return this.fund(round, stage, context, knownClients);
   }
 
@@ -696,7 +559,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   private orderIntent(round: LeadRound, stage: LeadStage): Omit<OrderRequest, "strategyId"> {
     return { clientOrderId: stage.clientOrderId, assetId: round.assetId, marketId: round.marketId, roundId: round.roundId,
       tokenId: stage.tokenId, direction: "BUY", price: stage.price, shares: stage.shares,
-      ...(stage.cancelAt === undefined ? { timeInForce: "FAK", postOnly: false } : { timeInForce: "GTC", postOnly: true }),
+      timeInForce: "FAK", postOnly: false,
       ...(round.config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: round.config.roundBudgetUsd }) };
   }
   private validSizeAndPrice(instrument: Instrument, shares: number, price: number): boolean {
@@ -730,23 +593,19 @@ export class BinanceLeadStrategy implements StrategyPlugin {
    * before the strategy state was. The order is the round's one attempt. The
    * signal it came from is gone; its fields are zero, the ask is the limit. */
   private adoptOrder(order: OrderRecord): { round: LeadRound; stage: LeadStage } | undefined {
-    const match = /^(.+):([^:]+):([12])$/.exec(order.clientOrderId);
+    const match = /^(.+):([^:]+):1$/.exec(order.clientOrderId);
     if (!match || match[1] !== this.state.instanceId) return undefined;
-    const number = Number(match[3]) as 1 | 2;
     const round = this.roundsByMarket.get(match[2]!);
-    // Stage n is adopted only in its slot: :1 into an empty round, :2 after :1.
-    if (!round || round.stages.length !== number - 1 || order.direction !== "BUY") return undefined;
+    if (!round || round.stages.length || order.direction !== "BUY") return undefined;
     const direction = order.tokenId === round.upTokenId ? "UP" : order.tokenId === round.downTokenId ? "DOWN" : undefined;
-    if (!direction || (number === 2 && direction === round.stages[0]!.direction)) return undefined;
-    const stage: LeadStage = { stage: number, direction, tokenId: order.tokenId, clientOrderId: order.clientOrderId,
+    if (!direction) return undefined;
+    const stage: LeadStage = { direction, tokenId: order.tokenId, clientOrderId: order.clientOrderId,
       price: order.price, shares: order.shares, createdAt: order.createdAt, status: order.status, filledShares: order.filledShares,
       ...(order.orderId ? { orderId: order.orderId } : {}),
       error: "重启时本场订单已在交易所记录中，策略记录丢失，按订单恢复",
       signal: { direction, price: 0, refPrice: 0, moveBp: 0, tradeId: 0, tradeTimeMs: 0, receivedAtUnix: order.createdAt,
         receivedAtMonoMs: 0 },
-      askAtSignal: order.price,
-      // A resting maker order still needs its timed cancel.
-      ...(order.postOnly ? { bidAtSignal: order.price, cancelAt: order.createdAt + round.config.makerHoldSec } : {}) };
+      askAtSignal: order.price };
     round.stages.push(stage);
     this.indexStage(round, stage);
     if (round.status === "ended") this.workingRounds.set(round.marketId, round);
@@ -756,22 +615,14 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   private noteAttempt(round: LeadRound, _stage: LeadStage): void {
     if (round.status !== "ended") round.reason = BinanceLeadStrategy.roundReason(round);
   }
-  /** The first order's state, plus the reverse leg's when there is one. */
+  /** The round's order state. */
   private static roundReason(round: LeadRound): string {
-    const [first, leg] = round.stages;
-    if (!first) return round.reason;
-    const text = BinanceLeadStrategy.attemptReason(first);
-    return leg ? `${text}；反转：${BinanceLeadStrategy.attemptReason(leg).replace(/^本场/, "")}` : text;
-  }
-  private static attemptReason(stage: LeadStage): string {
+    const stage = round.stages[0];
+    if (!stage) return round.reason;
     const got = `${Number(stage.filledShares.toFixed(4))}/${stage.shares}`;
-    const maker = stage.cancelAt !== undefined;
-    if (stage.status === "CREATED" || stage.status === "SUBMITTING") return maker ? "已挂买单（只挂单），等待成交" : "已下单（FAK），等待成交回报";
-    if (maker && ["OPEN", "PARTIAL"].includes(stage.status)) {
-      return stage.filledShares > EPS ? `挂单已成交 ${got} 股，到时撤掉剩余` : `买单挂在 ${priceText(stage.price)}，到时撤单`;
-    }
+    if (stage.status === "CREATED" || stage.status === "SUBMITTING") return "已下单（FAK），等待成交回报";
     if (stage.status === "ABANDONED") return "本场已尝试，意图已放弃";
-    if (stage.status === "REJECTED") return maker && /crosses book/i.test(stage.error ?? "") ? "本场已尝试，挂单会直接成交被拒" : "本场已尝试，订单被拒";
+    if (stage.status === "REJECTED") return "本场已尝试，订单被拒";
     if (stage.status === "UNKNOWN") return "本场已尝试，订单状态待确认";
     if (stage.filledShares > EPS) return `本场已买到 ${got} 股，持有到结算`;
     return stage.status === "CANCELLED" ? "本场已尝试，未成交" : `本场已尝试，买到 ${got} 股`;
@@ -802,29 +653,24 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         || !Number.isFinite(round.startsAt) || round.endsAt - round.startsAt !== 300
         || typeof round.roundId !== "string" || !round.roundId.trim()
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
-        || !Array.isArray(round.stages) || round.stages.length > 2
+        || !Array.isArray(round.stages) || round.stages.length > 1
         || !["waiting_start", "waiting_next_round", "running", "ended"].includes(round.status)
         || typeof round.reason !== "string") throw new Error("invalid persisted binance-lead round");
       // The book seen by a previous process is not the book in force now.
       delete round.latest;
       markets.add(round.marketId);
-      round.stages.forEach((stage, index) => {
+      for (const stage of round.stages) {
         const signal = stage.signal;
-        const number = index + 1;
-        if (stage.stage !== number || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:${number}`
+        // Fields an older engine wrote: the stage number (always 1 now) and the
+        // fair-value edge are dropped; a timed (maker) cancel is not restorable.
+        const legacy = stage as LeadStage & { stage?: unknown; fairEdge?: unknown; cancelAt?: unknown };
+        if ((legacy.stage !== undefined && legacy.stage !== 1) || legacy.cancelAt !== undefined
+          || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:1`
           || !validDirection(stage.direction)
-          // The reverse leg is the other side, a FAK of the base size.
-          || (number === 2 && (stage.direction === round.stages[0]!.direction || stage.cancelAt !== undefined
-            || stage.shares !== leadShares(round.config.shares, stage.price)))
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
           || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS
-          || (stage.cancelAt === undefined
-            ? !tierSizes(round.config).some(size => stage.shares === leadShares(size, stage.price))
-            : stage.shares !== round.config.shares)
-          || (stage.fairEdge !== undefined && !finite(stage.fairEdge))
+          || stage.shares !== leadShares(round.config.shares, stage.price)
           || !unitPrice(stage.askAtSignal) || stage.price > stage.askAtSignal + round.config.limitPremium + EPS
-          || (stage.cancelAt !== undefined && (!Number.isFinite(stage.cancelAt) || stage.bidAtSignal !== stage.price))
-          || (stage.cancelAt === undefined && stage.bidAtSignal !== undefined)
           // A BUY below its limit gets more than `shares` for the same budget
           // (2026-10-26: 5.25 of 5); the core bounds every fill by that budget.
           || !Number.isFinite(stage.createdAt) || !Number.isFinite(stage.filledShares) || stage.filledShares < 0
@@ -833,7 +679,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || !signal || signal.direction !== stage.direction
           || ![signal.price, signal.refPrice, signal.moveBp, signal.tradeId, signal.tradeTimeMs,
             signal.receivedAtUnix, signal.receivedAtMonoMs].every(finite)) throw new Error("invalid persisted binance-lead stage");
-      });
+        delete legacy.stage; delete legacy.fairEdge;
+        delete (signal as LeadSignalRecord & { fairUp?: unknown }).fairUp;
+      }
     }
     return state;
   }

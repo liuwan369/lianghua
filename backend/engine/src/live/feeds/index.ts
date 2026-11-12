@@ -94,7 +94,7 @@ export type FeedEvent =
       takerSide: string;
       tsUnix: number;
     }
-  /** Binance lead signal (binance-trades.ts); belongs to no market. */
+  /** Lead signal (binance-trades.ts); belongs to no market. */
   | ({ kind: "lead" } & LeadSignal)
   | { kind: "user"; event: UserFeedEvent; receivedAtMonoMs?: number }
   | { kind: "userStatus"; healthy: boolean; tsUnix: number }

@@ -188,7 +188,7 @@ export interface ConnectOptions {
   durationSec?: number;
   /** Selected asset is checked against every supplied market. */
   assetId?: AssetId;
-  /** Market-independent lead signals (binance-trades.ts binanceLeadFeed); started after the markets. */
+  /** Market-independent lead signals (binance-trades.ts bybitLeadFeed); started after the markets. */
   leadFeed?: (sink: (event: FeedEvent) => void) => { stop: () => void; isHealthy?: () => boolean };
   /** BUY orders to sign ahead for a new market: per token, the prices and the
    * size at each (binance-lead presignPlan). Signed in the background. */
@@ -220,7 +220,7 @@ export function hasProvisionalFills(fills: readonly { status?: string; ts?: numb
 
 /** Recovery found a signed order the venue does not know (404). Repeat exactly
  * the persisted signature, at most twice, while its round is still open. Never
- * a FAK or a post-only order (binance-lead's maker stage): each answers a signal
+ * a FAK or a post-only order: each answers a signal
  * that is gone by the time recovery runs, so it stays UNKNOWN until the account
  * read or the user feed gives its terminal state. */
 export function replaysPreparedOrder(
@@ -558,7 +558,6 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
       platform.ingest({ kind: "lead", assetId: options.assetId ?? "btc", direction: raw.direction, price: raw.price,
         refPrice: raw.refPrice, moveBp: raw.moveBp, ...(raw.openPrice !== undefined ? { openPrice: raw.openPrice } : {}),
         ...(raw.openMean60 !== undefined ? { openMean60: raw.openMean60 } : {}),
-        ...(raw.fairUp !== undefined ? { fairUp: raw.fairUp } : {}),
         tradeId: raw.tradeId, tradeTimeMs: raw.tradeTimeMs,
         receivedAtUnix: raw.receivedAtUnix, receivedAtMonoMs: raw.receivedAtMonoMs });
       return;

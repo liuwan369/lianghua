@@ -389,14 +389,12 @@ export type TradingEvent =
   | { kind: "market"; market: MarketInfo }
   | { kind: "book"; book: Book; snapshot?: undefined }
   | { kind: "book"; snapshot: MarketBookSnapshot; marketId: string; roundId: string; assetId?: AssetId; book?: undefined }
-  /** Binance lead signal; receivedAtUnix is when we saw the trade (S). */
+  /** Lead signal; receivedAtUnix is when we saw the trade (S). */
   | { kind: "lead"; assetId: AssetId; direction: "UP" | "DOWN"; price: number; refPrice: number; moveBp: number;
       /** The lead venue's price at the round open (absent if the feed started mid-round). */
       openPrice?: number;
       /** Mean lead price over (R-60, R] (absent unless the feed covered that minute). */
       openMean60?: number;
-      /** Fair-value model P(the round settles UP) at the signal (absent without ~6 min of lead history). */
-      fairUp?: number;
       tradeId: number; tradeTimeMs: number; receivedAtUnix: number; receivedAtMonoMs: number }
   | { kind: "fill"; fill: TradeFill; marketId?: string; roundId?: string; assetId?: AssetId }
   | { kind: "order"; order: OrderRecord; marketId?: string; roundId?: string; assetId?: AssetId }

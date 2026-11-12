@@ -1,7 +1,7 @@
 {
   "name": "btc-5m-market-trading-bot",
   "version": "0.3.0",
-  "description": "TypeScript Polymarket BTC 5m reversal trading platform",
+  "description": "TypeScript Polymarket BTC 5m binance-lead trading platform",
   "type": "module",
   "bin": {
     "trading-platform": "./dist/cli/platform.js"

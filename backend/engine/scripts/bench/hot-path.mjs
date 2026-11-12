@@ -78,7 +78,7 @@ try {
       YES: side(UP, 0.55 + (b % 3) / 100), NO: side(DOWN, 0.45) } });
     await platform.idle();
     if (PRESIGN) for (const tok of [UP, DOWN]) {
-      const plan = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, makerHoldSec: 0, shares: 5 }, 0.01);
+      const plan = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, shares: 5 }, 0.01);
       const size = new Map(plan.map(x => [x.price, x.shares]));
       await wrapper.presign(tok, plan.map(x => x.price), price => size.get(price), 0.01);
     }

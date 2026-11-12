@@ -1,7 +1,7 @@
 // Signing ahead (2026-10-29): a round's likely FAK limits are signed when the
 // market is set up, and a signal posts the stored order instead of signing on
 // the spot (server: signing 3.6 ms + hash 0.9 ms of an 11.9 ms hot path).
-// - presignPrices: every ask the strategy buys maps to one limit (cap, tick, 1 USD minimum);
+// - presignPrices: every ask the strategy buys maps to one limit and one size (cap, tick, 1 USD minimum);
 // - a matching order is used once, with its precomputed hash, and the POST body is it;
 // - no match (other price/size), a CLOB version change, or a tick change: sign on the spot;
 // - forgetPresigned drops a round's orders;
@@ -19,7 +19,7 @@ import { presignPrices, leadLimitPrice, leadShares } from "../../dist/strategies
 
 // --- the price plan: one limit per ask the strategy would buy ---
 {
-  const plan = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, makerHoldSec: 0, shares: 5 }, 0.01);
+  const plan = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, shares: 5 }, 0.01);
   assert.equal(plan.length, 80, "asks 0.01..0.80 give limits 0.04..0.83");
   assert.deepEqual(plan.slice(0, 3), [{ price: 0.04, shares: 25 }, { price: 0.05, shares: 20 }, { price: 0.06, shares: 17 }], "1 USD minimum");
   assert.deepEqual(plan.at(-1), { price: 0.83, shares: 5 });
@@ -28,11 +28,15 @@ import { presignPrices, leadLimitPrice, leadShares } from "../../dist/strategies
     const limit = leadLimitPrice(ask, 0.03, 0.01);
     assert.ok(plan.some(p => p.price === limit && p.shares === leadShares(5, limit)), `ask ${ask} is covered`);
   }
-  assert.deepEqual(presignPrices({ maxAsk: 0.8, limitPremium: 0.03, makerHoldSec: 3, shares: 5 }, 0.01), [], "a maker round signs nothing");
-  const fine = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, makerHoldSec: 0, shares: 5 }, 0.001);
+  assert.equal(new Set(plan.map(p => p.price)).size, plan.length, "one size per price");
+  const ten = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, shares: 10 }, 0.01);
+  assert.equal(ten.length, 80, "shares 10: still one entry per price");
+  assert.ok(ten.every(p => p.shares === leadShares(10, p.price)), "the size is leadShares(shares, price)");
+  assert.deepEqual(presignPrices({ maxAsk: 0.8, limitPremium: 0.03, shares: 5 }, 0), [], "no tick: nothing to sign");
+  const fine = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, shares: 5 }, 0.001);
   assert.equal(fine.length, 800, "tick 0.001: one per ask");
   assert.ok(fine.every(p => p.price <= 0.99));
-  const high = presignPrices({ maxAsk: 0.98, limitPremium: 0.03, makerHoldSec: 0, shares: 5 }, 0.01);
+  const high = presignPrices({ maxAsk: 0.98, limitPremium: 0.03, shares: 5 }, 0.01);
   assert.ok(high.every(p => p.price <= 0.99) && high.some(p => p.price === 0.99), "the limit never passes 0.99");
 }
 
