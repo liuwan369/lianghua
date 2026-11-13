@@ -25,7 +25,7 @@ Polymarket 加密货币 5 分钟涨跌盘的**币安领先策略（binance-lead�
   - 时钟用 chrony，误差 < 0.1 ms。
 - 控制面只在服务器本机：`curl -s -H "X-PM-Authenticated: probe" http://127.0.0.1:18766/api/...`（GET 只读）。公网 `https://166-1-221-53.sslip.io/console/`，nginx basic auth。
 - 服务：`pm-system-dashboard-dublin`（控制面，内存上限 900M）、`pm-clob-market-snapshot`（行情采集 + 录制，7 个币）、nginx。引擎由控制面按需启动在独立 scope `pm-engine-<run_id>`。
-- 部署：`PM_DEPLOY_SOCKS=127.0.0.1:10808 python scripts/deploy-reversal-release.py`（部署已提交的 HEAD，交易必须停着）。
+- 部署：`python scripts/deploy.py [ireland|tokyo|all]`（部署已提交的 HEAD，交易必须停着）。
 - 推送：`git push origin main`；连不上时 `git -c http.proxy=socks5h://127.0.0.1:10808 push -q origin main`。
 - 从服务器命令行启动实盘：见记忆 `live-run-start-from-shell`（**必须先得到用户同意**）。
 - 在服务器上跑脚本：写成本地文件 `scp` 过去再执行，跑完删掉。长任务用 `setsid nohup ... &`，**不要用 `pkill -f <名字>`**（会连 ssh 自己一起杀掉）。**大文件只能流式读**：一天的录制解压后几 GB，整份读进内存会把服务器挤爆（10-21 发生过）。回测和数据分析一律在本机跑。

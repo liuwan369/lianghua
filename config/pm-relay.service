@@ -1,0 +1,29 @@
+[Unit]
+Description=Polymarket lead-trade relay (Tokyo -> Ireland engine)
+After=network-online.target
+Wants=network-online.target
+# A relay that gave up after a network outage would silently drop the lead
+# line, so it never stops retrying; the journal rate limit below bounds the noise.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pm-relay/backend/engine
+# PM_RELAY_TARGET_HOST, PM_RELAY_PORT, PM_RELAY_KEY_FILE (operator file, never in git).
+EnvironmentFile=/root/.config/pm-system/relay.env
+ExecStart=/usr/local/bin/node /root/pm-relay/backend/engine/dist/cli/relay.js
+Restart=always
+RestartSec=2
+Nice=-5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+# One relay_status line a minute; errors in a restart loop are capped here.
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=200
+
+[Install]
+WantedBy=multi-user.target

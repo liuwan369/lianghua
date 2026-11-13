@@ -25,10 +25,10 @@ https://166-1-221-53.sslip.io/console/ （nginx basic auth）。四个页面，�
 ## 部署
 
 ```
-PM_DEPLOY_SOCKS=127.0.0.1:10808 python scripts/deploy-reversal-release.py
+python scripts/deploy.py [ireland|tokyo|all]
 ```
 
-不带参数，只部署已提交的 HEAD（未提交的改动不会上线）。交易必须处于停止状态，否则拒绝。详见 [ARCHITECTURE.md](ARCHITECTURE.md#部署与回滚)。
+默认 all（爱尔兰控制台 + 东京中继），只部署已提交的 HEAD（未提交的改动不会上线）。交易必须处于停止状态，否则拒绝。详见 [ARCHITECTURE.md](ARCHITECTURE.md#部署与回滚)。
 
 ## 测试
 

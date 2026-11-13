@@ -106,7 +106,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `dashboard/market_snapshot.py` | 校验采集器快照 |
 | `dashboard/system_metrics.py` | 主机与进程指标 |
 | `dashboard_account.py` | 账户配置的检查与保存，响应不含秘密 |
-| `deploy-reversal-release.py` | 部署 |
+| `deploy.py` | 部署（爱尔兰控制台、东京中继） |
 
 ### `frontend/console/`
 
@@ -212,14 +212,14 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 
 ## 部署与回滚
 
-`python scripts/deploy-reversal-release.py`（无参数）：
+`python scripts/deploy.py [ireland|tokyo|all]`：
 
-1. 本地用 `git archive HEAD` 在 `.deploy/<release>-build` 构建 `dist`，打包源码、`dist` 和清单（每个文件的 sha256、历史上删过的文件）。
-2. SFTP 上传到 `/root/.pm-releases/<release>/`，在服务器上于 `deployment.lock` 下应用。交易必须是停止状态，否则拒绝。
-3. 先把将被覆盖的文件打包成 `before.tar.gz`，再写入新文件、删掉已删除的文件、校验哈希、按需重载 systemd/nginx、重启采集器和控制面，最后确认控制面回到"停止 + 实盘锁不变"。
-4. 任何一步失败都从 `before.tar.gz` 自动回滚。服务器和本地各保留最近 5 个发布。
+1. 工作区里 `backend/engine`、`frontend/console`、`scripts`、`config` 有未提交改动就拒绝。本地用 `git archive HEAD` 在 `.deploy/<rev7>-build` 构建 `dist`，按目标打包（测试目录 `regress/` 和 `src/` 不上线），经 `ssh <别名> tar xzf -` 解到发布目录，再把脚本本身用 `ssh <别名> python3 - apply` 送过去执行。
+2. 爱尔兰（`pm-ire`）：拿 `data/dashboard/deployment.lock`；有活动的 `pm-engine-*`、`dist/cli/platform.js` 进程或控制面 `processRunning` 不是 false 就拒绝。发布目录 `/root/pm-releases/<rev7>-<UTC>/`。
+3. 东京（`pm-tokyo`）：只发 `dist` 和 package 文件到 `/root/pm-relay`，发布目录 `/root/pm-relay-releases/<rev7>-<UTC>/`，单元 `config/pm-relay.service`，用 `/usr/local/bin/node`（Node 24）。
+4. 两边相同：被覆盖或删除的文件先复制到发布目录的 `before/`；只删发布范围内不再发布的文件，`results/`、`node_modules/`、`.env`、`data/` 永不触碰；`package-lock.json` 变了才 `npm ci --omit=dev`；装单元（爱尔兰在 nginx、证书、口令都在时装站点并 `nginx -t` 后重载），重启后检查（控制面 30 秒内三个地址 200；中继 active 且无 `relay_error`，`--wait-status` 等 70 秒内 `sent` > 0），失败就从 `before/` 回滚并非零退出。
 
-服务器 `node_modules` 不归部署管，新增 npm 依赖要先在服务器上手动装。服务器上的 git HEAD 不随部署变，看 release 目录名判断线上版本。
+一次性准备（Node 24、中继密钥、env 文件、nginx/certbot、防火墙）由 `python scripts/deploy.py setup-ireland` / `setup-tokyo` 打印，运维手动执行。
 
 ## 已知限制与延后
 
