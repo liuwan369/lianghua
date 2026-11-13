@@ -7,7 +7,7 @@
   const LATE_BUCKETS = [["<0", "< 0 ms"], ["0-50", "0–50 ms"], ["50-100", "50–100 ms"], ["100-200", "100–200 ms"], ["200-400", "200–400 ms"], [">400", "> 400 ms"]];
   const STAGES = [["t_signal_ms", "成交→爱尔兰收到"], ["t_decide_ms", "收到→决策"], ["t_post_ms", "决策→发出"], ["t_ack_ms", "发出→交易所回复"]];
   const SKIPS = [["time_window", "不在下单时间窗"], ["band", "离开盘线太远 / 开盘线未知"], ["ask_too_high", "卖价高于上限"], ["book", "盘口不可用"],
-    ["budget", "预算或余额不够 / 日亏损上限"], ["paused", "已暂停"], ["already_attempted", "本场已下过单"], ["other", "其他"]];
+    ["budget", "预算或余额不够 / 日亏损上限"], ["paused", "已暂停"], ["mid_round_start", "中途启动，等下一场"], ["already_attempted", "本场已下过单"], ["other", "其他"]];
 
   const bar = (labelText, value, max, valueText, tone = "") => {
     const width = max > 0 && num(value) !== null ? Math.max(0, Math.min(100, (Math.abs(value) / max) * 100)) : 0;

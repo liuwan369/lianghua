@@ -112,11 +112,11 @@
              lines: [{venue, tokyo_delivered, direct_delivered,
                       tokyo_first_share,          // tokyo.delivered / (tokyo + direct)，取当前运行最新的 lead_lines
                       tokyo_lead_mean_ms, direct_lead_mean_ms}]},
- skips: {time_window, band, ask_too_high, book, budget, paused, already_attempted, other},
+ skips: {time_window, band, ask_too_high, book, budget, paused, mid_round_start, already_attempted, other},
  by_hour: [24 × {hour, orders, filled, settled, won, pnl_usd}]}   // 北京时间小时，按场次开始时间
 ```
 
-分位数用相邻秩线性插值，没有数据为 null。`skips` 数 `outcome` 为 `skipped`/`stopping` 的信号，按原因归类（`dashboard/ledger.py` `SKIP_RULES`，对应 `binance-lead.ts` 的中文原因）：`time_window`「不在本场」；`band`「超出 ±」「开盘价未知」「开盘前 60 秒均价未知」；`ask_too_high`「高于上限」「高于最高限价」；`book`「没有当前盘口」「一边没有卖价」「不新鲜」「行情恢复中」；`budget`「预算」「可用余额不足」「daily loss」；`paused`「已暂停新增交易」；`already_attempted`「本场已尝试」「本场已买到」「已下单（FAK）」；其余 `other`（如「交易所规则暂不可用」「停机中」）。
+分位数用相邻秩线性插值，没有数据为 null。`skips` 数 `outcome` 为 `skipped`/`stopping` 的信号，按原因归类（`dashboard/ledger.py` `SKIP_RULES`，对应 `binance-lead.ts` 的中文原因）：`time_window`「不在本场」；`band`「超出 ±」「开盘价未知」「开盘前 60 秒均价未知」；`ask_too_high`「高于上限」「高于最高限价」；`book`「没有当前盘口」「一边没有卖价」「不新鲜」「行情恢复中」；`budget`「预算」「可用余额不足」「daily loss」；`paused`「已暂停新增交易」；`mid_round_start`「中途启动」「错过本场开始」；`already_attempted`「本场已尝试」「本场已买到」「已下单（FAK）」；其余 `other`（如「交易所规则暂不可用」「停机中」）。
 
 ### `/api/orders/lead`
 

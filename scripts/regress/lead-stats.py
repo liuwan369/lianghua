@@ -222,12 +222,12 @@ class LeadStats(unittest.TestCase):
 
     def test_skips(self):
         self.assertEqual(self.stats["skips"], {"time_window": 1, "band": 1, "ask_too_high": 1, "book": 2,
-                                               "budget": 2, "paused": 1, "already_attempted": 1, "other": 2})
+                                               "budget": 2, "paused": 1, "mid_round_start": 0, "already_attempted": 1, "other": 2})
         for reason, bucket in (("卖价 0.995 高于最高限价 0.99，等下一个信号", "ask_too_high"),
                                ("本场开盘价未知（行情在本场中途才连上），等下一个信号", "band"),
                                ("信号到达时没有当前盘口，等下一个信号", "book"), ("行情恢复中，等待新盘口", "book"),
                                ("超过总资金预算，本场不下", "budget"), ("可用余额不足", "budget"),
-                               ("本场已买到 3/5 股，持有到结算", "already_attempted"), (None, "other")):
+                               ("本场已买到 3/5 股，持有到结算", "already_attempted"), ("中途启动，等待下一场", "mid_round_start"), (None, "other")):
             self.assertEqual(_skip_bucket(reason), bucket, reason)
 
     def test_by_hour_utc8(self):

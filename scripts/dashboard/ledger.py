@@ -690,10 +690,12 @@ LATE_BUCKETS = (("<0", None, 0), ("0-50", 0, 50), ("50-100", 50, 100), ("100-200
                 ("200-400", 200, 400), (">400", 400, None))
 # Skip reasons of binance-lead.ts (decide/fund/roundReason/onEvent) and the
 # core's risk halt, by bucket. First match wins, in this order.
-SKIP_BUCKETS = ("already_attempted", "paused", "time_window", "band", "ask_too_high", "book", "budget", "other")
+SKIP_BUCKETS = ("already_attempted", "paused", "mid_round_start", "time_window", "band", "ask_too_high", "book", "budget",
+                "other")
 SKIP_RULES = (
     ("already_attempted", ("本场已尝试", "本场已买到", "已下单（FAK）")),
     ("paused", ("已暂停新增交易",)),
+    ("mid_round_start", ("中途启动", "错过本场开始")),
     ("time_window", ("不在本场",)),
     ("band", ("超出 ±", "开盘价未知", "开盘前 60 秒均价未知")),
     ("ask_too_high", ("高于上限", "高于最高限价")),
