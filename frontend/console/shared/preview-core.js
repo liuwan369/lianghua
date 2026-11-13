@@ -1,245 +1,201 @@
 "use strict";
+// Console core: requests (answered from the push stream when it has the path),
+// escaped HTML templates, number/time formats, polling and the page shell.
 (() => {
-  /**
-   * Lightweight integration boundary for the standalone preview.
-   * Pages can keep their current markup while the mock source is replaced by
-   * the real adapter later. Production must not use localStorage as runtime truth.
-   */
-  const listeners = new Map();
-  const emit = (name, value) => (listeners.get(name) || []).forEach((fn) => fn(value));
-  const on = (name, fn) => {
-    const list = listeners.get(name) || [];
-    list.push(fn);
-    listeners.set(name, list);
-    return () => listeners.set(name, list.filter((item) => item !== fn));
-  };
+  const config = { apiBase: "", ...(window.__POLY_PREVIEW_CONFIG__ || {}) };
+
   const request = async (path, options = {}) => {
+    const method = (options.method || "GET").toUpperCase();
     // A pushed body is what this GET would return right now (shared/stream.js).
-    if ((options.method || "GET").toUpperCase() === "GET" && window.PolyPreviewStream) {
+    if (method === "GET" && !options.noPush && window.PolyPreviewStream) {
       window.PolyPreviewStream.note(path);
       const pushed = window.PolyPreviewStream.cached(path);
       if (pushed) return pushed;
     }
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), options.timeout || 8000);
+    const timer = window.setTimeout(() => controller.abort(), options.timeout || 8000);
     try {
-      const response = await fetch(`${PolyPreview.config.apiBase}${path}`, {
-        credentials: "same-origin",
-        cache: "no-store",
-        ...options,
-        signal: controller.signal
+      const response = await window.fetch(`${config.apiBase}${path}`, {
+        method, credentials: "same-origin", cache: "no-store", signal: controller.signal,
+        headers: options.body ? { "Content-Type": "application/json" } : undefined,
+        body: options.body ? JSON.stringify(options.body) : undefined,
       });
       const body = await response.json().catch(() => null);
-      if (!response.ok) { const error = new Error((body && body.error) || `请求失败（状态码 ${response.status}）`); error.status = response.status; throw error; }
-      if (!body || typeof body !== "object") throw new Error("接口未返回有效 JSON 数据，保留上次成功数据");
+      if (!response.ok) {
+        const error = new Error(label((body && body.error) || `请求失败（${response.status}）`));
+        error.status = response.status;
+        error.body = body;
+        throw error;
+      }
+      if (!body || typeof body !== "object") throw new Error("接口没有返回有效数据");
       return body;
     } catch (error) {
-      if (controller.signal.aborted) throw new Error("请求超时，页面保留上次成功数据");
+      if (controller.signal.aborted) throw new Error("请求超时");
       throw error;
-    } finally { window.clearTimeout(timeout); }
+    } finally { window.clearTimeout(timer); }
   };
-  const format = {
-    clock(value = Date.now()) { return new Date(value).toLocaleTimeString("zh-CN", { hour12: false }); },
-    timestampMs(value) {
-      if (value === null || value === undefined || value === "") return null;
-      const number = Number(value);
-      if (Number.isFinite(number)) return Math.abs(number) < 1e12 ? number * 1000 : number;
-      const parsed = Date.parse(value);
-      return Number.isFinite(parsed) ? parsed : null;
-    },
-    timestamp(value) {
-      if (value === null || value === undefined || value === "") return null;
-      const timestamp = this.timestampMs(value);
-      const date = timestamp == null ? new Date(value) : new Date(timestamp);
-      return Number.isNaN(date.getTime()) ? null : date;
-    },
-    time(value, fallback = "--:--:--") {
-      const date = this.timestamp(value);
-      return date ? date.toLocaleTimeString("zh-CN", { hour12: false }) : fallback;
-    },
-    readableError(value, fallback = "接口暂时不可用") {
-      const raw = String(value ?? "").trim();
-      if (!raw) return fallback;
-      const labels = {
-        stopped: "交易进程已停止",
-        started: "交易进程已启动",
-        running: "交易进程运行中",
-        starting: "交易进程正在启动",
-        stopping: "交易进程正在停止",
-        paused: "已暂停新增订单",
-        failed: "交易进程运行失败",
-        order: "订单状态更新",
-        fill: "订单成交",
-        settlement: "结算状态更新",
-        resolved: "市场结果已确认",
-        cancel: "撤单状态更新",
-        market_pool_unavailable: "运行池暂时不可用",
-        // Writing the run pool needs a control session. The raw venue wording
-        // ("交易控制密码错误") reads like a wrong password even when none was
-        // entered, so name the action the operator has to take instead.
-        "交易控制密码错误": "需要先在设置页连接控制会话，才能修改运行池或控制交易",
-        "未配置交易控制密码": "服务器尚未配置交易控制密码，无法修改运行池",
-        account_rpc_failed: "区块链节点查询失败，请检查网络连接",
-        account_check_failed: "账户检查未通过，请查看账户配置和授权",
-        account_checker_unavailable: "服务器账户检查程序暂不可用",
-        invalid_account_config: "账户配置格式不正确",
-        wallet_address_mismatch: "钱包地址与签名私钥不匹配",
-        approvals_missing: "交易授权未完成",
-        settlement_credentials_unavailable: "结算凭据不可用",
-        account_response_invalid: "服务器返回的账户数据无效",
-        ledger_projection_unavailable: "账本数据暂不可用",
-        ledger_projection_incomplete: "账本投影尚未追上运行记录",
-        remote_orders_unconfirmed: "远端挂单状态尚未确认",
-        remote_orders_state_unconfirmed: "远端挂单状态尚未确认",
-        runtime_snapshot_stale: "运行状态已过期",
-        strategy_config_unavailable: "策略配置暂不可用",
-        order_recovery_pending: "订单状态仍在核对",
-        market_feed_unhealthy: "行情数据异常，等待恢复",
-        transport_disconnected: "行情连接中断，等待恢复",
-        stale_book: "行情盘口已过期，暂不用于交易"
-      };
-      if (/market_feed_unhealthy/i.test(raw) && /transport_disconnected/i.test(raw)) return "行情连接中断，正在等待恢复";
-      if (/market_feed_unhealthy/i.test(raw) && /stale_book/i.test(raw)) return "行情盘口已过期，暂不用于交易";
-      if (/market_feed_unhealthy/i.test(raw) && /incomplete_book/i.test(raw)) return "行情深度不完整，暂不可交易";
-      const code = raw.toLowerCase().replace(/^error[:_ -]*/, "").split(/[:：]/, 1)[0];
-      if (labels[code]) return labels[code];
-      const words = {
-        market: "市场", feed: "行情源", unhealthy: "异常", transport: "连接", disconnected: "中断",
-        stale: "过期", book: "盘口", incomplete: "不完整", complete: "完整", connected: "已连接",
-        waiting: "等待", order: "订单", fill: "成交", settlement: "结算", reconciliation: "对账",
-        pending: "待处理", failed: "失败", error: "异常", retrying: "重试中", rejected: "未接受",
-        acknowledged: "已确认", confirmed: "已确认", unresolved: "待确认", unavailable: "暂不可用",
-        strategy: "策略", decision: "判断", skipped: "已跳过", accepted: "已接受", credentials: "账户凭据",
-        missing: "缺失", mismatch: "不匹配", timeout: "超时", rpc: "区块链节点", platform: "交易进程"
-      };
-      if (/^[a-z][a-z0-9_:\s-]*$/i.test(raw)) {
-        const translated = code.split(/[_:\s-]+/).filter(Boolean).map((word) => words[word] || word).join(" · ");
-        return translated && translated.split(" · ").every((word) => /[\u3400-\u9fff]/.test(word)) ? translated : fallback;
-      }
-      return /[\u3400-\u9fff]/.test(raw) ? raw : fallback;
-    },
-    money(value) { return Number.isFinite(value) ? `$${value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value.toFixed(0)}` : "--"; },
-    escape(value) { return String(value ?? "").replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char])); },
-    // Single source for account-readiness error codes. Previously copy-pasted
-    // into overview/settings/auto-trade blocks, which drifted (7 vs 8 vs 12
-    // keys). Union of all keys; pass a code to accountError(code, fallback).
-    accountErrorLabels: {
-      account_rpc_failed: "区块链节点查询失败，请检查网络连接",
-      account_check_failed: "账户检查未通过，请查看账户配置和授权",
-      account_checker_unavailable: "服务器账户检查程序暂不可用",
-      account_check_busy: "已有账户检查正在进行，请稍候",
-      invalid_account_config: "账户配置格式不正确",
-      account_changed_during_check: "检查期间账户配置发生变化，请重新检查",
-      wallet_address_mismatch: "钱包地址与签名私钥不匹配",
-      approvals_missing: "交易授权未完成",
-      settlement_credentials_unavailable: "结算凭据不可用",
-      settlement_credentials_not_ready: "结算凭据尚未准备好",
-      account_response_invalid: "服务器返回的账户数据无效",
-      account_reader_unavailable: "账户读取程序暂不可用"
-    },
-    accountError(code, fallback = "账户尚未检查通过，请到设置页检查已保存账户") {
-      const key = String(code ?? "").toLowerCase().split(/[:：]/, 1)[0];
-      return this.accountErrorLabels[key] || fallback;
-    }
-  };
-  // Single definition of the sidebar. Each page previously carried its own copy
-  // of this list plus the markup builder and the click binding, and marked the
-  // active entry by comparing Chinese labels.
-  const NAV_ITEMS = [
-    { key: "market", icon: "◇", label: "市场", target: "market.html" },
-    { key: "auto-trade", icon: "↗", label: "自动交易", target: "auto-trade.html" },
-    { key: "strategy", icon: "◒", label: "策略", target: "strategy.html" },
-    { key: "settings", icon: "⚙", label: "设置", target: "settings.html" }
-  ];
-  const navMarkup = (activeKey) => NAV_ITEMS.map((item) => {
-    const active = item.key === activeKey;
-    return `<button class="nav-item${active ? " active" : ""}" type="button" data-preview-nav="${item.label}" data-preview-target="${item.target}"${active ? ' aria-current="page"' : ""}><span>${item.icon}</span>${item.label}</button>`;
-  }).join("");
-  const selectedAssetFromUrl = new URLSearchParams(window.location.search).get("assetId");
-  const setSelectedAssetUrl = (assetId) => {
-    config.selectedAssetId = assetId || null;
-    const url = new URL(window.location.href);
-    if (assetId) url.searchParams.set("assetId", assetId);
-    else url.searchParams.delete("assetId");
-    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
-  };
-  const navigate = (target) => {
-    if (!target) return;
-    const url = new URL(target, window.location.href);
-    const selected = new URLSearchParams(window.location.search).get("assetId");
-    if (selected && !url.searchParams.has("assetId")) url.searchParams.set("assetId", selected);
-    window.location.assign(`${url.pathname}${url.search}${url.hash}`);
-  };
-  const scopedQuery = (context = {}) => {
-    const params = new URLSearchParams();
-    if (context.range) params.set("range", context.range);
-    if (context.assetId) params.set("assetId", context.assetId);
-    if (context.marketId) params.set("marketId", context.marketId);
-    if (context.roundId) params.set("roundId", context.roundId);
-    if (context.runId) params.set("runId", context.runId);
-    if (context.cursor) params.set("cursor", context.cursor);
-    // Unlisted keys are dropped silently, so a new query parameter must be added
-    // here or the request goes out without it and the server answers page 1.
-    if (context.beforeRoundId) params.set("beforeRoundId", context.beforeRoundId);
-    if (context.limit) params.set("limit", context.limit);
-    const query = params.toString();
-    return query ? `?${query}` : "";
-  };
-  const accountPost = async (path, payload = {}) => {
-    const base = new URL(config.apiBase || window.location.origin, window.location.href);
-    if (window.location.protocol !== "https:" || base.origin !== window.location.origin) {
-      throw new Error("账户密钥只允许通过 HTTPS 同源页面提交");
-    }
-    try {
-      const result = await request(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), credentials: "same-origin", redirect: "error", cache: "no-store", timeout: 55000 });
-      if (result?.ok !== true || !result.report || typeof result.report !== "object" || Array.isArray(result.report)) throw new Error("账户接口未确认检查或保存成功");
-      return result;
-    } catch (error) {
-      let message = error?.message || "账户请求失败，输入尚未保存";
-      for (const value of Object.values(payload)) if (typeof value === "string" && value) message = message.split(value).join("[已隐藏]");
-      message = message.replace(/(?:0x)?[a-fA-F0-9]{64}/g, "[已隐藏]").slice(0, 240);
-      throw new Error(message);
-    }
+  const post = (path, body, timeout) => request(path, { method: "POST", body, timeout });
+  const query = (params) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== "") search.set(key, value);
+    const text = search.toString();
+    return text ? `?${text}` : "";
   };
   const api = {
-    bootstrap: () => request("/api/bootstrap"),
-    controlSession: async (token) => {
-      const base = new URL(config.apiBase || window.location.origin, window.location.href);
-      if (window.location.protocol !== "https:" || base.origin !== window.location.origin) throw new Error("控制会话仅允许通过 HTTPS 同源页面连接");
-      try {
-        const result = await request("/api/trading/auth/session", { method: "POST", headers: { "Content-Type": "application/json", "X-PM-Control-Token": token }, body: "{}", redirect: "error" });
-        if (result.ok !== true) throw new Error("控制会话未获服务器确认");
-        return result;
-      } catch { throw new Error("控制会话连接失败，请检查控制密码及服务器部署配置"); }
-    },
-    markets: (query = "asset=crypto&duration=5m") => request(`/api/markets?${query}`),
-    marketSnapshot: (marketId, context = {}) => request(`/api/markets/${encodeURIComponent(marketId)}/snapshot${scopedQuery({ ...context, marketId })}`),
-    marketPool: (options) => request("/api/runtime/market-pool", options),
-    runtimeStatus: (context = {}) => request(`/api/runtime/status${scopedQuery(context)}`),
-    runtimeCommand: (payload) => request("/api/runtime/commands", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
+    runtimeStatus: () => request("/api/runtime/status"),
+    runtimeBook: () => request("/api/runtime/book"),
+    runtimeCommand: (payload) => post("/api/runtime/commands", payload, 30000),
     strategyConfig: () => request("/api/strategy/config"),
-    strategyDraft: (payload) => request("/api/strategy/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
-    strategyActivate: (payload) => request("/api/strategy/activate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }),
-    position: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/position${scopedQuery({ ...context, roundId })}`),
-    orders: (roundId, context = {}) => request(`/api/rounds/${encodeURIComponent(roundId)}/orders${scopedQuery({ ...context, roundId })}`),
-    cancelOrder: (orderId) => request(`/api/orders/${encodeURIComponent(orderId)}/cancel`, { method: "POST" }),
-    flatten: () => request("/api/runtime/flatten", { method: "POST" }),
+    strategyDraft: (payload) => post("/api/strategy/drafts", payload),
+    strategyActivate: (payload) => post("/api/strategy/activate", payload),
+    position: (roundId, marketId) => request(`/api/rounds/${encodeURIComponent(roundId)}/position${query({ marketId })}`),
+    roundOrders: (roundId, marketId) => request(`/api/rounds/${encodeURIComponent(roundId)}/orders${query({ marketId, limit: 10 })}`),
     accountSnapshot: () => request("/api/account/snapshot"),
     accountStatus: () => request("/api/account/status"),
-    accountCheck: (payload = {}) => accountPost("/api/account/check", payload),
-    accountSave: (payload = {}) => accountPost("/api/account/save", payload),
     diagnostics: () => request("/api/diagnostics/health"),
-    metrics: (range = "today", context = {}) => request(`/api/metrics/summary${scopedQuery({ ...context, range })}`),
-    events: (cursor = "", context = {}) => request(`/api/events${scopedQuery({ ...context, ...(cursor ? { cursor } : {}) })}`),
-    fills: (context = {}) => request(`/api/fills${scopedQuery(context)}`),
-    settlements: (context = {}) => request(`/api/settlements${scopedQuery(context)}`),
-    rounds: (context = {}) => request(`/api/rounds${scopedQuery(context)}`),
-    ledgerReset: () => request("/api/ledger/reset", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm: "RESET" }), timeout: 30000 })
+    statsLead: (range) => request(`/api/stats/lead${query({ range })}`),
+    // Older pages are read once, not subscribed to the push stream.
+    ordersLead: ({ range, limit, before } = {}) => request(`/api/orders/lead${query({ range, limit, before })}`, { noPush: before != null }),
+    events: (limit = 200) => request(`/api/events${query({ limit })}`),
+    ledgerReset: () => post("/api/ledger/reset", { confirm: "RESET" }, 30000),
   };
-  const runtimeConfig = window.__POLY_PREVIEW_CONFIG__ || {};
-  // Backend is the default. Preserve an explicitly supplied mode for hosts
-  // that use it as metadata, while keeping local/demo data disabled.
-  const config = { apiBase: "", marketCycle: "5m", strategyId: "binance-lead", selectedAssetId: selectedAssetFromUrl, mode: "backend", ...runtimeConfig, demo: false };
-  window.PolyPreview = Object.freeze({ config, api, request, format, navMarkup, navigate, setSelectedAssetUrl, on, emit });
+
+  // --- escaped HTML: every interpolated value is escaped unless it is html`` output ---
+  class Raw { constructor(text) { this.text = text; } toString() { return this.text; } }
+  const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" };
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ESC[char]);
+  const part = (value) => value instanceof Raw ? value.text : Array.isArray(value) ? value.map(part).join("")
+    : value === null || value === undefined || value === false ? "" : esc(value);
+  const html = (strings, ...values) => new Raw(strings.reduce((out, text, i) => out + text + (i < values.length ? part(values[i]) : ""), ""));
+  // Replace an element's markup only when it changed.
+  const put = (node, markup) => {
+    if (!node) return;
+    const text = String(markup);
+    if (node.__html !== text) { node.__html = text; node.innerHTML = text; }
+  };
+
+  // --- formats ---
+  const num = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+  const fmt = {
+    money(value) {   // signed, 2 decimals
+      const v = num(value);
+      if (v === null) return "--";
+      const fixed = Math.abs(v).toFixed(2);
+      return fixed === "0.00" ? "$0.00" : `${v > 0 ? "+" : "-"}$${fixed}`;
+    },
+    usd(value) { const v = num(value); return v === null ? "--" : `$${v.toFixed(2)}`; },
+    ms(value) { const v = num(value); return v === null ? "--" : `${Math.round(v)} ms`; },
+    pct(ratio) { const v = num(ratio); return v === null ? "--" : `${(v * 100).toFixed(1)}%`; },
+    price(value) {
+      const v = num(value);
+      if (v === null) return "--";
+      return v.toFixed(Math.abs(v * 100 - Math.round(v * 100)) > 1e-6 ? 3 : 2);
+    },
+    bp(value) { const v = num(value); return v === null ? "--" : `${v.toFixed(1)} bp`; },
+    shares(value) { const v = num(value); return v === null ? "--" : String(Number(v.toFixed(2))); },
+    int(value) { const v = num(value); return v === null ? "--" : String(Math.round(v)); },
+    btc(value) { const v = num(value); return v === null ? "--" : v.toFixed(2); },
+    seconds(value) { const v = num(value); return v === null ? "--" : v < 10 ? `${v.toFixed(1)} 秒` : `${Math.round(v)} 秒`; },
+    // Beijing time (UTC+8) from Unix seconds or milliseconds.
+    bjDate(value) {
+      const v = num(value);
+      if (v === null || v <= 0) return null;
+      return new Date((v < 1e12 ? v * 1000 : v) + 8 * 3600 * 1000).toISOString();
+    },
+    time(value) { const iso = fmt.bjDate(value); return iso ? iso.slice(11, 19) : "--"; },
+    hm(value) { const iso = fmt.bjDate(value); return iso ? iso.slice(11, 16) : "--"; },
+    dateTime(value) { const iso = fmt.bjDate(value); return iso ? `${iso.slice(5, 10)} ${iso.slice(11, 19)}` : "--"; },
+    countdown(seconds) {
+      const v = num(seconds);
+      if (v === null) return "--";
+      const s = Math.max(0, Math.floor(v));
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    },
+    tone(value) { const v = num(value); return v === null || Math.abs(v) < 0.005 ? "" : v > 0 ? "up" : "down"; },
+  };
+
+  const VENUES = { bybit: "Bybit", binance: "币安合约", okx: "OKX" };
+  const LINES = { direct: "爱尔兰直连", tokyo: "东京转发" };
+  const DIRECTIONS = { UP: "涨 UP", DOWN: "跌 DOWN" };
+  const ORDER_STATUS = { CREATED: "已创建", SUBMITTING: "提交中", OPEN: "挂单中", PARTIAL: "部分买到", FILLED: "全部买到",
+    CANCELLED: "没买到（FAK 作废）", REJECTED: "被拒绝", UNKNOWN: "待确认", ABANDONED: "已放弃" };
+  const ERRORS = {
+    runtime_snapshot_pending: "引擎刚启动，等待第一份运行快照",
+    no_current_round: "当前没有进行中的场次",
+    book_snapshot_unavailable: "还没有盘口快照",
+    book_snapshot_stale: "盘口快照已过期",
+    runtime_snapshot_stale: "运行状态已过期",
+    ledger_projection_unavailable: "账本数据暂不可用",
+    ledger_projection_incomplete: "账本还在追赶运行记录",
+    trading_runtime_unavailable: "交易引擎状态不可用",
+    resource_snapshot_stale: "主机资源数据过期",
+    lead_feed_unhealthy: "信号源 10 秒内没有成交",
+    relay_listener_down: "东京转发监听没有工作",
+    account_bridge_unavailable: "账户读取不可用",
+    account_not_configured: "服务器还没有配置账户",
+    not_checked: "还没有检查",
+    data_unavailable: "数据源暂时不可用",
+    invalid_query: "查询参数不正确",
+    record_not_found: "记录不存在",
+    stream_capacity: "推送连接已满",
+  };
+  const label = (code) => {
+    const text = String(code ?? "").trim();
+    if (!text) return "";
+    return text.split(/;\s*/).map((item) => ERRORS[item] || item).join("；");
+  };
+
+  // --- polling: one loop per data source, paused while the tab is hidden ---
+  const every = (ms, fn) => {
+    let timer = null;
+    let busy = false;
+    const run = async () => {
+      window.clearTimeout(timer);
+      timer = null;
+      if (window.document.hidden) return;
+      // Asked again while a read is in flight (a click): run right after it.
+      if (busy) { timer = window.setTimeout(run, 200); return; }
+      busy = true;
+      try { await fn(); } catch { /* each loop shows its own error */ } finally { busy = false; }
+      timer = window.setTimeout(run, ms);
+    };
+    window.document.addEventListener("visibilitychange", () => { if (!window.document.hidden && !timer) run(); });
+    run();
+    return run;
+  };
+
+  // --- page shell ---
+  const NAV = [
+    { key: "live", icon: "↗", label: "实盘", href: "auto-trade.html" },
+    { key: "stats", icon: "▤", label: "统计", href: "stats.html" },
+    { key: "history", icon: "☰", label: "历史", href: "history.html" },
+    { key: "settings", icon: "⚙", label: "设置", href: "settings.html" },
+  ];
+  const shell = (active, title, subtitle, body) => html`
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>BTC 五分钟领先</small></div></div>
+        <nav>${NAV.map((item) => html`<a class="nav-item${item.key === active ? " active" : ""}" href="${item.href}"${item.key === active ? html` aria-current="page"` : ""}><span>${item.icon}</span>${item.label}</a>`)}</nav>
+        <div class="sidebar-status"><i data-push-dot></i><span data-push-state>连接中</span></div>
+      </aside>
+      <main class="main">
+        <header class="page-header"><div><p class="eyebrow">BTC 五分钟 · binance-lead · 实盘</p><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-side" data-header-side></div></header>
+        ${body}
+      </main>
+    </div>`;
+  const mount = (active, title, subtitle, body) => {
+    const root = window.document.querySelector("#app");
+    if (!root) return null;
+    put(root, shell(active, title, subtitle, body));
+    window.setInterval(() => {
+      const connected = window.PolyPreviewStream?.connected === true;
+      const state = root.querySelector("[data-push-state]");
+      if (state) state.textContent = connected ? "实时推送" : "轮询中";
+      root.querySelector("[data-push-dot]")?.classList.toggle("off", !connected);
+    }, 2000);
+    return root;
+  };
+
+  window.PolyPreview = Object.freeze({ config, request, api, html, esc, put, fmt, num, label, every, mount, shell,
+    VENUES, LINES, DIRECTIONS, ORDER_STATUS, Raw });
 })();

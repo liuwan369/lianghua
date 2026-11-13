@@ -112,14 +112,13 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
-| `*.html` + `*-block.js/css` | 四个页面：自动交易（本场下单/没下单的原因、当前盘口能否下单、最近币安信号、币安行情健康）、市场、策略（binance-lead 参数表单）、设置 |
-| `stats-panel.js` | 自动交易页的交易统计、服务器状态、清空数据 |
-| `event-log.js` | 设置页的运行日志 |
-| `shared/preview-core.js` | 请求、侧栏、格式化 |
+| `auto-trade.html` + `live.js` | 实盘：启停命令、今日数字、信号源、当前场盘口、本场信号与下单 |
+| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、没买到、晚了多少、速度、按来源、跳过、按小时 |
+| `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，点一行展开 |
+| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布）、账户只读、系统健康、运行日志、清空统计 |
+| `console.css` | 全站唯一样式表 |
+| `shared/preview-core.js` | 请求、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏 |
 | `shared/stream.js` | 推送客户端：登记页面的 GET，用一条 EventSource 订阅 |
-| `shared/api-adapter.js` | 接口适配 |
-| `shared/view-model.js` | 数据整形（场次标签等） |
-| `shared/preview-store.js` | 页面状态 |
 
 ## 数据流
 

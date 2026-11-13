@@ -7,12 +7,12 @@
 // re-render the moment data changes instead of waiting for its poll timer.
 // If the stream is down nothing changes: request() goes to the network as before.
 (() => {
-  const PUSHABLE = ["/api/markets", "/api/runtime/status", "/api/rounds", "/api/fills", "/api/settlements",
-    "/api/events", "/api/account/snapshot", "/api/metrics/summary", "/api/account/status",
-    "/api/runtime/market-pool", "/api/strategy/config", "/api/diagnostics/health"];
+  // scripts/dashboard/push.py CADENCE.
+  const PUSHABLE = ["/api/runtime/status", "/api/runtime/book", "/api/rounds", "/api/fills", "/api/settlements",
+    "/api/events", "/api/account/snapshot", "/api/metrics/summary", "/api/orders/lead", "/api/stats/lead",
+    "/api/account/status", "/api/strategy/config", "/api/diagnostics/health"];
   // A path the page stopped requesting drops out after this. Longer than the
-  // slowest poll (account status every 30 s): at 30 s that path left and
-  // rejoined the set, and every change reopened the stream.
+  // slowest poll (30 s), so a polled path never leaves and rejoins the set.
   const WANT_TTL_MS = 120000;
   const RESUBSCRIBE_DELAY_MS = 300; // batch the paths a page notes while it starts up
   const pushable = (path) => {

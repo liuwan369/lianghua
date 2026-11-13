@@ -35,13 +35,15 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // --- before the stream exists, requests go to the network and are noted ---
 assert.equal((await api.runtimeStatus()).source, "network");
-await api.markets();
+await api.runtimeBook();
+await api.statsLead("today");
+await api.ordersLead({ range: "all", limit: 100, before: 123 });   // an older page is never subscribed
 await api.strategyDraft({});           // a POST is never noted or answered from push
 await wait(400);
 assert.equal(sources.length, 1, "one EventSource for the page");
 const url = new URL(sources[0].url, "http://x");
 assert.equal(url.pathname, "/api/stream");
-assert.deepEqual(url.searchParams.getAll("p").sort(), ["/api/markets?asset=crypto&duration=5m", "/api/runtime/status"]);
+assert.deepEqual(url.searchParams.getAll("p").sort(), ["/api/runtime/book", "/api/runtime/status", "/api/stats/lead?range=today"]);
 
 // --- once open, a pushed path is answered from the push, without a fetch ---
 const heard = [];
@@ -53,7 +55,7 @@ fetched.length = 0;
 assert.equal((await api.runtimeStatus()).source, "push", "served from the pushed body");
 assert.equal(fetched.length, 0, "no network request");
 // a path not pushed yet still uses the network
-assert.equal((await api.markets()).source, "network");
+assert.equal((await api.runtimeBook()).source, "network");
 
 // --- a stream error falls back to the network immediately ---
 sources[0].onerror();
