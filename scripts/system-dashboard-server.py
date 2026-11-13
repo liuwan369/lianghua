@@ -1087,7 +1087,8 @@ def strategy_control(payload: dict) -> dict:
         # No market is chosen here: the engine discovers the current round
         # itself (Gamma) and waits for the next one when started mid-round.
         return start_trading({"mode": saved["config"]["mode"], "confirm_live": True,
-                              "duration_min": saved["config"]["durationMinutes"]},
+                              "duration_min": saved["config"]["durationMinutes"],
+                              "start_paused": payload.get("start_paused") is True},
                              config_revision=saved["savedRevision"], request_id=request_id,
                              strategy_config=saved)
 
@@ -1179,10 +1180,12 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         # child process is still starting.
         candidate_log.touch()
         if strategy_config:
-            # A new operator start resumes the saved strategy. Reusing a
-            # process/state alone must still preserve an intentional pause.
+            # A new operator start resumes the saved strategy unless it asks to
+            # start paused (a dry run: feeds, signals and skip reasons, no
+            # orders until 继续). Reusing a process/state alone must still
+            # preserve an intentional pause.
             candidate_log.with_suffix(".control.json").write_text(
-                json.dumps({"paused": False}), encoding="utf-8")
+                json.dumps({"paused": payload.get("start_paused") is True}), encoding="utf-8")
         console_handle = candidate_console_log.open("a", encoding="utf-8")
         args = [
             "node", "dist/cli/platform.js", "--live",
@@ -2301,7 +2304,8 @@ def make_handler(root: Path):
                 if path == "/api/runtime/commands":
                     action = payload.get("action")
                     translated = {"action": action, "strategy_id": payload.get("strategyId", STRATEGY_ID),
-                                  "revision": payload.get("revision"), "request_id": payload.get("requestId")}
+                                  "revision": payload.get("revision"), "request_id": payload.get("requestId"),
+                                  "start_paused": payload.get("startPaused") is True}
                     if action == "start" and translated["revision"] is None:
                         translated["revision"] = payload.get("expectedRevision")
                     result = strategy_control(translated)

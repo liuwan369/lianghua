@@ -131,7 +131,7 @@
 
 | 路径 | 用途 |
 |---|---|
-| `POST /api/runtime/commands` | `{action: start\|pause\|resume\|stop, requestId, revision\|expectedRevision}`。启动不选市场：引擎自己发现当前场次，中途启动就等下一场。同一 `requestId` 再发返回已有运行。返回 `accepted`、`status`、`commandStatus`、`serviceState`、`remoteOrdersState`。最终状态看 `/api/runtime/status` |
+| `POST /api/runtime/commands` | `{action: start\|pause\|resume\|stop, requestId, revision\|expectedRevision, startPaused?}`。`startPaused: true` 让引擎从暂停开始（只收行情、出信号、记跳过原因，按「继续」前不下单）。启动不选市场：引擎自己发现当前场次，中途启动就等下一场。同一 `requestId` 再发返回已有运行。返回 `accepted`、`status`、`commandStatus`、`serviceState`、`remoteOrdersState`。最终状态看 `/api/runtime/status` |
 | `POST /api/strategy/drafts` | `{strategyId:"binance-lead", config, expectedRevision}` 保存草稿；`config` 必须恰好是上面的字段，范围同引擎 `normalizeBinanceLeadConfig`（份额 (0,10000]、阈值 (0,1000] bp、窗口 (0,60000] ms、加价 [0,1)、0 ≤ fromSec < toSec ≤ 300、卖价上限 (0,1)、`leadVenues` 非空不重复、`tokyoRelay` 布尔、开盘价范围 [0,1000]、`openLine` ∈ {tick, mean60}、两个盘口门 > 0、预算和日亏损为空或 > 0），不合法 400；版本冲突 409 |
 | `POST /api/strategy/activate` | `{expectedRevision, draftId}` 发布草稿，对之后尚未冻结的场次生效；`effectiveRoundId` 非空返回 501 |
 | `POST /api/ledger/reset` | `{confirm:"RESET"}`，引擎在跑或无法确认已停时 409。删 journal、引擎状态和投影，保留结算记录和配置 |

@@ -164,6 +164,19 @@ class LeadStart(unittest.TestCase):
                          (7, 2.5, "1"))
 
 
+    def test_start_paused_writes_the_pause_before_the_engine_runs(self):
+        self.publish()
+        control = lambda: json.loads(Path(self.spawned[-1][0][self.spawned[-1][0].index("--control-file") + 1])
+                                     .read_text(encoding="utf-8"))
+        self.server.strategy_control({"action": "start", "strategy_id": "binance-lead", "revision": 1,
+                                      "request_id": str(uuid.uuid4()), "start_paused": True})
+        self.assertEqual(control(), {"paused": True}, "a dry run never trades until 继续")
+        self.server._trading_process = None
+        self.server._trading_pid = None
+        self.server._trading_log = None
+        self.start(1)
+        self.assertEqual(control(), {"paused": False}, "a plain start trades")
+
     def test_same_request_id_does_not_start_twice(self):
         self.publish()
         request = str(uuid.uuid4())
