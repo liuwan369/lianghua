@@ -67,6 +67,12 @@ assert.ok(text(off).includes("东京转发：本次运行没有开启"));
 const down = text(L.renderSources({ ...status, leadLines: { ...status.leadLines, relay: { listening: false, port: 9555, messages: 0, accepted: 0 } } }, NOW));
 assert.ok(down.includes("没有监听"), down);
 assert.ok(text(L.renderSources({ processRunning: false, leadLines: null }, NOW)).includes("引擎没在运行"));
+// Stopped with the last run's counters: labelled as such, no red dots, no stale "没有监听".
+const stopped = L.renderSources({ ...status, processRunning: false,
+  leadLines: { ...status.leadLines, relay: { listening: false, port: 47001, messages: 9, accepted: 9 } } }, NOW);
+assert.ok(text(stopped).includes("上次运行的统计"), text(stopped));
+assert.ok(text(stopped).includes("已停") && !text(stopped).includes("没有监听"), text(stopped));
+assert.ok(!String(stopped).includes("dot bad"), "a stopped engine is not shown as failing");
 
 // --- strategy note from the config ---
 const note = L.strategyNote({ leadVenues: ["okx"], tokyoRelay: false, thresholdBp: 3, windowMs: 400, fromSec: 20, toSec: 250,

@@ -70,8 +70,10 @@
       const row = (line, counters, enabled) => {
         if (!enabled) return html`<div class="line"><span class="dot"></span><b>${LINES[line]}</b><small>未开启</small></div>`;
         const age = counters && counters.lastAt > 0 ? nowMs - counters.lastAt : null;
-        const tone = age === null ? "bad" : age < HEALTHY_MS ? "ok" : "bad";
-        return html`<div class="line"><span class="dot ${tone}"></span><b>${LINES[line]}</b><span>${age === null ? "没有成交" : `${fmt.seconds(Math.max(0, age) / 1000)}前`}</span><small>先到 ${fmt.int(counters?.delivered ?? null)} 笔</small></div>`;
+        // A stopped engine leaves its last counters: grey, no age, not "bad".
+        const tone = !running ? "" : age === null ? "bad" : age < HEALTHY_MS ? "ok" : "bad";
+        const when = !running ? "已停" : age === null ? "没有成交" : `${fmt.seconds(Math.max(0, age) / 1000)}前`;
+        return html`<div class="line"><span class="dot ${tone}"></span><b>${LINES[line]}</b><span>${when}</span><small>先到 ${fmt.int(counters?.delivered ?? null)} 笔</small></div>`;
       };
       const total = (direct?.delivered || 0) + (tokyo?.delivered || 0);
       const lead = relayOn && total > 0
@@ -84,6 +86,9 @@
       : relay.error ? `东京转发监听出错：${relay.error}`
       : `东京转发监听：${relay.listening ? "正在监听" : "没有监听"}${relay.port ? ` 端口 ${relay.port}` : ""} · 收到 ${fmt.int(relay.messages)} 条 · 接受 ${fmt.int(relay.accepted)} 条`
         + ((relay.badMac || relay.badFormat || relay.badSource) ? ` · 被拒 ${fmt.int((relay.badMac || 0) + (relay.badFormat || 0) + (relay.badSource || 0))} 条` : "");
+    if (!running) {
+      return html`<p class="note">引擎已停，下面是上次运行的统计（转发收到 ${fmt.int(relay?.messages ?? null)} 条）。</p><div class="sources">${cards}</div>`;
+    }
     const relayTone = relayOn && (!relay || relay.error || !relay.listening) ? "bad" : "";
     return html`<div class="sources">${cards}</div><p class="note ${relayTone}">${relayLine}。圆点绿色 = 10 秒内收到过成交。</p>`;
   };
