@@ -90,7 +90,9 @@ class AccountData:
         if not node:
             raise _ReaderError("account_node_missing")
         try:
-            process = subprocess.Popen([node, str(entry)], cwd=self.engine,
+            # A V8 heap cap: unbounded, the reader grew to ~190 MB of the
+            # console's 350 MB unit and got it OOM-killed (2026-11-13 11:36).
+            process = subprocess.Popen([node, "--max-old-space-size=160", str(entry)], cwd=self.engine,
                                        env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                        text=True, encoding="utf-8", bufsize=1)
         except ValueError:

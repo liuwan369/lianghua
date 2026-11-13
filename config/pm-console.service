@@ -30,7 +30,10 @@ CPUWeight=20
 # IOWeight is a cgroup setting, so the engine's scope does not get it; a
 # per-process IOSchedulingClass would be inherited by the engine, so none is set.
 IOWeight=20
-MemoryMax=350M
+# 2026-11-13: 350M OOM-killed the unit (account reader ~190 MB, server ~90 MB,
+# projection ~20 MB, plus peaks). The box has ~1.2 GB free beside the engine.
+MemoryHigh=500M
+MemoryMax=600M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
