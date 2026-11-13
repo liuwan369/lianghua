@@ -623,7 +623,8 @@ const diffMs = (later: number | null, earlier: number | null) => later === null 
  * - signal_recv_ms: our wall clock when the trade arrived (signal.receivedAtUnix);
  * - decision_ms: our wall clock at the strategy callback that placed the order (stage.createdAt);
  * - post_sent_ms: our wall clock when the CLOB POST started (order.postSentAt, client.ts);
- * - ack_ms: our wall clock when the core took the HTTP reply (order.httpAckAt; null without a reply);
+ * - ack_ms: our wall clock when the core took the venue's HTTP reply, a
+ *   rejection included (order.venueReplyAt, else httpAckAt; null without a reply);
  * - ask_gone_ms: our receive wall clock of the first book frame after the
  *   signal without our side's ask at or under the limit (stage.askGoneAtUnix);
  * - ask_gone_venue_ms: that frame's venue time for our side (venue clock).
@@ -644,7 +645,7 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   const signalRecvMs = signal && signal.receivedAtUnix > 0 && signal.tradeTimeMs > 0 ? signal.receivedAtUnix * 1000 : null;
   const decisionMs = msOf(stage?.createdAt);
   const postSentMs = msOf(order?.postSentAt);
-  const ackMs = msOf(order?.httpAckAt);
+  const ackMs = msOf(order?.venueReplyAt ?? order?.httpAckAt);
   const askGoneMs = msOf(stage?.askGoneAtUnix);
   return { client_order_id: order?.clientOrderId ?? stage?.clientOrderId ?? null, order_id: order?.orderId ?? stage?.orderId ?? null,
     market_id: order?.marketId ?? round?.marketId ?? null, round_id: order?.roundId ?? round?.roundId ?? null,

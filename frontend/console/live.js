@@ -158,8 +158,83 @@
     return snapshot?.collateral?.available === true ? num(snapshot.collateral.value) : null;
   };
 
+  // --- 完整链路: the newest lead_order from exchange trade to venue reply ---
+  // All *_ms are epoch ms (cli/platform.ts leadOrderFields); trade_time_ms is
+  // the exchange's clock, the others ours, so offsets include the clock skew.
+  const signedMs = (value) => { const v = num(value); return v === null ? "--" : `${v < 0 ? "-" : "+"}${Math.abs(Math.round(v))} ms`; };
+  const since = (later, earlier) => num(later) === null || num(earlier) === null ? null : later - earlier;
+  const filledOf = (o) => num(o?.filled_shares) > 0;
+  const missedOf = (o) => num(o?.filled_shares) === 0;
+  const chainRows = (o) => {
+    const at = (ms) => since(ms, o.trade_time_ms);
+    const rows = [{ name: `交易所成交（${VENUES[o.venue] || o.venue || "--"}）`, offset: num(o.trade_time_ms) === null ? null : 0 }];
+    if (o.line === "tokyo") rows.push({ name: "东京收到并转发", offset: at(o.relay_recv_ms) });
+    rows.push({ name: `爱尔兰收到信号（${LINES[o.line] || o.line || "--"}）`, offset: at(o.signal_recv_ms) },
+      { name: "引擎决策", offset: at(o.decision_ms) },
+      { name: "订单发出", offset: at(o.post_sent_ms) },
+      { name: "便宜卖单消失（卖价超过限价）", offset: at(o.ask_gone_ms), missing: "回复前一直在" },
+      { name: `交易所回复：${filledOf(o) ? `买到 ${fmt.shares(o.filled_shares)}/${fmt.shares(o.shares)} 股` : missedOf(o) ? "没买到" : "--"}`, offset: at(o.ack_ms) });
+    // 本段用时: from the nearest earlier row that has a time (a missing row
+    // would otherwise blank the next segment too).
+    let previous = null;
+    return rows.map((row) => {
+      const segment = row.offset === null || previous === null ? null : row.offset - previous;
+      if (row.offset !== null) previous = row.offset;
+      return { ...row, segment };
+    });
+  };
+  const chainVerdict = (o) => {
+    const gone = since(o.ask_gone_ms, o.trade_time_ms);
+    const ack = since(o.ack_ms, o.trade_time_ms);
+    if (filledOf(o)) return { tone: "up", text: `买到了${num(o.ask_gone_ms) === null ? "，卖单在回复前没消失" : ""}` };
+    if (missedOf(o) && gone !== null && ack !== null) {
+      const late = ack - gone;
+      return { tone: "bad", text: late >= 0
+        ? `卖单在第 ${Math.round(gone)} ms 消失，我们第 ${Math.round(ack)} ms 才到，晚了 ${Math.round(late)} ms`
+        : `卖单在第 ${Math.round(gone)} ms 消失，我们第 ${Math.round(ack)} ms 就到了，比它早 ${Math.round(-late)} ms，还是没买到` };
+    }
+    return { tone: "", text: "数据不全" };
+  };
+  const median = (values) => {
+    const list = values.filter((v) => num(v) !== null).sort((a, b) => a - b);
+    if (!list.length) return { n: 0, median: null };
+    const mid = Math.floor(list.length / 2);
+    return { n: list.length, median: list.length % 2 ? list[mid] : (list[mid - 1] + list[mid]) / 2 };
+  };
+  const chainMedians = (items) => {
+    const missed = items.filter(missedOf);
+    const pick = (list, key) => median(list.map((o) => o[key]));
+    return [
+      ["成交→爱尔兰收到（爱尔兰直连）", pick(items.filter((o) => o.line === "direct"), "t_signal_ms")],
+      ["成交→爱尔兰收到（东京转发）", pick(items.filter((o) => o.line === "tokyo"), "t_signal_ms")],
+      ["收到→决策", pick(items, "t_decide_ms")],
+      ["决策→发出", pick(items, "t_post_ms")],
+      ["发出→交易所回复", pick(items, "t_ack_ms")],
+      ["总计（成交→交易所回复）", pick(items, "t_total_ms")],
+      ["成交→卖单消失（没买到的）", pick(missed, "ask_gone_after_trade_ms")],
+      ["晚了多少（没买到的）", pick(missed, "late_by_ms")],
+    ];
+  };
+  const renderChain = (items) => {
+    const list = Array.isArray(items) ? items : [];
+    const o = list[0];
+    const stats = chainMedians(list);
+    const medians = html`<h3>最近 ${list.length} 单中位数</h3><div class="table-wrap"><table class="t"><thead><tr><th class="l">环节</th><th>单数</th><th>中位数</th></tr></thead><tbody>${stats.map(([name, s]) => html`<tr><td class="l">${name}</td><td class="num">${s.n}</td><td class="num">${fmt.ms(s.median)}</td></tr>`)}</tbody></table></div>`;
+    if (!o) return html`<div class="chain"><div><h3>最近一单完整链路</h3><p class="empty">本次运行还没有下单</p></div><div>${medians}</div></div>`;
+    const verdict = chainVerdict(o);
+    const rows = chainRows(o).map((row) => html`<tr><td class="l">${row.name}</td><td class="num">${row.offset === null && row.missing ? row.missing : signedMs(row.offset)}</td><td class="num">${fmt.ms(row.segment)}</td></tr>`);
+    return html`<div class="chain"><div>
+      <h3>最近一单完整链路</h3>
+      <p class="muted" data-chain-head>${fmt.dateTime(o.trade_time_ms)} 北京时间 · <span class="${o.direction === "UP" ? "up" : "down"}">${DIRECTIONS[o.direction] || o.direction || "--"}</span> · 信号时卖价 ${fmt.price(o.ask_at_signal)} → 限价 ${fmt.price(o.limit_price)}</p>
+      <div class="table-wrap"><table class="t"><thead><tr><th class="l">环节</th><th>距交易所成交</th><th>本段用时</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="chain-verdict ${verdict.tone}" data-chain-verdict>${verdict.text}</p>
+      ${o.error ? html`<p class="error-line">交易所回复：${o.error}</p>` : ""}
+      <p class="note">成交时间是交易所的时钟，其余是爱尔兰本机时钟，差值含两边的时钟偏差。</p>
+    </div><div>${medians}</div></div>`;
+  };
+
   window.PolyLive = Object.freeze({ runState, allowed, commandPayload, command, confirmText, renderSources, renderSignals,
-    renderBook, renderPosition, renderOpenLine, strategyNote, roundNumber, availableUsd, STATES });
+    renderBook, renderPosition, renderOpenLine, strategyNote, roundNumber, availableUsd, renderChain, chainMedians, STATES });
 
   // --- page ---
   const root = P.mount("live", "实盘", "引擎现在在做什么：信号源、当前场盘口、本场的信号和下单。", html`
@@ -186,6 +261,7 @@
         <div class="panel"><div class="panel-head"><h2>本场下单与持仓</h2></div><div data-position></div></div>
       </div>
     </section>
+    <section class="panel"><div class="panel-head"><h2>完整链路</h2><span class="panel-meta">从交易所成交到交易所回复，每一段花了多久</span></div><div data-chain></div></section>
     <p class="note" data-strategy-note></p>`);
   if (!root) return;
   const $ = (selector) => root.querySelector(selector);
@@ -247,6 +323,7 @@
     renderCards();
     P.put($("[data-sources]"), renderSources(state.status, Date.now()));
     renderRound();
+    P.put($("[data-chain]"), renderChain(state.leadOrders?.items));
     $("[data-strategy-note]").textContent = strategyNote(state.status?.currentRound?.config || state.config?.config);
   };
   const load = (key, fn) => async () => {
@@ -262,7 +339,7 @@
     }
     render();
   });
-  P.every(3000, async () => { await load("leadOrders", () => P.api.ordersLead({ range: "run", limit: 5 }))(); render(); });
+  P.every(3000, async () => { await load("leadOrders", () => P.api.ordersLead({ range: "run", limit: 20 }))(); render(); });
   P.every(10000, async () => {
     await Promise.all([load("config", P.api.strategyConfig)(), load("account", P.api.accountSnapshot)(),
       load("today", () => P.api.statsLead("today"))(), load("run", () => P.api.statsLead("run"))()]);

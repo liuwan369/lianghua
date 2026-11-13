@@ -64,6 +64,9 @@ a { color: #8cc6f2; }
 .card > small { color: #7d94aa; font-size: 11px; }
 .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .grid2 > .panel { margin-top: 18px; }
+.chain { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; }
+.chain h3 { margin: 0 0 6px; font-size: 14px; }
+.chain-verdict { margin: 10px 0 0; font-size: 14px; font-weight: 600; color: #dfeaf4; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
 .kv dt { color: #8098ae; }
 .kv dd { margin: 0; color: #dfeaf4; overflow-wrap: anywhere; }
@@ -192,7 +195,7 @@ summary { color: #8cc6f2; font-size: 12px; cursor: pointer; }
   .main { padding: 16px 12px 24px; }
   .page-header { display: block; }
   .header-side { justify-items: start; margin-top: 12px; }
-  .grid2, .sources, .book, .form { grid-template-columns: minmax(0, 1fr); }
+  .grid2, .sources, .book, .form, .chain { grid-template-columns: minmax(0, 1fr); }
   .panel { padding: 14px; }
   .bar-row { grid-template-columns: 88px minmax(0, 1fr) 72px; }
   .log li { grid-template-columns: 1fr; gap: 2px; }

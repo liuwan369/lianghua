@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { createLeadOrderLog, leadOrderFields } from "../../dist/cli/platform.js";
 import { createStrategy } from "../../dist/strategies/binance-lead.js";
 import { createLiveSettlementAdapter } from "../../dist/platform/live-settlement.js";
+import { TradingPlatform } from "../../dist/platform/platform.js";
 
 const START = 1_800_000_000, UP = "11".repeat(38), DOWN = "22".repeat(38), ROUND = String(START);
 const market = { id: "0xm", assetId: "btc", roundId: ROUND, name: `btc-updown-5m-${START}`, startsAt: START, endsAt: START + 300,
@@ -115,6 +116,66 @@ const order = (status, extra = {}) => ({ clientOrderId, strategyId: "binance-lea
   assert.ok(Math.abs(f.fee_usd - 0.05) < 1e-9);
   const noAck = leadOrderFields(indexed.round, indexed.stage, order("UNKNOWN"), []);
   assert.equal(noAck.ack_ms, null); assert.equal(noAck.t_ack_ms, null); assert.equal(noAck.late_by_ms, null);
+}
+
+// --- a FAK the venue rejected keeps the time of the venue's reply ---
+// Live 2026-11-13: a FAK BUY answered 400 "no orders found to match with FAK
+// order" after 508 ms got ack_ms null, so t_ack/t_total/late_by were null for
+// exactly the missed orders. The reply is real: the core stamps venueReplyAt
+// and lead_order takes ack_ms from it. Real TradingPlatform, the ack the real
+// gateway returns for that reply (fak-no-match.mjs checks that mapping).
+{
+  const clock = { now: S + 0.002 };
+  const NO_MATCH = "no orders found to match with FAK order. FAK orders are partially filled or killed if no match is found.";
+  const platform = new TradingPlatform({ account: { accountId: "t", at: START, cashAt: START, cashUsd: 100, positions: [], openOrders: [], complete: true },
+    instruments: market.instruments, limits: { capitalUsd: 100, maxOrderUsd: 50, maxOpenOrders: 10, dailyLossUsd: null }, now: () => clock.now,
+    adapters: { gateway: { mode: "live", durableIdentity: true, async submit(_request, _instrument, prepared) {
+      prepared({ orderHash: "0xorder", signedPayload: { sig: "s" }, preparedAt: S + 0.003 });
+      clock.now = S + 0.204;
+      return { status: "rejected", orderId: "0xorder", error: NO_MATCH, postSentAt: S + 0.004,
+        postLatencyMs: 199.7, ackLatencyMs: 200, totalLatencyMs: 202 }; }, async cancel() { return true; } },
+    estimateFee: () => 0.05 } });
+  platform.ingest({ kind: "market", market });
+  const lines = [];
+  const log = createLeadOrderLog(id => s.stageFor(id), fields => lines.push(fields));
+  platform.subscribe(event => log.observe(event, clock.now));
+  const rejected = await platform.core.submit({ clientOrderId, strategyId: "binance-lead", assetId: "btc", marketId: "0xm", roundId: ROUND,
+    tokenId: UP, direction: "BUY", price: 0.58, shares: 5, timeInForce: "FAK", postOnly: false });
+  assert.equal(rejected.status, "REJECTED");
+  assert.equal(lines.length, 1, "REJECTED is terminal: one record");
+  const f = lines[0];
+  const near = (a, b, label) => assert.ok(typeof a === "number" && Math.abs(a - b) < 1e-3, `${label}: ${a} vs ${b}`);
+  near(f.ack_ms, (S + 0.204) * 1000, "ack_ms");
+  near(f.t_ack_ms, 200, "t_ack"); near(f.t_total_ms, 329, "t_total");
+  near(f.late_by_ms, 54, "the ask went 54 ms before the reply");
+  assert.equal(rejected.venueReplyAt, S + 0.204, "the venue's reply time");
+  assert.equal(rejected.httpAckAt, undefined, "a rejection is not an ACK: the UNKNOWN rules keep their input");
+}
+{
+  // Replies that never came carry no venueReplyAt: refused before the POST
+  // (feed not ready) and a POST that timed out.
+  const rig = async ack => {
+    const platform = new TradingPlatform({ account: { accountId: "t", at: START, cashAt: START, cashUsd: 100, positions: [], openOrders: [], complete: true },
+      instruments: market.instruments, limits: { capitalUsd: 100, maxOrderUsd: 50, maxOpenOrders: 10, dailyLossUsd: null }, now: () => S + 0.3,
+      adapters: { gateway: { mode: "live", durableIdentity: true, async submit(_request, _instrument, prepared) {
+        prepared({ orderHash: "0xorder", signedPayload: { sig: "s" }, preparedAt: S + 0.003 }); return ack; }, async cancel() { return true; } },
+      estimateFee: () => 0.05 } });
+    platform.ingest({ kind: "market", market });
+    return platform.core.submit({ clientOrderId, strategyId: "binance-lead", assetId: "btc", marketId: "0xm", roundId: ROUND,
+      tokenId: UP, direction: "BUY", price: 0.58, shares: 5, timeInForce: "FAK", postOnly: false });
+  };
+  assert.equal((await rig({ status: "rejected", error: "authenticated feed is not ready" })).venueReplyAt, undefined, "no POST");
+  assert.equal((await rig({ status: "rejected", error: "sign", failurePhase: "signing" })).venueReplyAt, undefined, "signing failed");
+  const timedOut = await rig({ status: "unknown", error: "timed out", failurePhase: "post", postSentAt: S + 0.004 });
+  assert.equal(timedOut.venueReplyAt, undefined, "a timed-out POST had no reply");
+  assert.equal((await rig({ status: "accepted", orderId: "0xorder", postSentAt: S + 0.004 })).venueReplyAt, S + 0.3, "an ACK is a reply");
+}
+{
+  // An old record with only httpAckAt still gives ack_ms.
+  const f = leadOrderFields(indexed.round, indexed.stage, order("CANCELLED", { httpAckAt: S + 0.204 }), []);
+  assert.ok(Math.abs(f.ack_ms - (S + 0.204) * 1000) < 1e-6);
+  const g = leadOrderFields(indexed.round, indexed.stage, order("CANCELLED", { httpAckAt: S + 0.5, venueReplyAt: S + 0.204 }), []);
+  assert.ok(Math.abs(g.ack_ms - (S + 0.204) * 1000) < 1e-6, "venueReplyAt first");
 }
 
 // --- createLeadOrderLog: once per clientOrderId ---

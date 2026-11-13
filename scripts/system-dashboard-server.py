@@ -1159,7 +1159,7 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         log_dir = TRADING_ROOT / "results" / "live"
         log_dir.mkdir(parents=True, exist_ok=True)
         run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
-        # Journals grew 69-113 MB/h while trading and nothing removed them.
+        # Journals grew 69-113 MB/h while trading; older runs go to results/archive.
         prune_run_journals(log_dir, RUN_JOURNALS_KEPT - 1)
         candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
         candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
@@ -1617,17 +1617,23 @@ def _ledger_stamp() -> tuple:
     return tuple(stamp)
 
 
-RUN_JOURNALS_KEPT = 20
+RUN_JOURNALS_KEPT = 3
 
 
-def prune_run_journals(live: Path, keep: int = RUN_JOURNALS_KEPT) -> list[str]:
-    """Delete the files of all but the newest `keep` runs (journal growth).
+def prune_run_journals(live: Path, keep: int = RUN_JOURNALS_KEPT, archive: Path | None = None) -> list[str]:
+    """Keep the newest `keep` runs in `live`; pack each older one into
+    `archive/<run>.tar.gz` and remove its files (2026-11-13: the box keeps 3
+    raw runs, old runs are 6.5 GB raw / 0.36 GB packed; nothing is deleted
+    unpacked). The console statistics only read the runs the ledger has.
 
     A run is `dashboard-<run_id>.*`: journal, console log, control and stop
     files. Settlement records and the strategy's platform-state are shared
     across runs and never touched. Called before a new run starts, with no
-    engine running, so no file here is being written.
+    engine running, so no file here is being written. A run whose pack fails
+    is left in place.
     """
+    import tarfile
+    archive = archive or live.parent / "archive"
     runs: dict[str, list[Path]] = {}
     for path in live.glob("dashboard-*") if live.exists() else []:
         if not path.is_file() or ".settlements.json" in path.name or ".platform-state.json" in path.name:
@@ -1636,6 +1642,17 @@ def prune_run_journals(live: Path, keep: int = RUN_JOURNALS_KEPT) -> list[str]:
     newest = sorted(runs, key=lambda run: max(p.stat().st_mtime for p in runs[run]), reverse=True)
     removed = []
     for run in newest[keep:]:
+        archive.mkdir(parents=True, exist_ok=True)
+        target = archive / f"{run}.tar.gz"
+        partial = target.with_name(target.name + ".part")
+        try:
+            with tarfile.open(partial, "w:gz", compresslevel=6) as pack:
+                for path in runs[run]:
+                    pack.add(path, arcname=path.name)
+            partial.replace(target)
+        except OSError:
+            partial.unlink(missing_ok=True)
+            continue
         for path in runs[run]:
             path.unlink(missing_ok=True)
             removed.append(path.name)

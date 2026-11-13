@@ -81,7 +81,7 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
   assert.ok(/实盘 .*统计 .*历史 .*设置/.test(nav), nav.slice(0, 200));
   assert.ok(!/市场|策略页|运行池|控制密码/.test(page.node("#app").innerHTML), "no removed pages or features in the shell");
   for (const path of ["/api/runtime/status", "/api/runtime/book", `/api/rounds/${ROUND}/position?marketId=0xm`, `/api/rounds/${ROUND}/orders?marketId=0xm&limit=10`,
-    "/api/strategy/config", "/api/account/snapshot", "/api/stats/lead?range=today", "/api/stats/lead?range=run", "/api/orders/lead?range=run&limit=5"]) {
+    "/api/strategy/config", "/api/account/snapshot", "/api/stats/lead?range=today", "/api/stats/lead?range=run", "/api/orders/lead?range=run&limit=20"]) {
     assert.ok(page.requests.includes(path), `实盘 reads ${path}: ${page.requests}`);
   }
   const shown = text(page.html());

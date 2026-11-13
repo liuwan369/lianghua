@@ -26,12 +26,22 @@ with tempfile.TemporaryDirectory() as tmp:
               live / "dashboard-20260925-104129-1579.platform-state.json.settlements.json"]
     for path in shared:
         path.write_text("{}")
-    removed = server.prune_run_journals(live, 20)
+    archive = live.parent / f"{live.name}-archive"
+    assert server.RUN_JOURNALS_KEPT == 3, "the box keeps the newest 3 runs raw (2026-11-13)"
+    removed = server.prune_run_journals(live, 3, archive)
     runs = {p.name.split(".", 1)[0] for p in live.glob("dashboard-*.jsonl")}
-    assert len(runs) == 20, f"keeps the newest 20 runs; kept {len(runs)}"
+    assert len(runs) == 3, f"keeps the newest 3 runs; kept {len(runs)}"
     assert "dashboard-20261004-000024-abc24" in runs and "dashboard-20261000-000000-abc00" not in runs, "the oldest go first"
-    assert len(removed) == 15, f"all files of the 5 oldest runs are removed; removed {len(removed)}"
+    assert len(removed) == 66, f"all files of the 22 oldest runs leave the live directory; removed {len(removed)}"
     assert all(path.exists() for path in shared), "settlement records and platform state are never pruned"
+    # Nothing is lost: each moved run is one gzip'd tar in the archive, with all its files.
+    import tarfile
+    packs = sorted(archive.glob("dashboard-*.tar.gz"))
+    assert len(packs) == 22, f"one archive per old run; got {len(packs)}"
+    with tarfile.open(archive / "dashboard-20261000-000000-abc00.tar.gz") as pack:
+        assert sorted(pack.getnames()) == sorted(f"dashboard-20261000-000000-abc00{s}" for s in (".jsonl", ".console.log", ".control.json"))
+        assert pack.extractfile("dashboard-20261000-000000-abc00.jsonl").read() == b"x"
+    assert not list(archive.glob("*.part")), "no half-written archive is left"
 
 # A pruned, fully-read run is final, not stale.
 import dashboard.ledger as ledger_module

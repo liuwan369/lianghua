@@ -148,6 +148,9 @@ export interface OrderRecord extends OrderRequest {
   venueStatusAfterAckLatencyMs?: number;
   /** Wall-clock time at which the CLOB HTTP order response was accepted. */
   httpAckAt?: number;
+  /** Wall-clock seconds when the venue's HTTP reply to the order POST arrived:
+   * accepted, rejected or unknown. Timing only; nothing decides on it. */
+  venueReplyAt?: number;
   /** Wall-clock seconds when the order POST was started (CLOB client). */
   postSentAt?: number;
   filledShares: number;

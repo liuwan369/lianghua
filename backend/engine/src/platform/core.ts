@@ -193,6 +193,7 @@ export class TradingCore {
         || (o.venueStatusLatencyMs !== undefined && (!finite(o.venueStatusLatencyMs) || o.venueStatusLatencyMs < 0))
         || (o.venueStatusAfterAckLatencyMs !== undefined && (!finite(o.venueStatusAfterAckLatencyMs) || o.venueStatusAfterAckLatencyMs < 0))
         || (o.httpAckAt !== undefined && (!finite(o.httpAckAt) || o.httpAckAt < 0))
+        || (o.venueReplyAt !== undefined && (!finite(o.venueReplyAt) || o.venueReplyAt < 0))
         || (o.postSentAt !== undefined && (!finite(o.postSentAt) || o.postSentAt < 0))
         || (o.venueStatusSource !== undefined && !["http_ack", "user_ws", "account_read"].includes(o.venueStatusSource))
         || (o.cancellationSource !== undefined && !["local_http", "user_ws", "account_read"].includes(o.cancellationSource))
@@ -1060,6 +1061,14 @@ export class TradingCore {
       // reset or got a 5xx comes back with failurePhase "post" and may still be
       // matching: no httpAckAt, so the slow UNKNOWN rules apply (review C F1).
       if (ack.status === "accepted" || (ack.status === "unknown" && ack.failurePhase !== "post")) order.httpAckAt = this.clock();
+      // A rejection the venue sent (a FAK that matched nothing) is a reply too,
+      // but not an ACK: httpAckAt drives the UNKNOWN rules, so its time goes in
+      // venueReplyAt (timing only). A refusal before the POST has no
+      // postSentAt; a failed POST, signing or metadata step has a failurePhase.
+      if (order.httpAckAt !== undefined
+        || (ack.status === "rejected" && ack.postSentAt !== undefined && ack.failurePhase === undefined)) {
+        order.venueReplyAt = order.httpAckAt ?? this.clock();
+      }
       if (order.venueStatusAt !== undefined && order.httpAckAt !== undefined) {
         order.venueStatusAfterAckLatencyMs = Math.max(0, (order.venueStatusAt - order.httpAckAt) * 1000);
       }
