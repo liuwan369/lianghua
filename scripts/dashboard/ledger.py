@@ -94,23 +94,37 @@ CREATE INDEX IF NOT EXISTS trade_market ON trade_details(run_id,json_extract(pay
 CREATE INDEX IF NOT EXISTS trade_economic_id ON trade_details(run_id,json_extract(payload,'$.trade_id'),json_extract(payload,'$.order_id'));
 CREATE INDEX IF NOT EXISTS order_economic_id ON order_details(run_id,json_extract(payload,'$.client_order_id'));
 CREATE TABLE IF NOT EXISTS projection_migrations (name TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS lead_orders (
+ run_id TEXT NOT NULL REFERENCES runs(run_id), client_order_id TEXT NOT NULL,
+ market_id TEXT, round_start REAL, recv_ts REAL NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(run_id,client_order_id)
+);
+CREATE INDEX IF NOT EXISTS lead_order_round ON lead_orders(run_id,round_start);
+CREATE INDEX IF NOT EXISTS settlement_market_id ON settlement_details(market_id);
 """
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
-                         "order", "settlement", "platform_status", "lead_signal"})
-# lead_signal (cli/platform.ts leadJournalFields): what the strategy did with one Binance signal.
+                         "order", "settlement", "platform_status", "lead_signal", "lead_order"})
+# lead_signal (cli/platform.ts leadJournalFields): what the strategy did with one lead signal.
 LEAD_OUTCOMES = frozenset({"order_submitted", "skipped", "no_round", "stopping"})
+# contracts.ts LEAD_VENUES / LeadLine.
+LEAD_VENUES = ("bybit", "binance", "okx")
+LEAD_LINES = ("direct", "tokyo")
+# lead_order (cli/platform.ts leadOrderFields): one record per order.
+LEAD_ORDER_STATUSES = frozenset({"CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED",
+                                 "UNKNOWN", "ABANDONED"})
+LEAD_ORDER_TEXT = ("client_order_id", "order_id", "market_id", "round_id", "token_id", "venue_status", "error",
+                   "open_line")
+LEAD_ORDER_NUMBERS = ("round_start", "relay_recv_ms", "trade_time_ms", "signal_recv_ms", "move_bp", "signal_price",
+                      "open_value", "band_bp", "sec_since_open", "ask_at_signal", "limit_price", "shares",
+                      "filled_shares", "avg_fill_price", "fee_usd", "decision_ms", "post_sent_ms", "ack_ms",
+                      "ask_gone_ms", "ask_gone_venue_ms", "t_signal_ms", "t_decide_ms", "t_post_ms", "t_ack_ms",
+                      "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms")
 LATENCY_METRICS = frozenset({
-    "market_age", "book_processing", "book_batch_apply", "strategy_decision", "ws_receive_to_decision",
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
     "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
     "order_risk_metadata",
-    # The engine emits these four but they were absent from this whitelist, so
-    # every sample was dropped and order_http_ack (measured: median 251ms against
-    # a 32ms venue floor) could not be split into signing vs waiting vs reading.
-    # They are what localises that gap without guesswork.
+    # These split order_http_ack into signing, waiting and reading.
     "order_l2_headers", "order_http_post", "order_response_headers", "order_response_body",
-    # Retained while old journals remain readable.
-    "order_ack", "cancel_ack", "fill_report",
 })
 LATENCY_LIMIT = 5000
 # Latency is per-run diagnostic data that is cheap to regenerate by running again,
@@ -282,13 +296,16 @@ RISK_DAY_TZ = timezone(timedelta(hours=8))
 
 
 def _range_start(range_name, now):
-    """Start of range=today / range=month. The day boundary is 00:00 UTC+8, the
+    """Start of range=today / 7d / month. The day boundary is 00:00 UTC+8, the
     same one the engine's daily-loss stop uses (core.ts dayOf), so both "today"
-    figures always cover the same day (BUGS P1-3)."""
-    if range_name not in ("today", "month"):
+    figures always cover the same day (BUGS P1-3). 7d is today and the six
+    days before it."""
+    if range_name not in ("today", "7d", "month"):
         return None
     midnight = datetime.fromtimestamp(now, RISK_DAY_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    return (midnight if range_name == "today" else midnight.replace(day=1)).timestamp()
+    if range_name == "7d":
+        midnight -= timedelta(days=6)
+    return (midnight if range_name != "month" else midnight.replace(day=1)).timestamp()
 
 
 def _exposed_pnl(settled_pnl, unsettled_cost, unsettled_rounds):
@@ -356,11 +373,11 @@ def _strategy_projection(value):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "makerHoldSec", "openBandBp",
-            "reverseMaxAsk", "reverseToSec",
-            "midEdge", "midShares", "highEdge", "highShares", "maxQuoteAgeSeconds",
-            "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
-        result["leadSource"] = source.get("leadSource") if source.get("leadSource") in ("binance-spot", "bybit-perp") else None
+            "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "openBandBp",
+            "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
+        venues = source.get("leadVenues")
+        result["leadVenues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
+        result["tokyoRelay"] = source.get("tokyoRelay") if isinstance(source.get("tokyoRelay"), bool) else None
         result["openLine"] = source.get("openLine") if source.get("openLine") in ("tick", "mean60") else None
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
         return result
@@ -368,8 +385,12 @@ def _strategy_projection(value):
         if not isinstance(source, dict):
             return None
         result = {key: _number(source.get(key)) for key in (
-            "price", "refPrice", "moveBp", "openPrice", "openMean60", "fairUp", "tradeId", "tradeTimeMs", "receivedAtUnix")}
+            "price", "refPrice", "moveBp", "openPrice", "openMean60", "tradeTimeMs", "receivedAtUnix", "relayRecvMs")}
+        trade_id = source.get("tradeId")
+        result["tradeId"] = _text(trade_id) if isinstance(trade_id, str) else _number(trade_id)
         result["direction"] = source.get("direction") if source.get("direction") in ("UP", "DOWN") else None
+        result["venue"] = source.get("venue") if source.get("venue") in LEAD_VENUES else None
+        result["line"] = source.get("line") if source.get("line") in LEAD_LINES else None
         return result
     def round_view(source):
         if not isinstance(source, dict):
@@ -395,14 +416,15 @@ def _strategy_projection(value):
                             **{key: latest.get(key) if isinstance(latest.get(key), bool) else None
                                for key in ("twoSided", "freshOnArrival")},
                             "staleReason": _text(latest.get("staleReason"))} if isinstance(latest, dict) else None
-        # The first order, then at most the reverse leg.
+        # The round's one order (binance-lead places at most one).
         stages = source.get("stages") if isinstance(source.get("stages"), list) else []
         result["stages"] = [{**{key: _text(stage.get(key)) for key in (
             "tokenId", "clientOrderId", "orderId", "status", "error")},
-            **{key: _number(stage.get(key)) for key in ("stage", "price", "askAtSignal", "fairEdge", "shares", "createdAt", "filledShares")},
+            **{key: _number(stage.get(key)) for key in ("price", "askAtSignal", "shares", "createdAt", "filledShares",
+                                                        "askGoneAtUnix")},
             "direction": stage.get("direction") if stage.get("direction") in ("UP", "DOWN") else None,
             "signal": signal_view(stage.get("signal"))}
-            for stage in stages[:2] if isinstance(stage, dict)]
+            for stage in stages[:1] if isinstance(stage, dict)]
         return result
     rounds = value.get("rounds") if isinstance(value.get("rounds"), list) else []
     result = {"strategyId": STRATEGY_ID, "schemaVersion": 1,
@@ -413,6 +435,28 @@ def _strategy_projection(value):
               "rounds": [round_view(r) for r in rounds[-8:] if isinstance(r, dict)],
               "truncated": len(rounds) > 8}
     return result
+
+
+def _lead_lines(value):
+    """lead-trades.ts LeadLinesStats: per venue and line counters, relay listener."""
+    if not isinstance(value, dict):
+        return None
+    venues = {}
+    for venue, lines in (value.get("venues") or {}).items() if isinstance(value.get("venues"), dict) else ():
+        if venue not in LEAD_VENUES or not isinstance(lines, dict):
+            continue
+        venues[venue] = {line: {key: _number(counters.get(key)) for key in (
+            "frames", "trades", "delivered", "lastAt", "leadSumMs", "leadCount", "leadMeanMs")}
+            for line, counters in lines.items() if line in LEAD_LINES and isinstance(counters, dict)}
+    relay = value.get("relay")
+    if isinstance(relay, dict):
+        relay = {**{key: _number(relay.get(key)) for key in (
+            "port", "messages", "accepted", "badSource", "badFormat", "badMac", "tcpClients")},
+            "listening": relay.get("listening") if isinstance(relay.get("listening"), bool) else None,
+            "error": _text(relay.get("error"))}
+    else:
+        relay = None
+    return {"venues": venues, "relay": relay}
 
 
 def _runtime_projection(value, mode):
@@ -426,10 +470,13 @@ def _runtime_projection(value, mode):
     result["assetId"] = _asset_from(value)
     result["strategy_id"] = _text(value.get("strategy_id"))
     result["strategy_runtime"] = _strategy_projection(value.get("strategy_runtime"))
-    # Lead feed: true while either line delivered within its idle limit; the venue
-    # it reads is fixed when the engine starts (lead_source).
+    # Lead feed: true while some venue had a current trade on some line within
+    # its idle limit. Venues and the relay line are fixed when the engine starts.
     result["lead_feed_healthy"] = value.get("lead_feed_healthy") if isinstance(value.get("lead_feed_healthy"), bool) else None
-    result["lead_source"] = value.get("lead_source") if value.get("lead_source") in ("binance-spot", "bybit-perp") else None
+    venues = value.get("lead_venues")
+    result["lead_venues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
+    result["lead_relay"] = value.get("lead_relay") if isinstance(value.get("lead_relay"), bool) else None
+    result["lead_lines"] = _lead_lines(value.get("lead_lines"))
     snapshots = value.get("snapshots") if isinstance(value.get("snapshots"), list) else []
     # Keep the accepted paired snapshot lossless enough for the read-only
     # market DTO. Never rebuild it from the legacy token books below.
@@ -573,6 +620,10 @@ def _projection(record):
         result["redemption_required"] = record.get("redemption_required") if isinstance(record.get("redemption_required"), bool) else None
         result["settlementRequired"] = result["settlement_required"]
         result["redemptionRequired"] = result["redemption_required"]
+        # The side the payout vector paid (cli/platform.ts): a lead_order joins
+        # its won/lost by market_id and this token.
+        result["winning_token_id"] = _text(record.get("winning_token_id"))
+        result["winning_side"] = _text(record.get("winning_side"), 20)
     for field in ("created_at", "average_price", "filled_shares", "reserved_usd", "reserved_shares", "sign_latency_ms", "risk_metadata_latency_ms", "ack_latency_ms", "total_ack_latency_ms",
                   "cancel_requested_at", "cancel_ack_at", "cancel_ack_latency_ms", "venue_status_at",
                   "venue_status_latency_ms", "venue_status_after_ack_latency_ms", "updated_at"):
@@ -582,22 +633,41 @@ def _projection(record):
     result["cancellation_source"] = record.get("cancellation_source") if record.get("cancellation_source") in (
         "local_http", "user_ws", "account_read") else None
     if record["event"] == "lead_signal":
-        # The signal's price is Binance's BTC price, not an order: never an amount.
+        # The signal's price is the lead venue's BTC price, not an order: never an amount.
         result["side"] = record.get("direction") if record.get("direction") in ("UP", "DOWN") else None
         result["direction"] = result["side"]
-        result["trade_id"] = _number(record.get("trade_id"))
+        trade_id = record.get("trade_id")
+        result["trade_id"] = _text(trade_id) if isinstance(trade_id, str) else _number(trade_id)
+        result["venue"] = record.get("venue") if record.get("venue") in LEAD_VENUES else None
+        result["line"] = record.get("line") if record.get("line") in LEAD_LINES else None
         result["outcome"] = record.get("outcome") if record.get("outcome") in LEAD_OUTCOMES else None
         result["reason"] = _text(record.get("reason"))
         result["round_status"] = _text(record.get("round_status"))
         result["attempted"] = record.get("attempted") if isinstance(record.get("attempted"), bool) else None
-        for field in ("move_bp", "ref_price", "open_price", "open_mean60", "fair_up", "fair_edge", "stage", "received_at", "trade_time_ms",
-                      "limit_price", "ask_at_signal"):
+        for field in ("move_bp", "ref_price", "open_price", "open_mean60", "received_at", "trade_time_ms",
+                      "relay_recv_ms", "limit_price", "ask_at_signal"):
             result[field] = _number(record.get(field))
-        # The size the order was sent with (edge tiers: 5/10/20); `shares` stays
-        # None so a signal row never becomes an amount.
+        # The size the order was sent with; `shares` stays None so a signal row
+        # never becomes an amount.
         result["order_shares"] = result["shares"]
-        result["binance_price"] = result["price"]
+        result["signal_price"] = result["price"]
         result["price"] = result["shares"] = result["amount"] = result["pnl"] = None
+        return result
+    if record["event"] == "lead_order":
+        # Every field of cli/platform.ts leadOrderFields, typed; never an amount
+        # (fills are their own events and carry the money).
+        for field in LEAD_ORDER_TEXT:
+            result[field] = _text(record.get(field))
+        for field in LEAD_ORDER_NUMBERS:
+            result[field] = _number(record.get(field))
+        trade_id = record.get("trade_id")
+        result["trade_id"] = _text(trade_id) if isinstance(trade_id, str) else _number(trade_id)
+        result["direction"] = record.get("direction") if record.get("direction") in ("UP", "DOWN") else None
+        result["side"] = result["direction"]
+        result["status"] = record.get("status") if record.get("status") in LEAD_ORDER_STATUSES else None
+        result["venue"] = record.get("venue") if record.get("venue") in LEAD_VENUES else None
+        result["line"] = record.get("line") if record.get("line") in LEAD_LINES else None
+        result["price"] = result["amount"] = result["pnl"] = None
         return result
     price, shares = result["price"], result["shares"]
     result["amount"] = _number(price * shares) if price is not None and shares is not None and price >= 0 and shares >= 0 else None
@@ -606,6 +676,85 @@ def _projection(record):
     if record["event"] != "settlement":
         result["pnl"] = None
     return result
+
+
+LEAD_RANGES = ("run", "today", "7d", "all")
+HOURS = tuple(range(24))   # lead_stats takes a `range` argument
+EPS_SHARES = 1e-8
+# An order that ended without a share: the miss the late_by_ms numbers explain.
+# UNKNOWN is left out (it may still fill), OPEN/SUBMITTING are still working.
+MISSED_STATUSES = frozenset({"CANCELLED", "REJECTED", "ABANDONED"})
+# Crypto taker fee rate (official formula fee = C x 0.07 x p x (1-p)).
+TAKER_FEE_RATE = 0.07
+LATE_BUCKETS = (("<0", None, 0), ("0-50", 0, 50), ("50-100", 50, 100), ("100-200", 100, 200),
+                ("200-400", 200, 400), (">400", 400, None))
+# Skip reasons of binance-lead.ts (decide/fund/roundReason/onEvent) and the
+# core's risk halt, by bucket. First match wins, in this order.
+SKIP_BUCKETS = ("already_attempted", "paused", "time_window", "band", "ask_too_high", "book", "budget", "other")
+SKIP_RULES = (
+    ("already_attempted", ("本场已尝试", "本场已买到", "已下单（FAK）")),
+    ("paused", ("已暂停新增交易",)),
+    ("time_window", ("不在本场",)),
+    ("band", ("超出 ±", "开盘价未知", "开盘前 60 秒均价未知")),
+    ("ask_too_high", ("高于上限", "高于最高限价")),
+    ("book", ("没有当前盘口", "一边没有卖价", "不新鲜", "行情恢复中")),
+    ("budget", ("预算", "可用余额不足", "daily loss")),
+)
+
+
+def _skip_bucket(reason):
+    text = reason if isinstance(reason, str) else ""
+    for bucket, needles in SKIP_RULES:
+        if any(needle in text for needle in needles):
+            return bucket
+    return "other"
+
+
+def _ratio(part, whole):
+    return part / whole if whole else None
+
+
+def _sum(values):
+    known = [value for value in values if value is not None]
+    return round(sum(known), 6) if known else None
+
+
+def _quantile(ordered, q):
+    """Linear interpolation between closest ranks; None for no data."""
+    if not ordered:
+        return None
+    position = (len(ordered) - 1) * q
+    low = math.floor(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def _lead_outcome(order, winning_token):
+    """The direction's result for one lead order: won/lost once the round's
+    winner is known, else pending; the ledger PnL of what filled (payout minus
+    fill cost and fees); for an order without a share, whether it would have won."""
+    filled = order.get("filled_shares") or 0
+    if winning_token is None or not order.get("token_id"):
+        outcome = "pending"
+    else:
+        outcome = "won" if order["token_id"] == winning_token else "lost"
+    pnl = None
+    if outcome != "pending" and filled > EPS_SHARES:
+        price = order.get("avg_fill_price") if order.get("avg_fill_price") is not None else order.get("limit_price")
+        if price is not None:
+            pnl = round((filled if outcome == "won" else 0) - filled * price - (order.get("fee_usd") or 0), 6)
+    return {"outcome": outcome, "filled": filled > EPS_SHARES, "pnl": pnl,
+            "would_have_won": None if filled > EPS_SHARES or outcome == "pending" else outcome == "won"}
+
+
+def _hypothetical_pnl(order):
+    """What a missed order would have made filled in full at its limit, after
+    the taker fee estimate 0.07 x p x (1-p) x shares."""
+    shares, limit = order.get("shares"), order.get("limit_price")
+    if shares is None or limit is None or order.get("would_have_won") is None:
+        return None
+    gross = shares * (1 - limit) if order["would_have_won"] else -shares * limit
+    return gross - TAKER_FEE_RATE * limit * (1 - limit) * shares
 
 
 class Ledger:
@@ -1244,9 +1393,11 @@ class Ledger:
                         candidate = record.get(key)
                         if isinstance(candidate, (str, int)) and not isinstance(candidate, bool) and str(candidate):
                             stable_id = f"{key}:{candidate}"
-                            if kind == "fill" and key not in ("event_id", "eventId"):
+                            if (kind == "fill" and key not in ("event_id", "eventId")) or kind == "lead_order":
                                 # A trade id identifies the economic fill, not
-                                # one status/fee update of it.
+                                # one status/fee update of it; a lead_order's
+                                # event id names the order, and a restart may
+                                # rewrite it with newer fields (upserted below).
                                 stable_id += ":" + hashlib.sha256(json.dumps(projected, sort_keys=True).encode()).hexdigest()
                             break
                     asset_id = projected.get("asset_id") or ""
@@ -1412,6 +1563,16 @@ class Ledger:
         # A signal is not trading activity: no market row, so a round that only
         # saw signals never enters market summaries or settlement handover.
         if kind == "lead_signal":
+            return
+        # One row per order; a rewrite under the same key (a restart) replaces it.
+        if kind == "lead_order":
+            if event.get("client_order_id"):
+                db.execute("""INSERT INTO lead_orders(run_id,client_order_id,market_id,round_start,recv_ts,payload)
+                    VALUES(?,?,?,?,?,?) ON CONFLICT(run_id,client_order_id) DO UPDATE SET
+                    market_id=excluded.market_id,round_start=excluded.round_start,recv_ts=excluded.recv_ts,
+                    payload=excluded.payload""",
+                           (run_id, event["client_order_id"], event.get("market_id"), event.get("round_start"),
+                            event.get("time") or 0, json.dumps(event, allow_nan=False)))
             return
         if kind == "fill" and event["is_maker"] is False:
             db.execute("INSERT INTO kind_counts VALUES(?,'taker_fill',1) ON CONFLICT(run_id,kind) DO UPDATE SET count=count+1", (run_id,))
@@ -1810,9 +1971,9 @@ class Ledger:
                        "stale": age > RUNTIME_MAX_AGE or at > time.time() + 1 or summary["completeness"] != "caught_up"}
             # Why a round placed nothing: the strategy's verdict on each recent signal.
             runtime["lead_signals"] = [
-                {key: signal.get(key) for key in ("trade_id", "direction", "move_bp", "received_at", "round_id",
-                                                  "market_id", "outcome", "reason", "limit_price", "ask_at_signal",
-                                                  "fair_up", "fair_edge", "order_shares")}
+                {key: signal.get(key) for key in ("trade_id", "venue", "line", "direction", "move_bp", "received_at",
+                                                  "round_id", "market_id", "outcome", "reason", "limit_price",
+                                                  "ask_at_signal", "order_shares")}
                 for signal in self.events(run_id, limit=LEAD_SIGNALS_KEPT, kinds=["lead_signal"])["events"]]
         events = self.events(run_id, limit=20)["events"]
         for event in events:
@@ -1893,7 +2054,8 @@ class Ledger:
             return {"direction": stage.get("direction"), "price": stage.get("price"), "askAtSignal": stage.get("askAtSignal"),
                     "shares": stage.get("shares"), "filledShares": stage.get("filledShares"), "status": stage.get("status"),
                     "error": stage.get("error"), "createdAt": stage.get("createdAt"),
-                    "moveBp": signal.get("moveBp"), "binancePrice": signal.get("price"), "refPrice": signal.get("refPrice"),
+                    "moveBp": signal.get("moveBp"), "signalPrice": signal.get("price"), "refPrice": signal.get("refPrice"),
+                    "venue": signal.get("venue"), "line": signal.get("line"),
                     "signalAt": signal.get("receivedAtUnix")}
         with self._connect() as db:
             run = self._run(db, run_id)
@@ -2394,6 +2556,201 @@ class Ledger:
                     "completeness": "incomplete" if stale else "caught_up", "lag_bytes": lag,
                     "error": "statistics projection incomplete" if stale else None}
 
+    # --- binance-lead statistics (lead_signal / lead_orders / settlements) ---
+
+    def _lead_scope(self, db, run_id, range_name, now):
+        """The runs and time window a lead range covers. run = the run alone;
+        today / 7d / all = every live run of the run's account."""
+        if range_name not in LEAD_RANGES:
+            raise ValueError("invalid lead range")
+        selected = self._run(db, run_id)
+        run_ids = [run_id]
+        if range_name != "run" and selected["account_id"]:
+            run_ids = [row[0] for row in db.execute(
+                "SELECT run_id FROM runs WHERE mode='live' AND lower(account_id)=lower(?)", (selected["account_id"],))]
+            if run_id not in run_ids:
+                run_ids.append(run_id)
+        return run_ids, _range_start(range_name, now)
+
+    @staticmethod
+    def _winners(db, market_ids):
+        """market_id -> winning token id. The winner is a fact of the market, and
+        a round's settlement usually lands in the next run (BUGS P1-4), so any
+        run's settlement record counts."""
+        market_ids = [market_id for market_id in set(market_ids) if market_id]
+        if not market_ids:
+            return {}
+        marks = ",".join("?" for _ in market_ids)
+        winners = {}
+        for row in db.execute(f"SELECT market_id,payload FROM settlement_details WHERE market_id IN ({marks}) "
+                              "ORDER BY verified, source_at", market_ids):
+            token = json.loads(row["payload"]).get("winning_token_id")
+            if token:
+                winners[row["market_id"]] = token
+        return winners
+
+    def _lead_order_rows(self, db, run_ids, start):
+        """lead_orders of these runs whose round starts at or after `start`,
+        each joined with its round's outcome. One order per client id: a run
+        restarted mid-round may write the same order again."""
+        marks = ",".join("?" for _ in run_ids)
+        clause, args = "", list(run_ids)
+        if start is not None:
+            clause = " AND COALESCE(round_start, recv_ts) >= ?"
+            args.append(start)
+        orders = {}
+        for row in db.execute(f"SELECT recv_ts,payload FROM lead_orders WHERE run_id IN ({marks}){clause} "
+                              "ORDER BY recv_ts", args):
+            order = json.loads(row["payload"])
+            order["recv_ts"] = row["recv_ts"]
+            orders[order.get("client_order_id")] = order
+        winners = self._winners(db, [order.get("market_id") for order in orders.values()])
+        for order in orders.values():
+            order.update(_lead_outcome(order, winners.get(order.get("market_id"))))
+        return list(orders.values())
+
+    def lead_stats(self, run_id, *, range="run", official=None, now=None):
+        """GET /api/stats/lead. `official` is {(asset, roundId): {"pnl": ...}}
+        from the venue (official_pnl); a round it covers uses that PnL."""
+        now = time.time() if now is None else now
+        with self._connect() as db:
+            run_ids, start = self._lead_scope(db, run_id, range, now)
+            marks = ",".join("?" for _ in run_ids)
+            period, args = "", list(run_ids)
+            if start is not None:
+                period = " AND COALESCE(json_extract(payload,'$.received_at'),json_extract(payload,'$.time'))>=?"
+                args.append(start)
+            signals = in_window = 0
+            skips = {bucket: 0 for bucket in SKIP_BUCKETS}
+            for row in db.execute(f"SELECT json_extract(payload,'$.outcome') AS outcome,"
+                                  "json_extract(payload,'$.reason') AS reason FROM events "
+                                  f"WHERE run_id IN ({marks}) AND kind='lead_signal'{period}", args):
+                signals += 1
+                if row["outcome"] != "no_round":
+                    in_window += 1
+                if row["outcome"] in ("skipped", "stopping"):
+                    skips[_skip_bucket(row["reason"])] += 1
+            orders = self._lead_order_rows(db, run_ids, start)
+            runtime_row = db.execute("SELECT payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
+        runtime = json.loads(runtime_row["payload"]) if runtime_row else {}
+        official = official or {}
+
+        def pnl_of(order):
+            """Official round PnL when the venue reports the round, else the ledger's."""
+            key = ("btc", str(order.get("round_id")))
+            if key in official and official[key].get("pnl") is not None:
+                return official[key]["pnl"], "official"
+            return order.get("pnl"), "ledger"
+
+        filled = [o for o in orders if (o.get("filled_shares") or 0) > EPS_SHARES]
+        settled = [o for o in filled if o["outcome"] in ("won", "lost")]
+        won = [o for o in settled if o["outcome"] == "won"]
+        pnl_values = [pnl_of(o) for o in settled]
+        sources = {source for value, source in pnl_values if value is not None}
+        funnel = {"signals": signals, "signals_in_window": in_window, "orders": len(orders),
+                  "filled": len(filled), "fill_rate": _ratio(len(filled), len(orders)),
+                  "settled": len(settled), "won": len(won), "win_rate": _ratio(len(won), len(settled)),
+                  "pnl_usd": _sum(value for value, _ in pnl_values),
+                  "pnl_source": "official" if sources == {"official"} else "ledger" if sources == {"ledger"}
+                  else "mixed" if sources else None,
+                  "fees_usd": _sum(o.get("fee_usd") for o in filled)}
+
+        missed = [o for o in orders if not (o.get("filled_shares") or 0) > EPS_SHARES
+                  and o.get("status") in MISSED_STATUSES]
+        resolved_misses = [o for o in missed if o["would_have_won"] is not None]
+        misses = {"count": len(missed),
+                  "resolved": len(resolved_misses),
+                  "would_have_won": sum(1 for o in resolved_misses if o["would_have_won"]),
+                  "hypothetical_pnl_if_filled": _sum(_hypothetical_pnl(o) for o in resolved_misses)}
+
+        late = sorted(o["late_by_ms"] for o in missed if o.get("late_by_ms") is not None)
+        histogram = {label: 0 for label, _, _ in LATE_BUCKETS}
+        for value in late:
+            for label, low, high in LATE_BUCKETS:
+                if (low is None or value >= low) and (high is None or value < high):
+                    histogram[label] += 1
+                    break
+        gone = lambda rows: sorted(o["ask_gone_after_trade_ms"] for o in rows
+                                   if o.get("ask_gone_after_trade_ms") is not None)
+        late_by = {"n": len(late), "p10": _quantile(late, 0.1), "p50": _quantile(late, 0.5),
+                   "p90": _quantile(late, 0.9), "histogram": histogram,
+                   "ask_gone_after_trade_ms": {
+                       "missed": {"n": len(gone(missed)), "p50": _quantile(gone(missed), 0.5),
+                                  "p90": _quantile(gone(missed), 0.9)},
+                       "filled": {"n": len(gone(filled)), "p50": _quantile(gone(filled), 0.5),
+                                  "p90": _quantile(gone(filled), 0.9)}}}
+
+        latency = {}
+        for field in ("t_signal_ms", "t_decide_ms", "t_post_ms", "t_ack_ms", "t_total_ms"):
+            values = sorted(o[field] for o in orders if o.get(field) is not None)
+            latency[field] = {"n": len(values), "p50": _quantile(values, 0.5), "p90": _quantile(values, 0.9)}
+
+        groups = {}
+        for order in orders:
+            groups.setdefault((order.get("venue"), order.get("line")), []).append(order)
+        rows = []
+        for (venue, line), items in sorted(groups.items(), key=lambda item: (str(item[0][0]), str(item[0][1]))):
+            got = [o for o in items if (o.get("filled_shares") or 0) > EPS_SHARES]
+            done = [o for o in got if o["outcome"] in ("won", "lost")]
+            wins = sum(1 for o in done if o["outcome"] == "won")
+            rows.append({"venue": venue, "line": line, "orders": len(items), "filled": len(got),
+                         "fill_rate": _ratio(len(got), len(items)), "settled": len(done), "won": wins,
+                         "win_rate": _ratio(wins, len(done)), "pnl_usd": _sum(pnl_of(o)[0] for o in done)})
+        lines = []
+        for venue, counters in ((runtime.get("lead_lines") or {}).get("venues") or {}).items():
+            tokyo, direct = counters.get("tokyo") or {}, counters.get("direct") or {}
+            total = (tokyo.get("delivered") or 0) + (direct.get("delivered") or 0)
+            lines.append({"venue": venue, "tokyo_delivered": tokyo.get("delivered"),
+                          "direct_delivered": direct.get("delivered"),
+                          "tokyo_first_share": _ratio(tokyo.get("delivered") or 0, total),
+                          "tokyo_lead_mean_ms": tokyo.get("leadMeanMs"),
+                          "direct_lead_mean_ms": direct.get("leadMeanMs")})
+
+        hours = [{"hour": hour, "orders": 0, "filled": 0, "won": 0, "settled": 0, "pnl_usd": None}
+                 for hour in HOURS]
+        for order in orders:
+            at = order.get("round_start") or order.get("recv_ts")
+            if at is None:
+                continue
+            row = hours[datetime.fromtimestamp(at, RISK_DAY_TZ).hour]
+            row["orders"] += 1
+            if (order.get("filled_shares") or 0) > EPS_SHARES:
+                row["filled"] += 1
+                if order["outcome"] in ("won", "lost"):
+                    row["settled"] += 1
+                    row["won"] += order["outcome"] == "won"
+                    value = pnl_of(order)[0]
+                    if value is not None:
+                        row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
+        return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
+                "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
+                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours}
+
+    def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
+        """GET /api/orders/lead: lead orders newest first, with the round's
+        outcome and PnL. `before` is the recv_ts of the last row of the
+        previous page."""
+        limit = max(1, min(int(limit), 500))
+        now = time.time() if now is None else now
+        with self._connect() as db:
+            run_ids, start = self._lead_scope(db, run_id, range, now)
+            orders = self._lead_order_rows(db, run_ids, start)
+        official = official or {}
+        orders.sort(key=lambda o: (o.get("recv_ts") or 0, str(o.get("client_order_id"))), reverse=True)
+        if before is not None:
+            orders = [o for o in orders if (o.get("recv_ts") or 0) < before]
+        page = orders[:limit]
+        for order in page:
+            key = ("btc", str(order.get("round_id")))
+            if order["outcome"] in ("won", "lost") and key in official and official[key].get("pnl") is not None:
+                order["pnl"], order["pnl_source"] = official[key]["pnl"], "official"
+            elif order["outcome"] in ("won", "lost") and order.get("pnl") is not None:
+                order["pnl_source"] = "ledger"
+            else:
+                order["pnl_source"] = None
+        return {"run_id": run_id, "range": range, "items": page,
+                "next_before": page[-1].get("recv_ts") if len(orders) > limit else None}
+
     def run_account_id(self, run_id):
         """Return the durable account owner for access control checks."""
         with self._connect() as db:
@@ -2416,8 +2773,9 @@ class Ledger:
                 args.extend(kinds)
             else:
                 # Hundreds of signals a day would bury the run log's errors;
-                # they are read on their own (kinds=["lead_signal"]).
-                clause += " AND kind!='lead_signal'"
+                # signals and lead orders are read on their own
+                # (kinds=["lead_signal"], lead_orders_page).
+                clause += " AND kind NOT IN ('lead_signal','lead_order')"
             if asset_id is not None:
                 asset_id = _query_asset(asset_id)
                 clause += " AND asset_id=?"

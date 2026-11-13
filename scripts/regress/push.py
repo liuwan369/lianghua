@@ -29,8 +29,8 @@ server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 from dashboard.push import fingerprint  # noqa: E402
 
-# One market's snapshot is the collector-speed path; the full catalog pushes once a second.
-MARKETS = "/api/markets/0xm/snapshot"
+# The running engine's book: the fastest-changing pushed path.
+MARKETS = "/api/runtime/book"
 RUNTIME = "/api/runtime/status"
 
 
@@ -39,10 +39,10 @@ class Source:
         self.frame = 1
         self.runtime_delay = 0.0
 
-    def markets(self, query=None):
+    def markets(self):
         return {"schemaVersion": 1, "source": "test", "asOf": time.time(), "stale": False, "error": None,
-                "items": [{"marketId": "0xm", "roundId": "1", "frame": self.frame, "orderBook": {}, "source": "test",
-                           "sourceAt": 1_790_000_000 + self.frame, "stale": False, "error": None}], "markets": []}
+                "running": True, "available": True, "marketId": "0xm", "roundId": "1", "frame": self.frame,
+                "sourceAt": 1_790_000_000 + self.frame}
 
     def runtime(self, status):
         time.sleep(self.runtime_delay)
@@ -89,12 +89,14 @@ class Push(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.source = Source()
-        cls.saved = (server._modern_markets, server._modern_runtime, server.trading_status)
-        server._modern_markets = cls.source.markets
+        cls.saved = (server.runtime_book, server._modern_runtime, server.trading_status)
+        server.runtime_book = cls.source.markets
         server._modern_runtime = cls.source.runtime
         server.trading_status = lambda include_stats=True: {}
         handler = server.make_handler(SCRIPTS.parent)
         handler.push_hub.max_clients = 3
+        # The book's real token is the ledger's mtime; the stub changes without it.
+        handler.push_hub.token = lambda path: None
         cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         cls.hub = handler.push_hub
         cls.stop = threading.Event()
@@ -106,7 +108,7 @@ class Push(unittest.TestCase):
     def tearDownClass(cls):
         cls.stop.set()
         cls.httpd.shutdown()
-        server._modern_markets, server._modern_runtime, server.trading_status = cls.saved
+        server.runtime_book, server._modern_runtime, server.trading_status = cls.saved
 
     def open(self, *paths):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
@@ -138,7 +140,7 @@ class Push(unittest.TestCase):
         changed = response.reader.read(1, 2)
         self.assertEqual(changed[0]["path"], MARKETS)
         self.assertEqual(changed[0]["body"]["frame"], self.source.frame)
-        self.assertLess(time.monotonic() - started, 0.5, "a change arrives within one collector frame or so")
+        self.assertLess(time.monotonic() - started, 0.8, "a change arrives within one book cadence or so")
         response.close()
         conn.close()
 
@@ -207,7 +209,7 @@ class Tokens(unittest.TestCase):
         hub = PushHub(render)
         hub_ref["hub"] = hub
         for round_id in range(5):
-            path = f"/api/markets/0xm/snapshot?roundId={round_id}"
+            path = f"/api/orders/lead?range=run&before={round_id}"
             hub_ref["client"] = hub.subscribe([path])
             hub._render(path)
         self.assertEqual((len(hub.latest), len(hub.rendered_token), len(hub.next_due)), (0, 0, 0),

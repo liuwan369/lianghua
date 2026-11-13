@@ -9,43 +9,44 @@ import os
 from pathlib import Path
 import tempfile
 import uuid
-import re
 
 from .config import (ConfigStore, ConfigValidationError, ConfigConflictError,
                      ConfigStoreError, _unique_object)
 
 STRATEGY_ID = "binance-lead"
-ASSET_ID_RE = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
-# Polymarket runs 5m up/down markets for these seven. Verified live: every
-# "<asset>-updown-5m-<round>" slug resolves with 2 CLOB tokens and tick 0.01.
-# binance-lead is only researched on btc (STRATEGY.md); the others stay
-# selectable for the run pool and collector.
-SUPPORTED_ASSET_IDS = frozenset({"btc", "eth", "sol", "xrp", "doge", "hype", "bnb"})
+# binance-lead trades btc only (STRATEGY.md).
+ASSET_ID = "btc"
+# contracts.ts LEAD_VENUES: the venues whose perpetual trades signal.
+LEAD_VENUES = ("bybit", "binance", "okx")
+# binance-lead.ts OPEN_LINES: the tick at the open, or the 60 s mean before it.
+OPEN_LINES = ("tick", "mean60")
 
 
 def default_config() -> dict:
     # BINANCE_LEAD_DEFAULTS (backend/engine/src/strategies/binance-lead.ts) plus
     # the control plane's run settings, which reach the engine as flags.
-    return {"assetId": "btc", "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
-            "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0,
-            "openLine": "tick", "reverseMaxAsk": 0, "reverseToSec": 285,
-            "midEdge": 0.08, "midShares": 0, "highEdge": 0.13, "highShares": 0,
-            "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
+    return {"assetId": ASSET_ID, "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
+            "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "leadVenues": list(LEAD_VENUES), "tokyoRelay": True,
+            "openBandBp": 0, "openLine": "tick", "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
-# Fields added after a binance-lead revision was published (the server's
-# revision 1 has no maxAsk, revision 2 no makerHoldSec or leadSource, revisions
-# up to 8 no openBandBp, up to 9 no edge tiers, up to 11 no openLine or
-# reverse leg): a config missing only these
-# gets their defaults, any other key mismatch is still rejected.
-ADDED_FIELDS = ("maxAsk", "makerHoldSec", "leadSource", "openBandBp", "midEdge", "midShares", "highEdge", "highShares",
-                "openLine", "reverseMaxAsk", "reverseToSec")
-# binance-lead.ts OPEN_LINES: the tick at the open, or the 60 s mean before it.
-OPEN_LINES = ("tick", "mean60")
-# binance-lead.ts LEAD_SOURCES: Binance spot aggTrade, or Bybit USDT perpetual.
-LEAD_SOURCES = ("binance-spot", "bybit-perp")
+# A published file may predate these fields; it gets their defaults, as the
+# engine's normalizeBinanceLeadConfig does. Any other missing field is damage.
+ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay")
+# Settings the engine dropped (73fd2fd, d2bfb59). The engine ignores them in a
+# saved file, so a stored config carrying them loads without them; a submitted
+# draft with them is still rejected.
+RETIRED_FIELDS = ("makerHoldSec", "leadSource", "midEdge", "midShares", "highEdge", "highShares",
+                  "reverseMaxAsk", "reverseToSec")
+
+
+def _stored(config):
+    """A persisted config as the engine reads it: retired settings dropped."""
+    if not isinstance(config, dict):
+        return config
+    return {key: value for key, value in config.items() if key not in RETIRED_FIELDS}
 
 
 def validate_config(config: dict) -> dict:
@@ -64,10 +65,8 @@ def validate_config(config: dict) -> dict:
     if not isinstance(asset_id, str):
         raise ConfigValidationError("assetId必须是文本")
     asset_id = asset_id.strip().lower()
-    if not ASSET_ID_RE.fullmatch(asset_id):
-        raise ConfigValidationError("assetId格式无效")
-    if asset_id not in SUPPORTED_ASSET_IDS:
-        raise ConfigValidationError("当前运行时不支持该资产")
+    if asset_id != ASSET_ID:
+        raise ConfigValidationError("binance-lead 只交易 btc")
     result["assetId"] = asset_id
 
     def number(name, label):
@@ -93,24 +92,15 @@ def validate_config(config: dict) -> dict:
     if not 0 <= start < end <= 300:
         raise ConfigValidationError("起止秒必须满足 0 ≤ 起始秒 < 截止秒 ≤ 300")
     within("maxAsk", "卖价上限", 0, 1, high_open=True)
-    within("makerHoldSec", "挂单秒数", 0, 300, low_open=False)
-    if result["leadSource"] not in LEAD_SOURCES:
-        raise ConfigValidationError("信号来源只能是币安现货或 Bybit 合约")
+    venues = result["leadVenues"]
+    if (not isinstance(venues, list) or not venues or len(set(map(str, venues))) != len(venues)
+            or any(venue not in LEAD_VENUES for venue in venues)):
+        raise ConfigValidationError("信号交易所必须是 bybit、binance、okx 中不重复的至少一个")
+    if not isinstance(result["tokyoRelay"], bool):
+        raise ConfigValidationError("东京中继必须是开或关")
     within("openBandBp", "开盘价范围bp", 0, 1000, low_open=False)
     if result["openLine"] not in OPEN_LINES:
         raise ConfigValidationError("开盘线只能是开盘价或开盘前 60 秒均价")
-    # Reverse leg (binance-lead.ts decideReverse): 0 = off; a FAK, so taker mode only.
-    within("reverseMaxAsk", "反转卖价上限", 0, 1, low_open=False, high_open=True)
-    within("reverseToSec", "反转截止秒", 0, 300)
-    if result["reverseMaxAsk"] > 0 and result["makerHoldSec"] > 0:
-        raise ConfigValidationError("反转单只支持吃单（挂单秒数须为 0）")
-    # Size by the fair-value edge (binance-lead.ts leadTierShares): 0 shares = tier off.
-    within("midEdge", "中档优势", -1, 1, low_open=False)
-    within("highEdge", "高档优势", -1, 1, low_open=False)
-    within("midShares", "中档份额", 0, 10_000, low_open=False)
-    within("highShares", "高档份额", 0, 10_000, low_open=False)
-    if result["midShares"] > 0 and result["highShares"] > 0 and result["highEdge"] < result["midEdge"]:
-        raise ConfigValidationError("高档优势不能低于中档优势")
     for key, label in (("maxQuoteAgeSeconds", "盘口最大年龄"), ("maxQuoteSkewSeconds", "盘口两边时间差")):
         if number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须是正数")
@@ -156,7 +146,7 @@ class StrategyConfigStore(ConfigStore):
             if not isinstance(data["savedAt"], str) or not data["savedAt"].endswith("Z"):
                 raise ValueError("invalid saved time")
             datetime.fromisoformat(data["savedAt"][:-1] + "+00:00")
-            data["config"] = validate_config(data["config"])
+            data["config"] = validate_config(_stored(data["config"]))
             return data
         except (ValueError, TypeError, OverflowError) as exc:
             raise ConfigStoreError("策略配置损坏，未替换成默认参数") from exc
@@ -196,7 +186,7 @@ class StrategyConfigStore(ConfigStore):
                 if not isinstance(data["savedAt"], str) or not data["savedAt"].endswith("Z"):
                     raise ValueError("invalid saved time")
                 datetime.fromisoformat(data["savedAt"][:-1] + "+00:00")
-                data["config"] = validate_config(data["config"])
+                data["config"] = validate_config(_stored(data["config"]))
                 return self._public(data)
             except (ValueError, TypeError, OverflowError) as exc:
                 raise ConfigStoreError("策略草稿损坏，未替换成默认参数") from exc

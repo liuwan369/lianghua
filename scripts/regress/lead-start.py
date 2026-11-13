@@ -6,6 +6,12 @@
   old file is left as it was;
 - the start command carries --strategy binance-lead and the published
   binance-lead-config.json, which the built engine parses and reads as saved;
+- a start names no market: the engine discovers the round itself, so the
+  command has no --expected-market-id/--expected-round-id; nothing reads a
+  market catalog or collector;
+- the same requestId again returns the running state instead of starting twice;
+- under systemd the engine runs in its own scope at Nice -5 / CPUWeight 200,
+  still exec'd in place (same pid);
 - the account's state file keeps its name (btc-reversal-<hash>): the engine
   finds its settlement records at <state>.settlements.json, so a new name
   would orphan an unfinished redemption.
@@ -73,8 +79,6 @@ class LeadStart(unittest.TestCase):
         s._account_values = lambda: {}
         s._remote_orders_empty_from_fresh_snapshot = lambda: False
         s.trade_log_stats = lambda selection=None: {"runtime": None, "projection": {"state": "ready", "stale": False}}
-        s._modern_markets = lambda query=None: {"items": [{"assetId": "btc", "marketId": "0xm", "roundId": ROUND}]}
-        s.market_pool = lambda: {"desiredIds": ["btc"], "available": True, "stale": False}
         self.spawned = []
         self.popen = s.subprocess.Popen
         s.subprocess.Popen = lambda args, **kw: self.spawned.append((args, kw)) or Child()
@@ -88,9 +92,9 @@ class LeadStart(unittest.TestCase):
         os.environ.update(self.environ)
         self.tmp.cleanup()
 
-    def start(self, revision):
+    def start(self, revision, request_id=None):
         return self.server.strategy_control({"action": "start", "strategy_id": "binance-lead", "revision": revision,
-                                             "request_id": str(uuid.uuid4()), "asset_id": "btc", "market_ids": ["0xm"]})
+                                             "request_id": request_id or str(uuid.uuid4())})
 
     def publish(self, **changes):
         store = self.server.strategy_config_store()
@@ -125,7 +129,8 @@ class LeadStart(unittest.TestCase):
         self.assertEqual(flag("--asset"), "btc")
         self.assertEqual(flag("--max-rounds"), "3")
         self.assertEqual(float(flag("--duration-sec")), 30 * 60)
-        self.assertEqual((flag("--expected-market-id"), flag("--expected-round-id")), ("0xm", ROUND))
+        self.assertNotIn("--expected-market-id", args, "the engine discovers the round itself")
+        self.assertNotIn("--expected-round-id", args)
         config_path = Path(flag("--strategy-config"))
         self.assertEqual(config_path.name, "binance-lead-config.json")
         saved = json.loads(config_path.read_text(encoding="utf-8"))
@@ -157,6 +162,41 @@ class LeadStart(unittest.TestCase):
                          ("binance-lead", 3, 1800, "btc"))
         self.assertEqual((engine["config"]["shares"], engine["config"]["thresholdBp"], engine["config"]["revision"]),
                          (7, 2.5, "1"))
+
+
+    def test_same_request_id_does_not_start_twice(self):
+        self.publish()
+        request = str(uuid.uuid4())
+        self.start(1, request)
+        self.server._process_command = lambda pid: ""
+        again = self.start(1, request)
+        self.assertEqual(len(self.spawned), 1, "a retried request returns the run it started")
+        self.assertIn("running", again)
+        with self.assertRaisesRegex(ValueError, "UUID"):
+            self.start(1, "not-a-uuid")
+
+    def test_refused_without_unlock_or_fresh_account_check(self):
+        self.publish()
+        os.environ.pop("PM_TRADING_LIVE_UNLOCK")
+        with self.assertRaisesRegex(PermissionError, "实盘解锁"):
+            self.start(1)
+        os.environ["PM_TRADING_LIVE_UNLOCK"] = "1"
+        self.server.account_config_status = lambda: {"execution_credentials_ready": True, "account_check_ready": False,
+                                                     "settlement_credentials_ready": True, "wallet": WALLET}
+        with self.assertRaisesRegex(PermissionError, "账户尚未通过"):
+            self.start(1)
+        self.assertEqual(self.spawned, [])
+
+    def test_engine_scope_under_systemd(self):
+        s = self.server
+        args = s._engine_scope_args("/usr/bin/systemd-run", "r1", ["node", "dist/cli/platform.js"])
+        self.assertEqual(args[:6], ["/usr/bin/systemd-run", "--scope", "--quiet", "--collect", "--unit=pm-engine-r1", "-p"])
+        self.assertEqual(args[6], "CPUWeight=200")
+        self.assertEqual(args[7:9], ["nice", "-n"])
+        own = os.nice(0) if hasattr(os, "nice") else 0
+        self.assertEqual(int(args[9]) + own, -5, "nice -n is relative: the engine lands at -5 whatever the console's Nice")
+        self.assertEqual(args[10:14], ["choom", "-n", "-500", "--"])
+        self.assertEqual(args[14:], ["node", "dist/cli/platform.js"], "every wrapper execs in place: pid is the engine's")
 
 
 if __name__ == "__main__":

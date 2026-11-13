@@ -20,21 +20,22 @@ VOLATILE_KEYS = frozenset({"asOf", "as_of", "age_seconds", "ageSeconds", "cache_
                            "checked_at", "checkedAt", "refreshing", "ageMs", "quoteAgeMs", "lag_bytes",
                            "to"})  # metrics: the range end is "now"
 
-# Pushable paths and how often each is re-rendered, seconds. The collector
-# writes every 250 ms and the ledger about 4 times a second.
+# Pushable paths and how often each is re-rendered, seconds. The ledger is
+# written about 4 times a second; the engine's book rides its 2 s status line.
 CADENCE = (
-    ("/api/markets", 0.1),
     ("/api/runtime/status", 0.25),
+    ("/api/runtime/book", 0.5),
     ("/api/rounds", 0.5),
     ("/api/fills", 0.5),
     ("/api/settlements", 1.0),
     ("/api/events", 1.0),
     ("/api/account/snapshot", 1.0),
     ("/api/metrics/summary", 2.0),
+    ("/api/orders/lead", 1.0),
+    ("/api/stats/lead", 2.0),
     ("/api/account/status", 2.0),
-    ("/api/runtime/market-pool", 2.0),
     ("/api/strategy/config", 2.0),
-    ("/api/diagnostics/health", 5.0),   # embeds the whole catalog again
+    ("/api/diagnostics/health", 5.0),
 )
 MAX_PATHS_PER_CLIENT = 24
 KEEPALIVE_SEC = 5.0
@@ -42,11 +43,6 @@ KEEPALIVE_SEC = 5.0
 
 def cadence(path: str) -> float | None:
     route = path.split("?", 1)[0]
-    # The catalog lists every coin (40 KB) and pages poll it every ~10 s; only
-    # one market's snapshot needs collector speed. Pushing the catalog 4x a
-    # second was ~160 KB/s for one page; every 2 s is ~20 KB/s.
-    if route == "/api/markets":
-        return 2.0
     for prefix, seconds in CADENCE:
         if route == prefix or route.startswith(prefix + "/"):
             return seconds

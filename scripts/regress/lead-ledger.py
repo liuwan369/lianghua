@@ -7,8 +7,8 @@ roundOutcome (as summary() does), journaled with leadJournalFields. Then:
 - _strategy_projection keeps the round's signal, direction, limit, ask at the
   signal, filled shares and reason, and no reversal field;
 - position() reports that attempt and the YES/NO shares;
-- lead_signal lines reach /api/events (kind lead_signal) with their outcome
-  and reason, so "why no order this round" is visible;
+- lead_signal lines reach /api/events (kind lead_signal) with their outcome,
+  reason, venue and line, so "why no order this round" is visible;
 - a verified settlement gets its coverage from upTokenId/downTokenId +
   upShares/downShares and books PnL.
 
@@ -49,7 +49,8 @@ const book = (t, downAsk) => ({ kind: "book", marketId: "0xm", roundId: ROUND, s
   roundId: ROUND, sourceAt: t, expiresAt: t + 2, tsUnix: t, receivedAtUnix: t, receivedAtMonoMs: 0, marketAgeMs: 50,
   YES: { assetId: UP, bid: 0.56, ask: 0.57, sourceAt: t, expiresAt: t + 2 },
   NO: { assetId: DOWN, bid: 0.44, ask: downAsk, sourceAt: t, expiresAt: t + 2 } } });
-const lead = (S, tradeId) => ({ kind: "lead", assetId: "btc", direction: "UP", price: 100030, refPrice: 100000, moveBp: 2.9996,
+const lead = (S, tradeId) => ({ kind: "lead", assetId: "btc", venue: "bybit", line: "tokyo", relayRecvMs: S * 1000 - 60,
+  direction: "UP", price: 100030, refPrice: 100000, moveBp: 2.9996,
   tradeId, tradeTimeMs: S * 1000 - 100, receivedAtUnix: S, receivedAtMonoMs: 5 });
 const s = createStrategy();
 s.onEvent({ kind: "timer", ts: START - 20 }, ctx(START - 20));
@@ -140,8 +141,8 @@ class LeadLedger(unittest.TestCase):
         self.assertEqual(view["config"]["shares"], 5)
         self.assertEqual(view["config"]["thresholdBp"], 2)
         self.assertEqual(view["config"]["maxAsk"], 0.8, "the round's ask cap reaches the runtime view")
-        self.assertEqual(view["config"]["makerHoldSec"], 0, "and its maker hold (0 = FAK)")
-        self.assertEqual(view["config"]["leadSource"], "binance-spot", "and its signal source")
+        self.assertEqual(view["config"]["leadVenues"], ["bybit", "binance", "okx"], "and its signal venues")
+        self.assertIs(view["config"]["tokyoRelay"], True)
         current = view["currentRound"]
         self.assertEqual((current["upTokenId"], current["downTokenId"]), (UP, DOWN))
         self.assertEqual((current["upShares"], current["downShares"]), (3, 0))
@@ -151,12 +152,14 @@ class LeadLedger(unittest.TestCase):
         self.assertEqual((stage["direction"], stage["price"], stage["askAtSignal"], stage["shares"], stage["filledShares"],
                           stage["status"]), ("UP", self.data["limit"], 0.57, 5, 3, "FILLED"))
         self.assertEqual(self.data["limit"], 0.6, "ask 0.57 + 0.03")
-        self.assertEqual((stage["signal"]["moveBp"], stage["signal"]["tradeId"], stage["signal"]["direction"]),
-                         (2.9996, 42, "UP"))
+        self.assertEqual((stage["signal"]["moveBp"], stage["signal"]["tradeId"], stage["signal"]["direction"],
+                          stage["signal"]["venue"], stage["signal"]["line"]), (2.9996, 42, "UP", "bybit", "tokyo"))
         for gone in ("confirmationCount", "nextStage", "nextShares", "consumedStages", "lastStageDirection"):
             self.assertNotIn(gone, current, f"{gone} is a reversal field")
-        for gone in ("triggerPrice", "stageShares", "maxStages"):
+        for gone in ("triggerPrice", "stageShares", "maxStages", "makerHoldSec", "leadSource", "midEdge",
+                     "reverseMaxAsk"):
             self.assertNotIn(gone, view["config"])
+        self.assertNotIn("fairEdge", stage)
 
     def test_position_reports_the_round(self):
         position = self.ledger.position("run-lead", self.round, asset_id="btc", market_id="0xm")
@@ -177,8 +180,9 @@ class LeadLedger(unittest.TestCase):
         self.assertEqual((placed["outcome"], placed["limit_price"], placed["ask_at_signal"]),
                          ("order_submitted", self.data["limit"], 0.57))
         self.assertEqual((placed["direction"], placed["move_bp"], placed["round_id"]), ("UP", 2.9996, self.round))
-        self.assertEqual((placed["binance_price"], placed["price"], placed["amount"]), (100030, None, None),
-                         "a signal's price is Binance's, never an order price")
+        self.assertEqual((placed["signal_price"], placed["price"], placed["amount"]), (100030, None, None),
+                         "a signal's price is the lead venue's, never an order price")
+        self.assertEqual((placed["venue"], placed["line"]), ("bybit", "tokyo"))
         self.assertNotIn("lead_signal", [item["event"] for item in self.ledger.events("run-lead")["events"]],
                          "the run log is not buried under signals")
         runtime = self.ledger.runtime_stats("run-lead")["runtime"]

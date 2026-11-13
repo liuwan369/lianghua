@@ -4,7 +4,6 @@ from __future__ import annotations
 import copy
 import os
 import shutil
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -18,15 +17,12 @@ def _number(value):
 class SystemMetrics:
     """Collect inexpensive OS counters outside HTTP request handlers."""
 
-    def __init__(self, disk_path: Path, services: Callable[[], dict], collector_service: str | None = None):
+    def __init__(self, disk_path: Path, services: Callable[[], dict]):
         self.disk_path = Path(disk_path)
         self.services = services
         self._lock = threading.Lock()
         self._cache = self._empty()
         self._previous_cpu: tuple[int, int] | None = None
-        self.collector_service = collector_service
-        self._collector_checked = 0.
-        self._collector = {"pid": None, "state": "unknown"}
 
     @staticmethod
     def _empty() -> dict:
@@ -86,24 +82,6 @@ class SystemMetrics:
             pass
         return result
 
-    def _collector_status(self) -> dict:
-        if not self.collector_service or os.name == "nt":
-            return self._collector
-        if time.monotonic() - self._collector_checked < 10:
-            return self._collector
-        self._collector_checked = time.monotonic()
-        try:
-            process = subprocess.run(["systemctl", "show", self.collector_service, "--property=MainPID,ActiveState"],
-                                     capture_output=True, text=True, timeout=2)
-            if process.returncode != 0:
-                raise OSError("service state unavailable")
-            fields = dict(line.split("=", 1) for line in process.stdout.splitlines() if "=" in line)
-            pid = int(fields.get("MainPID", "0"))
-            self._collector = {"pid": pid if pid > 0 else None, "state": fields.get("ActiveState") or "unknown"}
-        except (OSError, ValueError, subprocess.SubprocessError):
-            self._collector = {"pid": None, "state": "unknown"}
-        return self._collector
-
     def refresh(self) -> dict:
         value = self._empty()
         value["asOf"] = time.time()
@@ -129,8 +107,6 @@ class SystemMetrics:
             service_state = self.services()
         except Exception:
             service_state = {}
-        if self.collector_service:
-            service_state["collector"] = self._collector_status()
         value["journal_backlog"] = _number(service_state.pop("journal_backlog", None))
         value["event_loop_lag_ms"] = _number(service_state.pop("event_loop_lag_ms", None))
         value["services"] = {

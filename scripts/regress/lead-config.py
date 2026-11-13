@@ -5,9 +5,12 @@
 - validate_config() accepts exactly what the engine's readStrategyConfig
   (normalizeBinanceLeadConfig) accepts, checked case by case against the engine;
 - a file the store writes is read by the engine as written;
-- a published config from before maxAsk (server revision 1) loads with 0.80,
-  one from before makerHoldSec (revision 2) with 0 (the FAK rule), one from
-  before leadSource with binance-spot;
+- a published config from before maxAsk / openBandBp / openLine / leadVenues /
+  tokyoRelay loads with the engine's defaults for them;
+- a published config that still carries the retired settings (makerHoldSec,
+  leadSource, the edge tiers, the reverse leg) loads without them, as the
+  engine reads it; a draft submitting them is rejected;
+- only btc is accepted;
 - a reversal config is never loaded: not at the new path (ConfigStoreError,
   never replaced by defaults), not as a draft (ConfigValidationError).
 
@@ -23,7 +26,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from dashboard.config import ConfigStoreError, ConfigValidationError  # noqa: E402
-from dashboard.strategy_config import STRATEGY_ID, StrategyConfigStore, default_config, validate_config  # noqa: E402
+from dashboard.strategy_config import (RETIRED_FIELDS, STRATEGY_ID, StrategyConfigStore,  # noqa: E402
+                                       default_config, validate_config)
 
 RUN_SETTINGS = {"mode", "durationMinutes", "maxRounds", "assetId"}
 DIST = ROOT / "backend" / "engine" / "dist"
@@ -51,6 +55,14 @@ def document(config):
             "savedAt": "2026-10-25T00:00:00Z", "config": config}
 
 
+def rejected(config):
+    try:
+        validate_config(config)
+    except ConfigValidationError:
+        return True
+    return False
+
+
 # --- defaults are the engine's ---
 assert STRATEGY_ID == "binance-lead"
 defaults = default_config()
@@ -71,8 +83,11 @@ CASES += [("thresholdBp", v) for v in (0, 0.1, 2, 1000, 1000.5, -2)]
 CASES += [("windowMs", v) for v in (0, 1, 250, 60000, 60001)]
 CASES += [("limitPremium", v) for v in (-0.01, 0, 0.03, 0.99, 1)]
 CASES += [("maxAsk", v) for v in (0, -0.1, 0.01, 0.8, 0.99, 1, 1.5, "0.8", None)]
-CASES += [("makerHoldSec", v) for v in (-0.1, 0, 0.5, 3, 300, 300.5, "3", None)]
-CASES += [("leadSource", v) for v in ("binance-spot", "bybit-perp", "okx", "", None, 1)]
+CASES += [("leadVenues", v) for v in (["bybit"], ["okx", "binance"], ["bybit", "binance", "okx"], [], ["bybit", "bybit"],
+                                      ["kraken"], "bybit", None)]
+CASES += [("tokyoRelay", v) for v in (True, False, 1, "true", None)]
+CASES += [("openBandBp", v) for v in (0, 5, 1000, -1, 1001, "5", None)]
+CASES += [("openLine", v) for v in ("tick", "mean60", "close", None)]
 CASES += [(("fromSec", "toSec"), v) for v in ((0, 300), (-1, 265), (265, 265), (270, 265), (15, 301), (0, 0.5), (299, 300))]
 CASES += [("maxQuoteAgeSeconds", v) for v in (0, 0.1, 2, -1)]
 CASES += [("maxQuoteSkewSeconds", v) for v in (0, 1.5, -1)]
@@ -85,11 +100,7 @@ for key, value in CASES:
     else:
         config[key] = value
     configs.append(config)
-    try:
-        validate_config(config)
-        python_ok.append(True)
-    except ConfigValidationError:
-        python_ok.append(False)
+    python_ok.append(not rejected(config))
 with tempfile.TemporaryDirectory() as tmp:
     paths = []
     for index, config in enumerate(configs):
@@ -101,92 +112,29 @@ with tempfile.TemporaryDirectory() as tmp:
                        " catch { return false; } })));", paths)
 for (key, value), mine, theirs in zip(CASES, python_ok, engine_ok):
     assert mine == theirs, f"{key}={value!r}: control plane {'accepts' if mine else 'rejects'}, engine {'accepts' if theirs else 'rejects'}"
-assert python_ok.count(False) >= 20 and python_ok.count(True) >= 15, "both sides of every boundary are exercised"
-assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "maxAsk"] == [False, False, True, True, True, False, False, False, False]
-assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "makerHoldSec"] == [False, True, True, True, True, False, False, False]
-assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "leadSource"] == [True, True, False, False, False, False]
+assert python_ok.count(False) >= 25 and python_ok.count(True) >= 20, "both sides of every boundary are exercised"
+assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "leadVenues"] == [True, True, True, False, False, False, False, False]
+assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "tokyoRelay"] == [True, True, False, False, False]
 
 # Values JSON cannot carry, and the control plane's own run settings.
 for key, value in (("shares", float("nan")), ("thresholdBp", float("inf")), ("durationMinutes", -1),
-                   ("maxRounds", 1.5), ("maxRounds", 10001), ("mode", "paper"), ("assetId", "doge2"),
-                   ("assetId", "BTC ")):
-    try:
-        result = validate_config({**defaults, key: value})
-    except ConfigValidationError:
-        continue
-    assert key == "assetId" and result["assetId"] == "btc", f"{key}={value!r} must be rejected"
+                   ("maxRounds", 1.5), ("maxRounds", 10001), ("mode", "paper"), ("assetId", "eth"),
+                   ("assetId", "doge2")):
+    assert rejected({**defaults, key: value}), f"{key}={value!r} must be rejected"
+assert validate_config({**defaults, "assetId": "BTC "})["assetId"] == "btc"
 assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 
-# --- the exact field set: no reversal field, nothing missing ---
-for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice"):
-    try:
-        validate_config({**defaults, extra: 0.67})
-    except ConfigValidationError:
-        continue
-    raise AssertionError(f"{extra} is not a binance-lead field")
+# --- the exact field set: no retired field, nothing missing ---
+for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
+    assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
+ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay")
 for missing in defaults:
-    if missing in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp", "midEdge", "midShares", "highEdge", "highShares",
-                   "openLine", "reverseMaxAsk", "reverseToSec"):
+    if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
-    try:
-        validate_config({k: v for k, v in defaults.items() if k != missing})
-    except ConfigValidationError:
-        continue
-    raise AssertionError(f"a config without {missing} must be rejected")
-assert validate_config({k: v for k, v in defaults.items() if k != "maxAsk"})["maxAsk"] == 0.8
-assert validate_config({**defaults, "maxAsk": 0.7})["maxAsk"] == 0.7
-assert validate_config({k: v for k, v in defaults.items() if k != "makerHoldSec"})["makerHoldSec"] == 0
-assert validate_config({k: v for k, v in defaults.items() if k not in ("maxAsk", "makerHoldSec")})["makerHoldSec"] == 0
-assert validate_config({**defaults, "makerHoldSec": 3})["makerHoldSec"] == 3
-assert validate_config({k: v for k, v in defaults.items() if k != "leadSource"})["leadSource"] == "binance-spot"
-# openBandBp (2026-11-01): a config published before it gets 0 (no filter); range [0, 1000].
-assert validate_config({k: v for k, v in defaults.items() if k != "openBandBp"})["openBandBp"] == 0
-assert validate_config({**defaults, "openBandBp": 5})["openBandBp"] == 5
-for bad in (-1, 1001, "5", None):
-    try:
-        validate_config({**defaults, "openBandBp": bad})
-    except ConfigValidationError:
-        continue
-    raise AssertionError(f"openBandBp {bad!r} must be rejected")
-assert validate_config({**defaults, "leadSource": "bybit-perp"})["leadSource"] == "bybit-perp"
-# Edge tiers (2026-11-03): a config published before them gets them off (0 shares).
-TIER_KEYS = ("midEdge", "midShares", "highEdge", "highShares")
-# openLine and the reverse leg (2026-11-07): an older revision gets "tick" and the leg off.
-NEW_KEYS = ("openLine", "reverseMaxAsk", "reverseToSec")
-old = validate_config({k: v for k, v in defaults.items() if k not in NEW_KEYS})
-assert (old["openLine"], old["reverseMaxAsk"], old["reverseToSec"]) == ("tick", 0, 285)
-new = validate_config({**defaults, "openLine": "mean60", "reverseMaxAsk": 0.5, "reverseToSec": 285})
-assert (new["openLine"], new["reverseMaxAsk"]) == ("mean60", 0.5)
-for key, bad in (("openLine", "close"), ("reverseMaxAsk", 1), ("reverseMaxAsk", -0.1), ("reverseToSec", 0), ("reverseToSec", 301)):
-    try:
-        validate_config({**defaults, key: bad})
-    except ConfigValidationError:
-        continue
-    raise AssertionError(f"{key} {bad!r} must be rejected")
-try:
-    validate_config({**defaults, "reverseMaxAsk": 0.5, "makerHoldSec": 3})
-except ConfigValidationError:
-    pass
-else:
-    raise AssertionError("the reverse leg is taker-only")
-old = validate_config({k: v for k, v in defaults.items() if k not in TIER_KEYS})
-assert (old["midEdge"], old["midShares"], old["highEdge"], old["highShares"]) == (0.08, 0, 0.13, 0)
-tiers = validate_config({**defaults, "midShares": 10, "highShares": 20})
-assert (tiers["midShares"], tiers["highShares"]) == (10, 20)
-for key, bad in (("midEdge", 1.5), ("highEdge", -2), ("midShares", -1), ("highShares", 10_001), ("midEdge", "0.08"), ("highShares", None)):
-    try:
-        validate_config({**defaults, key: bad})
-    except ConfigValidationError:
-        continue
-    raise AssertionError(f"{key} {bad!r} must be rejected")
-try:
-    validate_config({**defaults, "midShares": 10, "highShares": 20, "midEdge": 0.13, "highEdge": 0.08})
-except ConfigValidationError:
-    pass
-else:
-    raise AssertionError("highEdge below midEdge with both tiers on must be rejected")
-assert validate_config({**defaults, "midShares": 10, "highShares": 0, "midEdge": 0.13, "highEdge": 0.08})["midShares"] == 10, \
-    "order of edges only matters when both tiers are on"
+    assert rejected({k: v for k, v in defaults.items() if k != missing}), f"a config without {missing} must be rejected"
+old = validate_config({k: v for k, v in defaults.items() if k not in ADDED})
+assert (old["maxAsk"], old["openBandBp"], old["openLine"], old["leadVenues"], old["tokyoRelay"]) == \
+    (0.8, 0, "tick", ["bybit", "binance", "okx"], True)
 
 REVERSAL = {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
             "stageShares": [5], "maxStages": 1, "roundBudgetUsd": 5, "totalBudgetUsd": 10, "dailyLossUsd": 10,
@@ -207,7 +155,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert store.get_draft() is None
     # --- save -> the engine reads exactly what was saved ---
     chosen = {**defaults, "shares": 7, "thresholdBp": 2.5, "windowMs": 300, "limitPremium": 0.02, "fromSec": 20,
-              "toSec": 260, "maxAsk": 0.75, "makerHoldSec": 0, "leadSource": "bybit-perp", "openBandBp": 5, "openLine": "mean60", "reverseMaxAsk": 0.45, "reverseToSec": 280, "midEdge": 0.08, "midShares": 10, "highEdge": 0.13, "highShares": 20, "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
+              "toSec": 260, "maxAsk": 0.75, "leadVenues": ["okx", "bybit"], "tokyoRelay": False, "openBandBp": 5,
+              "openLine": "mean60", "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
     draft = store.save_draft(chosen, 0)
     saved = store.activate_draft(0, draft["draftId"])
     assert saved["savedRevision"] == 1 and saved["config"] == chosen
@@ -218,6 +167,18 @@ with tempfile.TemporaryDirectory() as tmp:
     assert read["savedRevision"] == "1" and read["dailyLossUsd"] == 10
     expected = {k: v for k, v in chosen.items() if k not in {"mode", "durationMinutes", "maxRounds"}}
     assert read["config"] == {**expected, "instanceId": "binance-lead", "revision": "1"}, read["config"]
+    # --- the server's published file still carries retired settings: both sides drop them ---
+    retired = {**chosen, "makerHoldSec": 0, "leadSource": "bybit-perp", "midEdge": 0.08, "midShares": 0,
+               "highEdge": 0.13, "highShares": 0, "reverseMaxAsk": 0, "reverseToSec": 285}
+    retired.pop("leadVenues")
+    retired.pop("tokyoRelay")
+    store.path.write_text(json.dumps(document(retired)), encoding="utf-8")
+    loaded = StrategyConfigStore(store.path).get()
+    assert loaded["config"] == {**chosen, "leadVenues": ["bybit", "binance", "okx"], "tokyoRelay": True}, loaded["config"]
+    read = engine("const { readStrategyConfig } = await load('cli/platform.js');\n"
+                  "console.log(JSON.stringify(readStrategyConfig(payload)));", str(store.path))
+    assert read["config"]["leadVenues"] == loaded["config"]["leadVenues"] and read["config"]["tokyoRelay"] is True
+    assert not set(RETIRED_FIELDS) & set(read["config"]), "the engine drops them too"
     # --- a reversal document at the new path is damage, never silently replaced ---
     store.path.write_text(json.dumps({"schemaVersion": 1, "strategyId": "btc-reversal", "savedRevision": 22,
                                       "savedAt": "2026-10-20T00:00:00Z", "config": REVERSAL}), encoding="utf-8")
@@ -234,22 +195,8 @@ with tempfile.TemporaryDirectory() as tmp:
         pass
     else:
         raise AssertionError("reversal fields under the new strategy id are rejected too")
-    # --- revision 1 on the server was published before maxAsk and makerHoldSec: 0.80 and 0 ---
-    before = {k: v for k, v in chosen.items() if k not in ("maxAsk", "makerHoldSec", "leadSource", "openBandBp") + TIER_KEYS + NEW_KEYS}
-    store.path.write_text(json.dumps(document(before)), encoding="utf-8")
-    loaded = StrategyConfigStore(store.path).get()
-    assert loaded["savedRevision"] == 1 and loaded["config"]["maxAsk"] == 0.8, loaded["config"]
-    assert loaded["config"] == {**before, "maxAsk": 0.8, "makerHoldSec": 0, "leadSource": "binance-spot", "openBandBp": 0,
-                                "midEdge": 0.08, "midShares": 0, "highEdge": 0.13, "highShares": 0,
-                                "openLine": "tick", "reverseMaxAsk": 0, "reverseToSec": 285}
-    read = engine("const { readStrategyConfig } = await load('cli/platform.js');\n"
-                  "console.log(JSON.stringify(readStrategyConfig(payload)));", str(store.path))
-    assert read["config"]["maxAsk"] == 0.8, "the engine reads the same file with the same default"
-    assert read["config"]["makerHoldSec"] == 0, "and the FAK rule"
-    assert read["config"]["leadSource"] == "binance-spot", "and Binance spot"
-    assert read["config"]["openBandBp"] == 0, "and no open-price filter"
-    # Only a missing maxAsk is filled in: a pre-maxAsk file with any other gap is still damage.
-    store.path.write_text(json.dumps(document({k: v for k, v in before.items() if k != "shares"})), encoding="utf-8")
+    # Only the added fields are filled in: a file with any other gap is still damage.
+    store.path.write_text(json.dumps(document({k: v for k, v in chosen.items() if k != "shares"})), encoding="utf-8")
     try:
         StrategyConfigStore(store.path).get()
     except ConfigStoreError:

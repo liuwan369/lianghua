@@ -1,4 +1,6 @@
-"""Single-operator account onboarding. Responses never include secret values."""
+"""The account profile (read-only here) and its read-only check. Responses never
+include secret values. The operator writes the profile on the server; the
+console never writes it."""
 from __future__ import annotations
 
 import json
@@ -7,25 +9,17 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
-FIELDS = {
-    "wallet": "POLYMARKET_WALLET_ADDRESS",
-    "funder": "POLY_FUNDER",
-    "signature_type": "POLY_SIGNATURE_TYPE",
-    "owner_key": "POLYMARKET_OWNER_PRIVATE_KEY",
-    "session_private_key": "POLYMARKET_SESSION_PRIVATE_KEY",
-    "relayer_key": "RELAYER_API_KEY",
-    "relayer_address": "RELAYER_API_KEY_ADDRESS",
-    "builder_api_key": "POLY_BUILDER_API_KEY",
-    "builder_secret": "POLY_BUILDER_SECRET",
-    "builder_passphrase": "POLY_BUILDER_PASSPHRASE",
-}
-CONTROL_FIELD = "PM_DASHBOARD_CONTROL_TOKEN"
-PROFILE_FIELDS = {**FIELDS, "control_token": CONTROL_FIELD}
-ACCOUNT_ENV_FIELDS = tuple(FIELDS.values())
+# Account settings the profile (and the engine's .env) may carry.
+ACCOUNT_ENV_FIELDS = ("POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER", "POLY_SIGNATURE_TYPE",
+                      "POLYMARKET_OWNER_PRIVATE_KEY", "POLYMARKET_SESSION_PRIVATE_KEY",
+                      "RELAYER_API_KEY", "RELAYER_API_KEY_ADDRESS",
+                      "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE")
 LEGACY_OWNER_FIELD = "POLYMARKET_PRIVATE_KEY"
+# The retired console password. A profile copied from the old box may still
+# carry it; it is dropped on read and never used.
+RETIRED_PROFILE_FIELDS = frozenset({"PM_DASHBOARD_CONTROL_TOKEN"})
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 KEY = re.compile(r"(?:0x)?[0-9a-fA-F]{64}\Z")
 
@@ -35,17 +29,16 @@ class AccountCheckError(RuntimeError):
 
     def __init__(self, code: str):
         errors = {
-            "invalid_account_config": (400, False, "钱包地址或签名私钥不可用，请核对填写内容；没有保存账户。"),
-            "account_rpc_timeout": (504, True, "链上查询超时，未能完成账户检查；没有保存账户，请稍后重试。"),
-            "account_rpc_failed": (503, True, "链上查询节点暂时不可用；没有保存账户，请稍后重试。"),
-            "account_check_failed": (503, True, "账户检查服务暂时未能完成查询；没有保存账户，请稍后重试。"),
-            "account_checker_unavailable": (503, False, "服务器账户检查程序不可用；没有保存账户，请联系管理员。"),
-            "account_engine_missing": (503, False, "服务器交易引擎目录不存在；没有保存账户，请联系管理员。"),
-            "account_reader_build_missing": (503, False, "服务器账户检查程序尚未构建；没有保存账户，请联系管理员。"),
-            "account_node_missing": (503, False, "服务器 Node.js 运行时不可用；没有保存账户，请联系管理员。"),
-            "account_response_invalid": (502, False, "账户检查返回数据不完整；没有保存账户，请重试。"),
-            "account_check_busy": (429, True, "已有账户检查或保存正在进行，请等待完成后重试。"),
-            "account_changed_during_check": (409, True, "检查期间服务器账户配置已变更；没有保存账户，请重新检查。"),
+            "invalid_account_config": (400, False, "钱包地址或签名私钥不可用，请核对服务器上的账户配置文件。"),
+            "account_rpc_timeout": (504, True, "链上查询超时，未能完成账户检查，请稍后重试。"),
+            "account_rpc_failed": (503, True, "链上查询节点暂时不可用，请稍后重试。"),
+            "account_check_failed": (503, True, "账户检查服务暂时未能完成查询，请稍后重试。"),
+            "account_checker_unavailable": (503, False, "服务器账户检查程序不可用，请联系管理员。"),
+            "account_engine_missing": (503, False, "服务器交易引擎目录不存在，请联系管理员。"),
+            "account_reader_build_missing": (503, False, "服务器账户检查程序尚未构建，请联系管理员。"),
+            "account_node_missing": (503, False, "服务器 Node.js 运行时不可用，请联系管理员。"),
+            "account_response_invalid": (502, False, "账户检查返回数据不完整，请重试。"),
+            "account_check_busy": (429, True, "账户检查正在进行，请等待完成后重试。"),
         }
         self.code = code
         self.http_status, self.retryable, message = errors[code]
@@ -66,84 +59,25 @@ def load_profile() -> dict | None:
         if path.is_symlink() or (os.name != "nt" and path.stat().st_mode & 0o077):
             raise ValueError()
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict) or set(data) - (set(PROFILE_FIELDS.values()) | {LEGACY_OWNER_FIELD}):
+        if not isinstance(data, dict) or set(data) - (set(ACCOUNT_ENV_FIELDS) | {LEGACY_OWNER_FIELD} | RETIRED_PROFILE_FIELDS):
             raise ValueError()
         if any(not isinstance(v, str) for v in data.values()):
             raise ValueError()
-        return data
+        return {name: value for name, value in data.items() if name not in RETIRED_PROFILE_FIELDS}
     except (ValueError, OSError):
         raise RuntimeError("账户配置无法安全读取，请检查文件权限；已停止使用旧配置。") from None
-
-
-def candidate_profile(payload: dict, previous: dict) -> dict:
-    if set(payload) - set(PROFILE_FIELDS):
-        raise ValueError("账户参数不支持，请刷新页面后重试")
-    if any(not isinstance(v, str) for v in payload.values()):
-        raise ValueError("账户字段必须是文本")
-    wallet = payload.get("wallet", "").strip()
-    if not ADDRESS.fullmatch(wallet):
-        raise ValueError("请填写完整的资金钱包地址（0x 开头）")
-    # Switching accounts must not silently carry the old account's secrets.
-    previous = {name: value if name == CONTROL_FIELD else value.strip().strip("'\"").strip() for name, value in previous.items()
-                if isinstance(value, str)}
-    same = wallet.lower() == (previous.get("POLYMARKET_WALLET_ADDRESS") or previous.get("POLY_FUNDER", "")).lower()
-    # The control password belongs to this local account profile, but is
-    # independent of the wallet identity and must survive an account switch.
-    result = dict(previous) if same else {CONTROL_FIELD: previous.get(CONTROL_FIELD, "")}
-    if same and not result.get("POLYMARKET_OWNER_PRIVATE_KEY") and result.get(LEGACY_OWNER_FIELD):
-        result["POLYMARKET_OWNER_PRIVATE_KEY"] = result[LEGACY_OWNER_FIELD]
-    result["POLYMARKET_WALLET_ADDRESS"] = wallet
-    for field, env_name in FIELDS.items():
-        value = payload.get(field, "").strip()
-        if value:
-            result[env_name] = value
-    if "control_token" in payload:
-        token = payload.get("control_token", "").strip()
-        if token and len(token) > 1024:
-            raise ValueError("交易控制密码过长")
-        result[CONTROL_FIELD] = token
-    key = result.get("POLYMARKET_OWNER_PRIVATE_KEY", "")
-    if key and not KEY.fullmatch(key):
-        raise ValueError("订单签名私钥格式错误，请检查是否混入说明文字")
-    session_key = result.get("POLYMARKET_SESSION_PRIVATE_KEY", "")
-    if session_key and not KEY.fullmatch(session_key):
-        raise ValueError("Session 签名私钥格式错误")
-    funder = result.get("POLY_FUNDER", "")
-    if funder and not ADDRESS.fullmatch(funder):
-        raise ValueError("资金账户地址格式错误")
-    signature = result.get("POLY_SIGNATURE_TYPE", "")
-    if signature and signature not in {"0", "1", "2", "3"}:
-        raise ValueError("签名类型必须为 0、1、2 或 3")
-    relayer = result.get("RELAYER_API_KEY", "")
-    addr = result.get("RELAYER_API_KEY_ADDRESS", "")
-    if bool(relayer) != bool(addr):
-        raise ValueError("Relayer 密钥与对应地址需要一起填写")
-    if relayer and not re.fullmatch(r"[A-Za-z0-9._~+/=-]{16,256}", relayer):
-        raise ValueError("Relayer 密钥格式错误，请去掉说明文字")
-    if addr and not ADDRESS.fullmatch(addr):
-        raise ValueError("Relayer 地址格式错误")
-    builder_values = [result.get(name, "") for name in (
-        "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"
-    )]
-    if any(value and any(char.isspace() for char in value) for value in builder_values):
-        raise ValueError("Builder 凭据不能包含空白字符")
-    if any(builder_values) and not all(builder_values):
-        raise ValueError("Builder API Key、Secret 和 Passphrase 需要一起填写")
-    if any(len(value) > 512 for value in builder_values):
-        raise ValueError("Builder 凭据长度超出限制")
-    return {name: result.get(name, "") for name in PROFILE_FIELDS.values()}
 
 
 def child_environment(values: dict) -> dict:
     """Inject the same account identity into both read-only child processes."""
     env = os.environ.copy()
-    protected = set(ACCOUNT_ENV_FIELDS) | {LEGACY_OWNER_FIELD, CONTROL_FIELD}
+    protected = set(ACCOUNT_ENV_FIELDS) | {LEGACY_OWNER_FIELD}
     for name in list(env):
         upper = name.upper()
         if name not in protected and any(marker in upper for marker in
                                          ("TOKEN", "SECRET", "PRIVATE_KEY", "API_KEY", "PASSWORD", "PASSPHRASE", "AUTHORIZATION")):
             env.pop(name, None)
-    for name in (*ACCOUNT_ENV_FIELDS, LEGACY_OWNER_FIELD, CONTROL_FIELD, "PM_TRADING_LIVE_UNLOCK"):
+    for name in (*ACCOUNT_ENV_FIELDS, LEGACY_OWNER_FIELD, "PM_TRADING_LIVE_UNLOCK"):
         env.pop(name, None)
     clean = {name: value.strip().strip("'\"").strip() for name, value in values.items()
              if name in {*ACCOUNT_ENV_FIELDS, LEGACY_OWNER_FIELD} and isinstance(value, str)}
@@ -175,7 +109,7 @@ def contains_secret(value, values: dict) -> bool:
     # fields explicitly while leaving public asset identifiers inspectable.
     private_names = {"private_key", "privatekey", "owner_key", "session_private_key", "secret",
                      "api_key", "apikey", "passphrase", "authorization", "headers", "env"}
-    environment_names = {*ACCOUNT_ENV_FIELDS, LEGACY_OWNER_FIELD, CONTROL_FIELD}
+    environment_names = {*ACCOUNT_ENV_FIELDS, LEGACY_OWNER_FIELD}
 
     def visit(item):
         if isinstance(item, dict):
@@ -236,7 +170,7 @@ def check_account(engine: Path, values: dict) -> dict:
     if fallback and fallback not in rpcs:
         rpcs.append(fallback)
     # Bound both attempts inside the browser/proxy deadline. Only the read-only
-    # checker is retried; persistence runs once after a successful check.
+    # checker is retried.
     for index, rpc in enumerate(rpcs):
         child_env = dict(env)
         if rpc:
@@ -274,50 +208,3 @@ def check_account(engine: Path, values: dict) -> dict:
         if index == len(rpcs) - 1:
             raise failure from None
     raise AccountCheckError("account_check_failed")
-
-
-def save_profile(values: dict) -> None:
-    if os.name == "nt":
-        raise RuntimeError("请在部署到服务器的 HTTPS 页面保存账户；Windows 开发页面只提供检查。")
-    _write_profile(values)
-
-
-def _write_profile(values: dict) -> None:
-    """Atomically write the private profile on the local server."""
-    path = profile_path()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if path.is_symlink() or path.parent.is_symlink():
-        raise RuntimeError("账户配置路径不安全")
-    os.chmod(path.parent, 0o700)
-    fd, temporary = tempfile.mkstemp(prefix=".account-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            os.chmod(temporary, 0o600)
-            json.dump(values, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
-def save_control_token(token: str) -> None:
-    """Persist the dashboard control password in the private account profile."""
-    value = token.strip()
-    if not value:
-        raise ValueError("交易控制密码不能为空")
-    if len(value) > 1024:
-        raise ValueError("交易控制密码过长")
-    previous = load_profile() or {}
-    previous[CONTROL_FIELD] = value
-    # Control-session persistence is also useful on the Windows development
-    # console; account signing secrets remain Linux-server-only via
-    # save_profile above.
-    _write_profile({name: previous[name] for name in PROFILE_FIELDS.values() if name in previous})
-
-
-def saved_control_token() -> str:
-    """Read the persisted control password without exposing the account profile."""
-    profile = load_profile()
-    return profile.get(CONTROL_FIELD, "").strip() if profile else ""
