@@ -79,10 +79,15 @@ O1 = order(1, venue="bybit", line="tokyo", direction="UP", status="FILLED", fill
            round_start=R1, gone=200, ack=40)
 O2 = order(2, venue="binance", line="direct", direction="DOWN", status="FILLED", filled=5, avg=0.6, fee=0.05, limit=0.63,
            round_start=R1 + 300, ack=50)
-O3 = order(3, venue="bybit", line="direct", direction="UP", status="CANCELLED", filled=0, limit=0.5,
-           round_start=R1 + 600, late=30, gone=120, ack=60)
-O4 = order(4, venue="okx", line="tokyo", direction="DOWN", status="CANCELLED", filled=0, limit=0.4,
-           round_start=R1 + 900, late=-10, gone=80, ack=70)
+O3 = {**order(3, venue="bybit", line="direct", direction="UP", status="CANCELLED", filled=0, limit=0.5,
+            round_start=R1 + 600, late=30, gone=120, ack=60), "stage": "fak", "rest_mode": "shadow",
+      "rest_shadow_fill_ms": (R1 + 632) * 1000}
+O4 = {**order(4, venue="okx", line="tokyo", direction="DOWN", status="CANCELLED", filled=0, limit=0.4,
+            round_start=R1 + 900, late=-10, gone=80, ack=70), "stage": "fak", "rest_mode": "shadow", "rest_shadow_fill_ms": None}
+# A live rest order after O7's miss (its own row, stage "rest"): 3 of 5 filled, DOWN won.
+O7R = {**order(70, venue="binance", line="tokyo", direction="UP", status="CANCELLED", filled=3, avg=0.7, fee=0,
+               limit=0.7, round_start=R1 + 3900, ack=100), "stage": "rest", "rest_mode": "live",
+       "parent_client_order_id": "c7", "market_id": "0xm7", "token_id": "U7"}
 O5 = order(5, venue="bybit", line="tokyo", direction="UP", status="REJECTED", filled=0, limit=0.5,
            round_start=R1 + 1200, ack=80)
 O6 = order(6, venue="bybit", line="tokyo", direction="UP", status="FILLED", filled=5, avg=0.5, fee=0.06, limit=0.53,
@@ -132,7 +137,7 @@ class LeadStats(unittest.TestCase):
         # Run B: its own orders, and the settlements of every round (the venue
         # settles after the run that traded it stopped).
         write(journal_b, [*SIGNALS_B, {"event": "platform_status", "recv_ts": R1 + 3700, "runtime": RUNTIME_B},
-                          O6, O7, settlement(1, "U1", R1 + 3701), settlement(2, "U2", R1 + 3702),
+                          O6, O7, O7R, settlement(1, "U1", R1 + 3701), settlement(2, "U2", R1 + 3702),
                           settlement(3, "U3", R1 + 3703), settlement(4, "U4", R1 + 3704),
                           settlement(7, "D7", R1 + 4300)])
         cls.ledger = Ledger(dashboard / "ledger.sqlite3")
@@ -181,6 +186,16 @@ class LeadStats(unittest.TestCase):
                                           official={("btc", str(R1)): {"pnl": 2.0}})["funnel"]
         self.assertAlmostEqual(official["pnl_usd"], 2.0 - 3.05, places=6, msg="the venue's PnL wins where it exists")
         self.assertEqual(official["pnl_source"], "mixed")
+
+    def test_rest(self):
+        rest = self.stats["rest"]
+        self.assertEqual((rest["live"]["orders"], rest["live"]["filled"], rest["live"]["settled"], rest["live"]["won"]),
+                         (1, 1, 1, 0), "the rest row is counted on its own, lost (DOWN won round 7)")
+        self.assertAlmostEqual(rest["live"]["pnl_usd"], -3 * 0.7, places=6, msg="3 filled at 0.70, no fee")
+        shadow = rest["shadow"]
+        self.assertEqual((shadow["misses"], shadow["would_fill"], shadow["settled"], shadow["won"]), (2, 1, 1, 1),
+                         "O3 and O4 were shadowed; O3 came back and won")
+        self.assertAlmostEqual(shadow["pnl_if_filled_usd"], 5 * (1 - 0.5), places=6, msg="maker fill at the limit, no fee")
 
     def test_misses(self):
         misses = self.stats["misses"]
@@ -254,10 +269,12 @@ class LeadStats(unittest.TestCase):
     # --- /api/orders/lead ---
     def test_orders_join(self):
         page = self.ledger.lead_orders_page("run-b", range="all", limit=3, now=R1 + 5000)
-        self.assertEqual([item["client_order_id"] for item in page["items"]], ["c7", "c6", "c5"], "newest first")
+        self.assertEqual([item["client_order_id"] for item in page["items"]], ["c70", "c7", "c6"],
+                         "newest first; the rest order after c7 is its own row")
+        self.assertEqual((page["items"][0]["stage"], page["items"][0]["parent_client_order_id"]), ("rest", "c7"))
         self.assertIsNotNone(page["next_before"])
         rest = self.ledger.lead_orders_page("run-b", range="all", limit=10, before=page["next_before"], now=R1 + 5000)
-        self.assertEqual([item["client_order_id"] for item in rest["items"]], ["c4", "c3", "c2", "c1"])
+        self.assertEqual([item["client_order_id"] for item in rest["items"]], ["c5", "c4", "c3", "c2", "c1"])
         self.assertIsNone(rest["next_before"])
         by_id = {item["client_order_id"]: item for item in page["items"] + rest["items"]}
         self.assertEqual((by_id["c1"]["outcome"], by_id["c1"]["pnl_source"]), ("won", "ledger"))
@@ -280,11 +297,11 @@ class LeadStats(unittest.TestCase):
             value = json.loads(body)
             self.assertEqual(status, 200)
             self.assertEqual((value["available"], value["range"], value["funnel"]["orders"]), (True, "all", 7))
-            for key in ("funnel", "misses", "late_by_ms", "latency", "by_source", "skips", "by_hour", "asOf", "stale"):
+            for key in ("funnel", "misses", "rest", "late_by_ms", "latency", "by_source", "skips", "by_hour", "asOf", "stale"):
                 self.assertIn(key, value)
             status, body = render("/api/orders/lead?range=all&limit=2")
             value = json.loads(body)
-            self.assertEqual([item["client_order_id"] for item in value["items"]], ["c7", "c6"])
+            self.assertEqual([item["client_order_id"] for item in value["items"]], ["c70", "c7"])
             status, _ = render("/api/stats/lead?range=month")
             self.assertEqual(status, 400)
         finally:

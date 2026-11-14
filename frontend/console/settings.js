@@ -19,6 +19,7 @@
     ["totalBudgetUsd", "总预算 $", "本次运行最多占用多少；空 = 不限", "1", "optional"],
     ["dailyLossUsd", "每日亏损上限 $", "北京时间当天亏到这个数就停止下新单；空 = 不限", "1", "optional"],
     ["maxRounds", "每次运行场数", "跑满这么多场自动停止；0 = 一直跑", "1", "int"],
+    ["restAfterMissSec", "没买到后挂单（秒）", "吃单没买到时，在同一限价挂只挂单的买单，这么多秒后撤；挂单不收手续费；0 = 关", "1", "number"],
   ];
   const ADVANCED = [
     ["maxQuoteAgeSeconds", "盘口最大年龄（秒）", "盘口比这个旧就不下单", "0.1", "number"],
@@ -26,7 +27,7 @@
   ];
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
-    "tokyoRelay", "openBandBp", "openLine", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
+    "tokyoRelay", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
     "dailyLossUsd", "durationMinutes", "maxRounds", "mode"];
 
   // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues: string[]} -> {config, errors}
@@ -53,11 +54,13 @@
     for (const key of ["maxQuoteAgeSeconds", "maxQuoteSkewSeconds"]) check(key, (v) => v > 0, "要大于 0");
     for (const key of ["roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"]) check(key, (v) => v === null || v > 0, "空或大于 0");
     check("maxRounds", (v) => Number.isInteger(v) && v >= 0 && v <= 10000, "0–10000 的整数");
+    check("restAfterMissSec", (v) => v >= 0 && v <= 30, "0–30 秒");
     const venues = ALL_VENUES.filter((venue) => (inputs.leadVenues || []).includes(venue));
     if (!venues.length) errors.leadVenues = "至少选一家交易所";
     config.leadVenues = venues;
     config.tokyoRelay = inputs.tokyoRelay === true;
     config.openLine = inputs.openLine === "mean60" ? "mean60" : "tick";
+    config.restShadow = inputs.restShadow !== false;
     const ordered = Object.fromEntries(CONFIG_KEYS.map((key) => [key, config[key]]));
     return { config: ordered, errors };
   };
@@ -74,6 +77,7 @@
     inputs.leadVenues = Array.isArray(config?.leadVenues) ? config.leadVenues : [...ALL_VENUES];
     inputs.tokyoRelay = config?.tokyoRelay !== false;
     inputs.openLine = config?.openLine === "mean60" ? "mean60" : "tick";
+    inputs.restShadow = config?.restShadow !== false;
     return inputs;
   };
 
@@ -145,6 +149,7 @@
         <label class="field"><span>开盘线</span><select data-field="openLine"><option value="tick">开盘那一笔</option><option value="mean60">开盘前 60 秒均价</option></select><small>开盘线范围从哪条线量</small></label>
         <div class="field"><span>信号交易所</span><div class="checks">${ALL_VENUES.map((venue) => html`<label><input type="checkbox" data-venue="${venue}"> ${VENUES[venue]}</label>`)}</div><small data-note="leadVenues">哪几家的永续合约成交算信号；至少一家</small></div>
         <div class="field"><span>东京转发</span><div class="checks"><label><input type="checkbox" data-field="tokyoRelay"> 开启</label></div><small>同时接东京转发来的成交，谁先到用谁</small></div>
+        <div class="field"><span>挂单模拟记录</span><div class="checks"><label><input type="checkbox" data-field="restShadow"> 开启</label></div><small>挂单关着时，记录没买到后 5 秒内挂单会不会成交（不下单），统计页可看</small></div>
         ${FIELDS.slice(8).map(field)}
       </div>
       <details><summary>高级</summary><div class="form" style="margin-top:10px">${ADVANCED.map(field)}</div></details>
@@ -169,6 +174,7 @@
     for (const [key] of [...FIELDS, ...ADVANCED]) inputs[key] = $(`[data-field="${key}"]`).value;
     inputs.openLine = $('[data-field="openLine"]').value;
     inputs.tokyoRelay = $('[data-field="tokyoRelay"]').checked;
+    inputs.restShadow = $('[data-field="restShadow"]').checked;
     inputs.leadVenues = ALL_VENUES.filter((venue) => $(`[data-venue="${venue}"]`).checked);
     return inputs;
   };
@@ -177,6 +183,7 @@
     for (const [key] of [...FIELDS, ...ADVANCED]) $(`[data-field="${key}"]`).value = inputs[key];
     $('[data-field="openLine"]').value = inputs.openLine;
     $('[data-field="tokyoRelay"]').checked = inputs.tokyoRelay;
+    $('[data-field="restShadow"]').checked = inputs.restShadow;
     for (const venue of ALL_VENUES) $(`[data-venue="${venue}"]`).checked = inputs.leadVenues.includes(venue);
     state.dirty = false;
     showErrors({});

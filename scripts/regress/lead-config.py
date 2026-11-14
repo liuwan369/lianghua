@@ -127,7 +127,7 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 # --- the exact field set: no retired field, nothing missing ---
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
-ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay")
+ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below

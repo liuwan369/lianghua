@@ -735,7 +735,14 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   const postSentMs = msOf(order?.postSentAt);
   const ackMs = msOf(order?.venueReplyAt ?? order?.httpAckAt);
   const askGoneMs = msOf(stage?.askGoneAtUnix);
-  return { client_order_id: order?.clientOrderId ?? stage?.clientOrderId ?? null, order_id: order?.orderId ?? stage?.orderId ?? null,
+  const rest = stage?.kind === "rest";
+  // rest_mode: what the round's config did after a miss ("live" placed a rest
+  // order, "shadow" only recorded what one would have filled, "off" neither).
+  const restMode = !config ? null : config.restAfterMissSec > 0 ? "live" : config.restShadow ? "shadow" : "off";
+  return { stage: rest ? "rest" : "fak", rest_mode: restMode,
+    parent_client_order_id: rest && round ? round.stages[0]?.clientOrderId ?? null : null,
+    rest_shadow_fill_ms: rest ? null : msOf(stage?.restShadowFillAt),
+    client_order_id: order?.clientOrderId ?? stage?.clientOrderId ?? null, order_id: order?.orderId ?? stage?.orderId ?? null,
     market_id: order?.marketId ?? round?.marketId ?? null, round_id: order?.roundId ?? round?.roundId ?? null,
     round_start: round?.startsAt ?? null, direction: stage?.direction ?? null, token_id: order?.tokenId ?? stage?.tokenId ?? null,
     status: stage?.status === "ABANDONED" ? "ABANDONED" : order?.status ?? stage?.status ?? null,
@@ -754,7 +761,7 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
     t_signal_ms: diffMs(signalRecvMs, tradeTimeMs), t_decide_ms: diffMs(decisionMs, signalRecvMs),
     t_post_ms: diffMs(postSentMs, decisionMs), t_ack_ms: diffMs(ackMs, postSentMs), t_total_ms: diffMs(ackMs, tradeTimeMs),
     ask_gone_after_trade_ms: diffMs(askGoneMs, tradeTimeMs),
-    late_by_ms: shares !== null && orderFilled !== null && orderFilled < shares - 1e-8 ? diffMs(ackMs, askGoneMs) : null };
+    late_by_ms: !rest && shares !== null && orderFilled !== null && orderFilled < shares - 1e-8 ? diffMs(ackMs, askGoneMs) : null };
 }
 
 const LEAD_ORDER_TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED"]);

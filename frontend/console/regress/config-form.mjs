@@ -31,10 +31,10 @@ const S = window.PolySettings;
 
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
-  "openBandBp", "openLine", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "openBandBp", "openLine", "restAfterMissSec", "restShadow", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
-  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", maxQuoteAgeSeconds: 2,
+  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, maxQuoteAgeSeconds: 2,
   maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, durationMinutes: 0, maxRounds: 12, mode: "live" };
 
 // --- the published config round-trips unchanged ---
@@ -60,6 +60,14 @@ assert.equal(edited.config.dailyLossUsd, null, "empty = null");
 assert.equal(edited.config.maxRounds, 3);
 assert.equal(edited.config.mode, "live");
 assert.equal(edited.config.durationMinutes, 0);
+// Rest after a miss: seconds 0..30, shadow switch.
+const rest = S.buildConfig({ ...inputs, restAfterMissSec: "5", restShadow: false }, published);
+assert.deepEqual({ ...rest.errors }, {});
+assert.equal(rest.config.restAfterMissSec, 5);
+assert.equal(rest.config.restShadow, false);
+for (const bad of ["-1", "31", ""]) {
+  assert.ok("restAfterMissSec" in S.buildConfig({ ...inputs, restAfterMissSec: bad }, published).errors, `rest ${bad}`);
+}
 
 // --- validation ---
 const errorsOf = (patch) => Object.keys(S.buildConfig({ ...inputs, ...patch }, published).errors).sort();

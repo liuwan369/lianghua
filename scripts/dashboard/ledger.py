@@ -124,12 +124,12 @@ LEAD_LINES = ("direct", "tokyo")
 LEAD_ORDER_STATUSES = frozenset({"CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED",
                                  "UNKNOWN", "ABANDONED"})
 LEAD_ORDER_TEXT = ("client_order_id", "order_id", "market_id", "round_id", "token_id", "venue_status", "error",
-                   "open_line")
+                   "open_line", "parent_client_order_id")
 LEAD_ORDER_NUMBERS = ("round_start", "relay_recv_ms", "trade_time_ms", "signal_recv_ms", "move_bp", "signal_price",
                       "open_value", "band_bp", "sec_since_open", "ask_at_signal", "limit_price", "shares",
                       "filled_shares", "avg_fill_price", "fee_usd", "decision_ms", "post_sent_ms", "ack_ms",
                       "ask_gone_ms", "ask_gone_venue_ms", "t_signal_ms", "t_decide_ms", "t_post_ms", "t_ack_ms",
-                      "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms")
+                      "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms", "rest_shadow_fill_ms")
 LATENCY_METRICS = frozenset({
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
     "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
@@ -678,6 +678,10 @@ def _projection(record):
         result["status"] = record.get("status") if record.get("status") in LEAD_ORDER_STATUSES else None
         result["venue"] = record.get("venue") if record.get("venue") in LEAD_VENUES else None
         result["line"] = record.get("line") if record.get("line") in LEAD_LINES else None
+        # The round's FAK, or the rest order placed after its miss; and what the
+        # round's config did after a miss (live / shadow / off).
+        result["stage"] = "rest" if record.get("stage") == "rest" else "fak"
+        result["rest_mode"] = record.get("rest_mode") if record.get("rest_mode") in ("live", "shadow", "off") else None
         result["price"] = result["amount"] = result["pnl"] = None
         return result
     price, shares = result["price"], result["shares"]
@@ -795,6 +799,17 @@ def _lead_outcome(order, winning_token):
             pnl = round((filled if outcome == "won" else 0) - filled * price - (order.get("fee_usd") or 0), 6)
     return {"outcome": outcome, "filled": filled > EPS_SHARES, "pnl": pnl,
             "would_have_won": None if filled > EPS_SHARES or outcome == "pending" else outcome == "won"}
+
+
+def _rest_pnl(order):
+    """What a rest order would have made for a missed order: its shares filled
+    at the limit as a maker (no fee)."""
+    shares, limit = order.get("shares"), order.get("limit_price")
+    if shares is None or limit is None or order.get("would_have_won") is None:
+        return None
+    filled = order.get("filled_shares") or 0
+    left = shares - filled
+    return left * (1 - limit) if order["would_have_won"] else -left * limit
 
 
 def _hypothetical_pnl(order):
@@ -2747,7 +2762,11 @@ class Ledger:
                         while len(_LEAD_BASE_CACHE) > 16:
                             _LEAD_BASE_CACHE.popitem(last=False)
         signals, in_window, skips = base["signals"], base["in_window"], dict(base["skips"])
-        orders = [dict(order) for order in base["orders"]]
+        every = [dict(order) for order in base["orders"]]
+        # The round's FAK is the order every figure below counts; a rest order
+        # placed after its miss (stage "rest") is reported on its own.
+        orders = [o for o in every if o.get("stage") != "rest"]
+        rests = [o for o in every if o.get("stage") == "rest"]
         runtime = json.loads(runtime_row["payload"]) if runtime_row else {}
         official = official or {}
 
@@ -2778,6 +2797,25 @@ class Ledger:
                   "resolved": len(resolved_misses),
                   "would_have_won": sum(1 for o in resolved_misses if o["would_have_won"]),
                   "hypothetical_pnl_if_filled": _sum(_hypothetical_pnl(o) for o in resolved_misses)}
+
+        # Rest after a miss. Live: the rest orders and what they made. Shadow:
+        # missed FAKs whose side came back to the limit within the window, and
+        # how those rounds ended (what a rest would have filled; queue ignored).
+        rest_got = [o for o in rests if (o.get("filled_shares") or 0) > EPS_SHARES]
+        rest_done = [o for o in rest_got if o["outcome"] in ("won", "lost")]
+        rest_won = sum(1 for o in rest_done if o["outcome"] == "won")
+        shadowed = [o for o in missed if o.get("rest_mode") == "shadow"]
+        would = [o for o in shadowed if o.get("rest_shadow_fill_ms") is not None]
+        would_done = [o for o in would if o["would_have_won"] is not None]
+        rest = {"live": {"orders": len(rests), "filled": len(rest_got), "fill_rate": _ratio(len(rest_got), len(rests)),
+                         "settled": len(rest_done), "won": rest_won, "win_rate": _ratio(rest_won, len(rest_done)),
+                         "pnl_usd": _sum(o.get("pnl") for o in rest_done)},
+                "shadow": {"misses": len(shadowed), "would_fill": len(would),
+                           "would_fill_rate": _ratio(len(would), len(shadowed)),
+                           "settled": len(would_done),
+                           "won": sum(1 for o in would_done if o["would_have_won"]),
+                           "win_rate": _ratio(sum(1 for o in would_done if o["would_have_won"]), len(would_done)),
+                           "pnl_if_filled_usd": _sum(_rest_pnl(o) for o in would_done)}}
 
         late = sorted(o["late_by_ms"] for o in missed if o.get("late_by_ms") is not None)
         histogram = {label: 0 for label, _, _ in LATE_BUCKETS}
@@ -2840,7 +2878,7 @@ class Ledger:
                         row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
-                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours}
+                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
         """GET /api/orders/lead: lead orders newest first, with the round's

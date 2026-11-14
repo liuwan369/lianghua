@@ -31,6 +31,15 @@ for (const piece of ["信号 412", "窗口内信号 380", "下单 60", "买到 4
 const misses = text(parts.misses);
 for (const piece of ["19 单", "其中会赢 11 单", "-$3.42"]) assert.ok(misses.includes(piece), `misses: ${piece}: ${misses}`);
 
+// --- rest after a miss: live rest orders, then the shadow; neither = an empty line ---
+const rest = text(S.renderRest({ live: { orders: 4, filled: 3, fill_rate: 0.75, settled: 3, won: 2, win_rate: 2 / 3, pnl_usd: 1.5 },
+  shadow: { misses: 10, would_fill: 4, would_fill_rate: 0.4, settled: 4, won: 3, win_rate: 0.75, pnl_if_filled_usd: 2.25 } }));
+for (const piece of ["挂单补单 4 单", "买到 3 单 · 75.0%", "胜率 66.7%", "+$1.50", "模拟：没买到 10 单", "5 秒内会成交 4 单", "其中会赢 3 / 4 单", "+$2.25"]) {
+  assert.ok(rest.includes(piece), `rest: ${piece}: ${rest}`);
+}
+assert.ok(text(S.renderRest({ live: { orders: 0 }, shadow: { misses: 0 } })).includes("还没有没买到的单"));
+assert.ok(text(S.renderRest(null)).includes("没有数据"));
+
 // --- late_by_ms ---
 const late = String(parts.late);
 const lateText = text(late);
