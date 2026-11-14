@@ -161,4 +161,16 @@ const position = (r, tokenId = UP) => r.platform.core.positions().find(p => p.to
   await closeRound(r);
   assert.deepEqual(r.gateway.cancels, []);
 }
+// --- live 2026-11-14 19:05: a resting BUY 5 @ 0.23 filled 3.53 @ 0.23, then a maker
+// leg of 1.46753 reported at 0.2300000681417075 (the venue's price for a leg
+// is its matched USDC / shares). 6.8e-8 over the limit was "invalid or unowned",
+// so 1.47 bought shares never reached the books and the order went UNKNOWN. ---
+{
+  const r = rig(venue(["t1"]));
+  await signal(r);
+  assert.equal(tryIngest(r, fill("t1", 3.53, 0.42, 0)), true);
+  assert.equal(tryIngest(r, fill("t2", 1.46753, 0.42 + 6.8e-8, 0)), true, "a leg priced a rounding hair over the limit is ours");
+  close(r.platform.core.order(ORDER).filledShares, 4.99753, "both legs");
+  assert.match(String(tryIngest(r, fill("t3", 0.01, 0.4201, 0))), /invalid or unowned fill/, "a real price over the limit is still refused");
+}
 console.log("fak-better-price OK");

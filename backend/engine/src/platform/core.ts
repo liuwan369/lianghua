@@ -7,6 +7,10 @@ const EPS = 1e-8;
  * spends at most the signed budget (2026-10-26: 5.176466 x 0.85 = 4.3999961 of
  * 4.40); this only absorbs rounding in the reported trade price and size. */
 const BUY_BUDGET_TOLERANCE_USD = 0.01;
+/** A trade leg's price is the venue's matched USDC / shares, not a tick: a
+ * maker leg at a 0.23 limit came back 0.2300000681417075 (2026-11-14). The
+ * limit check allows this much rounding; a real tick over it is still refused. */
+const FILL_PRICE_TOLERANCE = 1e-6;
 const active = (order: OrderRecord) => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status);
 const reservationPending = (order: OrderRecord) => active(order) || order.reconciliationPending === true;
 const copy = <T>(value: T): T => structuredClone(value);
@@ -1329,7 +1333,7 @@ export class TradingCore {
         && !(order.timeInForce === "FAK" && order.venueStatus === "matched"))
       || !fill.tradeId || ![fill.shares, fill.price, fill.feeUsd, fill.ts].every(finite)
       || fill.shares <= 0 || fill.price <= 0 || fill.price >= 1 || fill.feeUsd < 0
-      || (fill.direction === "BUY" ? fill.price > order.price + EPS : fill.price < order.price - EPS)
+      || (fill.direction === "BUY" ? fill.price > order.price + FILL_PRICE_TOLERANCE : fill.price < order.price - FILL_PRICE_TOLERANCE)
       || (fill.direction === "BUY"
         ? spentUsd + fill.shares * fill.price > order.shares * order.price + BUY_BUDGET_TOLERANCE_USD
         : order.filledShares + fill.shares > order.shares + EPS)) throw new Error("invalid or unowned fill");

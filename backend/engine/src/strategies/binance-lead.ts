@@ -194,7 +194,15 @@ export function leadLimitPrice(ask: number, premium: number, tickSize: number): 
  * buys 8 shares instead of being refused. Backtest (PMData 09-15..10-04): 51
  * of 442 fills cost under 1 USD at 5 shares and made 68.6 of the 241.2. */
 export function leadShares(configured: number, price: number): number {
-  return Math.max(configured, Math.ceil(MIN_MARKETABLE_BUY_USD / price - 1e-9));
+  let shares = Math.max(configured, Math.ceil(MIN_MARKETABLE_BUY_USD / price - 1e-9));
+  // A marketable BUY's USD amount (shares x price) may have 2 decimals at most
+  // (live 2026-11-14, tick 0.001: 12 x 0.086 = 1.032 was refused). At a
+  // 3-4 decimal price take the next whole share count whose cost is whole cents.
+  for (let n = shares; n < shares + 10_000; n += 1) {
+    const cents = n * price * 100;
+    if (Math.abs(cents - Math.round(cents)) < 1e-6) return n;
+  }
+  return shares;
 }
 
 /** The FAK limits a round can send on each side, for signing ahead: every ask

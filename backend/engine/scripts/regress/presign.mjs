@@ -38,6 +38,17 @@ import { presignPrices, leadLimitPrice, leadShares } from "../../dist/strategies
   assert.ok(fine.every(p => p.price <= 0.99));
   const high = presignPrices({ maxAsk: 0.98, limitPremium: 0.03, shares: 5 }, 0.01);
   assert.ok(high.every(p => p.price <= 0.99) && high.some(p => p.price === 0.99), "the limit never passes 0.99");
+  // Live 2026-11-14 15:10, tick 0.001: 12 x 0.086 = 1.032 USD was refused ("the
+  // market buy orders maker amount supports a max accuracy of 2 decimals").
+  const cents = (p, n) => Math.abs(n * p * 100 - Math.round(n * p * 100)) < 1e-6;
+  for (const p of [0.086, 0.123, 0.471, 0.005, 0.999, 0.555, 0.04, 0.47]) {
+    const n = leadShares(5, p);
+    assert.ok(cents(p, n), `${p} x ${n} is whole cents`);
+    assert.ok(n * p >= 1 - 1e-9 && n >= 5, `${p} x ${n} meets the minimums`);
+  }
+  assert.equal(leadShares(5, 0.47), 5, "a 2-decimal price keeps the configured size");
+  assert.equal(leadShares(5, 0.086), 15, "the fewest whole shares above 12 at 0.086 that cost whole cents");
+  assert.ok(fine.every(p => cents(p.price, p.shares)), "every presigned tick-0.001 order costs whole cents");
 }
 
 // --- the client: presign, take once, fall back ---
