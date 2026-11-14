@@ -779,13 +779,15 @@ export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string,
     bid: shadow?.bid ?? null, sell_shares: shadow?.shares ?? null };
 }
 export function createLeadExitShadowLog(rounds: () => readonly Readonly<LeadRound>[],
-  write: (fields: Record<string, unknown>, eventId: string) => void) {
+  write: (fields: Record<string, unknown>, eventId: string) => void, startedAt: number) {
   const written = new Set<string>();
   return {
     observe(now: number): void {
       for (const round of rounds()) {
-        // Kept rounds include hours of settled history: only this hour's.
-        if (written.has(round.marketId) || now - round.endsAt > 3600) continue;
+        // Kept rounds include earlier runs' history; this run watched only
+        // rounds still open when it started (live 2026-11-14: a restart wrote
+        // the past hour's held rounds as never triggered).
+        if (written.has(round.marketId) || round.endsAt <= startedAt) continue;
         if (!(round.exitShadow?.at !== undefined || now >= round.endsAt)) continue;
         const fields = leadExitShadowFields(round);
         if (now >= round.endsAt || fields) written.add(round.marketId);
@@ -1153,7 +1155,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       const orderLog = leadOrders = createLeadOrderLog(clientOrderId => lead.stageFor(clientOrderId),
         (fields, eventId) => journal?.write("lead_order", { ...fields, engine_ts: Date.now() / 1000 }, eventId));
       const exitLog = createLeadExitShadowLog(() => lead.roundList(),
-        (fields, eventId) => journal?.write("lead_exit_shadow", { ...fields, engine_ts: Date.now() / 1000 }, eventId));
+        (fields, eventId) => journal?.write("lead_exit_shadow", { ...fields, engine_ts: Date.now() / 1000 }, eventId), Date.now() / 1000);
       const onEvent = lead.onEvent.bind(lead);
       lead.onEvent = (event, context) => {
         const actions = handleLead(event, context);

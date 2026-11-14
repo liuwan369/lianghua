@@ -281,7 +281,7 @@ const fakSent = (config = {}) => {
   const fields = leadExitShadowFields(s.exportState().rounds[0]);
   assert.deepEqual([fields.triggered, fields.bid, fields.sell_shares, fields.opposite_signals, fields.direction], [true, 0.4, 5.2, 3, "UP"]);
   const lines = [];
-  const log = createLeadExitShadowLog(() => s.exportState().rounds, (f, id) => lines.push(id));
+  const log = createLeadExitShadowLog(() => s.exportState().rounds, (f, id) => lines.push(id), START - 30);
   log.observe(S + 12); log.observe(S + 300); log.observe(S + 400);
   assert.deepEqual(lines, ["lead_exit_shadow:0xm"], "once per round");
 }
@@ -296,7 +296,10 @@ const fakSent = (config = {}) => {
   at(h.s, { kind: "order", order: record(h.fak, "FILLED", 5, "0xfak", S + 0.6) }, S + 0.6);
   at(h.s, { ...lead(S + 3, "DOWN"), tradeId: 9 }, S + 3);
   const lines = [];
-  const log = createLeadExitShadowLog(() => h.s.exportState().rounds, (f) => lines.push(f));
+  const before = [];
+  createLeadExitShadowLog(() => h.s.exportState().rounds, (f) => before.push(f), START + 300).observe(START + 400);
+  assert.equal(before.length, 0, "a round that ended before the run started is not this run's");
+  const log = createLeadExitShadowLog(() => h.s.exportState().rounds, (f) => lines.push(f), START - 30);
   log.observe(S + 100);
   assert.equal(lines.length, 0, "not triggered and not over yet: nothing");
   log.observe(START + 300);
