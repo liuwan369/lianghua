@@ -159,6 +159,13 @@ export const REST_SHADOW_SEC = 5;
 const REST_MARGIN_SEC = 5;
 /** A timed cancel not yet confirmed is re-sent after this long. */
 const CANCEL_RETRY_SEC = 1;
+/** An order whose cancel the venue refused is UNKNOWN until account recovery
+ * settles it; its cancel is re-sent only this often (2026-11-14 19:06: a
+ * partly filled rest with nothing left resting was cancelled every second for
+ * 13 minutes, each refusal halting the account again). */
+const UNKNOWN_CANCEL_RETRY_SEC = 30;
+const cancelDue = (stage: LeadStage, now: number) => stage.cancelRequestedAt === undefined
+  || now - stage.cancelRequestedAt >= (stage.status === "UNKNOWN" ? UNKNOWN_CANCEL_RETRY_SEC : CANCEL_RETRY_SEC);
 /** A rest is placed within this long of the FAK's miss, or not at all. */
 const REST_LATE_SEC = 2;
 /** The venue refuses a marketable BUY under this many USD (2026-10-26 live:
@@ -410,8 +417,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       const rest = round.stages[1];
       if (rest && context.now < round.endsAt && rest.cancelAt !== undefined && context.now >= rest.cancelAt
         && activeOrder(rest.status) && rest.orderId && rest.filledShares < rest.shares - EPS
-        && !context.account.quarantinedOrderIds?.includes(rest.orderId)
-        && (rest.cancelRequestedAt === undefined || context.now - rest.cancelRequestedAt >= CANCEL_RETRY_SEC)) {
+        && !context.account.quarantinedOrderIds?.includes(rest.orderId) && cancelDue(rest, context.now)) {
         rest.cancelRequestedAt = context.now; changed = true;
         actions.push({ kind: "cancel", orderId: rest.orderId });
       }
@@ -428,7 +434,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           // A complete authenticated snapshot already excluded this UNKNOWN order.
           if (quarantined.has(stage.orderId)) continue;
           // Retry an unconfirmed cancel on later timers, without recursive callback storms.
-          if (stage.cancelRequestedAt !== undefined && context.now - stage.cancelRequestedAt < 1) continue;
+          if (!cancelDue(stage, context.now)) continue;
           stage.cancelRequestedAt = context.now; changed = true;
           actions.push({ kind: "cancel", orderId: stage.orderId });
         }

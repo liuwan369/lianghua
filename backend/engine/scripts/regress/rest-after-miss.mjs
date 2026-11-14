@@ -126,6 +126,23 @@ const fakSent = (config = {}) => {
     account({ risk: { availableUsd: 1 } }))), [], "not enough cash");
 }
 
+// --- live 2026-11-14 19:06: the venue refused the rest's cancel (matched, nothing
+// resting) and the core made it UNKNOWN; the cancel was re-sent every second for
+// 13 minutes. An UNKNOWN rest is re-cancelled at most every 30 s. ---
+{
+  const { s, fak } = fakSent({ restAfterMissSec: 3 });
+  const [rest] = submits(at(s, { kind: "order", order: record(fak, "REJECTED", 0, "0xfak", S + 0.6) }, S + 0.6));
+  at(s, { kind: "order", order: record(rest, "PARTIAL", 3.53, "0xrest", S + 1) }, S + 1);
+  assert.deepEqual(cancels(at(s, { kind: "timer", ts: S + 4.1 }, S + 4.1)), ["0xrest"], "due");
+  const unknown = { ...record(rest, "UNKNOWN", 3.53, "0xrest", S + 4.3), error: "cancellation not confirmed" };
+  at(s, { kind: "order", order: unknown }, S + 4.3);
+  for (const t of [S + 5.2, S + 10, S + 20, S + 33.9]) {
+    assert.deepEqual(cancels(at(s, { kind: "timer", ts: t }, t, account({ orders: [unknown] }))), [], `no cancel at +${(t - S).toFixed(1)} s`);
+  }
+  assert.deepEqual(cancels(at(s, { kind: "timer", ts: S + 34.2 }, S + 34.2, account({ orders: [unknown] }))), ["0xrest"],
+    "an UNKNOWN rest is re-cancelled after 30 s");
+}
+
 // --- partial rest fill, then cancel of the remainder ---
 {
   const { s, fak } = fakSent({ restAfterMissSec: 3 });
