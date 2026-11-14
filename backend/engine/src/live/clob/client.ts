@@ -119,8 +119,11 @@ async function installKeepAliveTransport(): Promise<void> {
   }
 }
 
-const presignKey = (tokenId: string, direction: "BUY" | "SELL", price: number, size: number) =>
-  `${tokenId}|${direction}|${Number(price.toFixed(6))}|${Number(size.toFixed(6))}`;
+/** Presigned orders are FAK, not post-only; the key carries both so a GTC or
+ * post-only order never posts a FAK's signature. */
+const presignKey = (tokenId: string, direction: "BUY" | "SELL", price: number, size: number,
+  timeInForce: "GTC" | "FOK" | "FAK", postOnly: boolean) =>
+  `${tokenId}|${direction}|${Number(price.toFixed(6))}|${Number(size.toFixed(6))}|${timeInForce}|${postOnly}`;
 
 export interface ClobWrapperOptions {
   key: string;
@@ -276,6 +279,17 @@ export function fakMatchedNothing(response: unknown, error: string | undefined):
   const nothingMade = zeroAmount(record.makingAmount) && zeroAmount(record.takingAmount) && responseTradeIds(response).length === 0;
   if (error !== undefined) return FAK_NO_MATCH.test(error) && nothingMade;
   return normalizeVenueOrderStatus(record.status) === "unmatched" && nothingMade;
+}
+
+const POST_ONLY_CROSSED = /invalid post-only order: order crosses book/i;
+
+/** A post-only order refused because it would take: HTTP 400 "invalid post-only
+ * order: order crosses book" (docs/resources/error-codes). The refusal means it
+ * was never placed; a reply naming a trade or an amount is not that proof. */
+export function postOnlyCrossed(response: unknown, error: string | undefined): boolean {
+  const record = response && typeof response === "object" ? response as Record<string, unknown> : {};
+  return error !== undefined && POST_ONLY_CROSSED.test(error)
+    && zeroAmount(record.makingAmount) && zeroAmount(record.takingAmount) && responseTradeIds(response).length === 0;
 }
 
 function responseTradeIds(value: unknown): string[] {
@@ -794,7 +808,7 @@ export class ClobWrapper {
       const negRisk = await this.negRisk(tokenId);
       for (const price of prices) {
         const size = sizes(price);
-        const slot = presignKey(tokenId, "BUY", price, size);
+        const slot = presignKey(tokenId, "BUY", price, size, "FAK", false);
         if (this.presigned.has(slot)) continue;
         const version = this.orderVersion;
         const order = await this.client.createOrder({ tokenID: tokenId, price, size, side: ClobSide.BUY },
@@ -815,8 +829,9 @@ export class ClobWrapper {
     for (const slot of [...this.presigned.keys()]) if (tokens.has(slot.split("|", 1)[0]!)) this.presigned.delete(slot);
   }
   presignedCount(): number { return this.presigned.size; }
-  private takePresigned(tokenId: string, direction: "BUY" | "SELL", price: number, size: number, negRisk: boolean) {
-    const slot = presignKey(tokenId, direction, price, size);
+  private takePresigned(tokenId: string, direction: "BUY" | "SELL", price: number, size: number,
+    timeInForce: "GTC" | "FOK" | "FAK", postOnly: boolean, negRisk: boolean) {
+    const slot = presignKey(tokenId, direction, price, size, timeInForce, postOnly);
     const hit = this.presigned.get(slot);
     if (!hit) return undefined;
     this.presigned.delete(slot);
@@ -850,7 +865,8 @@ export class ClobWrapper {
         const signStarted = performance.now();
         // The first attempt takes a pre-signed order when one matches exactly;
         // a retry after a version mismatch always signs anew.
-        const ready = attempt === 0 ? this.takePresigned(args.tokenId, args.direction ?? "BUY", args.price, args.size, negRisk) : undefined;
+        const ready = attempt === 0 ? this.takePresigned(args.tokenId, args.direction ?? "BUY", args.price, args.size,
+          args.timeInForce ?? "GTC", args.postOnly ?? false, negRisk) : undefined;
         const order = ready?.order ?? await withTimeout(this.client.createOrder(
           {
             tokenID: args.tokenId,
@@ -906,7 +922,8 @@ export class ClobWrapper {
           return {
             success,
             orderId,
-            ...(args.timeInForce === "FAK" && fakMatchedNothing(resp, apiError) ? { venueRefused: true } : {}),
+            ...((args.timeInForce === "FAK" && fakMatchedNothing(resp, apiError))
+              || (args.postOnly === true && postOnlyCrossed(resp, apiError)) ? { venueRefused: true } : {}),
             status: normalizeVenueOrderStatus(resp?.status),
             errorMsg: apiError ?? resp?.errorMsg,
             latencyMs: performance.now() - started,
