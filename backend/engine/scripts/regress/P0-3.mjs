@@ -6,14 +6,15 @@
 // because the state file is reused across runs, every later start stops too.
 //
 // Fix under test: summaryView() bounds each status line. It keeps the current
-// round, the recent rounds the ledger shows (rounds[-8:]), and any round still
-// needing work (an active order or unsettled position); it drops the rest from
-// the LINE only. The strategy's own state is untouched, so settlement recovery
-// still sees every round.
+// round and any round still needing work (an active order or unsettled
+// position); it drops the rest from the LINE only. The strategy's own state is
+// untouched, so settlement recovery still sees every round. (Until 2026-11-14
+// it also kept the 8 most recent rounds: 14 KB of a 50 KB line every 2 s that
+// the console never read.)
 //
 // Run after `npm run build`:  node scripts/regress/P0-3.mjs
 import assert from "node:assert/strict";
-import { summaryView, STATUS_RECENT_ROUNDS } from "../../dist/cli/platform.js";
+import { summaryView } from "../../dist/cli/platform.js";
 
 const START = 1_800_000_000;
 const mkRound = (i, extra = {}) => ({ marketId: `0x${String(i).padStart(64, "0")}`, roundId: String(START + i * 300),
@@ -32,7 +33,7 @@ const markets = Array.from({ length: N + 1 }, (_, i) => mkMarket(i));
 const needsWork = new Set([markets[5].id, markets[7].id]);
 const now = START + N * 300 + 60;
 
-const view = summaryView({ rounds, currentRound: current, markets, now,
+const view = summaryView({ rounds, currentRound: current, markets, now, currentMarketId: markets[N].id,
   needsWork: (marketId) => needsWork.has(marketId) });
 
 // --- bug: the old line carried everything and blew the ledger's 256 KB budget ---
@@ -43,23 +44,31 @@ const size = Buffer.byteLength(JSON.stringify(view));
 assert.ok(size < 64 * 1024, `status line must stay small; got ${size} bytes for ${N} rounds`);
 // --- contents: current + recent + needs-work kept, the rest dropped ---
 const ids = new Set(view.rounds.map((r) => r.marketId));
-assert.ok(ids.has(current.marketId), "the current round is kept");
-for (const r of rounds.slice(-STATUS_RECENT_ROUNDS)) assert.ok(ids.has(r.marketId), "each recent round is kept");
+assert.ok(!ids.has(current.marketId), "the current round rides as currentRound, not twice");
+assert.ok(!ids.has(rounds[N - 1].marketId), "a recent, fully resolved round is dropped (the console never read it)");
 assert.ok(ids.has(markets[5].id), "an old round with an unsettled position is kept (never drop a pending redemption)");
 assert.ok(ids.has(markets[7].id), "an old round with a live order is kept");
 assert.ok(!ids.has(markets[100].id), "an old, fully resolved round is dropped from the line");
 // Markets follow the same rule: ended markets drop unless they still need work.
 const mids = new Set(view.markets.map((m) => m.id));
 assert.ok(mids.has(markets[N].id), "the current market is kept");
-assert.ok(mids.has(markets[5].id), "a market still needing settlement is kept");
+assert.equal(view.markets.length, 1, "and nothing else: rounds 5 and 7 name their own markets");
+assert.ok(!mids.has(markets[5].id), "a settling market is named by its kept round, not twice");
+const orphan = summaryView({ rounds: [current], currentRound: current, markets, now, currentMarketId: markets[N].id,
+  needsWork: (marketId) => marketId === markets[3].id });
+assert.ok(orphan.markets.some((m) => m.id === markets[3].id),
+  "a market needing work without a strategy round (older run's position) keeps its identity");
 assert.ok(!mids.has(markets[100].id), "an ended, resolved market is dropped");
-// --- 2026-10-13: books follow only markets not yet ended. The recent rounds'
-// ended markets stayed in view, so their old snapshots and five-level books rode
-// along in every 2 s line: 25 KB of 41 KB, 217 MB of journal in 2.7 h. ---
-const quoted = new Set(view.quotedMarketIds);
-assert.ok(quoted.has(markets[N].id), "the running market's book is kept");
-assert.ok(!quoted.has(markets[N - 1].id), "a recent but ended market keeps its round, not its book");
-assert.ok(mids.has(markets[N - 1].id), "... its market identity stays for settlement");
-assert.ok(!quoted.has(markets[5].id), "an ended market still settling needs no book either");
+// --- books: only the current market's. Ended markets' books were 25 KB of a
+// 41 KB line (2026-10-13); the next, not yet open market's book is not shown
+// either (GET /api/runtime/book reads the current round only). ---
+const upcoming = { id: "0xnext", roundId: String(START + (N + 1) * 300), startsAt: START + (N + 1) * 300,
+  endsAt: START + (N + 2) * 300, instruments: [] };
+const withNext = summaryView({ rounds, currentRound: current, markets: [...markets, upcoming], now,
+  currentMarketId: markets[N].id, needsWork: (marketId) => needsWork.has(marketId) });
+const quoted = new Set(withNext.quotedMarketIds);
+assert.deepEqual([...quoted], [markets[N].id], "only the running market's book is kept");
+assert.ok(!withNext.markets.some((m) => m.id === "0xnext"), "the next market joins the line when it opens");
+assert.ok(!quoted.has(markets[5].id), "an ended market still settling needs no book");
 console.log(`P0-3: ${N} rounds -> status line ${size} bytes, ${view.rounds.length} rounds, ${view.markets.length} markets`);
 console.log("P0-3 OK");

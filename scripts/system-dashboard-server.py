@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 from contextlib import contextmanager
 from collections import deque, OrderedDict
 import hashlib
@@ -1606,15 +1607,31 @@ _lead_cache: OrderedDict = OrderedDict()
 
 
 def _ledger_stamp() -> tuple:
-    """mtimes of the ledger files: changes whenever the projection writes."""
-    directory = TRADING_ROOT / "results" / "dashboard"
-    stamp = []
-    for name in ("ledger.sqlite3", "ledger.sqlite3-wal"):
-        try:
-            stamp.append((directory / name).stat().st_mtime_ns)
-        except OSError:
-            stamp.append(0)
-    return tuple(stamp)
+    """Changes whenever a ledger view may change: the ledger's data version
+    (every business write; a platform_status line alone leaves it), and the
+    projection's freshness, which the views report as `stale`. The file mtime
+    moved on every 2 s status line, so a cached view was never reused."""
+    try:
+        version = _api_ledger().data_version()
+    except (OSError, sqlite3.Error):
+        version = None
+    view = _projection_snapshot()
+    return (version, view.get("run_id"), view.get("state"), bool(view.get("stale")))
+
+
+def _cached_view(key: tuple, build) -> dict:
+    """A ledger view's data from memory while `key` (path, run, official
+    results, _ledger_stamp()) is unchanged; built once otherwise. The caller
+    adds fresh metadata (asOf, stale) to a copy."""
+    with _modern_cache_lock:
+        cached = _lead_cache.get(key)
+    if cached is None:
+        cached = build()
+        with _modern_cache_lock:
+            _lead_cache[key] = cached
+            while len(_lead_cache) > 32:
+                _lead_cache.popitem(last=False)
+    return copy.deepcopy(cached)
 
 
 RUN_JOURNALS_KEPT = 3
@@ -1831,11 +1848,12 @@ def _modern_events(run_id: str | None, query: dict, kinds=None) -> dict:
     cursor = query.get("cursor", [None])[0]
     requested_asset = (query.get("assetId") or [None])[0]
     try:
-        result = _api_ledger().events(run_id, before_id=int(cursor) if cursor else None,
-                                      limit=int(query.get("limit", ["50"])[0]), kinds=kinds,
-                                      asset_id=requested_asset,
-                                      market_id=(query.get("marketId") or [None])[0],
-                                      round_id=(query.get("roundId") or [None])[0])
+        before_id, limit = int(cursor) if cursor else None, int(query.get("limit", ["50"])[0])
+        key = ("events", run_id, tuple(sorted(kinds)) if kinds else None,
+               tuple(sorted((name, tuple(values)) for name, values in query.items())), _ledger_stamp())
+        result = _cached_view(key, lambda: _api_ledger().events(
+            run_id, before_id=before_id, limit=limit, kinds=kinds, asset_id=requested_asset,
+            market_id=(query.get("marketId") or [None])[0], round_id=(query.get("roundId") or [None])[0]))
     except KeyError:
         return {"schemaVersion": 1, "status": "unavailable", "available": False,
                 "items": None, "cursor": None, "runId": run_id,
@@ -1964,22 +1982,17 @@ def make_handler(root: Path):
                                                ensure_ascii=False).encode("utf-8"))
                     return
                 results, _ = _official_or_last()
-                # The figures change only when the projection writes the ledger
-                # or the venue's results change: answer repeats from memory.
-                cache_key = (self.path, run_id, _ledger_stamp(), id(results))
-                with _modern_cache_lock:
-                    cached = _lead_cache.get(cache_key)
-                if cached is not None:
-                    self._send_json(cached)
-                    return
-                try:
+                # The figures change only with a business write to the ledger
+                # (not a status line) or new venue results: repeats from memory.
+                def build():
                     if path == "/api/stats/lead":
-                        data = _api_ledger().lead_stats(run_id, range=requested_range, official=results)
-                    else:
-                        before = query.get("before", [None])[0]
-                        data = _api_ledger().lead_orders_page(
-                            run_id, range=requested_range, limit=int(query.get("limit", ["200"])[0]),
-                            before=float(before) if before is not None else None, official=results)
+                        return _api_ledger().lead_stats(run_id, range=requested_range, official=results)
+                    before = query.get("before", [None])[0]
+                    return _api_ledger().lead_orders_page(
+                        run_id, range=requested_range, limit=int(query.get("limit", ["200"])[0]),
+                        before=float(before) if before is not None else None, official=results)
+                try:
+                    data = _cached_view((self.path, run_id, id(results), _ledger_stamp()), build)
                 except KeyError:
                     self._send_json(json.dumps({"schemaVersion": 1, "available": False, "runId": run_id,
                                                 "range": requested_range, "source": "ledger", "asOf": None,
@@ -1987,13 +2000,8 @@ def make_handler(root: Path):
                                                ensure_ascii=False).encode("utf-8"))
                     return
                 metadata = _ledger_metadata(run_id)
-                body = json.dumps({"schemaVersion": 1, "available": True, **data, **metadata},
-                                  ensure_ascii=False, allow_nan=False).encode("utf-8")
-                with _modern_cache_lock:
-                    _lead_cache[cache_key] = body
-                    while len(_lead_cache) > 16:
-                        _lead_cache.popitem(last=False)
-                self._send_json(body)
+                self._send_json(json.dumps({"schemaVersion": 1, "available": True, **data, **metadata},
+                                           ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/metrics/summary":
                 requested_range = query.get("range", ["today"])[0]
@@ -2082,12 +2090,13 @@ def make_handler(root: Path):
                                     b'"rounds":[],"error":"\xe5\xbd\x93\xe5\x89\x8d\xe6\xb2\xa1\xe6\x9c\x89\xe8\xbf\x90\xe8\xa1\x8c\xe8\xae\xb0\xe5\xbd\x95"}')
                     return
                 try:
-                    data = _api_ledger().rounds_page(
+                    limit = int((query.get("limit") or [50])[0])
+                    data = _cached_view((self.path, run_id, _ledger_stamp()), lambda: _api_ledger().rounds_page(
                         run_id,
                         before_round_id=(query.get("beforeRoundId") or [None])[0],
-                        limit=int((query.get("limit") or [50])[0]),
+                        limit=limit,
                         asset_id=(query.get("assetId") or [None])[0],
-                        round_id=(query.get("roundId") or [None])[0])
+                        round_id=(query.get("roundId") or [None])[0]))
                     # A finished round's result is the venue's (official_pnl);
                     # the ledger lists what the engine traded and its cost.
                     results, _ = _official_or_last()
@@ -2446,9 +2455,13 @@ def make_handler(root: Path):
                            for name in ("ledger.sqlite3", "ledger.sqlite3-wal", "snapshot.json"))
         except OSError:
             return None
-        if route.startswith(("/api/rounds", "/api/fills", "/api/settlements", "/api/events", "/api/metrics/",
-                             "/api/stats/", "/api/orders/", "/api/runtime/book")):
+        # The book follows every status line (the runtime row); the ledger
+        # views only a business write or a projection state change.
+        if route == "/api/runtime/book":
             return ledger
+        if route.startswith(("/api/rounds", "/api/fills", "/api/settlements", "/api/events", "/api/metrics/",
+                             "/api/stats/", "/api/orders/")):
+            return _ledger_stamp()
         if route == "/api/account/snapshot":
             return account_data()._checked
         return None

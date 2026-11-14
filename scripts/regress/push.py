@@ -4,7 +4,7 @@ Runs the real control-plane handler on a local port with stubbed data
 sources and checks what a browser would rely on:
 - a new connection first gets the current value of every subscribed path;
 - the pushed body is the body a GET of that path returns;
-- an unchanged source pushes nothing; a change arrives within ~0.3 s;
+- an unchanged source pushes nothing; a change arrives within one cadence (1 s for the book);
 - a source stuck for seconds (the trading lock on stop) does not delay others;
 - connections past the cap are refused; a closed browser is unsubscribed.
 
@@ -134,13 +134,13 @@ class Push(unittest.TestCase):
         self.assertEqual({m["path"] for m in first}, {MARKETS, RUNTIME}, "a new connection gets every path at once")
         pushed = next(m for m in first if m["path"] == MARKETS)["body"]
         self.assertEqual(fingerprint(pushed), fingerprint(self.get(MARKETS)), "pushed body == polled body")
-        self.assertEqual(response.reader.read(1, 0.8), [], "an unchanged source pushes nothing")
+        self.assertEqual(response.reader.read(1, 1.5), [], "an unchanged source pushes nothing")
         started = time.monotonic()
         self.source.frame += 1
         changed = response.reader.read(1, 2)
         self.assertEqual(changed[0]["path"], MARKETS)
         self.assertEqual(changed[0]["body"]["frame"], self.source.frame)
-        self.assertLess(time.monotonic() - started, 0.8, "a change arrives within one book cadence or so")
+        self.assertLess(time.monotonic() - started, 1.3, "a change arrives within one book cadence (1 s)")
         response.close()
         conn.close()
 
@@ -148,12 +148,12 @@ class Push(unittest.TestCase):
         conn, response = self.open(MARKETS, RUNTIME)
         response.reader.read(2, 3)
         self.source.runtime_delay = 3.0
-        time.sleep(0.4)
+        time.sleep(1.2)   # the runtime render is now stuck in its 3 s delay
         started = time.monotonic()
         self.source.frame += 1
         changed = response.reader.read(1, 2)
         self.assertTrue(changed and changed[0]["path"] == MARKETS, "markets still flows while runtime is stuck")
-        self.assertLess(time.monotonic() - started, 0.6)
+        self.assertLess(time.monotonic() - started, 1.3, "within one book cadence")
         self.source.runtime_delay = 0.0
         response.close()
         conn.close()
@@ -180,6 +180,18 @@ class Push(unittest.TestCase):
 
     def test_4_unknown_paths_are_ignored(self):
         self.assertEqual(self.hub.valid_paths(["/api/stream", "/etc/passwd", "/api/runtime/commands", MARKETS]), [MARKETS])
+
+
+class Cadence(unittest.TestCase):
+    def test_console_cadence(self):
+        """2026-11-14: the old 0.25-2 s cadences kept six render threads busy at
+        145 % CPU. The book and status still refresh every second (the engine
+        writes them every 2 s); the ledger views slower."""
+        from dashboard.push import cadence
+        expected = {"/api/runtime/status": 1.0, "/api/runtime/book": 1.0, "/api/orders/lead?range=run&limit=20": 3.0,
+                    "/api/stats/lead?range=today": 10.0, "/api/rounds?limit=50": 5.0, "/api/fills": 2.0,
+                    "/api/events?limit=50": 5.0, "/api/metrics/summary?range=today": 10.0}
+        self.assertEqual({path: cadence(path) for path in expected}, expected)
 
 
 class Tokens(unittest.TestCase):

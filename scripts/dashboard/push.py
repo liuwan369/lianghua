@@ -20,19 +20,22 @@ VOLATILE_KEYS = frozenset({"asOf", "as_of", "age_seconds", "ageSeconds", "cache_
                            "checked_at", "checkedAt", "refreshing", "ageMs", "quoteAgeMs", "lag_bytes",
                            "to"})  # metrics: the range end is "now"
 
-# Pushable paths and how often each is re-rendered, seconds. The ledger is
-# written about 4 times a second; the engine's book rides its 2 s status line.
+# Pushable paths and how often each is re-rendered, seconds. The engine's
+# book and runtime ride its 2 s status line, so 1 s keeps them within one line;
+# the ledger views change once per signal, order or settlement. The old 0.25-2 s
+# cadences kept six render threads busy at 145 % CPU on the 2 vCPU box
+# (2026-11-14). The console's polls match (frontend/console/live.js, stats.js).
 CADENCE = (
-    ("/api/runtime/status", 0.25),
-    ("/api/runtime/book", 0.5),
-    ("/api/rounds", 0.5),
-    ("/api/fills", 0.5),
+    ("/api/runtime/status", 1.0),
+    ("/api/runtime/book", 1.0),
+    ("/api/rounds", 5.0),
+    ("/api/fills", 2.0),
     ("/api/settlements", 1.0),
-    ("/api/events", 1.0),
+    ("/api/events", 5.0),
     ("/api/account/snapshot", 1.0),
-    ("/api/metrics/summary", 2.0),
-    ("/api/orders/lead", 1.0),
-    ("/api/stats/lead", 2.0),
+    ("/api/metrics/summary", 10.0),
+    ("/api/orders/lead", 3.0),
+    ("/api/stats/lead", 10.0),
     ("/api/account/status", 2.0),
     ("/api/strategy/config", 2.0),
     ("/api/diagnostics/health", 5.0),

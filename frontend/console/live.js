@@ -119,7 +119,7 @@
     if (!book || book.running === false) return { top: html`<p class="empty">引擎没在运行，没有盘口</p>`, depth: "", meta: "" };
     if (!book.available) return { top: html`<p class="empty">${P.label(book.error) || "盘口暂不可用"}</p>`, depth: "", meta: "" };
     const age = num(book.ageMs);
-    const meta = `${age === null ? "" : `${fmt.seconds(age / 1000)}前的盘口`}（最多比交易所晚约 2 秒）${book.stale ? " · 已过期" : ""}${book.twoSided ? "" : " · 一边没有卖价"}`;
+    const meta = `${age === null ? "" : `${fmt.seconds(age / 1000)}前的盘口`}（引擎每 2 秒写一次，页面每秒刷新，最多比交易所晚约 3 秒）${book.stale ? " · 已过期" : ""}${book.twoSided ? "" : " · 一边没有卖价"}`;
     return { top: html`<div class="book">${sideTop("UP", book.up)}${sideTop("DOWN", book.down)}</div>`,
       depth: html`<div class="book">${levels("UP", book.up)}${levels("DOWN", book.down)}</div>`, meta };
   };

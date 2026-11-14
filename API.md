@@ -49,7 +49,7 @@
 
 ### `/api/runtime/book`
 
-取自引擎每 2 s 一行的 `platform_status`，所以盘口最多比交易所晚约 2 s。
+取自引擎每 2 s 一行的 `platform_status`（只带当前场的配对快照，每边 5 档），推送和页面每 1 s 刷新，所以盘口最多比交易所晚约 3 s。
 
 ```
 {running, available, stale, error,            // error: runtime_snapshot_pending / no_current_round / book_snapshot_unavailable / book_snapshot_stale
@@ -86,7 +86,7 @@
 
 ### `/api/stats/lead`
 
-全部在账本里算（`lead_signal` 事件、`lead_orders` 表、结算），按账本 mtime 缓存。一笔单的输赢：方向那一边的 token 等于结算的 `winning_token_id` 就是赢；结算还没来是 pending。结算常落在下一次运行里，按 `market_id` 跨运行找。
+全部在账本里算（`lead_signals` 表、`lead_orders` 表、结算），按账本 `data_version` 缓存。一笔单的输赢：方向那一边的 token 等于结算的 `winning_token_id` 就是赢；结算还没来是 pending。结算常落在下一次运行里，按 `market_id` 跨运行找。
 
 ```
 {range, from, to, run_count, runId,
@@ -116,7 +116,7 @@
  by_hour: [24 × {hour, orders, filled, settled, won, pnl_usd}]}   // 北京时间小时，按场次开始时间
 ```
 
-分位数用相邻秩线性插值，没有数据为 null。`skips` 数 `outcome` 为 `skipped`/`stopping` 的信号，按原因归类（`dashboard/ledger.py` `SKIP_RULES`，对应 `binance-lead.ts` 的中文原因）：`time_window`「不在本场」；`band`「超出 ±」「开盘价未知」「开盘前 60 秒均价未知」；`ask_too_high`「高于上限」「高于最高限价」；`book`「没有当前盘口」「一边没有卖价」「不新鲜」「行情恢复中」；`budget`「预算」「可用余额不足」「daily loss」；`paused`「已暂停新增交易」；`mid_round_start`「中途启动」「错过本场开始」；`already_attempted`「本场已尝试」「本场已买到」「已下单（FAK）」；其余 `other`（如「交易所规则暂不可用」「停机中」）。
+分位数用相邻秩线性插值，没有数据为 null。`skips` 数 `outcome` 为 `skipped`/`stopping` 的信号，入账时按原因归类一次存进 `lead_signals.bucket`（`dashboard/ledger.py` `SKIP_RULES`，对应 `binance-lead.ts` 的中文原因）：`time_window`「不在本场」；`band`「超出 ±」「开盘价未知」「开盘前 60 秒均价未知」；`ask_too_high`「高于上限」「高于最高限价」；`book`「没有当前盘口」「一边没有卖价」「不新鲜」「行情恢复中」；`budget`「预算」「可用余额不足」「daily loss」；`paused`「已暂停新增交易」；`mid_round_start`「中途启动」「错过本场开始」；`already_attempted`「本场已尝试」「本场已买到」「已下单（FAK）」；其余 `other`（如「交易所规则暂不可用」「停机中」）。
 
 ### `/api/orders/lead`
 
@@ -144,10 +144,10 @@
 
 | 路径前缀 | 节奏 |
 |---|---|
-| `/api/runtime/status` | 0.25 |
-| `/api/runtime/book`、`/api/rounds`、`/api/fills` | 0.5 |
-| `/api/settlements`、`/api/events`、`/api/account/snapshot`、`/api/orders/lead` | 1 |
-| `/api/metrics/summary`、`/api/stats/lead`、`/api/account/status`、`/api/strategy/config` | 2 |
-| `/api/diagnostics/health` | 5 |
+| `/api/runtime/status`、`/api/runtime/book`、`/api/settlements`、`/api/account/snapshot` | 1 |
+| `/api/fills`、`/api/account/status`、`/api/strategy/config` | 2 |
+| `/api/orders/lead` | 3 |
+| `/api/rounds`、`/api/events`、`/api/diagnostics/health` | 5 |
+| `/api/metrics/summary`、`/api/stats/lead` | 10 |
 
-账本类路径（含 `/api/runtime/book`、`/api/stats/lead`、`/api/orders/lead`）只在 `ledger.sqlite3`/WAL/`snapshot.json` 变了才重渲染；账户快照看读取器刷新时间。推送断开时 `shared/stream.js` 让页面退回普通轮询。
+`/api/runtime/book` 在 `ledger.sqlite3`/WAL/`snapshot.json` 变了就重渲染（每条状态行都会变）。其余账本类路径（`/api/rounds`、`/api/fills`、`/api/settlements`、`/api/events`、`/api/metrics/*`、`/api/stats/lead`、`/api/orders/lead`）看账本的 `data_version`（每次信号、订单、成交、结算等业务写入加一，状态行不加）和投影状态，没变就不重渲染；`/api/stats/lead`、`/api/orders/lead`、`/api/rounds`、`/api/events`、`/api/fills` 的账本部分也按它缓存在内存里，`asOf`/`stale` 每次现取。账户快照看读取器刷新时间。推送断开时 `shared/stream.js` 让页面退回普通轮询。

@@ -40,7 +40,7 @@ class P1_4(unittest.TestCase):
             journal.write_bytes(gzip.decompress((FIXTURES / f"journal-{run_id}.jsonl.gz").read_bytes()))
             cls.ledger.register_run(run_id, "live", ACCOUNT, str(journal))
             for _ in range(100):
-                if not cls.ledger.ingest(run_id, max_bytes=8 << 20, max_records=20000).get("inserted"):
+                if not cls.ledger.ingest(run_id, max_bytes=8 << 20, max_records=20000).get("pending"):
                     break
         db = sqlite3.connect(root / "ledger.sqlite3")
         cls.pnl = {(run, rnd): pnl for run, rnd, pnl in db.execute(

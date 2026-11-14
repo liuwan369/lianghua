@@ -96,7 +96,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 |---|---|
 | `system-dashboard-server.py` | 控制面：路由、鉴权、启停引擎、PnL 拼装、静态前端 |
 | `dashboard/push.py` | `PushHub`：SSE 推送，按路径节奏重渲染 |
-| `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计）；`_strategy_projection` 投影 binance-lead 的 getStatus，`lead_signal` 进事件表，最近 20 条随运行快照给控制台 |
+| `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计）；`_strategy_projection` 投影 binance-lead 的 getStatus，`platform_status` 只覆盖 `platform_runtime`（每个 run 一行，不进事件表）；`lead_signal` 进事件表，同时把 outcome 和跳过原因分类存进 `lead_signals`，最近 20 条随运行快照给控制台；`data_version` 每次业务写入加一，控制面按它缓存统计 |
 | `dashboard/projection_worker.py` | 投影子进程，不读账户配置 |
 | `dashboard/read_model.py` | 拉起并读取投影快照 |
 | `dashboard/official_pnl.py` | 从 Data API 结果按场次算官方盈亏 |
@@ -158,7 +158,7 @@ FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易�
 - 重启时未提交的 `CREATED` 意图标为 `ABANDONED`，从不补发。
 - journal 每个信号一行 `lead_signal`：信号字段、所在场次、结果（`order_submitted`/`skipped`/`no_round`/`stopping`）和本场 reason、下单的限价与卖价。账本把它存成事件 `lead_signal`（不建场次行、不算成交），控制台用它显示"这场为什么没下单"。
 - journal 每笔订单一行 `lead_order`（`cli/platform.ts` leadOrderFields，event_id `lead_order:<clientOrderId>`）：订单到 FILLED/CANCELLED/REJECTED 或意图 ABANDONED 时写，否则在场次结束或停机时按当时状态写。带信号来源（venue/line）、各阶段时间（毫秒 epoch：成交 `trade_time_ms` 是交易所时钟，`signal_recv_ms`/`decision_ms`/`post_sent_ms`/`ack_ms` 是本机墙钟；`ack_ms` 取订单 `venueReplyAt`，交易所的任何 HTTP 回复都算，包括 FAK 没撮合的拒绝，只用于计时，不参与 UNKNOWN 判断）、`t_*` 差值、卖价消失时间 `ask_gone_ms`（策略 stage.askGoneAtUnix：信号后本方卖价没了或高过限价的第一帧，只看下单后 10 秒）和没买满时的 `late_by_ms = ack_ms - ask_gone_ms`。`platform_settlement` 带 `winning_token_id`/`winning_side`（读到赔付向量时），控制台按 market_id 关联输赢。
-- 状态行 `strategy_runtime` 是 `getStatus()`：每场 `stages`（至多 1 个，含 `signal`、`askAtSignal`）、`reason`、`latest`（当前盘口摘要），加上 `roundOutcome` 的 `upShares/downShares/costUsd/netIfUpUsd/netIfDownUsd`；结算盈亏的 coverage 用 `upTokenId/downTokenId` + `upShares/downShares`。
+- 状态行（`cli/platform.ts statusRuntime`，约 6 KB）只带控制台读的字段：`strategy_runtime.currentRound` 是当前场的完整 `getStatus()`（`config`、`stages`（至多 1 个，含 `signal`、`askAtSignal`）、`reason`、`latest`，加上 `roundOutcome` 的 `upShares/downShares/costUsd/netIfUpUsd/netIfDownUsd`）；`rounds` 只有还在结算的其他场（有活动订单、未结算持仓或未终结成交），每场只有身份和 `upTokenId/downTokenId/upShares/downShares`，结算盈亏的 coverage 用它们；`markets` 是当前场和需要结算但没有策略场次的市场；`snapshots` 只有当前场，每边 5 档。
 
 ## 风控（`platform/core.ts`）
 

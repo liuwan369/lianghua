@@ -15,6 +15,7 @@ import os
 import re
 from pathlib import Path
 import sqlite3
+import threading
 import time
 
 
@@ -101,9 +102,19 @@ CREATE TABLE IF NOT EXISTS lead_orders (
 );
 CREATE INDEX IF NOT EXISTS lead_order_round ON lead_orders(run_id,round_start);
 CREATE INDEX IF NOT EXISTS settlement_market_id ON settlement_details(market_id);
+CREATE TABLE IF NOT EXISTS lead_signals (
+ run_id TEXT NOT NULL REFERENCES runs(run_id), byte_offset INTEGER NOT NULL, received_at REAL NOT NULL,
+ outcome TEXT, bucket TEXT, PRIMARY KEY(run_id,byte_offset)
+);
+CREATE INDEX IF NOT EXISTS lead_signal_time ON lead_signals(run_id,received_at);
+CREATE TABLE IF NOT EXISTS data_version (id INTEGER PRIMARY KEY CHECK (id=1), version INTEGER NOT NULL);
+INSERT OR IGNORE INTO data_version VALUES(1, 0);
 """
+# platform_status is read by ingest but never stored as an event: only its
+# latest runtime matters (platform_runtime). 34,609 status rows were 38 MB of
+# the events table after 17 h (2026-11-14).
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
-                         "order", "settlement", "platform_status", "lead_signal", "lead_order"})
+                         "order", "settlement", "lead_signal", "lead_order"})
 # lead_signal (cli/platform.ts leadJournalFields): what the strategy did with one lead signal.
 LEAD_OUTCOMES = frozenset({"order_submitted", "skipped", "no_round", "stopping"})
 # contracts.ts LEAD_VENUES / LeadLine.
@@ -679,6 +690,11 @@ def _projection(record):
 
 
 LEAD_RANGES = ("run", "today", "7d", "all")
+# lead_stats' ledger side per (ledger, run, runs, range start, data_version):
+# computed once per business change, not per request (the 实盘 page asks for
+# today and run every 10 s, the stats page for its range).
+_LEAD_BASE_CACHE: OrderedDict = OrderedDict()
+_LEAD_BASE_LOCK = threading.Lock()
 HOURS = tuple(range(24))   # lead_stats takes a `range` argument
 EPS_SHARES = 1e-8
 # An order that ended without a share: the miss the late_by_ms numbers explain.
@@ -710,6 +726,38 @@ def _skip_bucket(reason):
         if any(needle in text for needle in needles):
             return bucket
     return "other"
+
+
+def _signal_time(signal):
+    """A lead_signal's time as lead_stats ranges it: received_at, else recv_ts."""
+    at = signal.get("received_at")
+    return at if at is not None else (signal.get("time") or 0)
+
+
+def _signal_bucket(signal):
+    """A skipped/stopping signal's skip bucket, classified once at ingest."""
+    return _skip_bucket(signal.get("reason")) if signal.get("outcome") in ("skipped", "stopping") else None
+
+
+def _runtime_identities(runtime):
+    """(asset, market id, name, round) of every market and round a runtime names."""
+    strategy = runtime.get("strategy_runtime") or {}
+    rows = list(runtime.get("markets") or [])
+    rows += [{"id": item.get("marketId"), "name": item.get("name"), "assetId": item.get("assetId"),
+              "roundId": item.get("roundId") or item.get("round_id")}
+             for item in strategy.get("rounds", []) if isinstance(item, dict)]
+    current = strategy.get("currentRound")
+    if isinstance(current, dict):
+        rows.append({"id": current.get("marketId"), "name": current.get("name"), "assetId": current.get("assetId"),
+                     "roundId": current.get("roundId") or current.get("round_id")})
+    identities = []
+    for row in rows:
+        identity_id = row.get("id") or row.get("marketId") or row.get("market_id")
+        identity_name = row.get("name") or row.get("marketSlug") or row.get("market_slug") or identity_id
+        asset_id = _asset_from(row) or runtime.get("assetId")
+        if identity_id and identity_name and asset_id:
+            identities.append((asset_id, identity_id, identity_name, row.get("roundId") or row.get("round_id")))
+    return tuple(identities)
 
 
 def _ratio(part, whole):
@@ -907,6 +955,26 @@ class Ledger:
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('platform_settlements_v1')")
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('round_identity_v1')")
                     db.execute("INSERT OR IGNORE INTO projection_migrations VALUES('round_identity_v2')")
+                # 2026-11-14: platform_status is no longer an event (only its
+                # latest runtime is kept), and lead_stats reads a lead_signals
+                # table whose skip bucket is classified once. Drop the stored
+                # status rows and fill lead_signals from the lead_signal events,
+                # in place: on the 95 MB server ledger that is ~35k deletes and
+                # ~10k inserts. The freed pages go back on the next ingest pass
+                # (_reclaim_free_pages).
+                if not db.execute("SELECT 1 FROM projection_migrations WHERE name='status_events_v1'").fetchone():
+                    for row in db.execute("SELECT run_id,COUNT(*) AS n FROM events WHERE kind='platform_status' "
+                                          "GROUP BY run_id").fetchall():
+                        db.execute("UPDATE runs SET event_count=MAX(0,event_count-?) WHERE run_id=?", (row["n"], row["run_id"]))
+                    db.execute("DELETE FROM events WHERE kind='platform_status'")
+                    db.execute("DELETE FROM kind_counts WHERE kind='platform_status'")
+                    db.executemany("INSERT OR IGNORE INTO lead_signals VALUES(?,?,?,?,?)", (
+                        (row["run_id"], row["byte_offset"], _signal_time(signal), signal.get("outcome"),
+                         _signal_bucket(signal))
+                        for row in db.execute("SELECT run_id,byte_offset,payload FROM events "
+                                              "WHERE kind='lead_signal'").fetchall()
+                        for signal in (json.loads(row["payload"]),)))
+                    db.execute("INSERT INTO projection_migrations VALUES('status_events_v1')")
                 # Recompute settlement semantics for rows projected before
                 # no-trade/no-redemption was distinguished from pending work.
                 # This is idempotent and lets an existing live run converge
@@ -1292,6 +1360,79 @@ class Ledger:
                 db.execute("UPDATE settlement_details SET market_id=?,round_id=?,payload=? WHERE run_id=? AND asset_id=? AND market=?",
                            (event.get("market_id"), event.get("round_id"), payload, run_id, asset_id, row["market"]))
 
+    def _accept_runtime(self, db, run_id, at, runtime):
+        """Keep the newest runtime of a run, map its markets, and give verified
+        settlements their coverage once the runtime shows it. A status line is
+        written every 2 s: the market map writes and backfills only an alias
+        that is new or changed, and the settlement pass reads only verified
+        settlements still without coverage (it refreshed every verified one,
+        every line)."""
+        accepted = db.execute("""INSERT INTO platform_runtime VALUES(?,?,?)
+            ON CONFLICT(run_id) DO UPDATE SET source_at=excluded.source_at,payload=excluded.payload
+            WHERE excluded.source_at>=platform_runtime.source_at""",
+                              (run_id, at, json.dumps(runtime, allow_nan=False))).rowcount
+        if not accepted:
+            return
+        self._map_identities(db, run_id, _runtime_identities(runtime))
+        # A settlement can be emitted before the next status snapshot. Revisit
+        # verified settlements still without coverage once positions arrive;
+        # one with coverage is final and was refreshed when it got it.
+        for settlement in db.execute(
+                "SELECT market,market_id,asset_id,round_id,payload FROM settlement_details "
+                "WHERE run_id=? AND verified=1 AND json_extract(payload,'$.coverage') IS NULL", (run_id,)).fetchall():
+            payload = json.loads(settlement["payload"])
+            coverage = self._coverage_from_runtime(runtime, settlement["market_id"],
+                _market_value(settlement["asset_id"], settlement["market"]),
+                settlement["round_id"], settlement["asset_id"])
+            if coverage is None:
+                continue
+            payload["coverage"] = coverage
+            db.execute("UPDATE settlement_details SET payload=? WHERE run_id=? AND market=?",
+                       (json.dumps(payload, allow_nan=False), run_id, settlement["market"]))
+            self._refresh_settlement(db, run_id, settlement["market"], settlement["asset_id"])
+            self._bump_version(db)
+
+    @staticmethod
+    def _bump_version(db):
+        """Mark a change that the console's cached views (lead_stats, rounds,
+        events) depend on. A status line alone does not bump it."""
+        db.execute("UPDATE data_version SET version=version+1 WHERE id=1")
+
+    def data_version(self):
+        """The ledger's content version: moves on every business write, not on
+        a platform_status line. Readers cache heavy views under it."""
+        with self._connect() as db:
+            if not self._has_table(db, "data_version"):
+                return None
+            row = db.execute("SELECT version FROM data_version WHERE id=1").fetchone()
+            return row[0] if row else None
+
+    @classmethod
+    def _map_identities(cls, db, run_id, identities):
+        """market_aliases from a runtime's (asset, market id, name, round)
+        identities; backfill rows projected before a mapping was known."""
+        changed_identity_ids = set()
+        for asset_id, identity_id, identity_name, identity_round in identities:
+            stored_id = _identity_key(asset_id, identity_id)
+            stored_name = _identity_key(asset_id, identity_name)
+            prior_alias = db.execute(
+                "SELECT market,round_id FROM market_aliases WHERE run_id=? AND asset_id=? AND market_id=?",
+                (run_id, asset_id, stored_id)).fetchone()
+            if (prior_alias is not None and prior_alias["market"] == stored_name
+                    and (identity_round is None or prior_alias["round_id"] == identity_round)):
+                continue
+            db.execute("INSERT INTO market_aliases(run_id,market_id,market,asset_id,round_id) VALUES(?,?,?,?,?) "
+                       "ON CONFLICT(run_id,market_id) DO UPDATE SET market=excluded.market,"
+                       "asset_id=excluded.asset_id,round_id=COALESCE(excluded.round_id,market_aliases.round_id)",
+                       (run_id, stored_id, stored_name, asset_id, identity_round))
+            changed_identity_ids.add((stored_id, asset_id))
+        # Only scan historical projection rows when an observed identity
+        # actually adds or changes a market/round mapping.
+        for identity_id, identity_asset in changed_identity_ids:
+            cls._backfill_identity(db, run_id, identity_id, identity_asset)
+        if changed_identity_ids:
+            cls._bump_version(db)
+
     @staticmethod
     def _fingerprints(source, offset, prefix_length):
         source.seek(0)
@@ -1331,6 +1472,8 @@ class Ledger:
                                         and not offset):
                     result["error"] = JOURNAL_REWRITTEN
                     db.execute("UPDATE runs SET source_error=? WHERE run_id=?", (result["error"], run_id))
+                    if result["error"] != run["source_error"]:
+                        self._bump_version(db)
                     return result
                 result["error"] = None
                 db.execute("UPDATE runs SET source_identity=?, source_error=NULL WHERE run_id=?", (identity, run_id))
@@ -1370,15 +1513,16 @@ class Ledger:
                                        (run_id, metric, record_offset, at, duration))
                             latency_metrics.add(metric)
                         continue
-                    if not isinstance(kind, str) or kind not in EVENT_KINDS:
-                        continue
-                    runtime = None
                     if kind == "platform_status":
                         runtime = _runtime_projection(record.get("runtime"), run["mode"])
                         at = _number(record.get("recv_ts"))
                         if runtime is None or at is None or at <= 0:
                             db.execute("UPDATE runs SET invalid_records=invalid_records+1 WHERE run_id=?", (run_id,))
                             continue
+                        self._accept_runtime(db, run_id, at, runtime)
+                        continue
+                    if not isinstance(kind, str) or kind not in EVENT_KINDS:
+                        continue
                     projected = _projection(record)
                     self._apply_identity(db, run_id, projected)
                     self._revision_identity(db, run_id, projected)
@@ -1412,66 +1556,11 @@ class Ledger:
                         continue
                     result["inserted"] += 1
                     self._accumulate(db, run_id, projected)
-                    if runtime is not None:
-                        accepted_runtime = db.execute("""INSERT INTO platform_runtime VALUES(?,?,?)
-                            ON CONFLICT(run_id) DO UPDATE SET source_at=excluded.source_at,payload=excluded.payload
-                            WHERE excluded.source_at>=platform_runtime.source_at""",
-                                   (run_id, at, json.dumps(runtime, allow_nan=False))).rowcount
-                        if not accepted_runtime:
-                            continue
-                        rounds = runtime.get("strategy_runtime") or {}
-                        identities = runtime["markets"] + [
-                            {"id": item.get("marketId"), "name": item.get("name"), "assetId": item.get("assetId"),
-                             "roundId": item.get("roundId") or item.get("round_id")}
-                            for item in rounds.get("rounds", []) if isinstance(item, dict)]
-                        if isinstance(rounds.get("currentRound"), dict):
-                            identities.append({"id": rounds["currentRound"].get("marketId"),
-                                               "name": rounds["currentRound"].get("name"),
-                                               "assetId": rounds["currentRound"].get("assetId"),
-                                               "roundId": rounds["currentRound"].get("roundId")
-                                                         or rounds["currentRound"].get("round_id")})
-                        changed_identity_ids = set()
-                        for identity_row in identities:
-                            identity_id = identity_row.get("id") or identity_row.get("marketId") \
-                                or identity_row.get("market_id")
-                            identity_name = identity_row.get("name") or identity_row.get("marketSlug") \
-                                or identity_row.get("market_slug") or identity_id
-                            identity_round = identity_row.get("roundId") or identity_row.get("round_id")
-                            if identity_id and identity_name:
-                                asset_id = _asset_from(identity_row) or runtime.get("assetId")
-                                if not asset_id:
-                                    continue
-                                stored_id = _identity_key(asset_id, identity_id)
-                                stored_name = _identity_key(asset_id, identity_name)
-                                prior_alias = db.execute(
-                                    "SELECT market,round_id FROM market_aliases WHERE run_id=? AND asset_id=? AND market_id=?",
-                                    (run_id, asset_id, stored_id)).fetchone()
-                                db.execute("INSERT INTO market_aliases(run_id,market_id,market,asset_id,round_id) VALUES(?,?,?,?,?) "
-                                           "ON CONFLICT(run_id,market_id) DO UPDATE SET market=excluded.market,"
-                                           "asset_id=excluded.asset_id,round_id=COALESCE(excluded.round_id,market_aliases.round_id)",
-                                           (run_id, stored_id, stored_name, asset_id, identity_round))
-                                if (prior_alias is None or prior_alias["market"] != stored_name
-                                        or (identity_round is not None and prior_alias["round_id"] != identity_round)):
-                                    changed_identity_ids.add((stored_id, asset_id))
-                        # platform_status is frequent. Only scan historical
-                        # projection rows when an observed identity actually
-                        # adds or changes a market/round mapping.
-                        for identity_id, identity_asset in changed_identity_ids:
-                            self._backfill_identity(db, run_id, identity_id, identity_asset)
-                        # A settlement can be emitted before the next status snapshot. Revisit
-                        # pending settlement rows once authoritative positions arrive.
-                        if self._has_table(db, "settlement_details"):
-                            for settlement in db.execute(
-                                    "SELECT market,market_id,asset_id,round_id,payload FROM settlement_details WHERE run_id=? AND verified=1", (run_id,)):
-                                payload = json.loads(settlement["payload"])
-                                coverage = self._coverage_from_runtime(runtime, settlement["market_id"],
-                                    _market_value(settlement["asset_id"], settlement["market"]),
-                                    settlement["round_id"], settlement["asset_id"])
-                                if coverage is not None and payload.get("coverage") is None:
-                                    payload["coverage"] = coverage
-                                    db.execute("UPDATE settlement_details SET payload=? WHERE run_id=? AND market=?",
-                                               (json.dumps(payload, allow_nan=False), run_id, settlement["market"]))
-                                self._refresh_settlement(db, run_id, settlement["market"], settlement["asset_id"])
+                    self._bump_version(db)
+                    if kind == "lead_signal":
+                        db.execute("INSERT OR IGNORE INTO lead_signals VALUES(?,?,?,?,?)",
+                                   (run_id, record_offset, _signal_time(projected), projected.get("outcome"),
+                                    _signal_bucket(projected)))
                 new_offset = offset + cursor
                 for metric in latency_metrics:
                     db.execute("""DELETE FROM latency_samples WHERE run_id=? AND byte_offset IN
@@ -1508,6 +1597,10 @@ class Ledger:
                 db.execute("""UPDATE runs SET byte_offset=?,prefix_length=?,prefix_hash=?,tail_hash=?,
                     record_count=record_count+?,event_count=event_count+?,source_error=? WHERE run_id=?""",
                            (new_offset, prefix_length, prefix, tail, result["records"], result["inserted"], result["error"], run_id))
+                # A view's staleness flag reads source_error and invalid_records.
+                after = db.execute("SELECT invalid_records FROM runs WHERE run_id=?", (run_id,)).fetchone()[0]
+                if result["error"] != run["source_error"] or after != run["invalid_records"]:
+                    self._bump_version(db)
                 size = os.fstat(source.fileno()).st_size
                 result.update(bytes=cursor, byte_offset=new_offset, source_bytes=size,
                               lag_bytes=max(0, size-new_offset), pending=new_offset < size)
@@ -2611,29 +2704,50 @@ class Ledger:
             order.update(_lead_outcome(order, winners.get(order.get("market_id"))))
         return list(orders.values())
 
+    def _lead_base(self, db, run_ids, start):
+        """The ledger side of lead_stats: signal counts by outcome and skip
+        bucket, and the lead orders joined with their outcome."""
+        marks = ",".join("?" for _ in run_ids)
+        period, args = "", list(run_ids)
+        if start is not None:
+            period = " AND received_at>=?"
+            args.append(start)
+        # One indexed GROUP BY over lead_signals (bucket classified at ingest);
+        # this was a Python pass over every lead_signal payload, 0.85-1.1 s per
+        # call with 9k signals (2026-11-14).
+        signals = in_window = 0
+        skips = {bucket: 0 for bucket in SKIP_BUCKETS}
+        for row in db.execute(f"SELECT outcome,bucket,COUNT(*) AS n FROM lead_signals "
+                              f"WHERE run_id IN ({marks}){period} GROUP BY outcome,bucket", args):
+            signals += row["n"]
+            if row["outcome"] != "no_round":
+                in_window += row["n"]
+            if row["bucket"] is not None:
+                skips[row["bucket"]] += row["n"]
+        return {"signals": signals, "in_window": in_window, "skips": skips,
+                "orders": self._lead_order_rows(db, run_ids, start)}
+
     def lead_stats(self, run_id, *, range="run", official=None, now=None):
         """GET /api/stats/lead. `official` is {(asset, roundId): {"pnl": ...}}
         from the venue (official_pnl); a round it covers uses that PnL."""
         now = time.time() if now is None else now
         with self._connect() as db:
             run_ids, start = self._lead_scope(db, run_id, range, now)
-            marks = ",".join("?" for _ in run_ids)
-            period, args = "", list(run_ids)
-            if start is not None:
-                period = " AND COALESCE(json_extract(payload,'$.received_at'),json_extract(payload,'$.time'))>=?"
-                args.append(start)
-            signals = in_window = 0
-            skips = {bucket: 0 for bucket in SKIP_BUCKETS}
-            for row in db.execute(f"SELECT json_extract(payload,'$.outcome') AS outcome,"
-                                  "json_extract(payload,'$.reason') AS reason FROM events "
-                                  f"WHERE run_id IN ({marks}) AND kind='lead_signal'{period}", args):
-                signals += 1
-                if row["outcome"] != "no_round":
-                    in_window += 1
-                if row["outcome"] in ("skipped", "stopping"):
-                    skips[_skip_bucket(row["reason"])] += 1
-            orders = self._lead_order_rows(db, run_ids, start)
             runtime_row = db.execute("SELECT payload FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone()
+            version = db.execute("SELECT version FROM data_version WHERE id=1").fetchone() \
+                if self._has_table(db, "data_version") else None
+            key = (str(self.path), run_id, tuple(run_ids), start, version[0] if version else None)
+            with _LEAD_BASE_LOCK:
+                base = _LEAD_BASE_CACHE.get(key) if version else None
+            if base is None:
+                base = self._lead_base(db, run_ids, start)
+                if version:
+                    with _LEAD_BASE_LOCK:
+                        _LEAD_BASE_CACHE[key] = base
+                        while len(_LEAD_BASE_CACHE) > 16:
+                            _LEAD_BASE_CACHE.popitem(last=False)
+        signals, in_window, skips = base["signals"], base["in_window"], dict(base["skips"])
+        orders = [dict(order) for order in base["orders"]]
         runtime = json.loads(runtime_row["payload"]) if runtime_row else {}
         official = official or {}
 
@@ -2951,9 +3065,11 @@ class Ledger:
             run = self._run(db, run_id)
             runtime = db.execute("SELECT source_at FROM platform_runtime WHERE run_id=?", (run_id,)).fetchone() \
                 if self._has_table(db, "platform_runtime") else None
-            latest_event = db.execute("SELECT MAX(COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))) "
-                                      "FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
-        as_of = runtime["source_at"] if runtime else latest_event
+            # Every ledger endpoint asks: read the event times only without a
+            # runtime (a full payload scan of the run's events otherwise).
+            as_of = runtime["source_at"] if runtime else db.execute(
+                "SELECT MAX(COALESCE(json_extract(payload,'$.engine_ts'),json_extract(payload,'$.time'))) "
+                "FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
         stale = bool(run["source_error"] or run["invalid_records"] or _journal_lag(run)[1] or as_of is None)
         return {"source": "ledger", "asOf": as_of,
                 "stale": stale, "error": "ledger_projection_incomplete" if stale else None,

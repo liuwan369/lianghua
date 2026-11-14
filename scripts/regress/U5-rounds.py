@@ -33,7 +33,7 @@ class Rounds(unittest.TestCase):
             journal.write_bytes(gzip.decompress((FIXTURES / f"journal-{run_id}.jsonl.gz").read_bytes()))
             cls.ledger.register_run(run_id, "live", ACCOUNT, str(journal))
             for _ in range(100):
-                if not cls.ledger.ingest(run_id, max_bytes=8 << 20, max_records=20000).get("inserted"):
+                if not cls.ledger.ingest(run_id, max_bytes=8 << 20, max_records=20000).get("pending"):
                     break
 
     @classmethod

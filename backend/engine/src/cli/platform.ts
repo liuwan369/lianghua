@@ -6,8 +6,8 @@ import { Command, CommanderError } from "commander";
 import { LeadSignalDetector, type LeadSignalParams } from "../live/feeds/binance-trades.js";
 import { leadPerpProducts } from "../live/feeds/btc.js";
 import { leadSignalFeed, readRelayKey, type RelayListenerOptions } from "../live/feeds/lead-trades.js";
-import type { AssetId, CoreState, HardLimits, LeadVenue, MarketInfo, OrderRecord, SettlementResult, TradeFill, TradingEvent,
-  TradingMode } from "../platform/contracts.js";
+import type { AssetId, CoreState, HardLimits, LeadVenue, MarketBookSnapshot, MarketInfo, OrderRecord, SettlementResult,
+  TradeFill, TradingEvent, TradingMode } from "../platform/contracts.js";
 import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
@@ -68,35 +68,123 @@ export function roundOutcome(round: { upTokenId: string; downTokenId: string },
     resultScope: "account_market", resultReason: feesVerified ? null : "成交或实际费用尚待确认" };
 }
 
-/** Recent rounds a status line always carries. The ledger shows rounds[-8:]
- * (scripts/dashboard/ledger.py _strategy_projection), so keep at least that. */
-export const STATUS_RECENT_ROUNDS = 8;
-
 /** Bound what one platform_status line carries (BUGS P0-3). Every 2 s the engine
  * wrote ALL rounds and every market it had ever seen; none were pruned, so the
  * line grew until the ledger (256 KB per read) and then the journal (1 MB
  * critical write) rejected it and the engine stopped, on every later start too.
  *
- * Keep the current round, the most recent rounds, and anything still needing
- * work (an active order or an unsettled position). This trims the LINE only: the
- * strategy's own state and settlementRecoveryCandidates still see every round,
- * so no pending redemption is ever dropped. */
+ * Keep the current round and every round still needing work (an active order,
+ * an unsettled position, a fill not yet final): the console shows the current
+ * round, and a settlement takes its coverage from the round it settles. Ended
+ * rounds without work stay out (eight recent ones were 14 KB of a 50 KB line,
+ * 2026-11-14). This trims the LINE only: the strategy's own state and
+ * settlementRecoveryCandidates still see every round, so no pending redemption
+ * is ever dropped. The book rides only for the current market. */
 export function summaryView<R extends { marketId: string }, M extends { id: string; endsAt: number }>(input: {
   rounds: R[]; currentRound?: R | null; markets: M[]; now: number; needsWork: (marketId: string) => boolean;
+  currentMarketId?: string | null;
 }): { rounds: R[]; markets: M[]; quotedMarketIds: string[] } {
-  const recent = new Set(input.rounds.slice(-STATUS_RECENT_ROUNDS).map(round => round.marketId));
-  if (input.currentRound) recent.add(input.currentRound.marketId);
-  const keepRound = (round: R) => recent.has(round.marketId) || input.needsWork(round.marketId);
-  const rounds = input.rounds.filter(keepRound);
+  const current = input.currentRound?.marketId;
+  // currentRound rides on its own; the list holds the other rounds.
+  const rounds = input.rounds.filter(round => round.marketId !== current && input.needsWork(round.marketId));
   const keptRoundIds = new Set(rounds.map(round => round.marketId));
-  // A market stays while it is live or upcoming, or while its round is kept.
-  const markets = input.markets.filter(market => market.endsAt > input.now
-    || keptRoundIds.has(market.id) || input.needsWork(market.id));
-  // Books and paired snapshots only for markets not yet ended: an ended market's
-  // last quote is never traded or shown, and 8 recent ones made it 25 KB of a
-  // 41 KB line every 2 s (217 MB of journal in 2.7 h, 2026-10-13).
-  const quotedMarketIds = markets.filter(market => market.endsAt > input.now).map(market => market.id);
+  const live = new Set([current, input.currentMarketId].filter((id): id is string => Boolean(id)));
+  // The current market (runtime_book takes the book's tokens from its
+  // instruments; it is in the line from its first second, before any order, and
+  // order/fill lines carry their own slug and round), and a market still needing
+  // work that no kept round already names (account recovery of an older run).
+  const markets = input.markets.filter(market => (live.has(market.id) && market.endsAt > input.now)
+    || (input.needsWork(market.id) && !keptRoundIds.has(market.id)));
+  const quotedMarketIds = markets.filter(market => live.has(market.id) && market.endsAt > input.now)
+    .map(market => market.id);
   return { rounds, markets, quotedMarketIds };
+}
+
+/** Book levels a status line carries per side; the console shows five. */
+export const STATUS_BOOK_LEVELS = 5;
+
+type StrategyStatus = ReturnType<BinanceLeadStrategy["getStatus"]>;
+type StatusRound = StrategyStatus["rounds"][number];
+
+/** The runtime object of one platform_status line: only what the console reads
+ * (scripts/dashboard/ledger.py _runtime_projection, system-dashboard-server.py
+ * runtime_book / _modern_runtime, Ledger.position and settlement coverage).
+ * The current round is whole; other rounds drop config and latest; markets keep
+ * the instrument fields the ledger projects; the current market's paired snapshot
+ * keeps five levels a side and none of the legacy flat fields. */
+export function statusRuntime(input: {
+  status: "starting" | "running" | "stopped" | "failed"; mode: TradingMode; startedAt: number;
+  strategyId: string | null; state: CoreState | undefined; strategyStatus: StrategyStatus | undefined;
+  markets: MarketInfo[]; snapshots: MarketBookSnapshot[]; now: number; needsWork: (marketId: string) => boolean;
+  leadFeedHealthy: boolean | null; leadVenues: string[] | null; leadRelay: boolean | null; leadLines: unknown;
+}) {
+  const { state, strategyStatus, now } = input;
+  const currentMarket = currentMarketAt(input.markets, now);
+  const view = summaryView({
+    rounds: strategyStatus?.rounds ?? [], currentRound: strategyStatus?.currentRound ?? null,
+    markets: input.markets, now, needsWork: input.needsWork, currentMarketId: currentMarket?.id ?? null,
+  });
+  const quoted = new Set(view.quotedMarketIds);
+  // The round's one order as the ledger projects it (_strategy_projection stages).
+  const stageView = (stage: LeadStage) => ({ direction: stage.direction, tokenId: stage.tokenId,
+    clientOrderId: stage.clientOrderId, orderId: stage.orderId, status: stage.status, error: stage.error,
+    price: stage.price, askAtSignal: stage.askAtSignal, shares: stage.shares, createdAt: stage.createdAt,
+    filledShares: stage.filledShares, askGoneAtUnix: stage.askGoneAtUnix,
+    signal: { venue: stage.signal.venue, line: stage.signal.line, direction: stage.signal.direction,
+      price: stage.signal.price, refPrice: stage.signal.refPrice, moveBp: stage.signal.moveBp,
+      openPrice: stage.signal.openPrice, openMean60: stage.signal.openMean60, tradeId: stage.signal.tradeId,
+      tradeTimeMs: stage.signal.tradeTimeMs, receivedAtUnix: stage.signal.receivedAtUnix,
+      relayRecvMs: stage.signal.relayRecvMs } });
+  const enrich = (round: StatusRound) => {
+    const { isRunning: _running, stages, ...rest } = round;
+    return { ...rest, stages: stages.slice(0, 1).map(stageView), ...roundOutcome(round, state) };
+  };
+  // runtime_book's side (_book_side): top of book, five levels, the venue clocks.
+  // Its token comes from the market's instruments, so the side's own id stays out.
+  const levels = (side: MarketBookSnapshot["YES"]) => side && { bid: side.bid, ask: side.ask,
+    bidSize: side.bidSize, askSize: side.askSize, bids: side.bids?.slice(0, STATUS_BOOK_LEVELS),
+    asks: side.asks?.slice(0, STATUS_BOOK_LEVELS), sourceAt: side.sourceAt, expiresAt: side.expiresAt,
+    depthSourceAt: side.depthSourceAt, depthExpiresAt: side.depthExpiresAt };
+  return { schemaVersion: 1, engine: "platform", execution: strategyStatus ? "strategy" : "observation",
+    strategy_id: input.strategyId, status: input.status, mode: input.mode, started_at: input.startedAt,
+    cash_usd: state?.cashUsd ?? null, positions_count: state?.positions.length ?? null,
+    positions: (state?.positions ?? []).map(({ tokenId, shares, costUsd }) => ({ tokenId, shares, costUsd })),
+    orders_count: state?.orders.length ?? null,
+    // A quarantined UNKNOWN is temporarily isolated; recovery can abandon it
+    // locally after a complete account and trade read proves it is absent.
+    // Do not present that uncertainty as an active venue order.
+    active_orders: state ? countActiveOrders(state) : null,
+    fills_count: state?.fills.length ?? null, risk: state?.risk ?? null,
+    strategy_runtime: strategyStatus ? {
+      schemaVersion: strategyStatus.schemaVersion, strategyId: strategyStatus.strategyId,
+      instanceId: strategyStatus.instanceId, paused: strategyStatus.paused, savedRevision: strategyStatus.savedRevision,
+      currentRound: strategyStatus.currentRound ? enrich(strategyStatus.currentRound) : null,
+      // A round still settling: its identity (the ledger's market map) and the
+      // coverage a settlement books against (tokens and shares held). The
+      // console shows only the current round's order, config and quote.
+      rounds: view.rounds.map(round => ({ assetId: round.assetId, marketId: round.marketId, roundId: round.roundId,
+        name: round.name, startsAt: round.startsAt, endsAt: round.endsAt, status: round.status,
+        attempted: round.attempted, upTokenId: round.upTokenId, downTokenId: round.downTokenId,
+        upShares: roundOutcome(round, state).upShares, downShares: roundOutcome(round, state).downShares })),
+    } : null,
+    lead_feed_healthy: input.leadFeedHealthy,
+    // The running feed's venues and lines (fixed at start; the saved config can differ).
+    lead_venues: input.leadVenues, lead_relay: input.leadRelay, lead_lines: input.leadLines,
+    markets: view.markets.map(market => ({ id: market.id, assetId: market.assetId, roundId: market.roundId,
+      name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
+      instruments: market.instruments.map(({ tokenId, outcome }) => ({ tokenId, outcome })) })),
+    // The accepted paired snapshot, cloned by the platform API; the console's
+    // book (GET /api/runtime/book) reads it and nothing else.
+    snapshots: input.snapshots.filter(snapshot => quoted.has(snapshot.marketId ?? "")).map(snapshot => ({
+      assetId: snapshot.assetId, marketId: snapshot.marketId, roundId: snapshot.roundId, sequence: snapshot.sequence,
+      sourceAt: snapshot.sourceAt, expiresAt: snapshot.expiresAt, YES: levels(snapshot.YES), NO: levels(snapshot.NO) })),
+  };
+}
+
+/** The market whose window holds `now`, the latest-starting if several. */
+export function currentMarketAt(markets: MarketInfo[], now: number): MarketInfo | undefined {
+  return markets.filter(market => market.startsAt <= now && now < market.endsAt)
+    .sort((left, right) => right.startsAt - left.startsAt)[0];
 }
 
 /** Stdout repeats an unchanged status at most this often. */
@@ -929,12 +1017,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
     const state = platform?.account.current();
     const now = Date.now() / 1000;
     const allMarkets = platform?.market.list() ?? selectedMarkets;
-    const currentMarket = allMarkets
-      .filter(market => market.startsAt <= now && now < market.endsAt)
-      .sort((left, right) => right.startsAt - left.startsAt)[0];
-    const strategyStatus = strategy?.getStatus();
-    const enrichRound = (round: NonNullable<typeof strategyStatus>["rounds"][number]) => ({
-      ...round, ...roundOutcome(round, state) });
+    const currentMarket = currentMarketAt(allMarkets, now);
     // A market still needs work while it has an active or reconciliation-pending
     // order, an unsettled position, or a non-terminal fill. Such markets stay in
     // the status line no matter how old (BUGS P0-3).
@@ -957,58 +1040,12 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       }
     }
     for (const id of settlementRecoveryMarketIds) workMarkets.add(id);
-    const view = summaryView({
-      rounds: strategyStatus?.rounds ?? [], currentRound: strategyStatus?.currentRound ?? null,
-      markets: allMarkets, now, needsWork: marketId => workMarkets.has(marketId),
-    });
-    const viewMarketIds = new Set(view.quotedMarketIds);
-    const viewTokens = new Set(view.markets.filter(market => viewMarketIds.has(market.id))
-      .flatMap(market => market.instruments.map(instrument => instrument.tokenId)));
-    const strategyRuntime = strategyStatus ? { ...strategyStatus,
-      rounds: view.rounds.map(enrichRound),
-      currentRound: strategyStatus.currentRound ? enrichRound(strategyStatus.currentRound) : null } : null;
-    const runtime = { schemaVersion: 1, engine: "platform", execution: strategy ? "strategy" : "observation",
-      strategy_id: strategy?.id ?? null, status, mode: options.mode, started_at: startedAt,
-      cash_usd: state?.cashUsd ?? null, positions_count: state?.positions.length ?? null,
-      positions: state?.positions ?? [],
-      orders_count: state?.orders.length ?? null,
-      // A quarantined UNKNOWN is temporarily isolated; recovery can abandon it
-      // locally after a complete account and trade read proves it is absent.
-      // Do not present that uncertainty as an active venue order.
-      active_orders: state ? countActiveOrders(state) : null,
-      fills_count: state?.fills.length ?? null, risk: state?.risk ?? null, limits: options.limits,
-      cash_flow_coverage: state?.cashFlowTracking ? {
-        from: state.cashFlowTracking.baselineAt, until: state.cashFlowTracking.coveredThroughAt ?? null,
-        from_block: state.cashFlowTracking.baselineBlock ?? null, cursor_block: state.cashFlowTracking.cursorBlock ?? null,
-        complete: state.cashFlowTracking.complete, reason: state.cashFlowTracking.reason ?? null,
-        applied_count: state.cashFlowTracking.appliedFlows.length,
-      } : null,
-      strategy_runtime: strategyRuntime,
-      lead_feed_healthy: connection?.leadFeedHealthy() ?? null,
-      // The running feed's venues and lines (fixed at start; the saved config can differ).
-      lead_venues: leadFeed ? Object.keys(leadFeed.detectors) : null,
-      lead_relay: leadFeed ? leadFeed.relay : null,
-      lead_lines: leadFeed?.stats() ?? null,
-      saved_revision: strategyConfig?.savedRevision ?? null,
-      markets: view.markets,
-      current_market: currentMarket ? {
-        marketId: currentMarket.id, roundId: currentMarket.roundId, assetId: currentMarket.assetId ?? options.assetId,
-        name: currentMarket.name, startsAt: currentMarket.startsAt, endsAt: currentMarket.endsAt,
-      } : null,
-      current_market_id: currentMarket?.id ?? null,
-      current_round_id: currentMarket?.roundId ?? null,
-      // This is the accepted paired snapshot projection. It is cloned by the
-      // platform API and is not rebuilt from legacy single-token books.
-      snapshots: (platform?.market.snapshots() ?? []).filter(snapshot => viewMarketIds.has(snapshot.marketId ?? "")),
-      books: (platform?.market.books() ?? []).filter(book => viewTokens.has(book.tokenId)).map(book => {
-        const receivedAt = book.receivedAt ?? book.ts;
-        const ageMs = Number.isFinite(receivedAt) ? Math.max(0, (now - receivedAt) * 1000) : null;
-        const market = selectedMarkets.find(item => item.instruments.some(instrument => instrument.tokenId === book.tokenId));
-        const expired = market ? now >= market.endsAt : true;
-          return { ...book, bids: book.bids?.slice(0, 10), asks: book.asks?.slice(0, 10),
-          received_age_ms: ageMs, market_expired: expired,
-          stale: expired || ageMs === null || ageMs > 10_000 || receivedAt > now + 1 };
-      }) };
+    const runtime = statusRuntime({ status, mode: options.mode, startedAt, strategyId: strategy?.id ?? null,
+      state, strategyStatus: strategy?.getStatus(), markets: allMarkets, snapshots: platform?.market.snapshots() ?? [],
+      now, needsWork: marketId => workMarkets.has(marketId),
+      leadFeedHealthy: connection?.leadFeedHealthy() ?? null,
+      leadVenues: leadFeed ? Object.keys(leadFeed.detectors) : null,
+      leadRelay: leadFeed ? leadFeed.relay : null, leadLines: leadFeed?.stats() ?? null });
     journal?.write("platform_status", { runtime });
     const reason = signalReason ?? null, printedAtMs = Date.now();
     if (!statusStdoutDue(lastStdoutStatus, status, reason, printedAtMs)) return;
@@ -1017,9 +1054,12 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       strategy: strategy?.id ?? null, markets: runtime.markets.map(market => market.id),
       cashUsd: runtime.cash_usd, positions: runtime.positions_count, orders: runtime.orders_count,
       activeOrders: runtime.active_orders, fills: runtime.fills_count, risk: runtime.risk,
-      currentMarket: runtime.current_market,
-      currentMarketId: runtime.current_market_id,
-      currentRoundId: runtime.current_round_id,
+      currentMarket: currentMarket ? {
+        marketId: currentMarket.id, roundId: currentMarket.roundId, assetId: currentMarket.assetId ?? options.assetId,
+        name: currentMarket.name, startsAt: currentMarket.startsAt, endsAt: currentMarket.endsAt,
+      } : null,
+      currentMarketId: currentMarket?.id ?? null,
+      currentRoundId: currentMarket?.roundId ?? null,
       telemetry: platform?.telemetry.snapshot() ?? null, capabilities: platform?.capabilities() ?? null,
       reason }));
   };
