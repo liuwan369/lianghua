@@ -196,6 +196,15 @@ class LeadStats(unittest.TestCase):
         self.assertEqual((shadow["misses"], shadow["would_fill"], shadow["settled"], shadow["won"]), (2, 1, 1, 1),
                          "O3 and O4 were shadowed; O3 came back and won")
         self.assertAlmostEqual(shadow["pnl_if_filled_usd"], 5 * (1 - 0.5), places=6, msg="maker fill at the limit, no fee")
+        # The venue's round PnL lands on the round's one filled row (the rest),
+        # never also on the unfilled FAK of the same round.
+        official = {("btc", str(R1 + 3900)): {"pnl": -2.1}}
+        stats = self.ledger.lead_stats("run-b", range="all", now=R1 + 5000, official=official)
+        self.assertAlmostEqual(stats["rest"]["live"]["pnl_usd"], -2.1, places=6)
+        page = {o["client_order_id"]: o for o in self.ledger.lead_orders_page("run-b", range="all", limit=20,
+                                                                          now=R1 + 5000, official=official)["items"]}
+        self.assertEqual((page["c70"]["pnl"], page["c70"]["pnl_source"]), (-2.1, "official"))
+        self.assertEqual((page["c7"]["pnl"], page["c7"]["pnl_source"]), (None, None), "the unfilled FAK shows no PnL")
 
     def test_misses(self):
         misses = self.stats["misses"]

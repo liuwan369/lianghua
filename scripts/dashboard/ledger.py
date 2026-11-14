@@ -2770,10 +2770,19 @@ class Ledger:
         runtime = json.loads(runtime_row["payload"]) if runtime_row else {}
         official = official or {}
 
+        # The venue's PnL is per round. A round can have the FAK and its rest
+        # order; when only one of them filled, the round's PnL is that row's.
+        filled_rows = {}
+        for order in every:
+            if (order.get("filled_shares") or 0) > EPS_SHARES:
+                filled_rows.setdefault(str(order.get("round_id")), []).append(order)
+
         def pnl_of(order):
-            """Official round PnL when the venue reports the round, else the ledger's."""
+            """Official round PnL when the venue reports the round and this is
+            the round's only filled row, else the ledger's."""
             key = ("btc", str(order.get("round_id")))
-            if key in official and official[key].get("pnl") is not None:
+            if (key in official and official[key].get("pnl") is not None
+                    and len(filled_rows.get(key[1], [])) == 1):
                 return official[key]["pnl"], "official"
             return order.get("pnl"), "ledger"
 
@@ -2809,7 +2818,7 @@ class Ledger:
         would_done = [o for o in would if o["would_have_won"] is not None]
         rest = {"live": {"orders": len(rests), "filled": len(rest_got), "fill_rate": _ratio(len(rest_got), len(rests)),
                          "settled": len(rest_done), "won": rest_won, "win_rate": _ratio(rest_won, len(rest_done)),
-                         "pnl_usd": _sum(o.get("pnl") for o in rest_done)},
+                         "pnl_usd": _sum(pnl_of(o)[0] for o in rest_done)},
                 "shadow": {"misses": len(shadowed), "would_fill": len(would),
                            "would_fill_rate": _ratio(len(would), len(shadowed)),
                            "settled": len(would_done),
@@ -2894,9 +2903,16 @@ class Ledger:
         if before is not None:
             orders = [o for o in orders if (o.get("recv_ts") or 0) < before]
         page = orders[:limit]
+        filled_rows = {}
+        for order in orders:
+            if (order.get("filled_shares") or 0) > EPS_SHARES:
+                filled_rows[str(order.get("round_id"))] = filled_rows.get(str(order.get("round_id")), 0) + 1
         for order in page:
             key = ("btc", str(order.get("round_id")))
-            if order["outcome"] in ("won", "lost") and key in official and official[key].get("pnl") is not None:
+            # The venue's round PnL goes on the round's one filled row; an
+            # unfilled FAK whose rest order filled shows none.
+            if (order["outcome"] in ("won", "lost") and (order.get("filled_shares") or 0) > EPS_SHARES
+                    and filled_rows.get(key[1]) == 1 and key in official and official[key].get("pnl") is not None):
                 order["pnl"], order["pnl_source"] = official[key]["pnl"], "official"
             elif order["outcome"] in ("won", "lost") and order.get("pnl") is not None:
                 order["pnl_source"] = "ledger"
