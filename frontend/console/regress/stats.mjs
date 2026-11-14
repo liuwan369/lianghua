@@ -40,6 +40,14 @@ for (const piece of ["挂单补单 4 单", "买到 3 单 · 75.0%", "胜率 66.7
 assert.ok(text(S.renderRest({ live: { orders: 0 }, shadow: { misses: 0 } })).includes("还没有没买到的单"));
 assert.ok(text(S.renderRest(null)).includes("没有数据"));
 
+// --- shadow exit ---
+const exit = text(S.renderExit({ held_rounds: 20, settled: 18, would_sell: 6, would_sell_rate: 1 / 3, mistaken: 2, mistaken_rate: 1 / 3,
+  mistaken_cost_usd: -4.2, saved: 4, saved_usd: 6.5, net_usd: 2.3, bid_p50: 0.31 }));
+for (const piece of ["买到的场 20 场", "会卖出 6 场", "占 33.3%", "卖价中位 0.31", "误卖（本来会赢） 2 场", "少赚 -$4.20", "止损（本来会输） 4 场", "少亏 +$6.50", "+$2.30"]) {
+  assert.ok(exit.includes(piece), `exit: ${piece}: ${exit}`);
+}
+assert.ok(text(S.renderExit({ held_rounds: 0 })).includes("还没有持仓的场"));
+
 // --- late_by_ms ---
 const late = String(parts.late);
 const lateText = text(late);

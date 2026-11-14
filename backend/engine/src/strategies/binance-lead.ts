@@ -95,9 +95,24 @@ export interface LeadStage {
   missedAt?: number;
   /** FAK stage: the rest after its miss was decided (placed or declined) once. */
   restDecided?: boolean;
+  /** When this stage first held shares (the order update's time). */
+  firstFillAt?: number;
   /** Rest stage: when its timed cancel is due (strategy clock), set once the
    * venue accepted it. */
   cancelAt?: number;
+}
+/** Shadow exit (user 2026-11-14, records only): once the round holds shares,
+ * the opposite signals seen after its first fill are counted; on the
+ * EXIT_SHADOW_OPPOSITE-th the bid of the held side in force is what a sell
+ * would have got. Kept on the round. */
+export interface LeadExitShadow {
+  /** Opposite signals counted so far (while holding). */
+  opposite: number;
+  /** Set on the trigger: receive time (s), the held side's bid then (null
+   * when the frame had none), and shares held then. */
+  at?: number;
+  bid?: number | null;
+  shares?: number;
 }
 /** Summary of the round's latest frame; never restored across a restart. */
 export interface LeadQuote {
@@ -123,6 +138,7 @@ export interface LeadRound {
   reason: string;
   /** The round's FAK once placed, then at most its rest order. */
   stages: LeadStage[];
+  exitShadow?: LeadExitShadow;
   latest?: LeadQuote;
 }
 export interface BinanceLeadState {
@@ -168,6 +184,12 @@ const cancelDue = (stage: LeadStage, now: number) => stage.cancelRequestedAt ===
   || now - stage.cancelRequestedAt >= (stage.status === "UNKNOWN" ? UNKNOWN_CANCEL_RETRY_SEC : CANCEL_RETRY_SEC);
 /** A rest is placed within this long of the FAK's miss, or not at all. */
 const REST_LATE_SEC = 2;
+/** Shadow exit: the opposite signal that would sell (23-day backtest
+ * E:/pm-backup/research-1113/chaos.py X3: 3 opposite signals cut losing
+ * orders -1509 -> -1282, worst day -25.8 -> -7.1, 43% of sells were winners). */
+export const EXIT_SHADOW_OPPOSITE = 3;
+/** A signal this soon after the fill's update is the same move, not a turn. */
+const EXIT_SHADOW_AFTER_SEC = 0.5;
 /** The venue refuses a marketable BUY under this many USD (2026-10-26 live:
  * "invalid amount for a marketable BUY order ($0.65), min size: 1"). */
 const MIN_MARKETABLE_BUY_USD = 1;
@@ -317,6 +339,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   roundAt(ts: number): Readonly<LeadRound> | undefined {
     return this.state.rounds.find(round => round.startsAt <= ts && ts < round.endsAt);
   }
+  /** Every kept round, without cloning. Callers must not mutate them. */
+  roundList(): readonly Readonly<LeadRound>[] { return this.state.rounds; }
   /** The stage that placed this order and its round, without cloning. Callers must not mutate it. */
   stageFor(clientOrderId: string): Readonly<{ round: Readonly<LeadRound>; stage: Readonly<LeadStage> }> | undefined {
     return this.stagesByClient.get(clientOrderId);
@@ -457,6 +481,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       }
       // The book in force is tracked while paused or blocked too.
       if (event.kind === "book") changed = this.updateLatest(round, event, context.now) || changed;
+      // Shadow exit (records only, never sells): what the round's held shares
+      // would have sold at on the EXIT_SHADOW_OPPOSITE-th opposite signal.
+      if (event.kind === "lead" && this.shadowExit(round, event)) changed = true;
       const marketBlocked = context.account.risk.blockedMarketIds?.includes(round.marketId) === true;
       const blocked = this.state.paused ? "已暂停新增交易"
         : marketBlocked ? "本场订单等待交易所确认"
@@ -548,6 +575,27 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
       signal: { ...signal }, askAtSignal: ask };
     return this.fund(round, stage, context, knownClients);
+  }
+
+  /** Shadow exit: count opposite signals seen while the round holds shares
+   * (from EXIT_SHADOW_AFTER_SEC after the first fill); on the
+   * EXIT_SHADOW_OPPOSITE-th, record the held side's bid in force. Never acts. */
+  private shadowExit(round: LeadRound, event: LeadEvent): boolean {
+    const held = round.stages.reduce((total, stage) => total + stage.filledShares, 0);
+    const first = round.stages.map(stage => stage.firstFillAt).filter(finite).sort((a, b) => a - b)[0];
+    const direction = round.stages[0]?.direction;
+    if (!(held > EPS) || first === undefined || !direction || event.direction === direction
+      || event.receivedAtUnix < first + EXIT_SHADOW_AFTER_SEC || event.receivedAtUnix >= round.endsAt) return false;
+    const shadow = round.exitShadow ??= { opposite: 0 };
+    if (shadow.at !== undefined) return false;
+    shadow.opposite += 1;
+    if (shadow.opposite >= EXIT_SHADOW_OPPOSITE) {
+      const bid = direction === "UP" ? round.latest?.upBid : round.latest?.downBid;
+      shadow.at = event.receivedAtUnix;
+      shadow.bid = unitPrice(bid) ? bid : null;
+      shadow.shares = held;
+    }
+    return true;
   }
 
   /** The rest order after a missed FAK: the round's FAK ended (cancelled or
@@ -720,6 +768,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       && stage.error === order.error) return false;
     stage.orderId = order.orderId; stage.status = order.status; stage.filledShares = order.filledShares; stage.error = order.error;
     this.createdStages.delete(stage.clientOrderId);
+    if (stage.firstFillAt === undefined && stage.filledShares > EPS) {
+      stage.firstFillAt = finite(order.updatedAt) ? order.updatedAt : this.lastNow;
+    }
     if ((stage.kind ?? "fak") === "fak" && stage.missedAt === undefined && ["CANCELLED", "REJECTED"].includes(stage.status)
       && stage.filledShares < stage.shares - EPS) {
       // The miss starts the rest (or its shadow) from the venue's reply.
@@ -823,7 +874,10 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         || !round.upTokenId || !round.downTokenId || round.upTokenId === round.downTokenId
         || !Array.isArray(round.stages) || round.stages.length > 2
         || !["waiting_start", "waiting_next_round", "running", "ended"].includes(round.status)
-        || typeof round.reason !== "string") throw new Error("invalid persisted binance-lead round");
+        || typeof round.reason !== "string"
+        || (round.exitShadow !== undefined && (!finite(round.exitShadow.opposite)
+          || (round.exitShadow.at !== undefined && !finite(round.exitShadow.at))
+          || (round.exitShadow.bid != null && !unitPrice(round.exitShadow.bid))))) throw new Error("invalid persisted binance-lead round");
       // The book seen by a previous process is not the book in force now.
       delete round.latest;
       markets.add(round.marketId);
@@ -849,6 +903,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || (stage.restShadowFillAt !== undefined && !finite(stage.restShadowFillAt))
           || (stage.missedAt !== undefined && !finite(stage.missedAt))
           || (stage.restDecided !== undefined && typeof stage.restDecided !== "boolean")
+          || (stage.firstFillAt !== undefined && !finite(stage.firstFillAt))
           || !unitPrice(stage.askAtSignal) || stage.price > stage.askAtSignal + round.config.limitPremium + EPS
           // A BUY below its limit gets more than `shares` for the same budget
           // (2026-10-26: 5.25 of 5); the core bounds every fill by that budget.

@@ -8,8 +8,8 @@
 //
 // Run after `npm run build`:  node scripts/regress/rest-after-miss.mjs
 import assert from "node:assert/strict";
-import { createStrategy, normalizeBinanceLeadConfig, REST_SHADOW_SEC } from "../../dist/strategies/binance-lead.js";
-import { leadOrderFields } from "../../dist/cli/platform.js";
+import { createStrategy, normalizeBinanceLeadConfig, REST_SHADOW_SEC, EXIT_SHADOW_OPPOSITE } from "../../dist/strategies/binance-lead.js";
+import { leadOrderFields, leadExitShadowFields, createLeadExitShadowLog } from "../../dist/cli/platform.js";
 
 const START = 1_800_000_000, UP = "11".repeat(38), DOWN = "22".repeat(38), ROUND = String(START);
 const market = { id: "0xm", assetId: "btc", roundId: ROUND, name: `btc-updown-5m-${START}`, startsAt: START, endsAt: START + 300,
@@ -252,5 +252,54 @@ const fakSent = (config = {}) => {
   assert.equal(f.filled_shares, 2);
   assert.equal(f.fee_usd, 0, "a maker fill pays no fee");
   assert.equal(f.late_by_ms, null, "late_by is the FAK's measure");
+}
+// --- shadow exit (records only): the 3rd opposite signal after the fill records
+// the held side's bid; same-way signals, signals before the fill and the
+// 0.5 s after it do not count; no order or cancel is ever produced ---
+{
+  assert.equal(EXIT_SHADOW_OPPOSITE, 3);
+  const { s, fak } = fakSent();
+  at(s, { kind: "order", order: record(fak, "FILLED", 5.2, "0xfak", S + 0.6) }, S + 0.6);
+  const leadAt = (t, dir) => submits(at(s, { ...lead(t, dir), tradeId: Math.round(t * 1000) }, t + 0.002)).length
+    + cancels(at(s, { kind: "timer", ts: t + 0.003 }, t + 0.003)).length;
+  assert.equal(leadAt(S + 0.8, "DOWN"), 0, "inside 0.5 s of the fill: the same move");
+  assert.equal(s.exportState().rounds[0].exitShadow, undefined);
+  assert.equal(leadAt(S + 2, "UP"), 0, "same way: not counted");
+  at(s, book(S + 5, 0.66, 0.36), S + 5);
+  assert.equal(leadAt(S + 6, "DOWN"), 0);
+  assert.equal(leadAt(S + 9, "DOWN"), 0);
+  assert.equal(s.exportState().rounds[0].exitShadow.opposite, 2);
+  at(s, book(S + 10, 0.41, 0.60), S + 10);
+  assert.equal(leadAt(S + 11, "DOWN"), 0, "the trigger sends nothing");
+  const shadow = s.exportState().rounds[0].exitShadow;
+  assert.deepEqual({ ...shadow }, { opposite: 3, at: S + 11, bid: 0.4, shares: 5.2 }, "the UP bid in force (0.41 - 0.01) and the shares held");
+  leadAt(S + 15, "DOWN");
+  assert.equal(s.exportState().rounds[0].exitShadow.opposite, 3, "frozen after the trigger");
+  // Restored, and written once as lead_exit_shadow.
+  const back = createStrategy({}, s.exportState());
+  assert.equal(back.exportState().rounds[0].exitShadow.bid, 0.4);
+  const fields = leadExitShadowFields(s.exportState().rounds[0]);
+  assert.deepEqual([fields.triggered, fields.bid, fields.sell_shares, fields.opposite_signals, fields.direction], [true, 0.4, 5.2, 3, "UP"]);
+  const lines = [];
+  const log = createLeadExitShadowLog(() => s.exportState().rounds, (f, id) => lines.push(id));
+  log.observe(S + 12); log.observe(S + 300); log.observe(S + 400);
+  assert.deepEqual(lines, ["lead_exit_shadow:0xm"], "once per round");
+}
+{
+  // No fill: nothing counted, no line. A held round with fewer than 3: a line at the end, not triggered.
+  const { s, fak } = fakSent();
+  at(s, { kind: "order", order: record(fak, "REJECTED", 0, "0xfak", S + 0.6) }, S + 0.6);
+  for (const t of [S + 2, S + 4, S + 6, S + 8]) at(s, { ...lead(t, "DOWN"), tradeId: t }, t);
+  assert.equal(s.exportState().rounds[0].exitShadow, undefined);
+  assert.equal(leadExitShadowFields(s.exportState().rounds[0]), undefined);
+  const h = fakSent();
+  at(h.s, { kind: "order", order: record(h.fak, "FILLED", 5, "0xfak", S + 0.6) }, S + 0.6);
+  at(h.s, { ...lead(S + 3, "DOWN"), tradeId: 9 }, S + 3);
+  const lines = [];
+  const log = createLeadExitShadowLog(() => h.s.exportState().rounds, (f) => lines.push(f));
+  log.observe(S + 100);
+  assert.equal(lines.length, 0, "not triggered and not over yet: nothing");
+  log.observe(START + 300);
+  assert.deepEqual([lines.length, lines[0].triggered, lines[0].opposite_signals], [1, false, 1], "at the end: one line, not triggered");
 }
 console.log("rest-after-miss OK");

@@ -764,6 +764,37 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
     late_by_ms: !rest && shares !== null && orderFilled !== null && orderFilled < shares - 1e-8 ? diffMs(ackMs, askGoneMs) : null };
 }
 
+/** One `lead_exit_shadow` line per round that held shares (key
+ * lead_exit_shadow:<marketId>), written when the shadow exit triggers or at
+ * the round's end: what a sell on the 3rd opposite signal would have got. */
+export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string, unknown> | undefined {
+  const stages = round.stages.filter(stage => stage.filledShares > 1e-8);
+  if (!stages.length) return undefined;
+  const shares = stages.reduce((total, stage) => total + stage.filledShares, 0);
+  const shadow = round.exitShadow;
+  return { market_id: round.marketId, round_id: round.roundId, round_start: round.startsAt,
+    direction: round.stages[0]!.direction, token_id: round.stages[0]!.tokenId, held_shares: shares,
+    opposite_signals: shadow?.opposite ?? 0, triggered: shadow?.at !== undefined,
+    trigger_ms: msOf(shadow?.at), trigger_sec_since_open: shadow?.at === undefined ? null : shadow.at - round.startsAt,
+    bid: shadow?.bid ?? null, sell_shares: shadow?.shares ?? null };
+}
+export function createLeadExitShadowLog(rounds: () => readonly Readonly<LeadRound>[],
+  write: (fields: Record<string, unknown>, eventId: string) => void) {
+  const written = new Set<string>();
+  return {
+    observe(now: number): void {
+      for (const round of rounds()) {
+        // Kept rounds include hours of settled history: only this hour's.
+        if (written.has(round.marketId) || now - round.endsAt > 3600) continue;
+        if (!(round.exitShadow?.at !== undefined || now >= round.endsAt)) continue;
+        const fields = leadExitShadowFields(round);
+        if (now >= round.endsAt || fields) written.add(round.marketId);
+        if (fields) write(fields, `lead_exit_shadow:${round.marketId}`);
+      }
+    },
+  };
+}
+
 const LEAD_ORDER_TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED"]);
 /** Writes `lead_order` once per binance-lead order (key lead_order:<clientOrderId>):
  * when its order reaches FILLED/CANCELLED/REJECTED (after its submit returned)
@@ -1121,11 +1152,16 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       };
       const orderLog = leadOrders = createLeadOrderLog(clientOrderId => lead.stageFor(clientOrderId),
         (fields, eventId) => journal?.write("lead_order", { ...fields, engine_ts: Date.now() / 1000 }, eventId));
+      const exitLog = createLeadExitShadowLog(() => lead.roundList(),
+        (fields, eventId) => journal?.write("lead_exit_shadow", { ...fields, engine_ts: Date.now() / 1000 }, eventId));
       const onEvent = lead.onEvent.bind(lead);
       lead.onEvent = (event, context) => {
         const actions = handleLead(event, context);
         // Read once the strategy has applied the event to its stage.
         try { orderLog.observe(event, context.now); } catch { /* Observability is outside execution. */ }
+        if (event.kind === "lead" || event.kind === "timer") {
+          try { exitLog.observe(context.now); } catch { /* Observability is outside execution. */ }
+        }
         return actions;
       };
       const handleLead: typeof onEvent = (event, context) => {

@@ -101,6 +101,13 @@ CREATE TABLE IF NOT EXISTS lead_orders (
  PRIMARY KEY(run_id,client_order_id)
 );
 CREATE INDEX IF NOT EXISTS lead_order_round ON lead_orders(run_id,round_start);
+-- lead_exit_shadow (cli/platform.ts leadExitShadowFields): per held round, what
+-- a sell on the 3rd opposite signal would have got (records only).
+CREATE TABLE IF NOT EXISTS lead_exit_shadows (
+ run_id TEXT NOT NULL REFERENCES runs(run_id), market_id TEXT NOT NULL,
+ round_start REAL, recv_ts REAL NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(run_id,market_id)
+);
 CREATE INDEX IF NOT EXISTS settlement_market_id ON settlement_details(market_id);
 CREATE TABLE IF NOT EXISTS lead_signals (
  run_id TEXT NOT NULL REFERENCES runs(run_id), byte_offset INTEGER NOT NULL, received_at REAL NOT NULL,
@@ -114,7 +121,7 @@ INSERT OR IGNORE INTO data_version VALUES(1, 0);
 # latest runtime matters (platform_runtime). 34,609 status rows were 38 MB of
 # the events table after 17 h (2026-11-14).
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
-                         "order", "settlement", "lead_signal", "lead_order"})
+                         "order", "settlement", "lead_signal", "lead_order", "lead_exit_shadow"})
 # lead_signal (cli/platform.ts leadJournalFields): what the strategy did with one lead signal.
 LEAD_OUTCOMES = frozenset({"order_submitted", "skipped", "no_round", "stopping"})
 # contracts.ts LEAD_VENUES / LeadLine.
@@ -663,6 +670,15 @@ def _projection(record):
         result["order_shares"] = result["shares"]
         result["signal_price"] = result["price"]
         result["price"] = result["shares"] = result["amount"] = result["pnl"] = None
+        return result
+    if record["event"] == "lead_exit_shadow":
+        for field in ("market_id", "round_id", "token_id"):
+            result[field] = _text(record.get(field))
+        for field in ("round_start", "held_shares", "opposite_signals", "trigger_ms", "trigger_sec_since_open", "bid", "sell_shares"):
+            result[field] = _number(record.get(field))
+        result["triggered"] = record.get("triggered") is True
+        result["direction"] = record.get("direction") if record.get("direction") in ("UP", "DOWN") else None
+        result["price"] = result["amount"] = result["pnl"] = None
         return result
     if record["event"] == "lead_order":
         # Every field of cli/platform.ts leadOrderFields, typed; never an amount
@@ -1554,7 +1570,7 @@ class Ledger:
                         candidate = record.get(key)
                         if isinstance(candidate, (str, int)) and not isinstance(candidate, bool) and str(candidate):
                             stable_id = f"{key}:{candidate}"
-                            if (kind == "fill" and key not in ("event_id", "eventId")) or kind == "lead_order":
+                            if (kind == "fill" and key not in ("event_id", "eventId")) or kind in ("lead_order", "lead_exit_shadow"):
                                 # A trade id identifies the economic fill, not
                                 # one status/fee update of it; a lead_order's
                                 # event id names the order, and a restart may
@@ -1673,6 +1689,14 @@ class Ledger:
         # A signal is not trading activity: no market row, so a round that only
         # saw signals never enters market summaries or settlement handover.
         if kind == "lead_signal":
+            return
+        if kind == "lead_exit_shadow":
+            if event.get("market_id"):
+                db.execute("""INSERT INTO lead_exit_shadows(run_id,market_id,round_start,recv_ts,payload) VALUES(?,?,?,?,?)
+                    ON CONFLICT(run_id,market_id) DO UPDATE SET round_start=excluded.round_start,recv_ts=excluded.recv_ts,
+                    payload=excluded.payload""",
+                           (run_id, event["market_id"], event.get("round_start"), event.get("time") or 0,
+                            json.dumps(event, allow_nan=False)))
             return
         # One row per order; a rewrite under the same key (a restart) replaces it.
         if kind == "lead_order":
@@ -2739,8 +2763,21 @@ class Ledger:
                 in_window += row["n"]
             if row["bucket"] is not None:
                 skips[row["bucket"]] += row["n"]
+        clause, eargs = "", list(run_ids)
+        if start is not None:
+            clause = " AND COALESCE(round_start, recv_ts) >= ?"
+            eargs.append(start)
+        exits = {}
+        if self._has_table(db, "lead_exit_shadows"):
+            for row in db.execute(f"SELECT payload FROM lead_exit_shadows WHERE run_id IN ({marks}){clause} ORDER BY recv_ts", eargs):
+                item = json.loads(row["payload"])
+                exits[item.get("market_id")] = item
+        winners = self._winners(db, list(exits))
+        for item in exits.values():
+            win = winners.get(item.get("market_id"))
+            item["won"] = None if win is None or not item.get("token_id") else item["token_id"] == win
         return {"signals": signals, "in_window": in_window, "skips": skips,
-                "orders": self._lead_order_rows(db, run_ids, start)}
+                "orders": self._lead_order_rows(db, run_ids, start), "exits": list(exits.values())}
 
     def lead_stats(self, run_id, *, range="run", official=None, now=None):
         """GET /api/stats/lead. `official` is {(asset, roundId): {"pnl": ...}}
@@ -2816,6 +2853,25 @@ class Ledger:
         shadowed = [o for o in missed if o.get("rest_mode") == "shadow"]
         would = [o for o in shadowed if o.get("rest_shadow_fill_ms") is not None]
         would_done = [o for o in would if o["would_have_won"] is not None]
+        # Shadow exit (records only): per held round, a sell of what it held on
+        # the 3rd opposite signal at the held side's bid then, minus the sell's
+        # taker fee, against holding to the close. A sold winner is a mistaken
+        # sell; a sold loser a saved one.
+        exits = [dict(item) for item in base.get("exits", [])]
+        done_exits = [item for item in exits if item["won"] is not None]
+        sold = [item for item in done_exits if item.get("triggered") and item.get("bid") is not None and item.get("sell_shares")]
+        def _sell_change(item):
+            n, b = item["sell_shares"], item["bid"]
+            return n * b - TAKER_FEE_RATE * b * (1 - b) * n - (n if item["won"] else 0.0)
+        mistaken = [item for item in sold if item["won"]]
+        saved = [item for item in sold if not item["won"]]
+        exit_shadow = {"held_rounds": len(exits), "settled": len(done_exits), "would_sell": len(sold),
+                       "would_sell_rate": _ratio(len(sold), len(done_exits)),
+                       "mistaken": len(mistaken), "mistaken_rate": _ratio(len(mistaken), len(sold)),
+                       "mistaken_cost_usd": _sum(_sell_change(item) for item in mistaken),
+                       "saved": len(saved), "saved_usd": _sum(_sell_change(item) for item in saved),
+                       "net_usd": _sum(_sell_change(item) for item in sold),
+                       "bid_p50": _quantile(sorted(item["bid"] for item in sold), 0.5)}
         rest = {"live": {"orders": len(rests), "filled": len(rest_got), "fill_rate": _ratio(len(rest_got), len(rests)),
                          "settled": len(rest_done), "won": rest_won, "win_rate": _ratio(rest_won, len(rest_done)),
                          "pnl_usd": _sum(pnl_of(o)[0] for o in rest_done)},
@@ -2887,7 +2943,8 @@ class Ledger:
                         row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
-                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest}
+                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest,
+                "exit_shadow": exit_shadow}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
         """GET /api/orders/lead: lead orders newest first, with the round's
@@ -2945,7 +3002,7 @@ class Ledger:
                 # Hundreds of signals a day would bury the run log's errors;
                 # signals and lead orders are read on their own
                 # (kinds=["lead_signal"], lead_orders_page).
-                clause += " AND kind NOT IN ('lead_signal','lead_order')"
+                clause += " AND kind NOT IN ('lead_signal','lead_order','lead_exit_shadow')"
             if asset_id is not None:
                 asset_id = _query_asset(asset_id)
                 clause += " AND asset_id=?"

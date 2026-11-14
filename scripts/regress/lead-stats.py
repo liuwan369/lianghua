@@ -118,6 +118,22 @@ RUNTIME_B = {"schemaVersion": 1, "engine": "platform", "execution": "strategy", 
              "markets": [], "snapshots": [], "books": []}
 
 
+def exit_shadow(n, *, direction, triggered, bid, sell, opposite, round_start):
+    token = f"{'U' if direction == 'UP' else 'D'}{n}"
+    return {"event": "lead_exit_shadow", "event_id": f"lead_exit_shadow:0xm{n}", "recv_ts": round_start + 200,
+            "market_id": f"0xm{n}", "round_id": str(round_start), "round_start": round_start, "direction": direction,
+            "token_id": token, "held_shares": 5, "opposite_signals": opposite, "triggered": triggered,
+            "trigger_ms": (round_start + 100) * 1000 if triggered else None, "trigger_sec_since_open": 100 if triggered else None,
+            "bid": bid, "sell_shares": sell}
+
+
+# O1 won (UP, U1): a sell on the 3rd opposite signal would have been a mistake.
+# O2 lost (DOWN token D2, winner U2): the sell would have saved part of it. O6 held, not triggered.
+EXITS = [exit_shadow(1, direction="UP", triggered=True, bid=0.40, sell=5, opposite=3, round_start=R1),
+         exit_shadow(2, direction="DOWN", triggered=True, bid=0.30, sell=5, opposite=3, round_start=R1 + 300),
+         exit_shadow(6, direction="UP", triggered=False, bid=None, sell=None, opposite=1, round_start=R1 + 3600)]
+
+
 def write(path, records):
     path.write_text("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records), encoding="utf-8")
 
@@ -133,11 +149,11 @@ class LeadStats(unittest.TestCase):
         journal_a, journal_b = root / "a.jsonl", root / "b.jsonl"
         # Run A: O1 written twice (OPEN at shutdown-before-ack, then FILLED on a
         # restart) plus an identical duplicate line of O2.
-        write(journal_a, [*SIGNALS_A, O1_OPEN, O1, O2, O2, O3, O4, O5])
+        write(journal_a, [*SIGNALS_A, O1_OPEN, O1, O2, O2, O3, O4, O5, EXITS[0], EXITS[1], EXITS[1]])
         # Run B: its own orders, and the settlements of every round (the venue
         # settles after the run that traded it stopped).
         write(journal_b, [*SIGNALS_B, {"event": "platform_status", "recv_ts": R1 + 3700, "runtime": RUNTIME_B},
-                          O6, O7, O7R, settlement(1, "U1", R1 + 3701), settlement(2, "U2", R1 + 3702),
+                          O6, O7, O7R, EXITS[2], settlement(1, "U1", R1 + 3701), settlement(2, "U2", R1 + 3702),
                           settlement(3, "U3", R1 + 3703), settlement(4, "U4", R1 + 3704),
                           settlement(7, "D7", R1 + 4300)])
         cls.ledger = Ledger(dashboard / "ledger.sqlite3")
@@ -205,6 +221,18 @@ class LeadStats(unittest.TestCase):
                                                                           now=R1 + 5000, official=official)["items"]}
         self.assertEqual((page["c70"]["pnl"], page["c70"]["pnl_source"]), (-2.1, "official"))
         self.assertEqual((page["c7"]["pnl"], page["c7"]["pnl_source"]), (None, None), "the unfilled FAK shows no PnL")
+
+    def test_exit_shadow(self):
+        e = self.stats["exit_shadow"]
+        fee = lambda b: 0.07 * b * (1 - b) * 5
+        self.assertEqual((e["held_rounds"], e["settled"], e["would_sell"], e["mistaken"], e["saved"]), (3, 2, 2, 1, 1),
+                         "round 6 has no winner yet; 1 of 2 sells was a winner")
+        self.assertAlmostEqual(e["mistaken_cost_usd"], 5 * 0.40 - fee(0.40) - 5, places=6)
+        self.assertAlmostEqual(e["saved_usd"], 5 * 0.30 - fee(0.30), places=6)
+        self.assertAlmostEqual(e["net_usd"], e["mistaken_cost_usd"] + e["saved_usd"], places=6)
+        self.assertEqual(e["mistaken_rate"], 0.5)
+        self.assertNotIn("lead_exit_shadow", [x["event"] for x in self.ledger.events("run-a")["events"]],
+                         "the shadow lines do not bury the run log")
 
     def test_misses(self):
         misses = self.stats["misses"]
