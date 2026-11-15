@@ -94,6 +94,11 @@ O6 = order(6, venue="bybit", line="tokyo", direction="UP", status="FILLED", fill
            round_start=R1 + 3600, gone=400, ack=90)
 O7 = order(7, venue="binance", line="tokyo", direction="UP", status="CANCELLED", filled=0, limit=0.7,
            round_start=R1 + 3900, late=450, gone=300, ack=100)
+# entryOrder gtc: one GTC, 6 shares (5 taker at once + 1 maker while it rested),
+# then cancelled. Its own row, stage "gtc".
+O8 = {**order(8, venue="okx", line="tokyo", direction="UP", status="CANCELLED", filled=6, avg=0.5, fee=0.05,
+             limit=0.53, round_start=R1 + 4200, ack=90), "stage": "gtc", "rest_mode": "gtc",
+      "taker_shares": 5, "maker_shares": 1}
 
 SIGNALS_A = [signal(1, "no_round", None, R1 - 50), signal(2, "order_submitted", "已下单（FAK），等待成交回报", R1 + 29),
              signal(3, "skipped", "信号在开盘后 3.0 秒，不在本场 [15, 265) 秒内", R1 + 3),
@@ -221,6 +226,24 @@ class LeadStats(unittest.TestCase):
                                                                           now=R1 + 5000, official=official)["items"]}
         self.assertEqual((page["c70"]["pnl"], page["c70"]["pnl_source"]), (-2.1, "official"))
         self.assertEqual((page["c7"]["pnl"], page["c7"]["pnl_source"]), (None, None), "the unfilled FAK shows no PnL")
+
+    def test_gtc(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        journal = Path(tmp.name) / "c.jsonl"
+        write(journal, [O8, settlement(8, "U8", R1 + 4500)])
+        ledger = Ledger(Path(tmp.name) / "ledger.sqlite3")
+        ledger.register_run("run-c", "live", ACCOUNT, str(journal))
+        ledger.ingest("run-c", max_bytes=8 << 20, max_records=10000)
+        stats = ledger.lead_stats("run-c", range="run", now=R1 + 5000)
+        g = stats["gtc"]
+        self.assertEqual((g["orders"], g["filled"], g["rested_fills"]), (1, 1, 1),
+                         "one GTC, bought, with a resting (maker) fill")
+        self.assertAlmostEqual(g["taker_shares"], 5, places=6)
+        self.assertAlmostEqual(g["maker_shares"], 1, places=6)
+        self.assertEqual((stats["funnel"]["orders"], stats["funnel"]["filled"], stats["rest"]["live"]["orders"]), (1, 1, 0),
+                         "the GTC is the round's order in the funnel, not a rest row")
+        self.assertEqual(self.stats["gtc"]["orders"], 0, "no GTC in the FAK runs")
 
     def test_exit_shadow(self):
         e = self.stats["exit_shadow"]

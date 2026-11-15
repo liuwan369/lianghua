@@ -11,6 +11,8 @@ const BUY_BUDGET_TOLERANCE_USD = 0.01;
  * maker leg at a 0.23 limit came back 0.2300000681417075 (2026-11-14). The
  * limit check allows this much rounding; a real tick over it is still refused. */
 const FILL_PRICE_TOLERANCE = 1e-6;
+/** Shares trade in steps of 0.01 (official precision table, every tick). */
+const SHARE_STEP = 0.01;
 const active = (order: OrderRecord) => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status);
 const reservationPending = (order: OrderRecord) => active(order) || order.reconciliationPending === true;
 const copy = <T>(value: T): T => structuredClone(value);
@@ -534,6 +536,52 @@ export class TradingCore {
     order.reconciliationPending = false;
     order.reservedUsd = 0; order.reservedShares = 0;
     order.error = "venue reports matched and no longer open; unfilled rest is void";
+    order.updatedAt = Math.max(order.updatedAt, this.clock());
+    this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
+    this.refreshReconciliationRisk();
+    this.updateRisk();
+    this.notify(order, true);
+    return true;
+  }
+  /** A BUY signs a USD budget (shares x limit). Spent to under one share step
+   * at the limit, nothing it has left can trade: it is filled (2026-11-14
+   * 19:05: a rest order matched 4.99753 of 5 at 0.23, the venue reported it
+   * matched and refused the cancel; it stayed UNKNOWN). */
+  private buyBudgetLeftUsd(order: OrderRecord): number {
+    let spent = 0, recorded = 0;
+    for (const item of this.state.fills) {
+      if (item.orderId !== order.orderId || item.status === "FAILED") continue;
+      spent += item.shares * item.price; recorded += item.shares;
+    }
+    // Matched shares without a fill record (an order imported from the account
+    // read carries the venue's size_matched only) spent at most the limit.
+    spent += Math.max(0, order.filledShares - recorded) * order.price;
+    return Math.max(0, order.shares * order.price - spent);
+  }
+  /** A BUY's reservation: its unspent budget, never under the unfilled shares
+   * at the limit (validateAccount's floor; a fill a hair over the limit spends
+   * more than shares x limit), plus the fee estimate of what is left. */
+  private buyReservationUsd(order: OrderRecord, feeUsd: number): number {
+    return Math.max(this.buyBudgetLeftUsd(order), Math.max(0, order.shares - order.filledShares) * order.price) + feeUsd;
+  }
+  private buyBudgetSpent(order: OrderRecord): boolean {
+    return order.direction === "BUY" && !!order.orderId && order.filledShares > EPS
+      && this.buyBudgetLeftUsd(order) < SHARE_STEP * order.price - EPS;
+  }
+  /** End a BUY the venue reports matched, that a complete open-order read no
+   * longer lists, whose budget is spent (buyBudgetSpent) and whose every fill
+   * is settled: filled. The order detail is not needed (2026-11-14 19:05: the
+   * lookup kept failing for that order). */
+  closeSpent(id: string): boolean {
+    const order = this.find(id);
+    if (!order?.orderId || !["UNKNOWN", "OPEN", "PARTIAL"].includes(order.status) || order.venueStatus !== "matched"
+      || order.direction !== "BUY" || !this.buyBudgetSpent(order)) return false;
+    const fills = this.state.fills.filter(fill => fill.orderId === order.orderId && fill.shares > EPS && fill.status !== "FAILED");
+    if (fills.some(fill => fill.status !== undefined && fill.status !== "CONFIRMED")) return false;
+    order.status = "FILLED";
+    order.reconciliationPending = false;
+    order.reservedUsd = 0; order.reservedShares = 0;
+    order.error = "venue reports matched; budget spent, nothing left to trade";
     order.updatedAt = Math.max(order.updatedAt, this.clock());
     this.state.quarantinedOrderIds = (this.state.quarantinedOrderIds ?? []).filter(item => item !== order.orderId);
     this.refreshReconciliationRisk();
@@ -1360,22 +1408,37 @@ export class TradingCore {
       this.state.cashUsd += amount - fill.feeUsd;
     }
     const remainingBefore = Math.max(0, order.shares - order.filledShares);
+    // A BUY's reservation follows its unspent budget: at a better price a
+    // fill spends less than its shares x limit and the rest of the budget
+    // still rests (a GTC buys more shares with it).
+    const budgetBefore = order.direction === "BUY" ? Math.max(0, order.shares * order.price - spentUsd) : 0;
     order.filledShares += fill.shares;
     const left = Math.max(0, order.shares - order.filledShares);
-    order.reservedUsd *= remainingBefore > EPS ? left / remainingBefore : 0;
+    const budgetAfter = Math.max(0, budgetBefore - amount);
+    // Never under the unfilled shares at the limit (validateAccount): a fill a
+    // hair over the limit (FILL_PRICE_TOLERANCE) spends more than that per share.
+    order.reservedUsd = order.direction === "BUY"
+      ? Math.max(order.reservedUsd * (budgetBefore > EPS ? budgetAfter / budgetBefore : 0), left * order.price)
+      : order.reservedUsd * (remainingBefore > EPS ? left / remainingBefore : 0);
     order.reservedShares = order.direction === "SELL" && reservationPending(order) ? left : 0;
     const saved = copy(fill), savedKey = this.fillKey(saved);
     this.fillIndexByKey.set(savedKey, this.state.fills.length);
     this.fillByKey.set(savedKey, saved);
     this.registerTradeLeg(saved.tradeId, saved.orderId);
     this.state.fills.push(saved);
-    if (left <= EPS) {
+    // A resting BUY (not a FAK) is filled when its budget is spent: at a better
+    // price it has its shares with budget still on the book, which the venue
+    // keeps listing until it is cancelled or bought.
+    const resting = order.direction === "BUY" && order.timeInForce !== "FAK";
+    if (resting ? this.buyBudgetSpent(order) : left <= EPS) {
       order.status = "FILLED";
       order.reconciliationPending = false;
       order.reservedUsd = 0; order.reservedShares = 0;
     }
     else if (this.matchedFakComplete(order)) this.voidFakRest(order);
-    else if (order.status !== "CANCELLED") order.status = "PARTIAL";
+    // A late leg never re-opens a terminal order (a FILLED GTC that was closed
+    // on its spent budget would go back to resting and get a refused cancel).
+    else if (order.status !== "CANCELLED" && order.status !== "FILLED") order.status = "PARTIAL";
     order.updatedAt = this.clock();
     this.persist(true);
     // Inventory is authoritative in the event context before the strategy sees the fill.
@@ -1451,9 +1514,11 @@ export class TradingCore {
     previous.status = "FAILED";
     order.filledShares = Math.max(0, order.filledShares - previous.shares);
     order.status = "UNKNOWN"; order.reconciliationPending = true;
-    const remaining = order.shares - order.filledShares;
-    order.reservedUsd = (order.direction === "BUY" ? remaining * order.price : 0)
-      + (this.options.adapters.estimateFee?.({ ...order, shares: remaining }) ?? 0);
+    // A BUY can hold more shares than it ordered (a better price): never a
+    // negative remainder.
+    const remaining = Math.max(0, order.shares - order.filledShares);
+    const fee = remaining > EPS ? this.options.adapters.estimateFee?.({ ...order, shares: remaining }) ?? 0 : 0;
+    order.reservedUsd = order.direction === "BUY" ? this.buyReservationUsd(order, fee) : fee;
     order.reservedShares = order.direction === "SELL" ? remaining : 0;
     this.state.risk.halted = true; this.state.risk.reason = "failed trade requires reconciliation";
     this.notify(order, true); this.emitFill(previous);

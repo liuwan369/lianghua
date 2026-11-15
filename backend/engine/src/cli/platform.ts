@@ -736,10 +736,17 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   const ackMs = msOf(order?.venueReplyAt ?? order?.httpAckAt);
   const askGoneMs = msOf(stage?.askGoneAtUnix);
   const rest = stage?.kind === "rest";
+  const gtc = stage?.kind === "gtc";
   // rest_mode: what the round's config did after a miss ("live" placed a rest
-  // order, "shadow" only recorded what one would have filled, "off" neither).
-  const restMode = !config ? null : config.restAfterMissSec > 0 ? "live" : config.restShadow ? "shadow" : "off";
-  return { stage: rest ? "rest" : "fak", rest_mode: restMode,
+  // order, "shadow" only recorded what one would have filled, "off" neither,
+  // "gtc" the round's one GTC rested what did not match at once).
+  const restMode = !config ? null : gtc ? "gtc"
+    : config.restAfterMissSec > 0 ? "live" : config.restShadow ? "shadow" : "off";
+  // A GTC's shares bought at once (taker, after the taker delay) and while
+  // it rested (maker).
+  const sharesBy = (maker: boolean) => filled.filter(fill => fill.isMaker === maker).reduce((total, fill) => total + fill.shares, 0);
+  return { stage: rest ? "rest" : gtc ? "gtc" : "fak", rest_mode: restMode,
+    taker_shares: gtc ? sharesBy(false) : null, maker_shares: gtc ? sharesBy(true) : null,
     parent_client_order_id: rest && round ? round.stages[0]?.clientOrderId ?? null : null,
     rest_shadow_fill_ms: rest ? null : msOf(stage?.restShadowFillAt),
     client_order_id: order?.clientOrderId ?? stage?.clientOrderId ?? null, order_id: order?.orderId ?? stage?.orderId ?? null,

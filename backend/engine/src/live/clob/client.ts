@@ -831,7 +831,11 @@ export class ClobWrapper {
   presignedCount(): number { return this.presigned.size; }
   private takePresigned(tokenId: string, direction: "BUY" | "SELL", price: number, size: number,
     timeInForce: "GTC" | "FOK" | "FAK", postOnly: boolean, negRisk: boolean) {
-    const slot = presignKey(tokenId, direction, price, size, timeInForce, postOnly);
+    // The signed order is the same for FAK and GTC (createOrder, limit-order
+    // amounts); the type and postOnly go in the POST envelope (orderToJsonV2).
+    // A plain GTC (binance-lead entryOrder gtc) posts the FAK's presign; a
+    // post-only order never does (it is the rest after that FAK missed).
+    const slot = presignKey(tokenId, direction, price, size, timeInForce === "GTC" && !postOnly ? "FAK" : timeInForce, postOnly);
     const hit = this.presigned.get(slot);
     if (!hit) return undefined;
     this.presigned.delete(slot);

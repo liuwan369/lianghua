@@ -2,7 +2,8 @@
 // matched token/direction/price/size only, so the post-only GTC rest order at
 // the FAK's limit and remaining size could post the presigned FAK signature.
 // A GTC post-only order is always signed on the spot; the FAK presign at the
-// same key stays stored, and a later FAK there still takes it.
+// same key stays stored, and a later FAK there still takes it. A plain GTC
+// (entryOrder gtc) takes the presign: same signed order, type in the envelope.
 // Real ClobWrapper + PolymarketGateway, fetch stubbed. Run after `npm run build`.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -57,11 +58,15 @@ try {
   assert.equal(wrapper.presignedCount(), 0, "used once");
   assert.equal(bodies.at(-1).orderType, "FAK");
   assert.notEqual(fak.signedPayload.signature, restOrder.signedPayload.signature, "two distinct orders");
-  // A plain GTC (not post-only) at a presigned key does not take it either.
+  // A plain GTC (not post-only; binance-lead entryOrder gtc) takes it: the
+  // signed order is the same, the type goes in the POST envelope.
   await wrapper.presign(T, [0.6], () => 5, 0.01);
   signedOnTheSpot = 0;
-  await submit("GTC", false);
-  assert.equal(signedOnTheSpot, 1, "a GTC is signed on the spot");
-  assert.equal(wrapper.presignedCount(), 1);
+  const gtc = await submit("GTC", false);
+  assert.equal(signedOnTheSpot, 0, "a plain GTC posts the presigned order");
+  assert.equal(wrapper.presignedCount(), 0, "used once");
+  assert.equal(bodies.at(-1).orderType, "GTC");
+  assert.equal(bodies.at(-1).postOnly, false);
+  assert.equal(bodies.at(-1).order.signature, gtc.signedPayload.signature);
 } finally { globalThis.fetch = realFetch; }
 console.log("presign-order-type OK");

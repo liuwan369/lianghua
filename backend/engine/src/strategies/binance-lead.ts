@@ -53,18 +53,27 @@ export interface BinanceLeadConfig {
    * REST_SHADOW_SEC of its reply put that side's ask at or under the limit
    * (stage.restShadowFillAt): what a rest would have filled. No order. */
   restShadow: boolean;
+  /** The round's order (user 2026-11-15). "fak": a FAK, then after a miss the
+   * rest order above. "gtc": one GTC BUY at the same limit; what matches after
+   * the taker delay is a taker fill, what does not rests on the book (maker,
+   * no fee) from the venue's reply, cancelled restAfterMissSec after it. One
+   * order: no rest order, no post-only refusal when the ask came back. */
+  entryOrder: EntryOrder;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
   totalBudgetUsd?: number;
   dailyLossUsd?: number | null;
 }
+export type EntryOrder = "fak" | "gtc";
+export const ENTRY_ORDERS: readonly EntryOrder[] = ["fak", "gtc"];
 type LeadEvent = Extract<TradingEvent, { kind: "lead" }>;
 export type LeadSignalRecord = Omit<LeadEvent, "kind" | "assetId">;
 export interface LeadStage {
-  /** "fak" the round's order (client id :1); "rest" the post-only BUY after
-   * it missed (client id :rest). Absent in older state: "fak". */
-  kind?: "fak" | "rest";
+  /** "fak" the round's FAK (client id :1); "rest" the post-only BUY after it
+   * missed (client id :rest); "gtc" the round's one GTC (client id :1,
+   * entryOrder gtc). Absent in older state: "fak". */
+  kind?: "fak" | "rest" | "gtc";
   direction: LeadDirection;
   tokenId: string;
   clientOrderId: string;
@@ -97,8 +106,8 @@ export interface LeadStage {
   restDecided?: boolean;
   /** When this stage first held shares (the order update's time). */
   firstFillAt?: number;
-  /** Rest stage: when its timed cancel is due (strategy clock), set once the
-   * venue accepted it. */
+  /** Rest or GTC stage: when its timed cancel is due (strategy clock), set once
+   * the venue accepted it. */
   cancelAt?: number;
 }
 /** Shadow exit (user 2026-11-14, records only): once the round holds shares,
@@ -157,7 +166,7 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadVenues: [...LEAD_VENUES], tokyoRelay: true,
-  openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
 const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"];
@@ -202,6 +211,11 @@ const unitPrice = (n: unknown): n is number => positive(n) && n < 1;
 const priceText = (n: number) => Number(n.toFixed(2)) === n ? n.toFixed(2) : String(n);
 const validDirection = (value: unknown): value is LeadDirection => value === "UP" || value === "DOWN";
 const activeOrder = (status: string) => ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(status);
+/** The stage's order may still have something on the book. A GTC can hold its
+ * shares (bought below the limit) with budget still resting: the core keeps
+ * it OPEN/PARTIAL until that budget is spent. */
+const hasRemainder = (stage: Readonly<LeadStage>) => activeOrder(stage.status) && !!stage.orderId
+  && (stage.kind === "gtc" || stage.filledShares < stage.shares - EPS);
 const STAGE_STATUSES = ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN", "ABANDONED"];
 
 /** Ask + premium, rounded down to the tick (never pays more than the rule), capped at 0.99. */
@@ -273,6 +287,9 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
     throw new Error("restAfterMissSec must be in [0, 30]");
   }
   if (typeof config.restShadow !== "boolean") throw new Error("restShadow must be true or false");
+  if (!ENTRY_ORDERS.includes(config.entryOrder)) throw new Error(`entryOrder must be one of ${ENTRY_ORDERS.join(", ")}`);
+  // The GTC's remainder is cancelled after restAfterMissSec: 0 would rest it to the close.
+  if (config.entryOrder === "gtc" && !(config.restAfterMissSec > 0)) throw new Error("entryOrder gtc needs restAfterMissSec > 0");
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
     if (config[key] !== undefined && !positive(config[key])) throw new Error(`${key} must be positive when supplied`);
   }
@@ -444,34 +461,33 @@ export class BinanceLeadStrategy implements StrategyPlugin {
 
     const actions: StrategyAction[] = [];
     for (const round of this.workingRounds.values()) {
-      // A rest order's hold is up: pull what still rests (the ended branch
-      // below keeps retrying once the round is over).
-      const rest = round.stages[1];
+      // A rest order's or the GTC's hold is up: pull what still rests (the
+      // ended branch below keeps retrying once the round is over).
+      const rest = round.stages[0]?.kind === "gtc" ? round.stages[0] : round.stages[1];
       if (rest && context.now < round.endsAt && rest.cancelAt !== undefined && context.now >= rest.cancelAt
-        && activeOrder(rest.status) && rest.orderId && rest.filledShares < rest.shares - EPS
-        && !context.account.quarantinedOrderIds?.includes(rest.orderId) && cancelDue(rest, context.now)) {
+        && hasRemainder(rest) && !context.account.quarantinedOrderIds?.includes(rest.orderId!) && cancelDue(rest, context.now)) {
         rest.cancelRequestedAt = context.now; changed = true;
-        actions.push({ kind: "cancel", orderId: rest.orderId });
+        actions.push({ kind: "cancel", orderId: rest.orderId! });
       }
       if (this.restoredWaitingMarkets.delete(round.marketId) && round.startsAt < context.now) {
         round.status = "waiting_next_round"; round.reason = "重启时已错过本场开始，等待下一场"; changed = true;
       }
       if (context.now >= round.endsAt) {
         if (round.status !== "ended") { round.status = "ended"; round.reason = "本场已结束，处理余单与结算"; round.latest = undefined; changed = true; }
-        let hasRemainder = false;
+        let working = false;
         const quarantined = new Set(context.account.quarantinedOrderIds ?? []);
         for (const stage of round.stages) {
-          if (!activeOrder(stage.status) || !stage.orderId || stage.filledShares >= stage.shares - EPS) continue;
-          hasRemainder = true;
+          if (!hasRemainder(stage)) continue;
+          working = true;
           // A complete authenticated snapshot already excluded this UNKNOWN order.
-          if (quarantined.has(stage.orderId)) continue;
+          if (quarantined.has(stage.orderId!)) continue;
           // Retry an unconfirmed cancel on later timers, without recursive callback storms.
           if (!cancelDue(stage, context.now)) continue;
           stage.cancelRequestedAt = context.now; changed = true;
-          actions.push({ kind: "cancel", orderId: stage.orderId });
+          actions.push({ kind: "cancel", orderId: stage.orderId! });
         }
         // Late acknowledgements or failed-fill corrections can wake this round again.
-        if (!hasRemainder) { this.workingRounds.delete(round.marketId); this.blockNoted.delete(round.marketId); }
+        if (!working) { this.workingRounds.delete(round.marketId); this.blockNoted.delete(round.marketId); }
         continue;
       }
       if (context.now < round.startsAt || round.status === "waiting_next_round") continue;
@@ -571,7 +587,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       round.reason = "数量或限价不符合交易所规则"; return undefined;
     }
     const { kind: _kind, assetId: _assetId, ...signal } = event;
-    const stage: LeadStage = { direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
+    const stage: LeadStage = { ...(config.entryOrder === "gtc" ? { kind: "gtc" as const } : {}),
+      direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
       price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
       signal: { ...signal }, askAtSignal: ask };
     return this.fund(round, stage, context, knownClients);
@@ -744,7 +761,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   private orderIntent(round: LeadRound, stage: LeadStage): Omit<OrderRequest, "strategyId"> {
     return { clientOrderId: stage.clientOrderId, assetId: round.assetId, marketId: round.marketId, roundId: round.roundId,
       tokenId: stage.tokenId, direction: "BUY", price: stage.price, shares: stage.shares,
-      ...(stage.kind === "rest" ? { timeInForce: "GTC" as const, postOnly: true } : { timeInForce: "FAK" as const, postOnly: false }),
+      ...(stage.kind === "rest" ? { timeInForce: "GTC" as const, postOnly: true }
+        : stage.kind === "gtc" ? { timeInForce: "GTC" as const, postOnly: false } : { timeInForce: "FAK" as const, postOnly: false }),
       ...(round.config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: round.config.roundBudgetUsd }) };
   }
   private validSizeAndPrice(instrument: Instrument, shares: number, price: number): boolean {
@@ -776,14 +794,13 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       // The miss starts the rest (or its shadow) from the venue's reply.
       stage.missedAt = finite(order.venueReplyAt) ? order.venueReplyAt : finite(order.updatedAt) ? order.updatedAt : this.lastNow;
     }
-    if (stage.kind === "rest" && stage.cancelAt === undefined && ["OPEN", "PARTIAL"].includes(stage.status)) {
+    if ((stage.kind === "rest" || stage.kind === "gtc") && stage.cancelAt === undefined && ["OPEN", "PARTIAL"].includes(stage.status)) {
       // The hold runs from the venue's acceptance.
       const accepted = finite(order.httpAckAt) ? order.httpAckAt : finite(order.updatedAt) ? order.updatedAt : this.lastNow;
       stage.cancelAt = accepted + round.config.restAfterMissSec;
     }
     this.noteAttempt(round, stage);
-    if (round.status === "ended" && activeOrder(stage.status) && stage.orderId
-      && stage.filledShares < stage.shares - EPS) this.workingRounds.set(round.marketId, round);
+    if (round.status === "ended" && hasRemainder(stage)) this.workingRounds.set(round.marketId, round);
     return true;
   }
   /** The core holds this round's order but the strategy has no stage: the
@@ -795,12 +812,17 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (!match || match[1] !== this.state.instanceId) return undefined;
     const round = this.roundsByMarket.get(match[2]!);
     const rest = match[3] === "rest";
+    // A :1 GTC (not post-only) is the round's one GTC (entryOrder gtc).
+    const gtc = !rest && order.timeInForce === "GTC" && !order.postOnly;
     // :1 only into an empty round; :rest only after the round's FAK, same token.
     if (!round || order.direction !== "BUY" || round.stages.length !== (rest ? 1 : 0)
       || (rest && (order.tokenId !== round.stages[0]!.tokenId || !order.postOnly))) return undefined;
     const direction = order.tokenId === round.upTokenId ? "UP" : order.tokenId === round.downTokenId ? "DOWN" : undefined;
     if (!direction) return undefined;
-    const stage: LeadStage = { ...(rest ? { kind: "rest" as const, cancelAt: order.createdAt + round.config.restAfterMissSec } : {}),
+    // Its hold from its creation: the venue's acceptance is not known any more.
+    const hold = round.config.restAfterMissSec > 0 ? round.config.restAfterMissSec : REST_SHADOW_SEC;
+    const stage: LeadStage = { ...(rest ? { kind: "rest" as const, cancelAt: order.createdAt + round.config.restAfterMissSec }
+      : gtc ? { kind: "gtc" as const, cancelAt: order.createdAt + hold } : {}),
       direction, tokenId: order.tokenId, clientOrderId: order.clientOrderId,
       price: order.price, shares: order.shares, createdAt: order.createdAt, status: order.status, filledShares: order.filledShares,
       ...(order.orderId ? { orderId: order.orderId } : {}),
@@ -821,6 +843,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   private static roundReason(round: LeadRound): string {
     const stage = round.stages[0];
     if (!stage) return round.reason;
+    if (stage.kind === "gtc") return BinanceLeadStrategy.gtcReason(stage);
     const text = BinanceLeadStrategy.fakReason(stage);
     const rest = round.stages[1];
     return rest ? `${text}；挂单补单：${BinanceLeadStrategy.restReason(rest)}` : text;
@@ -836,6 +859,17 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (stage.status === "UNKNOWN") return "状态待确认";
     if (stage.status === "ABANDONED") return "意图已放弃";
     return stage.filledShares > EPS ? `买到 ${got} 股，剩余已撤` : "没成交，已撤";
+  }
+  private static gtcReason(stage: LeadStage): string {
+    const got = `${Number(stage.filledShares.toFixed(4))}/${stage.shares}`;
+    if (stage.status === "CREATED" || stage.status === "SUBMITTING") return "已下单（限价单），等待成交回报";
+    if (stage.status === "OPEN") return `本场已下单，未立即成交，挂在 ${priceText(stage.price)}，到时撤单`;
+    if (stage.status === "PARTIAL") return `本场已买到 ${got} 股，剩余挂着，到时撤单`;
+    if (stage.status === "ABANDONED") return "本场已尝试，意图已放弃";
+    if (stage.status === "REJECTED") return "本场已尝试，订单被拒";
+    if (stage.status === "UNKNOWN") return "本场已尝试，订单状态待确认";
+    if (stage.filledShares > EPS) return `本场已买到 ${got} 股，持有到结算`;
+    return "本场已尝试，未成交，已撤";
   }
   private static fakReason(stage: LeadStage): string {
     const got = `${Number(stage.filledShares.toFixed(4))}/${stage.shares}`;
@@ -853,8 +887,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   private indexRound(round: LeadRound): void {
     this.roundsByMarket.set(round.marketId, round);
     for (const stage of round.stages) this.indexStage(round, stage);
-    if (round.status !== "ended" || round.stages.some(stage => activeOrder(stage.status) && stage.orderId
-      && stage.filledShares < stage.shares - EPS)) this.workingRounds.set(round.marketId, round);
+    if (round.status !== "ended" || round.stages.some(hasRemainder)) this.workingRounds.set(round.marketId, round);
   }
   private save(): void { this.options.persist?.(this.exportState()); }
 
@@ -888,12 +921,15 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         const legacy = stage as LeadStage & { stage?: unknown; fairEdge?: unknown };
         const rest = index === 1;
         const fak = round.stages[0]!;
+        const gtc = stage.kind === "gtc";
         if ((legacy.stage !== undefined && legacy.stage !== 1)
-          || (stage.kind ?? "fak") !== (rest ? "rest" : "fak")
+          // The first stage is the FAK or the GTC; a rest only follows a FAK.
+          || (rest ? stage.kind !== "rest" || fak.kind === "gtc" : !gtc && (stage.kind ?? "fak") !== "fak")
           || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:${rest ? "rest" : "1"}`
-          // Only the rest has a timed cancel; it follows a FAK short of its
-          // shares, on its token, at its limit, for at most the remainder.
-          || (!rest && stage.cancelAt !== undefined)
+          // Only the rest and the GTC have a timed cancel; a rest follows a FAK
+          // short of its shares, on its token, at its limit, for at most the remainder.
+          || (!rest && !gtc && stage.cancelAt !== undefined)
+          || (gtc && stage.cancelAt !== undefined && !finite(stage.cancelAt))
           || (rest && ((stage.cancelAt !== undefined && !finite(stage.cancelAt)) || stage.tokenId !== fak.tokenId
             || Math.abs(stage.price - fak.price) > EPS || stage.shares > fak.shares - fak.filledShares + EPS))
           || !validDirection(stage.direction)

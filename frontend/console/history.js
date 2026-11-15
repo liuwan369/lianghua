@@ -31,7 +31,8 @@
       ["卖单消失（我们收到）", stamp(o.ask_gone_ms)], ["卖单消失（交易所时间）", stamp(o.ask_gone_venue_ms)],
       ["成交后多久卖单消失", ms(o.ask_gone_after_trade_ms)], ["晚了", ms(o.late_by_ms)],
       ["盈亏来源", o.pnl_source === "official" ? "官方结算" : o.pnl_source === "ledger" ? "账本估算" : "--"],
-      ["挂单补单", o.stage === "rest" ? `是 · 跟在 ${o.parent_client_order_id || "--"} 后面` : o.rest_mode === "shadow" ? (num(o.rest_shadow_fill_ms) === null ? "模拟：5 秒内不会成交" : `模拟：${stamp(o.rest_shadow_fill_ms)} 会成交`) : o.rest_mode === "live" ? "已开启" : "--"],
+      ...(o.stage === "gtc" ? [["限价单", `立即成交 ${fmt.shares(o.taker_shares)} 股 · 挂着成交 ${fmt.shares(o.maker_shares)} 股`]] : []),
+      ["挂单补单", o.stage === "gtc" ? "--" : o.stage === "rest" ? `是 · 跟在 ${o.parent_client_order_id || "--"} 后面` : o.rest_mode === "shadow" ? (num(o.rest_shadow_fill_ms) === null ? "模拟：5 秒内不会成交" : `模拟：${stamp(o.rest_shadow_fill_ms)} 会成交`) : o.rest_mode === "live" ? "已开启" : "--"],
     ];
     return html`<div class="detail-grid">${items.map(([k, v]) => html`<div><span>${k}</span> <b>${v}</b></div>`)}</div>${o.error ? html`<p class="error-line">错误：${o.error}</p>` : ""}`;
   };
@@ -42,7 +43,7 @@
       const r = result(o);
       const key = rowKey(o);
       return html`<tr class="row-click" data-key="${key}"><td class="num">${fmt.dateTime(o.recv_ts)}</td><td class="num">${fmt.hm(o.round_start)}</td>
-        <td class="l">${o.stage === "rest" ? html`<span class="tag">挂单补单</span> ` : ""}${VENUES[o.venue] || o.venue || "--"} · ${LINES[o.line] || o.line || "--"}</td>
+        <td class="l">${o.stage === "rest" ? html`<span class="tag">挂单补单</span> ` : o.stage === "gtc" ? html`<span class="tag">限价单</span> ` : ""}${VENUES[o.venue] || o.venue || "--"} · ${LINES[o.line] || o.line || "--"}</td>
         <td class="l ${o.direction === "UP" ? "up" : "down"}">${DIRECTIONS[o.direction] || o.direction || "--"}</td>
         <td class="num">${fmt.price(o.ask_at_signal)}</td><td class="num">${fmt.price(o.limit_price)}</td><td class="num">${fmt.shares(o.shares)}</td>
         <td class="num">${fmt.shares(o.filled_shares)}</td><td class="l ${r.tone}">${r.text}</td><td class="num ${fmt.tone(o.pnl)}">${fmt.money(o.pnl)}</td>

@@ -27,14 +27,18 @@ def default_config() -> dict:
     # the control plane's run settings, which reach the engine as flags.
     return {"assetId": ASSET_ID, "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
             "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "leadVenues": list(LEAD_VENUES), "tokyoRelay": True,
-            "openBandBp": 0, "openLine": "tick", "restAfterMissSec": 0, "restShadow": True, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
+            "openBandBp": 0, "openLine": "tick", "restAfterMissSec": 0, "restShadow": True, "entryOrder": "fak", "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
+# binance-lead.ts ENTRY_ORDERS.
+ENTRY_ORDERS = ("fak", "gtc")
+
+
 # A published file may predate these fields; it gets their defaults, as the
 # engine's normalizeBinanceLeadConfig does. Any other missing field is damage.
-ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow")
+ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder")
 # Settings the engine dropped (73fd2fd, d2bfb59). The engine ignores them in a
 # saved file, so a stored config carrying them loads without them; a submitted
 # draft with them is still rejected.
@@ -104,6 +108,10 @@ def validate_config(config: dict) -> dict:
     within("restAfterMissSec", "没买到后挂单秒数", 0, 30, low_open=False)
     if not isinstance(result["restShadow"], bool):
         raise ConfigValidationError("挂单模拟记录必须是开或关")
+    if result["entryOrder"] not in ENTRY_ORDERS:
+        raise ConfigValidationError("第一单方式只能是吃单+补单（fak）或限价单（gtc）")
+    if result["entryOrder"] == "gtc" and not result["restAfterMissSec"] > 0:
+        raise ConfigValidationError("第一单用限价单时，挂单秒数必须大于 0（到时撤掉剩余）")
     for key, label in (("maxQuoteAgeSeconds", "盘口最大年龄"), ("maxQuoteSkewSeconds", "盘口两边时间差")):
         if number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须是正数")

@@ -216,14 +216,15 @@ export function hasProvisionalFills(fills: readonly { status?: string; ts?: numb
 
 /** Recovery found a signed order the venue does not know (404). Repeat exactly
  * the persisted signature, at most twice, while its round is still open. Never
- * a FAK or a post-only order: each answers a signal
- * that is gone by the time recovery runs, so it stays UNKNOWN until the account
- * read or the user feed gives its terminal state. */
+ * a FAK, a post-only order or binance-lead's GTC (entryOrder gtc): each answers
+ * a signal that is gone by the time recovery runs, so it stays UNKNOWN until
+ * the account read or the user feed gives its terminal state. */
 export function replaysPreparedOrder(
-  order: Pick<OrderRecord, "prepared" | "status" | "venueStatus" | "preparedReplayAttempts" | "timeInForce" | "postOnly">,
+  order: Pick<OrderRecord, "prepared" | "status" | "venueStatus" | "preparedReplayAttempts" | "timeInForce" | "postOnly">
+    & Partial<Pick<OrderRecord, "strategyId">>,
   venueStatus: string | undefined, market: Pick<MarketInfo, "endsAt"> | undefined, nowSec: number,
 ): boolean {
-  return order.timeInForce !== "FAK" && !order.postOnly && !!order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
+  return order.timeInForce !== "FAK" && !order.postOnly && order.strategyId !== "binance-lead" && !!order.prepared && ["SUBMITTING", "UNKNOWN"].includes(order.status)
     && !order.venueStatus && !venueStatus
     && (order.preparedReplayAttempts ?? 0) < 2 && !!market && nowSec < market.endsAt;
 }
@@ -861,6 +862,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
         // (core checks that equals our settled fills) instead of retrying.
         if (detail && String(detail.status ?? "").toUpperCase() === "MATCHED"
           && platform.core.closeMatched(order.orderId!, numeric(detail.size_matched))) continue;
+        // Matched, not open, budget spent and every fill settled: filled,
+        // whatever the detail lookup answered (it may keep failing).
+        if (platform.core.closeSpent(order.orderId!)) continue;
         const missing = !!detail && (detail.status === "NOT_FOUND" || numeric(detail.status) === 404
           || /order.*not found|not found.*order/i.test(String(detail.error ?? "")));
         if (missing) notFoundIds.add(order.orderId!);

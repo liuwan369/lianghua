@@ -31,10 +31,10 @@ const S = window.PolySettings;
 
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
-  "openBandBp", "openLine", "restAfterMissSec", "restShadow", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
-  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, maxQuoteAgeSeconds: 2,
+  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", maxQuoteAgeSeconds: 2,
   maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, durationMinutes: 0, maxRounds: 12, mode: "live" };
 
 // --- the published config round-trips unchanged ---
@@ -68,6 +68,14 @@ assert.equal(rest.config.restShadow, false);
 for (const bad of ["-1", "31", ""]) {
   assert.ok("restAfterMissSec" in S.buildConfig({ ...inputs, restAfterMissSec: bad }, published).errors, `rest ${bad}`);
 }
+// The first order: FAK (+ rest) or one GTC; a GTC needs seconds > 0.
+assert.equal(S.inputsFrom(published).entryOrder, "fak");
+assert.equal(S.inputsFrom({ ...published, entryOrder: "gtc" }).entryOrder, "gtc");
+const gtc = S.buildConfig({ ...inputs, entryOrder: "gtc", restAfterMissSec: "5" }, published);
+assert.deepEqual({ ...gtc.errors }, {});
+assert.equal(gtc.config.entryOrder, "gtc");
+assert.ok("restAfterMissSec" in S.buildConfig({ ...inputs, entryOrder: "gtc", restAfterMissSec: "0" }, published).errors, "gtc with 0 s");
+assert.equal(S.buildConfig({ ...inputs, entryOrder: "ioc" }, published).config.entryOrder, "fak", "anything else is fak");
 
 // --- validation ---
 const errorsOf = (patch) => Object.keys(S.buildConfig({ ...inputs, ...patch }, published).errors).sort();

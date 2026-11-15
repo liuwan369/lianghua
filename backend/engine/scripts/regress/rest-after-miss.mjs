@@ -305,4 +305,53 @@ const fakSent = (config = {}) => {
   log.observe(START + 300);
   assert.deepEqual([lines.length, lines[0].triggered, lines[0].opposite_signals], [1, false, 1], "at the end: one line, not triggered");
 }
+// --- entryOrder "gtc" (user 2026-11-15): the round's first order is one GTC at
+// the same limit; what does not match at once rests and is cancelled
+// restAfterMissSec after the venue accepted it. No separate rest order. ---
+{
+  assert.equal(normalizeBinanceLeadConfig({}).entryOrder, "fak", "the FAK + rest flow stays the default");
+  assert.throws(() => normalizeBinanceLeadConfig({ entryOrder: "ioc" }), /entryOrder/);
+  assert.throws(() => normalizeBinanceLeadConfig({ entryOrder: "gtc", restAfterMissSec: 0 }), /entryOrder gtc needs restAfterMissSec/);
+  const { s, fak: order } = fakSent({ entryOrder: "gtc", restAfterMissSec: 5 });
+  assert.equal(order.timeInForce, "GTC", "the first order is GTC");
+  assert.equal(order.postOnly, false, "not post-only: it takes what it can at once");
+  assert.equal(order.price, 0.63, "same limit as the FAK");
+  assert.equal(order.clientOrderId, "binance-lead:0xm:1");
+  assert.equal(stages(s)[0].kind, "gtc");
+  // Part matched at once, the rest rests: cancel 5 s after the venue accepted it.
+  const a1 = at(s, { kind: "order", order: { ...record(order, "PARTIAL", 2, "0xg", S + 0.5), httpAckAt: S + 0.5 } }, S + 0.5);
+  assert.deepEqual(submits(a1), [], "no rest order: the GTC is the rest");
+  assert.equal(stages(s)[0].cancelAt, S + 5.5);
+  assert.deepEqual(cancels(at(s, { kind: "timer", ts: S + 5.4 }, S + 5.4)), []);
+  assert.deepEqual(cancels(at(s, { kind: "timer", ts: S + 5.6 }, S + 5.6)), ["0xg"], "the remainder is cancelled when due");
+  at(s, { kind: "order", order: record(order, "CANCELLED", 2, "0xg", S + 5.8) }, S + 5.8);
+  assert.equal(stages(s).length, 1, "one order in the round");
+  at(s, book(S + 20, 0.5, 0.5), S + 20);
+  assert.deepEqual(submits(at(s, lead(S + 21, "DOWN"), S + 21.002)), [], "never a second order");
+  // Restored with its timer.
+  assert.equal(createStrategy({}, s.exportState()).exportState().rounds[0].stages[0].cancelAt, S + 5.5);
+}
+{
+  // Filled at once: nothing to cancel. OPEN (nothing matched) is cancelled when due, like a rest.
+  const f = fakSent({ entryOrder: "gtc", restAfterMissSec: 5 });
+  at(f.s, { kind: "order", order: { ...record(f.fak, "FILLED", 5, "0xg", S + 0.5), httpAckAt: S + 0.5 } }, S + 0.5);
+  assert.deepEqual(cancels(at(f.s, { kind: "timer", ts: S + 9 }, S + 9)), []);
+  const o = fakSent({ entryOrder: "gtc", restAfterMissSec: 3 });
+  at(o.s, { kind: "order", order: { ...record(o.fak, "OPEN", 0, "0xg", S + 0.5), httpAckAt: S + 0.5 } }, S + 0.5);
+  assert.deepEqual(cancels(at(o.s, { kind: "timer", ts: S + 3.6 }, S + 3.6)), ["0xg"]);
+  // lead_order says which flow the round used.
+  const fields = leadOrderFields(o.s.exportState().rounds[0], stages(o.s)[0], record(o.fak, "CANCELLED", 0, "0xg", S + 4), []);
+  assert.equal(fields.stage, "gtc");
+  assert.equal(fields.rest_mode, "gtc");
+}
+{
+  // adoptOrder of a GTC :1 (state lost): it gets its timer from createdAt.
+  const s = createStrategy({ limitPremium: 0.08, entryOrder: "gtc", restAfterMissSec: 5 });
+  at(s, { kind: "timer", ts: START - 20 }, START - 20);
+  const base = { clientOrderId: "binance-lead:0xm:1", assetId: "btc", marketId: "0xm", roundId: ROUND, tokenId: UP, direction: "BUY",
+    price: 0.63, shares: 5, timeInForce: "GTC", postOnly: false };
+  at(s, { kind: "timer", ts: S + 2 }, S + 2, account({ orders: [record(base, "OPEN", 0, "0xg", S + 0.6)] }));
+  assert.equal(stages(s)[0].kind, "gtc");
+  assert.equal(stages(s)[0].cancelAt, S + 0.6 + 5);
+}
 console.log("rest-after-miss OK");

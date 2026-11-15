@@ -37,9 +37,15 @@
   };
   // Rest after a miss: the live rest orders, or with the rest off what the
   // shadow says a 5 s rest would have filled (queue ignored, so optimistic).
-  const renderRest = (rest) => {
+  const renderRest = (rest, gtc) => {
     if (!rest) return html`<p class="empty">没有数据</p>`;
     const live = rest.live || {}, shadow = rest.shadow || {};
+    // entryOrder gtc: one limit order per round, its remainder rests.
+    const gtcCards = gtc?.orders ? html`<div class="cards">
+      ${card("限价单", `${fmt.int(gtc.orders)} 单`, `买到 ${fmt.int(gtc.filled)} 单 · ${fmt.pct(gtc.fill_rate)}`)}
+      ${card("挂上后才成交", `${fmt.int(gtc.rested_fills)} 单`, "剩余部分挂着时被买走（不收手续费）")}
+      ${card("股数", `立即 ${fmt.shares(gtc.taker_shares)} · 挂单 ${fmt.shares(gtc.maker_shares)}`, "立即 = 吃单成交，挂单 = 挂着时成交")}
+    </div>` : "";
     const liveCards = live.orders ? html`<div class="cards">
       ${card("挂单补单", `${fmt.int(live.orders)} 单`, `买到 ${fmt.int(live.filled)} 单 · ${fmt.pct(live.fill_rate)}`)}
       ${card("已结算", `${fmt.int(live.settled)} 单`, `赢 ${fmt.int(live.won)} · 胜率 ${fmt.pct(live.win_rate)}`)}
@@ -51,8 +57,8 @@
       ${card("其中会赢", `${fmt.int(shadow.won)} / ${fmt.int(shadow.settled)} 单`, `胜率 ${fmt.pct(shadow.win_rate)}`)}
       ${card("模拟盈亏", fmt.money(shadow.pnl_if_filled_usd), "按限价、不排队估算，偏乐观", fmt.tone(shadow.pnl_if_filled_usd))}
     </div>` : "";
-    if (!liveCards && !shadowCards) return html`<p class="empty">还没有没买到的单</p>`;
-    return html`${liveCards}${shadowCards}<p class="note">吃单没买到后，在同一限价挂只挂单的买单，几秒后撤。</p>`;
+    if (!liveCards && !shadowCards && !gtcCards) return html`<p class="empty">还没有没买到的单</p>`;
+    return html`${gtcCards}${liveCards}${shadowCards}<p class="note">吃单+补单：吃单没买到后，在同一限价挂只挂单的买单，几秒后撤。限价单：一张单，能成交的立即成交，剩下的挂着，几秒后撤。</p>`;
   };
   // Shadow exit (records only): selling what a round held on its 3rd opposite
   // signal at the bid then, against holding to the close.
@@ -111,7 +117,7 @@
       </tbody></table></div>`;
   };
   const renderAll = (data) => ({
-    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest), exit: renderExit(data?.exit_shadow), late: renderLate(data?.late_by_ms),
+    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exit: renderExit(data?.exit_shadow), late: renderLate(data?.late_by_ms),
     latency: renderLatency(data?.latency), sources: renderBySource(data?.by_source), skips: renderSkips(data?.skips), hours: renderHours(data?.by_hour),
   });
   window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderMisses, renderRest, renderExit, renderLate, renderLatency, renderBySource, renderSkips, renderHours });

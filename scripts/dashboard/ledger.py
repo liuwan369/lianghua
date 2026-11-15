@@ -136,7 +136,8 @@ LEAD_ORDER_NUMBERS = ("round_start", "relay_recv_ms", "trade_time_ms", "signal_r
                       "open_value", "band_bp", "sec_since_open", "ask_at_signal", "limit_price", "shares",
                       "filled_shares", "avg_fill_price", "fee_usd", "decision_ms", "post_sent_ms", "ack_ms",
                       "ask_gone_ms", "ask_gone_venue_ms", "t_signal_ms", "t_decide_ms", "t_post_ms", "t_ack_ms",
-                      "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms", "rest_shadow_fill_ms")
+                      "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms", "rest_shadow_fill_ms",
+                      "taker_shares", "maker_shares")
 LATENCY_METRICS = frozenset({
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
     "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
@@ -696,8 +697,8 @@ def _projection(record):
         result["line"] = record.get("line") if record.get("line") in LEAD_LINES else None
         # The round's FAK, or the rest order placed after its miss; and what the
         # round's config did after a miss (live / shadow / off).
-        result["stage"] = "rest" if record.get("stage") == "rest" else "fak"
-        result["rest_mode"] = record.get("rest_mode") if record.get("rest_mode") in ("live", "shadow", "off") else None
+        result["stage"] = record.get("stage") if record.get("stage") in ("rest", "gtc") else "fak"
+        result["rest_mode"] = record.get("rest_mode") if record.get("rest_mode") in ("live", "shadow", "off", "gtc") else None
         result["price"] = result["amount"] = result["pnl"] = None
         return result
     price, shares = result["price"], result["shares"]
@@ -2872,6 +2873,17 @@ class Ledger:
                        "saved": len(saved), "saved_usd": _sum(_sell_change(item) for item in saved),
                        "net_usd": _sum(_sell_change(item) for item in sold),
                        "bid_p50": _quantile(sorted(item["bid"] for item in sold), 0.5)}
+        # entryOrder gtc: the round's one GTC. How many rounds used it, how many
+        # bought at all, and how its shares split between the immediate (taker)
+        # fill and what the resting remainder later filled (maker).
+        gtc_orders = [o for o in orders if o.get("stage") == "gtc"]
+        gtc_filled = [o for o in gtc_orders if (o.get("filled_shares") or 0) > EPS_SHARES]
+        gtc_rested = [o for o in gtc_filled if (o.get("maker_shares") or 0) > EPS_SHARES]
+        gtc = {"orders": len(gtc_orders), "filled": len(gtc_filled),
+               "fill_rate": _ratio(len(gtc_filled), len(gtc_orders)),
+               "rested_fills": len(gtc_rested),
+               "taker_shares": _sum(o.get("taker_shares") for o in gtc_filled),
+               "maker_shares": _sum(o.get("maker_shares") for o in gtc_filled)}
         rest = {"live": {"orders": len(rests), "filled": len(rest_got), "fill_rate": _ratio(len(rest_got), len(rests)),
                          "settled": len(rest_done), "won": rest_won, "win_rate": _ratio(rest_won, len(rest_done)),
                          "pnl_usd": _sum(pnl_of(o)[0] for o in rest_done)},
@@ -2943,7 +2955,7 @@ class Ledger:
                         row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
-                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest,
+                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc,
                 "exit_shadow": exit_shadow}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
