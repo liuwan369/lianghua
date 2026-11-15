@@ -24,6 +24,10 @@ const check = (name, markup) => {
   assert.ok(out.includes(SAFE), `${name}: the text is shown escaped`);
 };
 
+// --- engine stop reasons are shown in Chinese; unknown text stays as it is ---
+assert.equal(window.PolyPreview.label("daily loss limit"), "已达每日亏损上限，今天不再下单");
+assert.equal(window.PolyPreview.label("卖价 0.85 高于上限 0.80，等下一个信号"), "卖价 0.85 高于上限 0.80，等下一个信号");
+
 // --- the template itself ---
 assert.equal(esc(EVIL), SAFE);
 assert.equal(String(html`<b>${EVIL}</b>`), `<b>${SAFE}</b>`);

@@ -138,6 +138,18 @@
     invalid_query: "查询参数不正确",
     record_not_found: "记录不存在",
     stream_capacity: "推送连接已满",
+    // The engine's stop reasons (core.ts risk.reason); a skipped signal or a
+    // round shows them as they are.
+    "daily loss limit": "已达每日亏损上限，今天不再下单",
+    "platform stopped": "引擎已停止",
+    "unknown order requires reconciliation": "有订单状态待确认，等待对账",
+    "restored orders require reconciliation": "重启后有未完成订单，等待对账",
+    "failed trade requires reconciliation": "有成交失败，等待对账",
+    "failed trade requires account reconciliation": "有成交失败，等待账户对账",
+    "signed identity requires reconciliation": "订单编号不一致，等待对账",
+    "state persistence failed": "状态保存失败，已停止下单",
+    "account recovery in progress": "正在读取账户，稍后再下",
+    "market reconciliation in progress": "本场订单待确认，稍后再下",
   };
   const label = (code) => {
     const text = String(code ?? "").trim();

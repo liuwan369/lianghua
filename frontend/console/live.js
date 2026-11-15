@@ -99,7 +99,7 @@
     ? html`<span class="tag up">已下单</span> 限价 ${fmt.price(signal.limit_price)}`
     : signal.outcome === "no_round" ? html`<span class="tag">不在场次内</span>`
     : signal.outcome === "stopping" ? html`<span class="tag warn">停机中</span>`
-    : html`<span class="tag warn">跳过</span> ${signal.reason || ""}`;
+    : html`<span class="tag warn">跳过</span> ${P.label(signal.reason)}`;
   const renderSignals = (signals, roundId) => {
     const mine = (Array.isArray(signals) ? signals : []).filter((s) => roundId && String(s.round_id) === String(roundId))
       .sort((a, b) => (b.received_at || 0) - (a.received_at || 0));
@@ -129,7 +129,7 @@
   };
   const renderPosition = (position, orders) => {
     const attempt = position?.attempt;
-    if (!attempt) return html`<p class="empty">${position?.reason || "本场还没有下单"}</p>`;
+    if (!attempt) return html`<p class="empty">${P.label(position?.reason) || "本场还没有下单"}</p>`;
     const list = Array.isArray(orders?.orders) ? orders.orders : [];
     const pnl = position.outcomePnl || {};
     return html`<dl class="kv">
@@ -307,7 +307,7 @@
     $("[data-round-title]").textContent = round ? `当前场 ${fmt.hm(round.startsAt)}–${fmt.hm(round.endsAt)}` : "当前场";
     $("[data-round-meta]").textContent = round ? `还剩 ${fmt.countdown(round.endsAt - now / 1000)} · 开盘后第 ${Math.max(0, Math.floor(now / 1000 - round.startsAt))} 秒` : "";
     P.put($("[data-round-reason]"), round
-      ? html`<p class="muted">${ROUND_STATUS[round.status] || round.status || ""}${round.reason ? ` · ${round.reason}` : ""}</p>`
+      ? html`<p class="muted">${ROUND_STATUS[round.status] || round.status || ""}${round.reason ? ` · ${P.label(round.reason)}` : ""}</p>`
       : html`<p class="empty">${s?.processRunning ? "引擎在等场次" : "引擎没在运行"}</p>`);
     const book = renderBook(state.book);
     P.put($("[data-book-top]"), book.top);

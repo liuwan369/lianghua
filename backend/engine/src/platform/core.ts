@@ -861,6 +861,13 @@ export class TradingCore {
     }
     if (this.options.limits.dailyLossUsd != null && risk.dailyPnlUsd <= -this.options.limits.dailyLossUsd + EPS && (!risk.halted || risk.reason === "daily loss limit")) {
       risk.halted = true; risk.reason = "daily loss limit";
+    } else if (risk.reason === "daily loss limit"
+      && (this.options.limits.dailyLossUsd == null || risk.dailyPnlUsd > -this.options.limits.dailyLossUsd + EPS)) {
+      // The stop no longer holds: the limit was removed or raised, including a
+      // restart with a new limit (2026-11-15: a state halted at the 40 limit,
+      // restarted with no limit, stayed halted; updateLimits only saw changes
+      // during the run).
+      risk.halted = false; delete risk.reason;
     }
   }
   updateLimits(limits: Partial<CoreOptions["limits"]>): void {
