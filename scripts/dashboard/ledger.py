@@ -137,7 +137,7 @@ LEAD_ORDER_NUMBERS = ("round_start", "relay_recv_ms", "trade_time_ms", "signal_r
                       "filled_shares", "avg_fill_price", "fee_usd", "decision_ms", "post_sent_ms", "ack_ms",
                       "ask_gone_ms", "ask_gone_venue_ms", "t_signal_ms", "t_decide_ms", "t_post_ms", "t_ack_ms",
                       "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms", "rest_shadow_fill_ms",
-                      "taker_shares", "maker_shares")
+                      "taker_shares", "maker_shares", "signals300", "vol300_bp")
 LATENCY_METRICS = frozenset({
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
     "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
@@ -699,6 +699,9 @@ def _projection(record):
         # round's config did after a miss (live / shadow / off).
         result["stage"] = record.get("stage") if record.get("stage") in ("rest", "gtc") else "fak"
         result["rest_mode"] = record.get("rest_mode") if record.get("rest_mode") in ("live", "shadow", "off", "gtc") else None
+        # Shadow regime pause: would the round's signal have been skipped as wild.
+        result["regime_pause"] = record.get("regime_pause") if isinstance(record.get("regime_pause"), bool) else None
+        result["regime_reason"] = record.get("regime_reason") if record.get("regime_reason") in ("signals", "vol") else None
         result["price"] = result["amount"] = result["pnl"] = None
         return result
     price, shares = result["price"], result["shares"]
@@ -2884,6 +2887,27 @@ class Ledger:
                "rested_fills": len(gtc_rested),
                "taker_shares": _sum(o.get("taker_shares") for o in gtc_filled),
                "maker_shares": _sum(o.get("maker_shares") for o in gtc_filled)}
+        # Shadow regime pause (records only): the round's orders whose signal
+        # came in a wild market. What they made is what pausing would have
+        # given up (a loss saved when negative).
+        judged = [o for o in orders if o.get("regime_pause") is not None]
+        paused = [o for o in judged if o.get("regime_pause")]
+        paused_got = [o for o in paused if (o.get("filled_shares") or 0) > EPS_SHARES]
+        paused_done = [o for o in paused_got if o["outcome"] in ("won", "lost")]
+        kept_done = [o for o in judged if not o.get("regime_pause") and (o.get("filled_shares") or 0) > EPS_SHARES
+                     and o["outcome"] in ("won", "lost")]
+        paused_pnl = _sum(pnl_of(o)[0] for o in paused_done)
+        regime = {"judged": len(judged), "would_pause": len(paused), "would_pause_rate": _ratio(len(paused), len(judged)),
+                  "by_signals": sum(1 for o in paused if o.get("regime_reason") == "signals"),
+                  "by_vol": sum(1 for o in paused if o.get("regime_reason") == "vol"),
+                  "paused_filled": len(paused_got), "paused_settled": len(paused_done),
+                  "paused_won": sum(1 for o in paused_done if o["outcome"] == "won"),
+                  "paused_win_rate": _ratio(sum(1 for o in paused_done if o["outcome"] == "won"), len(paused_done)),
+                  "paused_pnl_usd": paused_pnl,
+                  "kept_settled": len(kept_done),
+                  "kept_win_rate": _ratio(sum(1 for o in kept_done if o["outcome"] == "won"), len(kept_done)),
+                  "kept_pnl_usd": _sum(pnl_of(o)[0] for o in kept_done),
+                  "net_if_paused_usd": None if paused_pnl is None else -paused_pnl}
         rest = {"live": {"orders": len(rests), "filled": len(rest_got), "fill_rate": _ratio(len(rest_got), len(rests)),
                          "settled": len(rest_done), "won": rest_won, "win_rate": _ratio(rest_won, len(rest_done)),
                          "pnl_usd": _sum(pnl_of(o)[0] for o in rest_done)},
@@ -2955,7 +2979,7 @@ class Ledger:
                         row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
-                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc,
+                "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc, "regime": regime,
                 "exit_shadow": exit_shadow}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):

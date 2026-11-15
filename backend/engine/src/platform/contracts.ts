@@ -409,6 +409,8 @@ export type TradingEvent =
       openPrice?: number;
       /** Mean venue price over (R-60, R] (absent unless the feed covered that minute). */
       openMean60?: number;
+      /** This venue's signals and 1 s return std (bp) in the 300 s before it (absent without the history). */
+      signals300?: number; vol300Bp?: number;
       /** The venue whose detector fired and the line its trade came in on first.
        * tradeId is per venue: (venue, tradeId) identifies a signal. */
       venue: LeadVenue; line: LeadLine;

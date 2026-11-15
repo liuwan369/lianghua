@@ -40,6 +40,12 @@ export interface LeadSignal {
    * basis |error| p50 0.47 bp vs 1.44 bp for openPrice). Absent unless the
    * history covers the whole window. */
   openMean60?: number;
+  /** Market activity before this signal on this venue (shadow regime pause,
+   * user 2026-11-15): this detector's signals in the 300 s before it, and the
+   * std of 1 s log returns over the 300 s before it (bp, the per-second grid).
+   * Absent while the history is shorter than 300 s. */
+  signals300?: number;
+  vol300Bp?: number;
   venue: LeadVenue;
   line: LeadLine;
   relayRecvMs?: number;
@@ -62,6 +68,9 @@ const SEC_RING = 512;
 /** No trade for longer than this is a dead feed, not a quiet market (Bybit perp
  * 10-18/25, 11-01: longest quiet gap 29 s): the history restarts. */
 const MAX_HISTORY_GAP_MS = 60_000;
+
+/** Seconds of activity the regime measures look back over. */
+export const REGIME_WINDOW_SEC = 300;
 
 /** Mean of price(g) for g = R-59..R (the 60 s before the open R, unix seconds). */
 export function leadOpenMean60(price: (g: number) => number | undefined, R: number): number | undefined {
@@ -107,6 +116,8 @@ export class LeadSignalDetector {
   private readonly secPrice = new Float64Array(SEC_RING);
   private readonly secTag = new Float64Array(SEC_RING).fill(-1);
   private historyStartSec?: number;
+  /** Trade times (ms) of this detector's signals, oldest first, last 300 s. */
+  private signalTimes: number[] = [];
 
   constructor(params: LeadSignalParams) { this.params = LeadSignalDetector.check(params); }
 
@@ -151,11 +162,38 @@ export class LeadSignalDetector {
     this.base = this.head = this.next;
     this.append(t, p);
     const openMean60 = leadOpenMean60(g => this.secondPrice(g), roundMs / 1000);
+    const regime = this.regime(t);
     return { direction, price: p, refPrice, moveBp: move * 1e4, tradeId: trade.id, tradeTimeMs: t,
       ...(this.openPrice !== undefined ? { openPrice: this.openPrice } : {}),
       ...(openMean60 !== undefined ? { openMean60 } : {}),
+      ...regime,
       venue: trade.venue, line: trade.line, ...(trade.relayRecvMs !== undefined ? { relayRecvMs: trade.relayRecvMs } : {}),
       receivedAtUnix: trade.receivedAtUnix, receivedAtMonoMs: trade.receivedAtMonoMs };
+  }
+
+  /** Signals in the 300 s before t (this one not yet counted) and the std of
+   * 1 s log returns over the 300 whole seconds before t (research-1115
+   * regime.py: the same grid as the backtest). Records this signal. */
+  private regime(t: number): { signals300?: number; vol300Bp?: number } {
+    const from = t - REGIME_WINDOW_SEC * 1000;
+    let k = 0;
+    while (k < this.signalTimes.length && this.signalTimes[k]! < from) k += 1;
+    if (k) this.signalTimes.splice(0, k);
+    const covered = this.historyStartSec !== undefined && this.historyStartSec * 1000 <= from;
+    const signals300 = this.signalTimes.length;
+    this.signalTimes.push(t);
+    if (!covered) return {};
+    const end = Math.floor(t / 1000), start = end - REGIME_WINDOW_SEC;
+    let prev = this.secondPrice(start), n = 0, sum = 0, sumSq = 0;
+    if (prev === undefined) return { signals300 };
+    for (let g = start + 1; g <= end; g += 1) {
+      const price = this.secondPrice(g);
+      if (price === undefined) return { signals300 };
+      const r = Math.log(price / prev) * 1e4; prev = price;
+      n += 1; sum += r; sumSq += r * r;
+    }
+    const mean = sum / n;
+    return { signals300, vol300Bp: Math.sqrt(Math.max(0, sumSq / n - mean * mean)) };
   }
 
   /** Close the seconds g with lastTradeMs <= g*1000 < t on the previous trade's

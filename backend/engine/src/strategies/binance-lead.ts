@@ -199,6 +199,20 @@ const REST_LATE_SEC = 2;
 export const EXIT_SHADOW_OPPOSITE = 3;
 /** A signal this soon after the fill's update is the same move, not a turn. */
 const EXIT_SHADOW_AFTER_SEC = 0.5;
+/** Shadow regime pause (user 2026-11-15, records only): a round's order whose
+ * signal came with more than REGIME_PAUSE_SIGNALS of its venue's signals, or a
+ * 1 s return std above REGIME_PAUSE_VOL_BP, in the 300 s before it would have
+ * been skipped. Thresholds: the 90th percentile of the first 14 of 28 days
+ * (E:/pm-backup/research-1115/regime.py: +48 / +64 over 28 days, t 0.5 / 0.7). */
+export const REGIME_PAUSE_SIGNALS = 12;
+export const REGIME_PAUSE_VOL_BP = 0.89;
+/** Whether the shadow pause would have skipped this signal, and why. */
+export function regimePause(signal: Pick<LeadSignalRecord, "signals300" | "vol300Bp">):
+  { pause: boolean; reason: "signals" | "vol" | null } {
+  if (finite(signal.signals300) && signal.signals300 > REGIME_PAUSE_SIGNALS) return { pause: true, reason: "signals" };
+  if (finite(signal.vol300Bp) && signal.vol300Bp > REGIME_PAUSE_VOL_BP) return { pause: true, reason: "vol" };
+  return { pause: false, reason: null };
+}
 /** The venue refuses a marketable BUY under this many USD (2026-10-26 live:
  * "invalid amount for a marketable BUY order ($0.65), min size: 1"). */
 const MIN_MARKETABLE_BUY_USD = 1;
@@ -950,6 +964,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || !signal || signal.direction !== stage.direction
           || ![signal.price, signal.refPrice, signal.moveBp, signal.tradeId, signal.tradeTimeMs,
             signal.receivedAtUnix, signal.receivedAtMonoMs].every(finite)
+          || (signal.signals300 !== undefined && !finite(signal.signals300))
+          || (signal.vol300Bp !== undefined && !finite(signal.vol300Bp))
           || (signal.venue !== undefined && !LEAD_VENUES.includes(signal.venue))
           || (signal.line !== undefined && signal.line !== "direct" && signal.line !== "tokyo")) throw new Error("invalid persisted binance-lead stage");
         // A signal saved before venues existed was Bybit's, direct.

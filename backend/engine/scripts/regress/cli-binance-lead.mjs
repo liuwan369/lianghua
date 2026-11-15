@@ -110,7 +110,7 @@ try {
   const second = lead(START + 23, 42, "okx", "tokyo", { relayRecvMs: (START + 23) * 1000 - 40 });
   s.onEvent(second, ctx(START + 23));
   assert.deepEqual(leadJournalFields(second, s.roundAt(second.receivedAtUnix), false), { asset_id: "btc", direction: "UP",
-    price: 100030, ref_price: 100000, move_bp: 2.9996, open_price: null, open_mean60: null,
+    price: 100030, ref_price: 100000, move_bp: 2.9996, open_price: null, open_mean60: null, signals300: null, vol300_bp: null,
     venue: "okx", line: "tokyo", relay_recv_ms: (START + 23) * 1000 - 40, trade_id: 42, trade_time_ms: (START + 23) * 1000 - 100,
     received_at: START + 23, received_at_mono_ms: 5, market_id: "0xm", round_id: ROUND, round_status: "running",
     outcome: "order_submitted", reason: "已下单（FAK），等待成交回报", attempted: true, client_order_id: "binance-lead:0xm:1",

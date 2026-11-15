@@ -48,6 +48,15 @@ for (const piece of ["买到的场 20 场", "会卖出 6 场", "占 33.3%", "卖
 }
 assert.ok(text(S.renderExit({ held_rounds: 0 })).includes("还没有持仓的场"));
 
+// --- shadow regime pause ---
+const regime = text(S.renderRegime({ judged: 30, would_pause: 6, would_pause_rate: 0.2, by_signals: 4, by_vol: 2, paused_filled: 5,
+  paused_settled: 5, paused_won: 1, paused_win_rate: 0.2, paused_pnl_usd: -12.5, kept_settled: 20, kept_win_rate: 0.55,
+  kept_pnl_usd: 8.25, net_if_paused_usd: 12.5 }));
+for (const piece of ["记录的单 30 单", "会暂停 6 单", "占 20.0%", "信号多 4 · 波动大 2", "赢 1 / 5 场", "-$12.50", "+$8.25", "+$12.50"]) {
+  assert.ok(regime.includes(piece), `regime: ${piece}: ${regime}`);
+}
+assert.ok(text(S.renderRegime({ judged: 0 })).includes("还没有带行情记录的单"));
+
 // --- late_by_ms ---
 const late = String(parts.late);
 const lateText = text(late);

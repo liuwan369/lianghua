@@ -11,7 +11,7 @@ import type { AssetId, CoreState, HardLimits, LeadVenue, MarketBookSnapshot, Mar
 import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
-import { createStrategy, normalizeBinanceLeadConfig, presignPrices, type BinanceLeadConfig, type BinanceLeadState,
+import { createStrategy, normalizeBinanceLeadConfig, presignPrices, regimePause, type BinanceLeadConfig, type BinanceLeadState,
   type BinanceLeadStrategy, type LeadRound, type LeadStage } from "../strategies/binance-lead.js";
 
 /** The only built-in strategy; also its key in CoreState.strategyStates. */
@@ -690,6 +690,7 @@ export function leadJournalFields(event: Extract<TradingEvent, { kind: "lead" }>
   const placed = round?.stages.find(stage => stage.signal.tradeId === event.tradeId && stage.signal.venue === event.venue);
   return { asset_id: event.assetId, direction: event.direction, price: event.price, ref_price: event.refPrice,
     move_bp: event.moveBp, open_price: event.openPrice ?? null, open_mean60: event.openMean60 ?? null,
+    signals300: event.signals300 ?? null, vol300_bp: event.vol300Bp ?? null,
     venue: event.venue, line: event.line, relay_recv_ms: event.relayRecvMs ?? null,
     trade_id: event.tradeId, trade_time_ms: event.tradeTimeMs,
     received_at: event.receivedAtUnix, received_at_mono_ms: event.receivedAtMonoMs,
@@ -745,7 +746,12 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   // A GTC's shares bought at once (taker, after the taker delay) and while
   // it rested (maker).
   const sharesBy = (maker: boolean) => filled.filter(fill => fill.isMaker === maker).reduce((total, fill) => total + fill.shares, 0);
+  // Shadow regime pause: would this round's signal have been skipped as wild.
+  const regime = signal ? regimePause(signal) : { pause: false, reason: null };
   return { stage: rest ? "rest" : gtc ? "gtc" : "fak", rest_mode: restMode,
+    signals300: signal?.signals300 ?? null, vol300_bp: signal?.vol300Bp ?? null,
+    regime_pause: signal && (Number.isFinite(signal.signals300) || Number.isFinite(signal.vol300Bp)) ? regime.pause : null,
+    regime_reason: regime.reason,
     taker_shares: gtc ? sharesBy(false) : null, maker_shares: gtc ? sharesBy(true) : null,
     parent_client_order_id: rest && round ? round.stages[0]?.clientOrderId ?? null : null,
     rest_shadow_fill_ms: rest ? null : msOf(stage?.restShadowFillAt),

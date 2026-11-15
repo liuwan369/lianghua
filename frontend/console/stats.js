@@ -73,6 +73,19 @@
       ${card("如果开了", fmt.money(e.net_usd), "比拿到结算多赚（负 = 少赚）", fmt.tone(e.net_usd))}
     </div><p class="note">只记录不卖：买到后第 3 个反向信号时按当时买一价卖掉（扣吃单手续费），和拿到结算比。</p>`;
   };
+  // Shadow regime pause (records only): orders whose signal came in a wild
+  // market (more than 12 signals, or a 1 s std above 0.89 bp, in 5 min).
+  const renderRegime = (g) => {
+    if (!g) return html`<p class="empty">没有数据</p>`;
+    if (!g.judged) return html`<p class="empty">还没有带行情记录的单（新版本部署后开始记录）</p>`;
+    return html`<div class="cards">
+      ${card("记录的单", `${fmt.int(g.judged)} 单`, `会暂停 ${fmt.int(g.would_pause)} 单 · 占 ${fmt.pct(g.would_pause_rate)}`)}
+      ${card("暂停原因", `信号多 ${fmt.int(g.by_signals)} · 波动大 ${fmt.int(g.by_vol)}`, "前 5 分钟信号 > 12 或每秒波动 > 0.89 bp")}
+      ${card("会暂停的单", `赢 ${fmt.int(g.paused_won)} / ${fmt.int(g.paused_settled)} 场`, `胜率 ${fmt.pct(g.paused_win_rate)} · 盈亏 ${fmt.money(g.paused_pnl_usd)}`, fmt.tone(g.paused_pnl_usd))}
+      ${card("留下的单", `${fmt.int(g.kept_settled)} 场`, `胜率 ${fmt.pct(g.kept_win_rate)} · 盈亏 ${fmt.money(g.kept_pnl_usd)}`, fmt.tone(g.kept_pnl_usd))}
+      ${card("如果开了暂停", fmt.money(g.net_if_paused_usd), "正 = 少亏，负 = 少赚", fmt.tone(g.net_if_paused_usd))}
+    </div><p class="note">只记录不暂停：每单记下信号前 5 分钟的信号数和波动，太乱的单"如果开了暂停就不下"。</p>`;
+  };
   const renderLate = (late) => {
     if (!late) return html`<p class="empty">没有数据</p>`;
     const histogram = late.histogram || {};
@@ -117,10 +130,10 @@
       </tbody></table></div>`;
   };
   const renderAll = (data) => ({
-    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exit: renderExit(data?.exit_shadow), late: renderLate(data?.late_by_ms),
+    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exit: renderExit(data?.exit_shadow), regime: renderRegime(data?.regime), late: renderLate(data?.late_by_ms),
     latency: renderLatency(data?.latency), sources: renderBySource(data?.by_source), skips: renderSkips(data?.skips), hours: renderHours(data?.by_hour),
   });
-  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderMisses, renderRest, renderExit, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
+  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderMisses, renderRest, renderExit, renderRegime, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
 
   const section = (key, title, meta = "") => html`<section class="panel"><div class="panel-head"><h2>${title}</h2><span class="panel-meta">${meta}</span></div><div data-part="${key}"></div></section>`;
   const root = P.mount("stats", "统计", "领先策略的漏斗、没买到的单、速度和按来源的结果，全部从账本算。", html`
@@ -129,6 +142,7 @@
     ${section("misses", "没买到的单")}
     ${section("rest", "没买到后挂单")}
     ${section("exit", "反向信号卖出（模拟）", "第 3 个反向信号就卖，只记录")}
+    ${section("regime", "行情太乱就暂停（模拟）", "信号前 5 分钟太乱就不下，只记录")}
     <div class="grid2">${section("late", "晚了多少毫秒")}${section("latency", "速度分解", "每笔单从交易所成交到收到回复")}</div>
     ${section("sources", "按信号源")}
     <div class="grid2">${section("skips", "跳过原因", "有信号但没下单")}${section("hours", "按小时（北京时间）", "按场次开始时间")}</div>`);
