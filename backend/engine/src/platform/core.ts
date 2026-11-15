@@ -1426,11 +1426,11 @@ export class TradingCore {
     this.fillByKey.set(savedKey, saved);
     this.registerTradeLeg(saved.tradeId, saved.orderId);
     this.state.fills.push(saved);
-    // A resting BUY (not a FAK) is filled when its budget is spent: at a better
-    // price it has its shares with budget still on the book, which the venue
-    // keeps listing until it is cancelled or bought.
-    const resting = order.direction === "BUY" && order.timeInForce !== "FAK";
-    if (resting ? this.buyBudgetSpent(order) : left <= EPS) {
+    // Filled on its shares, or a BUY whose budget is spent to under one share
+    // step (19:05 dust). A GTC matched below its limit gets its shares, not
+    // more, and nothing of it rests (live 2026-11-15: 5 @ 0.30 filled 5 @ 0.27,
+    // venue matched, the cancel refused).
+    if (left <= EPS || this.buyBudgetSpent(order)) {
       order.status = "FILLED";
       order.reconciliationPending = false;
       order.reservedUsd = 0; order.reservedShares = 0;

@@ -211,11 +211,10 @@ const unitPrice = (n: unknown): n is number => positive(n) && n < 1;
 const priceText = (n: number) => Number(n.toFixed(2)) === n ? n.toFixed(2) : String(n);
 const validDirection = (value: unknown): value is LeadDirection => value === "UP" || value === "DOWN";
 const activeOrder = (status: string) => ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(status);
-/** The stage's order may still have something on the book. A GTC can hold its
- * shares (bought below the limit) with budget still resting: the core keeps
- * it OPEN/PARTIAL until that budget is spent. */
+/** The stage's order may still have something on the book: active, short of
+ * its shares. */
 const hasRemainder = (stage: Readonly<LeadStage>) => activeOrder(stage.status) && !!stage.orderId
-  && (stage.kind === "gtc" || stage.filledShares < stage.shares - EPS);
+  && stage.filledShares < stage.shares - EPS;
 const STAGE_STATUSES = ["CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED", "UNKNOWN", "ABANDONED"];
 
 /** Ask + premium, rounded down to the tick (never pays more than the rule), capped at 0.99. */

@@ -1,8 +1,9 @@
 // A BUY signs a USD budget (shares x limit). A resting BUY (GTC) filled below
 // its limit gets its shares with budget left on the book; one filled to under
 // one share step (0.01) of budget has nothing left that can trade.
-// - a GTC bought 5.6 shares at 0.55 of a 5 x 0.63 budget is still PARTIAL: 0.07
-//   of budget rests, its reservation is that, not 0;
+// - a GTC matched below its limit gets its shares and is FILLED (the venue
+//   rests nothing more); a part-matched one rests, its reservation the unspent
+//   budget, never under the unfilled shares x limit;
 // - a fill spending the budget to under 0.01 share makes it FILLED (2026-11-14
 //   19:05: 4.99753 of 5 at 0.23, the venue said matched and refused the cancel;
 //   it stayed UNKNOWN with 0.0006 reserved);
@@ -50,17 +51,23 @@ async function placed({ price, shares, timeInForce = "GTC", cancel = async () =>
   return { dir, platform, hash, fill, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-// --- at a better price: the shares are there, budget still rests ---
+// --- at a better price: a GTC gets its shares and is done (live 2026-11-15:
+// 5 @ 0.30 filled 5 @ 0.27, the venue said matched, nothing rested) ---
+{
+  const h = await placed({ price: 0.30, shares: 5, venueStatus: "matched" });
+  h.fill("a", 0.27, 5);
+  const order = h.platform.core.order(h.hash);
+  assert.equal(order.status, "FILLED", "its shares bought: filled, no cancel to refuse");
+  assert.equal(order.reservedUsd, 0);
+  h.done();
+}
+// --- part matched at a better price: the rest rests; reservation follows budget, floored ---
 {
   const h = await placed({ price: 0.63, shares: 5 });
-  h.fill("a", 0.55, 5.6);                                   // 3.08 of 3.15 spent
+  h.fill("a", 0.55, 2);                                      // 1.10 of 3.15 spent
   const order = h.platform.core.order(h.hash);
-  assert.equal(order.status, "PARTIAL", "0.07 of budget still on the book: not FILLED at 5.6 >= 5 shares");
-  assert.ok(Math.abs(order.reservedUsd - 0.07) < 1e-6, `reservation follows the unspent budget: ${order.reservedUsd}`);
-  h.fill("b", 0.63, 0.1111111);                             // the rest, at the limit
-  const done = h.platform.core.order(h.hash);
-  assert.equal(done.status, "FILLED", "budget spent");
-  assert.equal(done.reservedUsd, 0);
+  assert.equal(order.status, "PARTIAL");
+  assert.ok(Math.abs(order.reservedUsd - 2.05) < 1e-6, `unspent budget: ${order.reservedUsd}`);
   h.done();
 }
 // --- the 19:05 order: 4.99753 of 5 at 0.23 is filled ---
@@ -130,15 +137,16 @@ const restoredStuck = async ({ settled }) => {
     adapters: { gateway: { mode: "live", durableIdentity: true, async submit() {}, async cancel() { return true; } }, estimateFee: () => 0 } }),
     "the state restores (validateAccount's reservation floor)");
 }
-// --- a FAILED leg of a GTC holding more than its shares: no negative reservation ---
+// --- a FAILED leg of a BUY holding more than its shares (a FAK at a better
+// price): no negative reservation ---
 {
-  const h = await placed({ price: 0.63, shares: 5 });
-  h.fill("a", 0.55, 5.3, { status: "MATCHED" });
-  h.fill("b", 0.55, 0.3, { status: "MATCHED" });
-  h.fill("b", 0.55, 0.3, { status: "FAILED" });
+  const h = await placed({ price: 0.63, shares: 5, timeInForce: "FAK", venueStatus: "delayed" });
+  h.fill("a", 0.55, 4.0, { status: "MATCHED" });
+  h.fill("b", 0.55, 1.6, { status: "MATCHED" });
+  h.fill("b", 0.55, 1.6, { status: "FAILED" });
   const order = h.platform.core.order(h.hash);
   assert.ok(order.reservedUsd >= 0, `reservation never negative: ${order.reservedUsd}`);
-  assert.ok(Math.abs(order.reservedUsd - (5 * 0.63 - 5.3 * 0.55)) < 1e-6, `unspent budget reserved: ${order.reservedUsd}`);
+  assert.ok(Math.abs(order.reservedUsd - (5 * 0.63 - 4.0 * 0.55)) < 1e-6, `unspent budget reserved: ${order.reservedUsd}`);
   h.done();
 }
 // --- a late leg never re-opens a FILLED order ---
