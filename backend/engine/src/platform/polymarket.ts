@@ -6,7 +6,7 @@ import { parseAuthenticatedTrade, runUserFeed, type UserFeedControl } from "../l
 import { FeedQueue, type FeedEvent } from "../live/feeds/index.js";
 import { ownerSignerPrivateKey } from "../live/account.js";
 import { polymarketFillFee } from "../models.js";
-import type { AccountSnapshot, AssetId, CoreState, ExecutionTiming, GatewayAck, HardLimits, Instrument, MarketBookSnapshot, MarketInfo,
+import type { AccountSnapshot, AssetId, CoreState, ExecutionTiming, TradingEvent, GatewayAck, HardLimits, Instrument, MarketBookSnapshot, MarketInfo,
   OrderGateway, OrderRecord, OrderRequest, PlatformAdapters, PreparedOrder, TradingMode } from "./contracts.js";
 import { normalizeVenueOrderStatus } from "./contracts.js";
 import { TradingPlatform } from "./platform.js";
@@ -34,6 +34,14 @@ type DiscoveryModule = typeof marketDiscovery & {
   findFiveMinuteMarket?: (asset: string, options: { now: number; directOnly: boolean; signal?: AbortSignal }) => Promise<FiveMinuteDiscovery | undefined>;
 };
 type RoutedFeedEvent = FeedEvent & { __runtimeMarketId?: string };
+
+/** The platform's lead event of a detector signal: every signal field, the
+ * optional ones only when present. */
+export function leadEvent(raw: Extract<FeedEvent, { kind: "lead" }>): Omit<Extract<TradingEvent, { kind: "lead" }>, "assetId"> {
+  const event: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) if (value !== undefined) event[key] = value;
+  return event as Omit<Extract<TradingEvent, { kind: "lead" }>, "assetId">;
+}
 
 /** A prewarmed next round is expected to be unhealthy until its window starts. */
 export function isActiveMarket(market: Pick<MarketInfo, "startsAt" | "endsAt">, now = Date.now() / 1000): boolean {
@@ -552,12 +560,9 @@ export async function connectPolymarketPlatform(options: ConnectOptions) {
   };
   const consumeFeedEvent = (raw: FeedEvent): void => {
     if (raw.kind === "lead") {
-      platform.ingest({ kind: "lead", assetId: options.assetId ?? "btc", direction: raw.direction, price: raw.price,
-        refPrice: raw.refPrice, moveBp: raw.moveBp, ...(raw.openPrice !== undefined ? { openPrice: raw.openPrice } : {}),
-        ...(raw.openMean60 !== undefined ? { openMean60: raw.openMean60 } : {}),
-        venue: raw.venue, line: raw.line, ...(raw.relayRecvMs !== undefined ? { relayRecvMs: raw.relayRecvMs } : {}),
-        tradeId: raw.tradeId, tradeTimeMs: raw.tradeTimeMs,
-        receivedAtUnix: raw.receivedAtUnix, receivedAtMonoMs: raw.receivedAtMonoMs });
+      // Every field of the detector's signal (2026-11-15: a field-by-field
+      // copy dropped the new signals300/vol300Bp), plus the connection's asset.
+      platform.ingest({ ...leadEvent(raw), assetId: options.assetId ?? "btc" });
       return;
     }
     const event = raw as RoutedFeedEvent;

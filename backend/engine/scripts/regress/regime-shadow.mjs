@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { LeadSignalDetector } from "../../dist/live/feeds/binance-trades.js";
 import { regimePause, REGIME_PAUSE_SIGNALS, REGIME_PAUSE_VOL_BP } from "../../dist/strategies/binance-lead.js";
 import { leadOrderFields } from "../../dist/cli/platform.js";
+import { leadEvent } from "../../dist/platform/polymarket.js";
 
 const R = 1_800_000_000;
 const PARAMS = { windowMs: 250, thresholdBp: 2, fromSec: 0, toSec: 300 };
@@ -70,6 +71,18 @@ assert.equal(REGIME_PAUSE_SIGNALS, 12); assert.equal(REGIME_PAUSE_VOL_BP, 0.89);
   const s = jump(d, t0 + 390_500, 100000, 100000 * Math.exp(5e-4));
   assert.ok(s.vol300Bp > 0.89 && s.vol300Bp < 1.6, `std of ±1.5 bp: ${s.vol300Bp}`);
   assert.deepEqual(regimePause(s), { pause: true, reason: "vol" });
+}
+// --- the platform's lead event keeps every signal field (live 2026-11-15:
+// a field-by-field copy dropped signals300/vol300Bp, every order was unjudged) ---
+{
+  const d = new LeadSignalDetector(PARAMS);
+  const t0 = (R - 400) * 1000;
+  for (let k = 0; k <= 390; k += 1) push(d, t0 + k * 1000, 100000);
+  const s = jump(d, t0 + 390_500, 100000, 100030);
+  const e = leadEvent({ kind: "lead", ...s });
+  for (const key of Object.keys(s)) assert.deepEqual(e[key], s[key], `kept ${key}`);
+  assert.equal(e.signals300, 0); assert.ok(Number.isFinite(e.vol300Bp));
+  assert.ok(!("relayRecvMs" in e), "an absent optional field stays absent");
 }
 // --- journal: the round's order carries the shadow decision ---
 {
