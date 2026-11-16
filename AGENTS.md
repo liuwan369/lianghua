@@ -22,5 +22,6 @@
 - 构建：`cd backend/engine && npm run typecheck && npm run build`
 - 测试：`node backend/engine/scripts/regress/*.mjs`（先 build）、`node backend/engine/scripts/check-*.mjs`、`python scripts/regress/*.py`、`node frontend/console/regress/*.mjs`。逐个运行，退出码 0 即通过。
 - 部署：提交后 `python scripts/deploy.py [ireland|tokyo|all]`（默认 all，`--dry-run` 只构建并列出远端步骤），部署的是 HEAD，交易必须已停止；一次性准备见 `python scripts/deploy.py setup-ireland` / `setup-tokyo`。
-- 服务器：`ssh pm-new`（`root@166.1.221.53`，本机联通线路直连不通，`~/.ssh/config` 里走本地代理 127.0.0.1:10808），运行目录 `/root/pm-system`；控制面只在服务器本机可直连，如 `curl -s http://127.0.0.1:18766/api/runtime/status`。
-- 去哪看：策略 `backend/engine/src/strategies/binance-lead.ts`，信号 `backend/engine/src/live/feeds/binance-trades.ts`；下单与风控 `backend/engine/src/platform/core.ts`、`platform/polymarket.ts`、`live/clob/client.ts`；入口 `backend/engine/src/cli/platform.ts`；控制面 `scripts/system-dashboard-server.py`；账本 `scripts/dashboard/ledger.py`；前端 `frontend/console/`。
+- 服务器：实盘在爱尔兰 `ssh pm-ire`（运行目录 `/root/pm-system`），东京 `ssh pm-tokyo` 只跑转发；`ssh pm-new`（都柏林旧机器）不交易。控制面只在爱尔兰本机可直连，如 `curl -s http://127.0.0.1:18766/api/runtime/status`；写操作要走 nginx（basic auth + Origin）。
+- 推送 GitHub：本机直连会被重置，用 `git -c http.proxy=http://127.0.0.1:10808 push origin main`。
+- 去哪看：策略 `backend/engine/src/strategies/binance-lead.ts`，信号 `backend/engine/src/live/feeds/binance-trades.ts`（检测器）和 `lead-trades.ts`（三家交易所 + 东京转发）；下单与风控 `backend/engine/src/platform/core.ts`、`platform/polymarket.ts`、`live/clob/client.ts`；入口 `backend/engine/src/cli/platform.ts`；控制面 `scripts/system-dashboard-server.py`；账本 `scripts/dashboard/ledger.py`；前端 `frontend/console/`。

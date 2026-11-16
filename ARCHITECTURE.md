@@ -4,40 +4,42 @@
 
 ## 进程
 
+两台 AWS（2 vCPU、2 GB）：**爱尔兰 eu-west-1**（`pm-ire`，控制台 + 交易引擎，离 Polymarket 伦敦撮合约 24 ms）和**东京 ap-northeast-1**（`pm-tokyo`，只做转发：在东京收 Bybit/币安/OKX 成交，签名后转给爱尔兰）。旧的都柏林机器（`pm-new`）不跑交易，只做研究下载。
+
 ```
- 浏览器 ──https──> nginx 443 (basic auth, 10 r/s)
+ 浏览器 ──https──> nginx 443（basic auth，读 10 r/s、写 1 r/s）
                       │ X-PM-Authenticated
                       ▼
         控制面 system-dashboard-server.py  127.0.0.1:18766
-        (systemd: pm-system-dashboard-dublin)
+        (systemd: pm-console，Nice 10，CPUWeight 20，MemoryMax 600M)
           │ 子进程: projection_worker.py ── journal → ledger.sqlite3
-          │ 子进程: node dist/cli/account-data.js（账户只读，15 s 刷新）
-          │ 启停: systemd-run --scope pm-engine-<run_id> + choom -500
+          │ 子进程: node dist/cli/account-data.js（账户只读，--max-old-space-size=160）
+          │ 启停: systemd-run --scope pm-engine-<run_id>（CPUWeight 200，Nice -5）
           ▼
         交易引擎 node dist/cli/platform.js --live ──WS/HTTP──> Polymarket CLOB / Polygon
+          │ ← 领先成交：爱尔兰直连三家交易所 + 东京转发（UDP×2 + TCP，端口 47001，HMAC）
           │ 写 results/live/dashboard-<run_id>.jsonl
 
-        行情采集器 node dist/cli/market-snapshot.js (systemd: pm-clob-market-snapshot)
-          ├─ 每 250 ms 写 data/dashboard/market-snapshot.json（控制台展示用；一边无挂单时另带 one_sided，只展示不交易）
-          ├─ 双边报价超过 2 秒没变时，每 2 秒向交易所 REST POST /books 核对一次，价格一样就写 quiet_confirmed_at（只展示不交易）
-          └─ 记录器 market-recorder → data/market-history/（回测 scripts/backtest.py 只读它，手动在服务器上跑）
+ 东京  pm-relay（systemd，node dist/cli/relay.js）── 三家交易所 WS ──> 签名转发到爱尔兰
 ```
 
-| 进程 | 启动方式 | 职责 |
-|---|---|---|
-| 控制面 | systemd `pm-system-dashboard-dublin`，`MemoryMax=900M` | HTTP API、托管前端、启停引擎、账户检查、SSE 推送 |
-| 交易引擎 | 控制面 `_start_trading`，一次只跑一个 | 行情 → 策略 → 下单 → 成交 → 结算 |
-| 行情采集器 | systemd `pm-clob-market-snapshot`，常驻 | 7 个币（btc,eth,sol,xrp,doge,hype,bnb）的公共盘口，`--stale-after-ms 2000`；同时做全量行情记录（盘口、成交 `k:"t"`、一边无卖价时的盘口 `k:"o"`、币本身价格 `k:"p"`：币安 1 秒 K 线，所有币一个连接，每币每秒一条 `{e 该秒, o 开, p 收}`；结算用的 Chainlink 价 `k:"c"`：Polymarket RTDS `crypto_prices_chainlink`，免凭证，所有币一个连接，每币约每秒一条 `{e 源时间秒, p}`，场次开始/结束那一秒的值就是官方 openPrice/closePrice） |
-| 账本投影 | 控制面拉起 `scripts/dashboard/projection_worker.py`，约 250 ms 一轮 | 读 journal，写 `results/dashboard/ledger.sqlite3` |
-| 账户读取 | 控制面常驻子进程 `dist/cli/account-data.js`，每 15 s | 余额、挂单、持仓、成交、Data API 平仓结果 |
+| 进程 | 机器 | 启动方式 | 职责 |
+|---|---|---|---|
+| 控制面 | 爱尔兰 | systemd `pm-console` | HTTP API、托管前端、启停引擎、账户检查、SSE 推送 |
+| 交易引擎 | 爱尔兰 | 控制面 `_start_trading`，一次只跑一个 | 领先信号 → 策略 → 下单 → 成交 → 结算 |
+| 账本投影 | 爱尔兰 | 控制面拉起 `scripts/dashboard/projection_worker.py` | 读 journal，写 `results/dashboard/ledger.sqlite3` |
+| 账户读取 | 爱尔兰 | 控制面常驻子进程 `dist/cli/account-data.js` | 余额、挂单、持仓、成交、Data API 平仓结果 |
+| 转发 | 东京 | systemd `pm-relay` | 收 Bybit/币安/OKX 成交，`venue|id|seq|tradeTimeMs|price|tokyoRecvMs|mac` 发给爱尔兰 |
 
-引擎下单用自己的行情 WS，不读采集器文件，也不依赖采集器在跑：市场发现只走 Gamma（`live/discovery.ts`）。采集器文件只给控制台看。
+引擎下单用自己的行情 WS，市场发现只走 Gamma（`live/discovery.ts`）。
 
-引擎跑在独立 systemd scope `pm-engine-<run_id>` 里（`systemd-run --scope` 原地 exec，pid 不变；`choom -n -500` 降低被 OOM 杀的优先级），所以重启控制面不会停掉引擎，控制面重启后按 pid 重新接管。
+引擎跑在独立 systemd scope `pm-engine-<run_id>` 里，所以重启控制面不会停掉引擎，控制面重启后按 pid 重新接管。
+
+行情采集与录制（`cli/market-snapshot.ts`、`cli/market-recorder.ts`、`dashboard/market-projection.ts`）现在不在任何机器上跑：2026-11-12 停了都柏林的录制，爱尔兰不装这个服务。代码留着，给计划中的伦敦录制机用；录好的数据在本机 `E:/pm-backup/market-history/`（到 11-13）。
 
 ### 启动与停止
 
-启动（`strategy_control` → `_start_trading`）必须同时满足：策略已保存且请求带上当前版本号、UUID `requestId`、`marketIds` 恰好一个能唯一对上目录的 marketId+roundId、`confirm_live`、服务器环境 `PM_TRADING_LIVE_UNLOCK=1`、账户检查通过、没有在跑的引擎、拿到 `deployment.lock`。启动前清理旧 journal，只保留最新 20 个 run。
+启动（`POST /api/runtime/commands {action:"start", requestId, revision}` → `strategy_control` → `_start_trading`）必须同时满足：`revision` 等于已发布的版本号（> 0）、`requestId` 是 UUID（同一个编号重发只返回当前状态）、服务器环境 `PM_TRADING_LIVE_UNLOCK=1`、账户检查通过（签名、授权、结算凭据）、没有在跑的引擎、拿到 `deployment.lock`。不选市场：引擎自己从 Gamma 发现当前场，中途启动就等下一场。启动前把旧 run 的 journal 打包进 `results/archive/<run>.tar.gz`，`results/live/` 只留最新 3 个（`prune_run_journals`）。
 
 ```
 node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds <n>
@@ -56,6 +58,8 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 停止：Linux 发 SIGTERM。引擎暂停 → 撤掉所有挂单 → 对账 → 最多再等 5 分钟把结算跑完 → 落盘退出。控制面最多等 8 s，超时也不 kill 实盘进程。账户快照读到零挂单才算"已确认停止"。
 
+启动失败会写进 `<journal>.console.log` 的 `platform_error`（例：2026-11-15 地区检查 `polymarket.com/api/geoblock` 超时一次，`GEO-CHECK FAILED`），引擎不重试，控制台再点启动即可。
+
 ## 模块
 
 ### `backend/engine/src`
@@ -63,8 +67,8 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | 文件 | 职责 |
 |---|---|
 | `cli/platform.ts` | 引擎唯一入口：参数、市场发现与换轮（15 s 发现，提前 10 s 预热下一场）、策略挂载、配置/控制文件 1 s 轮询、结算调度 15 s、写 journal、停机流程 |
-| `cli/market-snapshot.ts` | 行情采集器入口 |
-| `cli/market-recorder.ts` | 采集器内的全量行情记录（盘口和成交，gzip JSONL，按天轮换、过期删除） |
+| `cli/relay.ts` | 东京转发入口：三家交易所成交 → HMAC 签名 → UDP×2 + TCP 发给爱尔兰 |
+| `cli/market-snapshot.ts`、`cli/market-recorder.ts` | 行情采集与全量录制（现在不运行，留给伦敦录制机） |
 | `cli/account-data.ts` | 账户读取器入口（stdin 收只读命令，JSONL 输出） |
 | `cli/account-check.ts` | 一次性账户检查（钱包、签名、授权、余额） |
 | `platform/core.ts` | `TradingCore`：资金预留、订单状态机、成交入账、持仓、风控与停机、对账 |
@@ -81,12 +85,13 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/feeds/polymarket.ts` | 公共行情 WS：L2 盘口、新鲜度看门狗 |
 | `live/feeds/user.ts` | 认证用户 WS：订单与成交，断线补偿 |
 | `live/feeds/index.ts` | `FeedQueue`：同一 key 只留最新盘口；币安信号走优先通道，不合并 |
-| `live/feeds/binance-trades.ts` | 领先成交：币安 aggTrade 两条线路按成交 id 去重（`binanceLeadFeed`），Bybit 永续 publicTrade 两条线路按 `seq` + 成交 id 去重（`bybitLeadFeed`）；`LeadSignalDetector`（250 ms 窗口判信号） |
-| `live/feeds/btc.ts` | 各币在交易所的代码（采集器订阅币安 1 秒 K 线、引擎订阅币安 aggTrade 用） |
+| `live/feeds/lead-trades.ts` | 领先成交：Bybit（stream.bybit.com + stream.bytick.com）、币安 USD-M（`fstream.binance.com/market/ws/btcusdt@aggTrade`）、OKX（`BTC-USDT-SWAP`）直连，加东京转发（`relay` 编解码、监听、HMAC 校验），每家按成交编号去重、谁先到用谁（`VenueIngest`、`runLeadTrades`、`leadSignalFeed`） |
+| `live/feeds/binance-trades.ts` | `LeadSignalDetector`：每家一个，250 ms 窗口判信号；带开盘价、开盘前 60 s 均价、信号前 300 s 的信号数和每秒波动 |
+| `live/feeds/btc.ts` | 各币在交易所的代码 |
 | `live/orderbook.ts` | 本地 L2 盘口副本 |
 | `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘 |
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
-| `dashboard/market-projection.ts` | 采集器的公共盘口投影 |
+| `dashboard/market-projection.ts` | 采集器的公共盘口投影（随采集器停用） |
 | `strategies/binance-lead.ts` | 策略本体 |
 | `models.ts` | 价格量化、手续费公式 `shares × rate × (p(1−p))^exp` |
 
@@ -106,16 +111,17 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `dashboard/market_snapshot.py` | 校验采集器快照 |
 | `dashboard/system_metrics.py` | 主机与进程指标 |
 | `dashboard_account.py` | 账户配置的检查与保存，响应不含秘密 |
-| `deploy.py` | 部署（爱尔兰控制台、东京中继） |
+| `deploy.py` | 部署（爱尔兰控制台 + 引擎、东京转发） |
+| `backtest.py` | 读录制行情（本机回测用） |
 
 ### `frontend/console/`
 
 | 文件 | 职责 |
 |---|---|
 | `auto-trade.html` + `live.js` | 实盘：启停命令、今日数字、信号源、当前场盘口、本场信号与下单 |
-| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、没买到、晚了多少、速度、按来源、跳过、按小时 |
+| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、没买到、挂单/限价单、反向信号卖出（模拟）、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
 | `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，点一行展开 |
-| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布）、账户只读、系统健康、运行日志、清空统计 |
+| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布，含第一单方式、挂单秒数、行情太乱就暂停）、账户只读、系统健康、运行日志、清空统计 |
 | `console.css` | 全站唯一样式表 |
 | `shared/preview-core.js` | 请求、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏 |
 | `shared/stream.js` | 推送客户端：登记页面的 GET，用一条 EventSource 订阅 |
@@ -137,23 +143,22 @@ journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/
 FAK 没成交的回复（`ClobWrapper.submitOrder` 的 `fakKilled`）：交易所报 "no orders found to match with FAK order"（实盘是 HTTP 400 `{error, orderID}`，带我们签名的哈希），或 `success` + `unmatched` + makingAmount/takingAmount 为 0 + 没有 tradeIDs，网关给 `rejected`，订单直接 `REJECTED`、释放预留、不阻断市场。`delayed`（撮合还没发生）照常 `OPEN` 等用户 feed；超时、5xx、连接断开仍是 `UNKNOWN`。账户恢复里，回执拿到过、详情 404、开放订单和成交扫描里都没有、该 token 没持仓的 FAK 当场放弃（`abandonsMissingFak`），不等 `UNKNOWN_ABANDON_AFTER_SEC` 的 5 分钟。journal 的 `order` 行带 `error`（交易所原话，过 `safeErrorMessage`）。
 
 ```
-币安 aggTrade ×2 或 Bybit 永续 ×2（leadSource）─> binance-trades 去重 ─> LeadSignalDetector ─> 优先队列 ─> platform.publish ─> 策略 onEvent
+Bybit ×2 / 币安 / OKX 直连 + 东京转发 ─> lead-trades 每家去重 ─> 每家一个 LeadSignalDetector ─> leadEvent（全部字段）─> 优先队列 ─> platform.publish ─> 策略 onEvent
 ```
 
 ## 策略 `binance-lead`
 
-默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`makerHoldSec 0`、`leadSource binance-spot`、`openBandBp 0`、`midEdge 0.08`、`midShares 0`、`highEdge 0.13`、`highShares 0`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`leadVenues [bybit, binance, okx]`、`tokyoRelay true`、`openBandBp 0`、`openLine tick`、`restAfterMissSec 0`、`restShadow true`、`entryOrder fak`、`regimePause false`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。实盘配置在控制台设置页，见 [STRATEGY.md](STRATEGY.md)。
 
-- 开盘价（`openBandBp`）：`LeadSignalDetector` 按成交时间记下每场开盘价（本场开始时刻或之前最后一笔成交；行情在本场中途才连上就没有），随信号带出 `openPrice`；策略只在信号离开盘价 −openBandBp ≤ d < openBandBp 时下单（d 按信号方向取正负，单位 bp），并核对开盘价属于本场。journal 的 lead 行带 `open_price`。
-- 按优势定股数（`midEdge/midShares/highEdge/highShares`）：`LeadSignalDetector` 用环形缓冲记每整秒的领先价（该秒及之前最后一笔成交），信号时 `leadFairUp` 算本场结算 P(UP)（开盘前 60 s 均价对收盘前 60 s 均价，300 s 波动率，C 0.859，信息截止到信号那一笔），随信号带出 `fairUp`。历史不满约 6 分钟、成交断档超过 60 s 后重新记、波动率为 0 时不带。策略算 `edge = P(信号那边) − 卖价 − 0.07·卖价·(1−卖价)`，≥ highEdge 买 highShares，≥ midEdge 买 midShares，否则 `shares`（份额为 0 的档关闭；没有 fairUp 按 `shares`；挂单一律 `shares`），再套 1 美元下限。stage 记 `fairEdge`，journal 的 lead 行带 `fair_up`、`fair_edge`。预签单每个限价签每一档的股数；重启恢复时 FAK 股数必须是本场配置某一档的股数。**回滚注意**：下过 10/20 股的场还在状态文件里时，旧版本恢复会报错起不来。
-- 信号源（`leadSource`，`cli/platform.ts leadFeedFor`）：`binance-spot` 或 `bybit-perp`，引擎启动时选定，热更新改它要下次启动才生效（检测器窗口里只能是一家的价格）。两家都只认 1 秒内的成交（太旧、时间在未来、编号乱跳的丢掉）。
+- 开盘线（`openBandBp`、`openLine`）：`LeadSignalDetector` 按成交时间记下每场开盘价（`openPrice`，本场开始时刻或之前最后一笔成交）和开盘前 60 秒均价（`openMean60`，每整秒最后一笔成交的均价，和官方目标价的 Chainlink 60 s TWAP 同一窗口）。策略只在信号离开盘线 −openBandBp ≤ d < openBandBp 时下单（d 按信号方向取正负，单位 bp），`openLine` 选用哪条线。
+- 信号源（`leadVenues`、`tokyoRelay`，引擎启动时生效）：每家交易所一个检测器，窗口里只有那一家的价格；同一笔成交从直连和东京两条线来，谁先到用谁（`line` 记 `direct`/`tokyo`）。
+- 行情太乱（`regimePause`）：每个信号带 `signals300`（这家检测器信号前 300 s 的信号数）和 `vol300Bp`（前 300 个整秒的每秒对数收益标准差）；`regimePause()` 判 > 12 或 > 0.89。开关开着时 `decide` 跳过这个信号，本场等下一个；关着时只在 `lead_order` 记 `regime_pause`。重启后前 300 s 没有这两个数，照常下单。
 - 信号（`LeadSignalDetector`，在 feed 一侧）：领先成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结。
 - 只接 `now <= startsAt` 时发现的场；中途启动等下一场。
 - 当前盘口：本场最新一帧，一边没卖价也算。两边都有卖价、到达时年龄 ≤ 2 s、两边时间差 ≤ 1.5 s、两边卖价之和 ≤ 1.05 才算新鲜。行情断线、账户恢复（只限被阻断的市场）后作废，等新的一帧。
-- 下单：本场第一个"当前盘口新鲜"、这一边卖价 ≤ `maxAsk` 的信号，买信号那一边，FAK 限价 = 卖价 + `limitPremium`（向下取到 tick，最多 0.99），`shares` 股，`clientOrderId = <instanceId>:<marketId>:1`。盘口不新鲜或卖价高于 `maxAsk` 就等下一个信号，不算本场的尝试。
-- 挂单模式（`makerHoldSec` > 0）：同一个信号改成 post-only GTC 买单，价格 = 这一边买一价（`bidAtSignal`，上限看它），股数就是 `shares`（不抬到 1 美元）；`cancelAt = 决定时刻 + makerHoldSec`，到时策略发 cancel（1 秒内不重发），场次结束仍走原来的收尾撤单。交易所回 crosses book 的 post-only 记 REJECTED（`postOnlyCrossed`），恢复时 post-only 单和 FAK 一样从不重发签名。
-- 一场最多一笔，成不成交都不再下；持有到结算。
+- 下单：本场第一个"当前盘口新鲜"、这一边卖价 ≤ `maxAsk`、在开盘线范围内（开了暂停时还要不乱）的信号，买信号那一边，限价 = 卖价 + `limitPremium`（向下取到 tick，最多 0.99），`shares` 股（不到 1 美元抬到 1 美元，金额凑整到分），`clientOrderId = <instanceId>:<marketId>:1`；`entryOrder` 决定是 FAK 还是 GTC。不合格就等下一个信号，不算本场的尝试。
+- 一场一个信号：FAK 时最多 FAK + 一张挂单补单，GTC 时只一张；持有到结算。
 - 下单前检查：单场预算、总预算、可用资金、tick 与最小股数、费用预估。
 - 重启时未提交的 `CREATED` 意图标为 `ABANDONED`，从不补发。
 - journal 每个信号一行 `lead_signal`：信号字段、所在场次、结果（`order_submitted`/`skipped`/`no_round`/`stopping`）和本场 reason、下单的限价与卖价。账本把它存成事件 `lead_signal`（不建场次行、不算成交），控制台用它显示"这场为什么没下单"。
@@ -198,20 +203,20 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 
 | 路径 | 说明 |
 |---|---|
-| `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 前只保留最新 20 个。延迟只记下单路径（每笔订单一次），不记每个盘口；platform_status 每 --status-sec 写 journal，stdout（`.console.log`）只在状态或原因变化时、否则每 60 s 打一行，停止/失败那一行必打 |
+| `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 时只留最新 3 个，更早的打包进 `E/results/archive/<run>.tar.gz`。延迟只记下单路径（每笔订单一次），不记每个盘口；platform_status 每 --status-sec 写 journal，stdout（`.console.log`）只在状态或原因变化时、否则每 60 s 打一行，停止/失败那一行必打 |
 | `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎状态，按账户跨 run、跨策略共用（名字是历史遗留，见"启动与停止"） |
 | `…platform-state.json.settlements.json` | 结算记录，清空数据时保留 |
 | `E/results/dashboard/binance-lead-config.json`、`binance-lead-config.draft.json` | 已发布配置、草稿（旧的 `btc-reversal-config*.json` 不再读，留在原处） |
 | `E/results/dashboard/market_pool.json` | 运行池 |
 | `E/results/dashboard/ledger.sqlite3`、`snapshot.json` | 账本投影 |
 | `E/results/dashboard-state.json` | 控制面当前 run 信息 |
-| `/root/pm-system/data/dashboard/market-snapshot.json` | 采集器快照 |
+| `E/results/account-history/<钱包>.json` | 账户读取器记住的订单详情 |
 | `/root/pm-system/data/dashboard/deployment.lock` | 部署与启动共用的 flock |
-| `/root/pm-system/data/market-history/<币>/<北京日期>.jsonl.gz` | 全量行情记录，保留 30 天（`config/pm-clob-market-snapshot.service` 的 `--record-days`） |
+| `/root/pm-releases/<rev7>-<UTC>/`（东京 `/root/pm-relay-releases/`） | 每次部署的发布目录，`before/` 里是被替换的旧文件 |
 
-行情记录每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。同一文件里还有成交行（feed 的 `last_trade_price`）：`{t,a,m,r,k:"t",tok:"u"|"d",p 价,s 量,side 吃单方向 BUY|SELL}`，盘口行没有 `k`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
+行情录制（不再运行，格式供本机回测读旧数据）：每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。同一文件里还有成交行（feed 的 `last_trade_price`）：`{t,a,m,r,k:"t",tok:"u"|"d",p 价,s 量,side 吃单方向 BUY|SELL}`，盘口行没有 `k`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
 
-秘密只在服务器：账户配置 `/root/.config/pm-system/account.json`、`/root/pm-system/config/dashboard-secret.env`、nginx 口令 `/etc/nginx/pm-dashboard.htpasswd`。不进源码、日志、文档、浏览器。
+秘密只在服务器：爱尔兰 `E/.env`（钱包、签名私钥、Relayer/Builder 凭据、RPC）、`/root/.config/pm-system/console.env`（实盘解锁、转发端口等，不含密钥值）、`/root/.config/pm-system/relay.key`（转发 HMAC 密钥，东京同一份）、nginx 口令 `/etc/nginx/pm-console.htpasswd`；东京 `/root/.config/pm-system/relay.env`、`relay.key`。全部 600 权限，不进源码、日志、文档、浏览器。
 
 ## 部署与回滚
 
@@ -226,6 +231,6 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 
 ## 已知限制与延后
 
-- O1：服务器 root 允许密码 SSH 登录且对公网开放。计划调试完后设 IP 白名单（80 端口需对外开放以续期证书）。
-- O3：没有任何备份（账本、结算记录、账户配置只在这一块盘上）。调试完后再做。
+- O3：没有自动备份。爱尔兰的账本、结算记录、状态文件只在这一块盘上；旧 run 的 journal 在 `results/archive/`，本机 `E:/pm-backup/aws-runs/` 有手动拷的一份。
+- 研究数据都在本机 `E:/pm-backup/`（录制行情到 11-13、各交易所逐笔成交、research-* 脚本和结论）；predict.fun 历史在都柏林 `pm-new:/root/pf-history/`。
 - C30：账本自己计算已结算盈亏的旧逻辑（`scripts/dashboard/ledger.py`）待官方数据连续稳定、没出现 `ledger` 回退后删除。
