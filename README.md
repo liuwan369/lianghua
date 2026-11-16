@@ -49,3 +49,4 @@ node frontend/console/regress/<名字>.mjs
 - [API.md](API.md)：控制面 HTTP 接口和推送。
 - [AGENTS.md](AGENTS.md)：铁律和工作方式；[HANDOFF.md](HANDOFF.md)：当前状态、服务器操作、行情录制。
 - [STRATEGY.md](STRATEGY.md)：策略规则和前向验证口径。
+- [ROADMAP.md](ROADMAP.md)：还缺什么、按什么顺序做、做到哪了。

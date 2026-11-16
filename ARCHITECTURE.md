@@ -231,6 +231,6 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 
 ## 已知限制与延后
 
-- O3：没有自动备份。爱尔兰的账本、结算记录、状态文件只在这一块盘上；旧 run 的 journal 在 `results/archive/`，本机 `E:/pm-backup/aws-runs/` 有手动拷的一份。
+- 没有自动备份（ROADMAP 4.1）。爱尔兰的账本、结算记录、状态文件只在这一块盘上；旧 run 的 journal 在 `results/archive/`，本机 `E:/pm-backup/aws-runs/` 有手动拷的一份。
 - 研究数据都在本机 `E:/pm-backup/`（录制行情到 11-13、各交易所逐笔成交、research-* 脚本和结论）；predict.fun 历史在都柏林 `pm-new:/root/pf-history/`。
-- C30：账本自己计算已结算盈亏的旧逻辑（`scripts/dashboard/ledger.py`）待官方数据连续稳定、没出现 `ledger` 回退后删除。
+- 账本自己计算已结算盈亏的旧逻辑（`scripts/dashboard/ledger.py`）待官方数据连续稳定、没出现 `ledger` 回退后删除（ROADMAP 4.3）。
