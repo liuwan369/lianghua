@@ -59,6 +59,13 @@ export interface BinanceLeadConfig {
    * no fee) from the venue's reply, cancelled restAfterMissSec after it. One
    * order: no rest order, no post-only refusal when the ask came back. */
   entryOrder: EntryOrder;
+  /** Regime pause (user 2026-11-16, off by default): skip a signal that came
+   * in a wild market (regimePause: more than REGIME_PAUSE_SIGNALS signals or a
+   * 1 s std above REGIME_PAUSE_VOL_BP in the 300 s before it); the round waits
+   * for a later signal. Off, the decision is still journalled (shadow). Live
+   * 11-16 01:40-10:00: the 20 orders it would have skipped won 6, -41.97; the
+   * 39 kept +3.71. */
+  regimePause: boolean;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -166,7 +173,7 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadVenues: [...LEAD_VENUES], tokyoRelay: true,
-  openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
 const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"];
@@ -301,6 +308,7 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   }
   if (typeof config.restShadow !== "boolean") throw new Error("restShadow must be true or false");
   if (!ENTRY_ORDERS.includes(config.entryOrder)) throw new Error(`entryOrder must be one of ${ENTRY_ORDERS.join(", ")}`);
+  if (typeof config.regimePause !== "boolean") throw new Error("regimePause must be true or false");
   // The GTC's remainder is cancelled after restAfterMissSec: 0 would rest it to the close.
   if (config.entryOrder === "gtc" && !(config.restAfterMissSec > 0)) throw new Error("entryOrder gtc needs restAfterMissSec > 0");
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
@@ -587,6 +595,15 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     // +0.004 a share (t 0.15). Keep the round's attempt for a later signal.
     if (ask > config.maxAsk + EPS) {
       round.reason = `卖价 ${priceText(ask)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
+    }
+    if (config.regimePause) {
+      const wild = regimePause(event);
+      if (wild.pause) {
+        round.reason = wild.reason === "signals"
+          ? `行情太乱：前 5 分钟 ${event.signals300} 个信号（> ${REGIME_PAUSE_SIGNALS}），等下一个信号`
+          : `行情太乱：前 5 分钟每秒波动 ${event.vol300Bp!.toFixed(2)} bp（> ${REGIME_PAUSE_VOL_BP}），等下一个信号`;
+        return undefined;
+      }
     }
     const instrument = context.markets.find(m => m.id === round.marketId)?.instruments.find(i => i.tokenId === tokenId);
     if (!instrument || !positive(instrument.tickSize) || !positive(instrument.minOrderSize)) {

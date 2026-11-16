@@ -11,7 +11,7 @@
 // Run after `npm run build`:  node scripts/regress/regime-shadow.mjs
 import assert from "node:assert/strict";
 import { LeadSignalDetector } from "../../dist/live/feeds/binance-trades.js";
-import { regimePause, REGIME_PAUSE_SIGNALS, REGIME_PAUSE_VOL_BP } from "../../dist/strategies/binance-lead.js";
+import { regimePause, REGIME_PAUSE_SIGNALS, REGIME_PAUSE_VOL_BP, createStrategy, normalizeBinanceLeadConfig } from "../../dist/strategies/binance-lead.js";
 import { leadOrderFields } from "../../dist/cli/platform.js";
 import { leadEvent } from "../../dist/platform/polymarket.js";
 
@@ -96,5 +96,39 @@ assert.equal(REGIME_PAUSE_SIGNALS, 12); assert.equal(REGIME_PAUSE_VOL_BP, 0.89);
   assert.deepEqual([f.signals300, f.vol300_bp, f.regime_pause, f.regime_reason], [20, 0.4, true, "signals"]);
   const old = leadOrderFields(round, { ...stage, signal: { ...signal, signals300: undefined, vol300Bp: undefined } }, undefined, []);
   assert.equal(old.regime_pause, null, "a signal without the measures is not judged");
+}
+// --- the switch (user 2026-11-16): off by default, the order goes out; on, a
+// wild signal is skipped and the round keeps its attempt for a calm one ---
+{
+  assert.equal(normalizeBinanceLeadConfig({}).regimePause, false, "off by default");
+  assert.throws(() => normalizeBinanceLeadConfig({ regimePause: "yes" }), /regimePause/);
+  const START = 1_800_000_000, UP = "11".repeat(38), DOWN = "22".repeat(38);
+  const market = { id: "0xm", assetId: "btc", roundId: String(START), name: `btc-updown-5m-${START}`, startsAt: START, endsAt: START + 300,
+    instruments: [{ tokenId: UP, marketId: "0xm", outcome: "Up", tickSize: 0.01, minOrderSize: 5 },
+                  { tokenId: DOWN, marketId: "0xm", outcome: "Down", tickSize: 0.01, minOrderSize: 5 }] };
+  const ctx = now => ({ mode: "live", now, markets: [market], books: [], estimateFee: () => 0.02,
+    account: { cashUsd: 1000, positions: [], orders: [], quarantinedOrderIds: [], risk: { halted: false, availableUsd: 1000, occupiedUsd: 0 } } });
+  const book = t => ({ kind: "book", marketId: "0xm", roundId: String(START), snapshot: { assetId: "btc", marketId: "0xm", roundId: String(START),
+    sourceAt: t, expiresAt: t + 2, tsUnix: t, receivedAtUnix: t, receivedAtMonoMs: 0, marketAgeMs: 50,
+    YES: { assetId: UP, bid: 0.4, ask: 0.5, sourceAt: t, expiresAt: t + 2 }, NO: { assetId: DOWN, bid: 0.4, ask: 0.52, sourceAt: t, expiresAt: t + 2 } } });
+  const lead = (S, extra) => ({ kind: "lead", assetId: "btc", direction: "UP", price: 100030, refPrice: 100000, moveBp: 3,
+    venue: "bybit", line: "direct", tradeId: S, tradeTimeMs: (S - 0.1) * 1000, receivedAtUnix: S, receivedAtMonoMs: 1, ...extra });
+  const run = (config, extra) => {
+    const st = createStrategy({ limitPremium: 0.08, ...config });
+    st.onEvent({ kind: "timer", ts: START - 20 }, ctx(START - 20));
+    st.onEvent(book(START + 20), ctx(START + 20));
+    return { st, actions: st.onEvent(lead(START + 21, extra), ctx(START + 21.002)) };
+  };
+  const wild = { signals300: 20, vol300Bp: 0.4 };
+  assert.equal(run({}, wild).actions.filter(a => a.kind === "submit").length, 1, "off: a wild signal still trades");
+  const on = run({ regimePause: true }, wild);
+  assert.equal(on.actions.filter(a => a.kind === "submit").length, 0, "on: a wild signal is skipped");
+  assert.match(on.st.exportState().rounds[0].reason, /行情太乱：前 5 分钟 20 个信号/);
+  assert.equal(on.st.exportState().rounds[0].stages.length, 0, "the round keeps its attempt");
+  const later = on.st.onEvent(lead(START + 40, { signals300: 3, vol300Bp: 0.4 }), ctx(START + 40.002));
+  assert.equal(later.filter(a => a.kind === "submit").length, 1, "a calm signal later in the round trades");
+  const vol = run({ regimePause: true }, { signals300: 2, vol300Bp: 1.2 });
+  assert.match(vol.st.exportState().rounds[0].reason, /每秒波动 1.20 bp/);
+  assert.equal(run({ regimePause: true }, {}).actions.filter(a => a.kind === "submit").length, 1, "no measures (after a restart): trades");
 }
 console.log("regime-shadow OK");

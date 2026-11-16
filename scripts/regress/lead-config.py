@@ -127,7 +127,7 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 # --- the exact field set: no retired field, nothing missing ---
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
-ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder")
+ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
@@ -138,6 +138,9 @@ assert old["entryOrder"] == "fak", "an older config keeps the FAK + rest flow"
 assert validate_config({**defaults, "entryOrder": "gtc", "restAfterMissSec": 5})["entryOrder"] == "gtc"
 assert rejected({**defaults, "entryOrder": "gtc", "restAfterMissSec": 0}), "gtc with 0 s rests to the close"
 assert rejected({**defaults, "entryOrder": "ioc"})
+assert old["regimePause"] is False, "an older config keeps trading in a wild market"
+assert validate_config({**defaults, "regimePause": True})["regimePause"] is True
+assert rejected({**defaults, "regimePause": "on"})
 assert (old["maxAsk"], old["openBandBp"], old["openLine"], old["leadVenues"], old["tokyoRelay"]) == \
     (0.8, 0, "tick", ["bybit", "binance", "okx"], True)
 
