@@ -152,6 +152,24 @@ export function classifyCashFlows(input: ClassifyCashFlowInput): CashFlowClassif
           || transfer.net < 0n && other.net > 0n && other.from === COLLATERAL_OFFRAMP.toLowerCase()))) return "conversion";
       return undefined;
     };
+    // A withdrawal through the offramp (live 2026-11-17, one WITHDRAWAL row of
+    // 40): pUSD -40 out of the wallet, USDC.e +40 in from the offramp and -40
+    // straight on to the destination. The USDC.e legs net to zero inside this
+    // receipt: pass-through. The official row must match the pUSD net.
+    const usdcE = active.filter(t => t.token === USDC_E.toLowerCase());
+    const pusd = active.filter(t => t.token === PUSD.toLowerCase());
+    if (kinds.size === 1 && (kinds.has("withdrawal") || kinds.has("deposit")) && pusd.length && usdcE.length
+      && usdcE.reduce((n, t) => n + t.net, 0n) === 0n && pusd.length + usdcE.length === active.length) {
+      const kind = [...kinds][0] as "withdrawal" | "deposit";
+      const claimed = claims.reduce((n, row) => n + (cashUnits(activityAmount(row)) ?? -1n), 0n);
+      const actual = pusd.reduce((n, t) => n + t.net, 0n);
+      if (claims.every(row => cashUnits(activityAmount(row)) !== undefined) && new Set(claims.map(activityKey)).size === claims.length
+        && (kind === "withdrawal" ? actual === -claimed && pusd.every(t => t.net < 0n) : actual === claimed && pusd.every(t => t.net > 0n))) {
+        pusd.forEach(t => classify(t, kind, "official-activity-and-receipt"));
+        usdcE.forEach(t => classify(t, "conversion", "official-activity-and-receipt"));
+        continue;
+      }
+    }
     // Account-level activity labels must match the confirmed asset, sign and
     // amount; a label or an unclassified incoming transfer alone proves nothing.
     if (kinds.size === 1 && !kinds.has("unknown") && new Set(active.map(t => t.token)).size === 1) {
