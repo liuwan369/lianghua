@@ -138,19 +138,6 @@ export interface LeadStage {
   edge?: number;
   edgeShares?: number;
 }
-/** Shadow exit (user 2026-11-14, records only): once the round holds shares,
- * the opposite signals seen after its first fill are counted; on the
- * EXIT_SHADOW_OPPOSITE-th the bid of the held side in force is what a sell
- * would have got. Kept on the round. */
-export interface LeadExitShadow {
-  /** Opposite signals counted so far (while holding). */
-  opposite: number;
-  /** Set on the trigger: receive time (s), the held side's bid then (null
-   * when the frame had none), and shares held then. */
-  at?: number;
-  bid?: number | null;
-  shares?: number;
-}
 /** Exit on the first reverse signal (user 2026-11-17): the first opposite
  * signal after the round held shares. Recorded whether or not exitOnReverse
  * sells; kept on the round. */
@@ -203,7 +190,6 @@ export interface LeadRound {
   reason: string;
   /** The round's FAK once placed, then at most its rest order. */
   stages: LeadStage[];
-  exitShadow?: LeadExitShadow;
   exitFirst?: LeadExitFirst;
   exit?: LeadExitOrder;
   latest?: LeadQuote;
@@ -251,12 +237,8 @@ const cancelDue = (stage: LeadStage, now: number) => stage.cancelRequestedAt ===
   || now - stage.cancelRequestedAt >= (stage.status === "UNKNOWN" ? UNKNOWN_CANCEL_RETRY_SEC : CANCEL_RETRY_SEC);
 /** A rest is placed within this long of the FAK's miss, or not at all. */
 const REST_LATE_SEC = 2;
-/** Shadow exit: the opposite signal that would sell (23-day backtest
- * E:/pm-backup/research-1113/chaos.py X3: 3 opposite signals cut losing
- * orders -1509 -> -1282, worst day -25.8 -> -7.1, 43% of sells were winners). */
-export const EXIT_SHADOW_OPPOSITE = 3;
-/** A signal this soon after the fill's update is the same move, not a turn. */
-const EXIT_SHADOW_AFTER_SEC = 0.5;
+/** A reverse signal this soon after the fill's update is the same move, not a turn. */
+const EXIT_AFTER_SEC = 0.5;
 /** Exit on the first reverse signal: the sell's limit under the held side's
  * bid (it takes the bid and the levels down to this), as the backtest. */
 export const EXIT_PREMIUM = 0.08;
@@ -653,9 +635,6 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         if (exit.changed) changed = true;
         if (exit.order) actions.push({ kind: "submit", order: exit.order });
       }
-      // Shadow exit (records only, never sells): what the round's held shares
-      // would have sold at on the EXIT_SHADOW_OPPOSITE-th opposite signal.
-      if (event.kind === "lead" && this.shadowExit(round, event)) changed = true;
       // Exit on the first reverse signal: recorded always; sold with exitOnReverse.
       if (event.kind === "lead") {
         const exit = this.decideExit(round, event, context);
@@ -779,29 +758,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     return funded;
   }
 
-  /** Shadow exit: count opposite signals seen while the round holds shares
-   * (from EXIT_SHADOW_AFTER_SEC after the first fill); on the
-   * EXIT_SHADOW_OPPOSITE-th, record the held side's bid in force. Never acts. */
-  private shadowExit(round: LeadRound, event: LeadEvent): boolean {
-    const held = round.stages.reduce((total, stage) => total + stage.filledShares, 0);
-    const first = round.stages.map(stage => stage.firstFillAt).filter(finite).sort((a, b) => a - b)[0];
-    const direction = round.stages[0]?.direction;
-    if (!(held > EPS) || first === undefined || !direction || event.direction === direction
-      || event.receivedAtUnix < first + EXIT_SHADOW_AFTER_SEC || event.receivedAtUnix >= round.endsAt) return false;
-    const shadow = round.exitShadow ??= { opposite: 0 };
-    if (shadow.at !== undefined) return false;
-    shadow.opposite += 1;
-    if (shadow.opposite >= EXIT_SHADOW_OPPOSITE) {
-      const bid = direction === "UP" ? round.latest?.upBid : round.latest?.downBid;
-      shadow.at = event.receivedAtUnix;
-      shadow.bid = unitPrice(bid) ? bid : null;
-      shadow.shares = held;
-    }
-    return true;
-  }
-
   /** The first opposite signal after the round held shares (from
-   * EXIT_SHADOW_AFTER_SEC after the first fill, until EXIT_LAST_SEC before the
+   * EXIT_AFTER_SEC after the first fill, until EXIT_LAST_SEC before the
    * close): record the held side's bid; with exitOnReverse, sell what the
    * round holds (sendExit). Once per round. A GTC or rest remainder still
    * resting is cancelled first and the sell waits until no buy of the round
@@ -815,7 +773,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const first = round.stages.map(stage => stage.firstFillAt).filter(finite).sort((a, b) => a - b)[0];
     const seen = event.receivedAtUnix;
     if (!(held > EPS) || first === undefined || event.direction === buy.direction
-      || seen < first + EXIT_SHADOW_AFTER_SEC || seen >= round.endsAt - EXIT_LAST_SEC) return { changed: false };
+      || seen < first + EXIT_AFTER_SEC || seen >= round.endsAt - EXIT_LAST_SEC) return { changed: false };
     const bid = buy.direction === "UP" ? round.latest?.upBid : round.latest?.downBid;
     const record: LeadExitFirst = { at: seen, bid: unitPrice(bid) ? bid : null, shares: held, sent: false };
     round.exitFirst = record;
@@ -1216,9 +1174,6 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         || !Array.isArray(round.stages) || round.stages.length > 2
         || !["waiting_start", "waiting_next_round", "running", "ended"].includes(round.status)
         || typeof round.reason !== "string"
-        || (round.exitShadow !== undefined && (!finite(round.exitShadow.opposite)
-          || (round.exitShadow.at !== undefined && !finite(round.exitShadow.at))
-          || (round.exitShadow.bid != null && !unitPrice(round.exitShadow.bid))))
         || (round.exitFirst !== undefined && (!finite(round.exitFirst.at) || !finite(round.exitFirst.shares)
           || (round.exitFirst.bid !== null && !unitPrice(round.exitFirst.bid)) || typeof round.exitFirst.sent !== "boolean"
           || (round.exitFirst.waiting !== undefined && round.exitFirst.waiting !== true)))
@@ -1228,6 +1183,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
           || round.exit.filledShares < 0 || !STAGE_STATUSES.includes(round.exit.status)))) throw new Error("invalid persisted binance-lead round");
       // The book seen by a previous process is not the book in force now.
       delete round.latest;
+      // The 3rd-reverse-signal shadow exit an older engine kept (removed 2026-11-17).
+      delete (round as LeadRound & { exitShadow?: unknown }).exitShadow;
       markets.add(round.marketId);
       round.stages.forEach((stage, index) => {
         const signal = stage.signal;

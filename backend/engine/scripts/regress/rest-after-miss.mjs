@@ -8,7 +8,7 @@
 //
 // Run after `npm run build`:  node scripts/regress/rest-after-miss.mjs
 import assert from "node:assert/strict";
-import { createStrategy, normalizeBinanceLeadConfig, REST_SHADOW_SEC, EXIT_SHADOW_OPPOSITE } from "../../dist/strategies/binance-lead.js";
+import { createStrategy, normalizeBinanceLeadConfig, REST_SHADOW_SEC } from "../../dist/strategies/binance-lead.js";
 import { leadOrderFields, leadExitShadowFields, createLeadExitShadowLog } from "../../dist/cli/platform.js";
 
 const START = 1_800_000_000, UP = "11".repeat(38), DOWN = "22".repeat(38), ROUND = String(START);
@@ -253,57 +253,64 @@ const fakSent = (config = {}) => {
   assert.equal(f.fee_usd, 0, "a maker fill pays no fee");
   assert.equal(f.late_by_ms, null, "late_by is the FAK's measure");
 }
-// --- shadow exit (records only): the 3rd opposite signal after the fill records
-// the held side's bid; same-way signals, signals before the fill and the
-// 0.5 s after it do not count; no order or cancel is ever produced ---
+// --- lead_exit_shadow (one line per held round, at its close): the first
+// reverse signal after the fill (exitOnReverse off: recorded, no order or
+// cancel); same-way signals and the 0.5 s after the fill do not count. The
+// 3rd-reverse-signal shadow (2026-11-14) is gone: an older state keeping it
+// restores without it. ---
 {
-  assert.equal(EXIT_SHADOW_OPPOSITE, 3);
   const { s, fak } = fakSent();
   at(s, { kind: "order", order: record(fak, "FILLED", 5.2, "0xfak", S + 0.6) }, S + 0.6);
   const leadAt = (t, dir) => submits(at(s, { ...lead(t, dir), tradeId: Math.round(t * 1000) }, t + 0.002)).length
     + cancels(at(s, { kind: "timer", ts: t + 0.003 }, t + 0.003)).length;
   assert.equal(leadAt(S + 0.8, "DOWN"), 0, "inside 0.5 s of the fill: the same move");
-  assert.equal(s.exportState().rounds[0].exitShadow, undefined);
+  assert.equal(s.exportState().rounds[0].exitFirst, undefined);
   assert.equal(leadAt(S + 2, "UP"), 0, "same way: not counted");
-  at(s, book(S + 5, 0.66, 0.36), S + 5);
-  assert.equal(leadAt(S + 6, "DOWN"), 0);
-  assert.equal(leadAt(S + 9, "DOWN"), 0);
-  assert.equal(s.exportState().rounds[0].exitShadow.opposite, 2);
-  at(s, book(S + 10, 0.41, 0.60), S + 10);
-  assert.equal(leadAt(S + 11, "DOWN"), 0, "the trigger sends nothing");
-  const shadow = s.exportState().rounds[0].exitShadow;
-  assert.deepEqual({ ...shadow }, { opposite: 3, at: S + 11, bid: 0.4, shares: 5.2 }, "the UP bid in force (0.41 - 0.01) and the shares held");
-  leadAt(S + 15, "DOWN");
-  assert.equal(s.exportState().rounds[0].exitShadow.opposite, 3, "frozen after the trigger");
-  // Restored, and written once as lead_exit_shadow.
-  const back = createStrategy({}, s.exportState());
-  assert.equal(back.exportState().rounds[0].exitShadow.bid, 0.4);
+  at(s, book(S + 5, 0.41, 0.60), S + 5);
+  assert.equal(leadAt(S + 6, "DOWN"), 0, "off: nothing sent");
+  const first = s.exportState().rounds[0].exitFirst;
+  assert.deepEqual([first.at, first.bid, first.shares, first.sent, first.skip], [S + 6, 0.4, 5.2, false, "off"],
+    "the UP bid in force (0.41 - 0.01) and the shares held");
+  assert.equal(s.exportState().rounds[0].exitShadow, undefined, "no 3rd-signal shadow any more");
+  // Written once as lead_exit_shadow, at the close.
   const fields = leadExitShadowFields(s.exportState().rounds[0]);
-  assert.deepEqual([fields.triggered, fields.bid, fields.sell_shares, fields.opposite_signals, fields.direction], [true, 0.4, 5.2, 3, "UP"]);
+  assert.deepEqual([fields.first_triggered, fields.first_bid, fields.first_shares, fields.held_shares, fields.direction],
+    [true, 0.4, 5.2, 5.2, "UP"]);
+  for (const gone of ["opposite_signals", "triggered", "trigger_ms", "trigger_sec_since_open", "bid", "sell_shares"]) {
+    assert.ok(!(gone in fields), `${gone} was the 3rd-signal shadow`);
+  }
   const lines = [];
   const log = createLeadExitShadowLog(() => s.exportState().rounds, (f, id) => lines.push(id), START - 30);
-  log.observe(S + 12); log.observe(S + 300); log.observe(S + 400);
+  log.observe(S + 12);
+  assert.deepEqual(lines, [], "not before the close");
+  log.observe(START + 300); log.observe(START + 400);
   assert.deepEqual(lines, ["lead_exit_shadow:0xm"], "once per round");
+  // An older state with the 3rd-signal shadow on a round restores without it.
+  const old = s.exportState();
+  old.rounds[0].exitShadow = { opposite: 3, at: S + 11, bid: 0.4, shares: 5.2 };
+  const back = createStrategy({}, old);
+  assert.equal(back.exportState().rounds[0].exitShadow, undefined, "dropped on restore");
+  assert.equal(back.exportState().rounds[0].exitFirst.bid, 0.4, "the first-signal record stays");
 }
 {
-  // No fill: nothing counted, no line. A held round with fewer than 3: a line at the end, not triggered.
+  // No fill: nothing recorded, no line. A held round without a reverse signal: a line at the end, not triggered.
   const { s, fak } = fakSent();
   at(s, { kind: "order", order: record(fak, "REJECTED", 0, "0xfak", S + 0.6) }, S + 0.6);
   for (const t of [S + 2, S + 4, S + 6, S + 8]) at(s, { ...lead(t, "DOWN"), tradeId: t }, t);
-  assert.equal(s.exportState().rounds[0].exitShadow, undefined);
+  assert.equal(s.exportState().rounds[0].exitFirst, undefined);
   assert.equal(leadExitShadowFields(s.exportState().rounds[0]), undefined);
   const h = fakSent();
   at(h.s, { kind: "order", order: record(h.fak, "FILLED", 5, "0xfak", S + 0.6) }, S + 0.6);
-  at(h.s, { ...lead(S + 3, "DOWN"), tradeId: 9 }, S + 3);
+  at(h.s, { ...lead(S + 3, "UP"), tradeId: 9 }, S + 3);
   const lines = [];
   const before = [];
   createLeadExitShadowLog(() => h.s.exportState().rounds, (f) => before.push(f), START + 300).observe(START + 400);
   assert.equal(before.length, 0, "a round that ended before the run started is not this run's");
   const log = createLeadExitShadowLog(() => h.s.exportState().rounds, (f) => lines.push(f), START - 30);
   log.observe(S + 100);
-  assert.equal(lines.length, 0, "not triggered and not over yet: nothing");
+  assert.equal(lines.length, 0, "not over yet: nothing");
   log.observe(START + 300);
-  assert.deepEqual([lines.length, lines[0].triggered, lines[0].opposite_signals], [1, false, 1], "at the end: one line, not triggered");
+  assert.deepEqual([lines.length, lines[0].first_triggered, lines[0].held_shares], [1, false, 5], "at the end: one line, no reverse signal");
 }
 // --- entryOrder "gtc" (user 2026-11-15): the round's first order is one GTC at
 // the same limit; what does not match at once rests and is cancelled

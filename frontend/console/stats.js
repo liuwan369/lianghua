@@ -60,19 +60,6 @@
     if (!liveCards && !shadowCards && !gtcCards) return html`<p class="empty">还没有没买到的单</p>`;
     return html`${gtcCards}${liveCards}${shadowCards}<p class="note">吃单+补单：吃单没买到后，在同一限价挂只挂单的买单，几秒后撤。限价单：一张单，能成交的立即成交，剩下的挂着，几秒后撤。</p>`;
   };
-  // Shadow exit (records only): selling what a round held on its 3rd opposite
-  // signal at the bid then, against holding to the close.
-  const renderExit = (e) => {
-    if (!e) return html`<p class="empty">没有数据</p>`;
-    if (!e.held_rounds) return html`<p class="empty">还没有持仓的场</p>`;
-    return html`<div class="cards">
-      ${card("买到的场", `${fmt.int(e.held_rounds)} 场`, `已出结果 ${fmt.int(e.settled)} 场`)}
-      ${card("会卖出", `${fmt.int(e.would_sell)} 场`, `占 ${fmt.pct(e.would_sell_rate)} · 卖价中位 ${fmt.price(e.bid_p50)}`)}
-      ${card("误卖（本来会赢）", `${fmt.int(e.mistaken)} 场`, `占卖出 ${fmt.pct(e.mistaken_rate)} · 少赚 ${fmt.money(e.mistaken_cost_usd)}`, "down")}
-      ${card("止损（本来会输）", `${fmt.int(e.saved)} 场`, `少亏 ${fmt.money(e.saved_usd)}`, "up")}
-      ${card("如果开了", fmt.money(e.net_usd), "比拿到结算多赚（负 = 少赚）", fmt.tone(e.net_usd))}
-    </div><p class="note">只记录不卖：买到后第 3 个反向信号时按当时买一价卖掉（扣吃单手续费），和拿到结算比。</p>`;
-  };
   // Exit on the first reverse signal (exitOnReverse): shadow while off (a sell
   // at the bid then, against holding to the close), the sells while on.
   const FIRST_SKIPS = { off: "开关关着", paused: "已暂停", halted: "账户停止交易", market_blocked: "本场等交易所确认", buy_working: "买单还在处理",
@@ -168,10 +155,10 @@
       </tbody></table></div>`;
   };
   const renderAll = (data) => ({
-    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exit: renderExit(data?.exit_shadow), exitFirst: renderExitFirst(data?.exit_first), edge: renderEdge(data?.edge_sizing), regime: renderRegime(data?.regime), late: renderLate(data?.late_by_ms),
+    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exitFirst: renderExitFirst(data?.exit_first), edge: renderEdge(data?.edge_sizing), regime: renderRegime(data?.regime), late: renderLate(data?.late_by_ms),
     latency: renderLatency(data?.latency), sources: renderBySource(data?.by_source), skips: renderSkips(data?.skips), hours: renderHours(data?.by_hour),
   });
-  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderMisses, renderRest, renderExit, renderExitFirst, renderEdge, renderRegime, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
+  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderMisses, renderRest, renderExitFirst, renderEdge, renderRegime, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
 
   const section = (key, title, meta = "") => html`<section class="panel"><div class="panel-head"><h2>${title}</h2><span class="panel-meta">${meta}</span></div><div data-part="${key}"></div></section>`;
   const root = P.mount("stats", "统计", "领先策略的漏斗、没买到的单、速度和按来源的结果，全部从账本算。", html`
@@ -181,7 +168,6 @@
     ${section("rest", "没买到后挂单")}
     ${section("exitFirst", "反向信号就卖出", "买到后第一个反向信号就卖")}
     ${section("edge", "按优势定股数", "优势大多买，优势小少买")}
-    ${section("exit", "反向信号卖出（模拟）", "第 3 个反向信号就卖，只记录")}
     ${section("regime", "行情太乱就暂停（模拟）", "信号前 5 分钟太乱就不下，只记录")}
     <div class="grid2">${section("late", "晚了多少毫秒")}${section("latency", "速度分解", "每笔单从交易所成交到收到回复")}</div>
     ${section("sources", "按信号源")}

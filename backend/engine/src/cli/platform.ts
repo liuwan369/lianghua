@@ -137,7 +137,7 @@ export function statusRuntime(input: {
       relayRecvMs: stage.signal.relayRecvMs } });
   const enrich = (round: StatusRound) => {
     // The exit record and the exit order go to the journal, not to the 2 s status line.
-    const { isRunning: _running, stages, exitFirst: _exitFirst, exit: _exit, exitShadow: _exitShadow, ...rest } = round;
+    const { isRunning: _running, stages, exitFirst: _exitFirst, exit: _exit, ...rest } = round;
     return { ...rest, stages: stages.slice(0, 1).map(stageView), ...roundOutcome(round, state) };
   };
   // runtime_book's side (_book_side): top of book, five levels, the venue clocks.
@@ -782,9 +782,6 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
     late_by_ms: !rest && shares !== null && orderFilled !== null && orderFilled < shares - 1e-8 ? diffMs(ackMs, askGoneMs) : null };
 }
 
-/** One `lead_exit_shadow` line per round that held shares (key
- * lead_exit_shadow:<marketId>), written when the shadow exit triggers or at
- * the round's end: what a sell on the 3rd opposite signal would have got. */
 /** The exit sell's `lead_order` (stage "exit", side SELL): what it sold, at
  * what price, and what the sale got back (proceeds less fees). */
 export function leadExitOrderFields(round: Readonly<LeadRound>, exit: Readonly<LeadExitOrder>,
@@ -805,18 +802,16 @@ export function leadExitOrderFields(round: Readonly<LeadRound>, exit: Readonly<L
     proceeds_usd: filled.length ? filled.reduce((total, fill) => total + fill.price * fill.shares - fill.feeUsd, 0) : null,
     decision_ms: msOf(exit.createdAt), post_sent_ms: msOf(order?.postSentAt), ack_ms: msOf(order?.venueReplyAt ?? order?.httpAckAt) };
 }
+/** One `lead_exit_shadow` line per round that held shares (key
+ * lead_exit_shadow:<marketId>), written at the round's end: the first reverse
+ * signal after the fill (exitOnReverse: the bid then, sent or why not) and the
+ * exit sell (what it filled). */
 export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string, unknown> | undefined {
   const stages = round.stages.filter(stage => stage.filledShares > 1e-8);
   if (!stages.length) return undefined;
   const shares = stages.reduce((total, stage) => total + stage.filledShares, 0);
-  const shadow = round.exitShadow;
   return { market_id: round.marketId, round_id: round.roundId, round_start: round.startsAt,
     direction: round.stages[0]!.direction, token_id: round.stages[0]!.tokenId, held_shares: shares,
-    opposite_signals: shadow?.opposite ?? 0, triggered: shadow?.at !== undefined,
-    trigger_ms: msOf(shadow?.at), trigger_sec_since_open: shadow?.at === undefined ? null : shadow.at - round.startsAt,
-    bid: shadow?.bid ?? null, sell_shares: shadow?.shares ?? null,
-    // Exit on the first reverse signal (exitOnReverse): its signal, the bid
-    // then, and the sell (sent or why not, and what it filled).
     first_triggered: round.exitFirst !== undefined, first_ms: msOf(round.exitFirst?.at),
     first_sec_since_open: round.exitFirst ? round.exitFirst.at - round.startsAt : null,
     first_bid: round.exitFirst?.bid ?? null, first_shares: round.exitFirst?.shares ?? null,

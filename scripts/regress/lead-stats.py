@@ -136,8 +136,8 @@ def exit_shadow(n, *, direction, triggered, bid, sell, opposite, round_start):
             "bid": bid, "sell_shares": sell}
 
 
-# O1 won (UP, U1): a sell on the 3rd opposite signal would have been a mistake.
-# O2 lost (DOWN token D2, winner U2): the sell would have saved part of it. O6 held, not triggered.
+# Lines an engine before 2026-11-17 wrote (the 3rd-reverse-signal shadow, now
+# retired): they still mark held rounds; their old fields are not projected.
 EXITS = [exit_shadow(1, direction="UP", triggered=True, bid=0.40, sell=5, opposite=3, round_start=R1),
          exit_shadow(2, direction="DOWN", triggered=True, bid=0.30, sell=5, opposite=3, round_start=R1 + 300),
          exit_shadow(6, direction="UP", triggered=False, bid=None, sell=None, opposite=1, round_start=R1 + 3600)]
@@ -249,15 +249,15 @@ class LeadStats(unittest.TestCase):
                          "the GTC is the round's order in the funnel, not a rest row")
         self.assertEqual(self.stats["gtc"]["orders"], 0, "no GTC in the FAK runs")
 
-    def test_exit_shadow(self):
-        e = self.stats["exit_shadow"]
-        fee = lambda b: 0.07 * b * (1 - b) * 5
-        self.assertEqual((e["held_rounds"], e["settled"], e["would_sell"], e["mistaken"], e["saved"]), (3, 2, 2, 1, 1),
-                         "round 6 has no winner yet; 1 of 2 sells was a winner")
-        self.assertAlmostEqual(e["mistaken_cost_usd"], 5 * 0.40 - fee(0.40) - 5, places=6)
-        self.assertAlmostEqual(e["saved_usd"], 5 * 0.30 - fee(0.30), places=6)
-        self.assertAlmostEqual(e["net_usd"], e["mistaken_cost_usd"] + e["saved_usd"], places=6)
-        self.assertEqual(e["mistaken_rate"], 0.5)
+    def test_old_exit_shadow_lines(self):
+        self.assertNotIn("exit_shadow", self.stats, "the 3rd-reverse-signal shadow is retired")
+        e = self.stats["exit_first"]
+        self.assertEqual((e["held_rounds"], e["settled"], e["triggered"]), (3, 2, 0),
+                         "old lines are held rounds without a first-signal record")
+        with self.ledger._connect() as db:
+            row = json.loads(db.execute("SELECT payload FROM lead_exit_shadows WHERE market_id='0xm1'").fetchone()[0])
+        for gone in ("opposite_signals", "triggered", "bid", "sell_shares"):
+            self.assertNotIn(gone, row, f"{gone} is not projected")
         self.assertNotIn("lead_exit_shadow", [x["event"] for x in self.ledger.events("run-a")["events"]],
                          "the shadow lines do not bury the run log")
 

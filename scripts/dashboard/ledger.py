@@ -101,8 +101,8 @@ CREATE TABLE IF NOT EXISTS lead_orders (
  PRIMARY KEY(run_id,client_order_id)
 );
 CREATE INDEX IF NOT EXISTS lead_order_round ON lead_orders(run_id,round_start);
--- lead_exit_shadow (cli/platform.ts leadExitShadowFields): per held round, what
--- a sell on the 3rd opposite signal would have got (records only).
+-- lead_exit_shadow (cli/platform.ts leadExitShadowFields): per held round, the
+-- first reverse signal after the fill and the exit sell (exitOnReverse).
 CREATE TABLE IF NOT EXISTS lead_exit_shadows (
  run_id TEXT NOT NULL REFERENCES runs(run_id), market_id TEXT NOT NULL,
  round_start REAL, recv_ts REAL NOT NULL, payload TEXT NOT NULL,
@@ -702,11 +702,11 @@ def _projection(record):
     if record["event"] == "lead_exit_shadow":
         for field in ("market_id", "round_id", "token_id"):
             result[field] = _text(record.get(field))
-        for field in ("round_start", "held_shares", "opposite_signals", "trigger_ms", "trigger_sec_since_open", "bid", "sell_shares",
-                      "first_ms", "first_sec_since_open", "first_bid", "first_shares",
+        # (A line before 2026-11-17 also carried the 3rd-reverse-signal shadow:
+        # opposite_signals, triggered, bid, sell_shares. Retired, not projected.)
+        for field in ("round_start", "held_shares", "first_ms", "first_sec_since_open", "first_bid", "first_shares",
                       "exit_price", "exit_shares", "exit_filled"):
             result[field] = _number(record.get(field))
-        result["triggered"] = record.get("triggered") is True
         # Exit on the first reverse signal (exitOnReverse): recorded always, sent when on.
         result["first_triggered"] = record.get("first_triggered") is True
         result["first_sent"] = record.get("first_sent") if isinstance(record.get("first_sent"), bool) else None
@@ -2981,25 +2981,9 @@ class Ledger:
         shadowed = [o for o in missed if o.get("rest_mode") == "shadow"]
         would = [o for o in shadowed if o.get("rest_shadow_fill_ms") is not None]
         would_done = [o for o in would if o["would_have_won"] is not None]
-        # Shadow exit (records only): per held round, a sell of what it held on
-        # the 3rd opposite signal at the held side's bid then, minus the sell's
-        # taker fee, against holding to the close. A sold winner is a mistaken
-        # sell; a sold loser a saved one.
+        # Held rounds (lead_exit_shadow), with their outcome.
         exits = [dict(item) for item in base.get("exits", [])]
         done_exits = [item for item in exits if item["won"] is not None]
-        sold = [item for item in done_exits if item.get("triggered") and item.get("bid") is not None and item.get("sell_shares")]
-        def _sell_change(item):
-            n, b = item["sell_shares"], item["bid"]
-            return n * b - TAKER_FEE_RATE * b * (1 - b) * n - (n if item["won"] else 0.0)
-        mistaken = [item for item in sold if item["won"]]
-        saved = [item for item in sold if not item["won"]]
-        exit_shadow = {"held_rounds": len(exits), "settled": len(done_exits), "would_sell": len(sold),
-                       "would_sell_rate": _ratio(len(sold), len(done_exits)),
-                       "mistaken": len(mistaken), "mistaken_rate": _ratio(len(mistaken), len(sold)),
-                       "mistaken_cost_usd": _sum(_sell_change(item) for item in mistaken),
-                       "saved": len(saved), "saved_usd": _sum(_sell_change(item) for item in saved),
-                       "net_usd": _sum(_sell_change(item) for item in sold),
-                       "bid_p50": _quantile(sorted(item["bid"] for item in sold), 0.5)}
         # Exit on the first reverse signal. Shadow (exitOnReverse off): per held
         # round, a sell of what it held at the bid then, minus the taker fee,
         # against holding to the close. Live: the sells sent and what they
@@ -3162,7 +3146,7 @@ class Ledger:
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
                 "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc, "regime": regime,
-                "exit_shadow": exit_shadow, "exit_first": exit_first, "edge_sizing": edge_sizing}
+                "exit_first": exit_first, "edge_sizing": edge_sizing}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
         """GET /api/orders/lead: lead orders newest first, with the round's
