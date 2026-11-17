@@ -12,7 +12,7 @@ import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
 import { createStrategy, normalizeBinanceLeadConfig, presignPrices, regimePause, type BinanceLeadConfig, type BinanceLeadState,
-  type BinanceLeadStrategy, type LeadRound, type LeadStage } from "../strategies/binance-lead.js";
+  type BinanceLeadStrategy, type LeadExitOrder, type LeadRound, type LeadStage } from "../strategies/binance-lead.js";
 
 /** The only built-in strategy; also its key in CoreState.strategyStates. */
 export const STRATEGY_ID = "binance-lead";
@@ -136,7 +136,8 @@ export function statusRuntime(input: {
       tradeTimeMs: stage.signal.tradeTimeMs, receivedAtUnix: stage.signal.receivedAtUnix,
       relayRecvMs: stage.signal.relayRecvMs } });
   const enrich = (round: StatusRound) => {
-    const { isRunning: _running, stages, ...rest } = round;
+    // The exit record and the exit order go to the journal, not to the 2 s status line.
+    const { isRunning: _running, stages, exitFirst: _exitFirst, exit: _exit, exitShadow: _exitShadow, ...rest } = round;
     return { ...rest, stages: stages.slice(0, 1).map(stageView), ...roundOutcome(round, state) };
   };
   // runtime_book's side (_book_side): top of book, five levels, the venue clocks.
@@ -751,6 +752,10 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   return { stage: rest ? "rest" : gtc ? "gtc" : "fak", rest_mode: restMode,
     signals300: signal?.signals300 ?? null, vol300_bp: signal?.vol300Bp ?? null,
     regime_pause: signal && (Number.isFinite(signal.signals300) || Number.isFinite(signal.vol300Bp)) ? regime.pause : null,
+    // Size by edge (shadow while edgeSizing is off): the fair value and edge
+    // at the decision, the shares the edge picks and the shares sent.
+    fair: stage?.fair ?? null, edge: stage?.edge ?? null, edge_shares: stage?.edgeShares ?? null,
+    edge_sizing: config ? config.edgeSizing : null,
     regime_reason: regime.reason,
     taker_shares: gtc ? sharesBy(false) : null, maker_shares: gtc ? sharesBy(true) : null,
     parent_client_order_id: rest && round ? round.stages[0]?.clientOrderId ?? null : null,
@@ -780,6 +785,26 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
 /** One `lead_exit_shadow` line per round that held shares (key
  * lead_exit_shadow:<marketId>), written when the shadow exit triggers or at
  * the round's end: what a sell on the 3rd opposite signal would have got. */
+/** The exit sell's `lead_order` (stage "exit", side SELL): what it sold, at
+ * what price, and what the sale got back (proceeds less fees). */
+export function leadExitOrderFields(round: Readonly<LeadRound>, exit: Readonly<LeadExitOrder>,
+  order: Readonly<OrderRecord> | undefined, fills: readonly TradeFill[]): Record<string, unknown> {
+  const filled = fills.filter(fill => fill.status !== "FAILED" && fill.shares > 0);
+  const filledShares = filled.reduce((total, fill) => total + fill.shares, 0);
+  const first = round.exitFirst;
+  return { stage: "exit", side: "SELL", rest_mode: null,
+    client_order_id: exit.clientOrderId, order_id: order?.orderId ?? exit.orderId ?? null,
+    market_id: round.marketId, round_id: round.roundId, round_start: round.startsAt,
+    direction: round.stages[0]?.direction ?? null, token_id: exit.tokenId,
+    status: exit.status === "ABANDONED" ? "ABANDONED" : order?.status ?? exit.status,
+    venue_status: order?.venueStatus ?? null, error: safeErrorMessage(order?.error ?? exit.error) ?? null,
+    sec_since_open: first ? first.at - round.startsAt : null, bid_at_signal: first?.bid ?? null,
+    limit_price: exit.price, shares: exit.shares, filled_shares: order?.filledShares ?? exit.filledShares,
+    avg_fill_price: filledShares > 0 ? filled.reduce((total, fill) => total + fill.price * fill.shares, 0) / filledShares : null,
+    fee_usd: filled.length ? filled.reduce((total, fill) => total + fill.feeUsd, 0) : null,
+    proceeds_usd: filled.length ? filled.reduce((total, fill) => total + fill.price * fill.shares - fill.feeUsd, 0) : null,
+    decision_ms: msOf(exit.createdAt), post_sent_ms: msOf(order?.postSentAt), ack_ms: msOf(order?.venueReplyAt ?? order?.httpAckAt) };
+}
 export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string, unknown> | undefined {
   const stages = round.stages.filter(stage => stage.filledShares > 1e-8);
   if (!stages.length) return undefined;
@@ -789,7 +814,16 @@ export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string,
     direction: round.stages[0]!.direction, token_id: round.stages[0]!.tokenId, held_shares: shares,
     opposite_signals: shadow?.opposite ?? 0, triggered: shadow?.at !== undefined,
     trigger_ms: msOf(shadow?.at), trigger_sec_since_open: shadow?.at === undefined ? null : shadow.at - round.startsAt,
-    bid: shadow?.bid ?? null, sell_shares: shadow?.shares ?? null };
+    bid: shadow?.bid ?? null, sell_shares: shadow?.shares ?? null,
+    // Exit on the first reverse signal (exitOnReverse): its signal, the bid
+    // then, and the sell (sent or why not, and what it filled).
+    first_triggered: round.exitFirst !== undefined, first_ms: msOf(round.exitFirst?.at),
+    first_sec_since_open: round.exitFirst ? round.exitFirst.at - round.startsAt : null,
+    first_bid: round.exitFirst?.bid ?? null, first_shares: round.exitFirst?.shares ?? null,
+    first_sent: round.exitFirst?.sent ?? null, first_skip: round.exitFirst?.skip ?? null,
+    exit_status: round.exit?.status ?? null, exit_price: round.exit?.price ?? null,
+    exit_shares: round.exit?.shares ?? null, exit_filled: round.exit?.filledShares ?? null,
+    exit_client_order_id: round.exit?.clientOrderId ?? null, exit_order_id: round.exit?.orderId ?? null };
 }
 export function createLeadExitShadowLog(rounds: () => readonly Readonly<LeadRound>[],
   write: (fields: Record<string, unknown>, eventId: string) => void, startedAt: number) {
@@ -801,7 +835,7 @@ export function createLeadExitShadowLog(rounds: () => readonly Readonly<LeadRoun
         // rounds still open when it started (live 2026-11-14: a restart wrote
         // the past hour's held rounds as never triggered).
         if (written.has(round.marketId) || round.endsAt <= startedAt) continue;
-        if (!(round.exitShadow?.at !== undefined || now >= round.endsAt)) continue;
+        if (now < round.endsAt) continue;
         const fields = leadExitShadowFields(round);
         if (now >= round.endsAt || fields) written.add(round.marketId);
         if (fields) write(fields, `lead_exit_shadow:${round.marketId}`);
@@ -819,7 +853,8 @@ const LEAD_ORDER_TERMINAL = new Set(["FILLED", "CANCELLED", "REJECTED"]);
  * observe() runs after the strategy handled the event, so the stage is current. */
 export function createLeadOrderLog(lookup: (clientOrderId: string) =>
   Readonly<{ round: Readonly<LeadRound>; stage: Readonly<LeadStage> }> | undefined,
-write: (fields: Record<string, unknown>, eventId: string) => void) {
+write: (fields: Record<string, unknown>, eventId: string) => void,
+exitLookup: (clientOrderId: string) => Readonly<{ round: Readonly<LeadRound>; exit: Readonly<LeadExitOrder> }> | undefined = () => undefined) {
   const pending = new Map<string, OrderRecord>();
   const fillsByOrder = new Map<string, Map<string, TradeFill>>();
   const written = new Set<string>();
@@ -829,6 +864,8 @@ write: (fields: Record<string, unknown>, eventId: string) => void) {
     written.add(clientOrderId);
     const fills = order?.orderId ? [...fillsByOrder.get(order.orderId)?.values() ?? []] : [];
     if (order?.orderId) fillsByOrder.delete(order.orderId);
+    const exit = exitLookup(clientOrderId);
+    if (exit) { write(leadExitOrderFields(exit.round, exit.exit, order, fills), `lead_order:${clientOrderId}`); return; }
     const indexed = lookup(clientOrderId);
     write(leadOrderFields(indexed?.round, indexed?.stage, order, fills), `lead_order:${clientOrderId}`);
   };
@@ -840,8 +877,9 @@ write: (fields: Record<string, unknown>, eventId: string) => void) {
         pending.set(order.clientOrderId, order);
       } else if (event.kind === "error" && event.code === "order_not_submitted" && event.clientOrderId
         && !written.has(event.clientOrderId) && !pending.has(event.clientOrderId)) {
-        // The core refused it before an order record existed: the stage alone.
-        if (lookup(event.clientOrderId)?.stage.status === "REJECTED") emit(event.clientOrderId);
+        // The core refused it before an order record existed: the stage (or the exit sell) alone.
+        if (lookup(event.clientOrderId)?.stage.status === "REJECTED"
+          || exitLookup(event.clientOrderId)?.exit.status === "REJECTED") emit(event.clientOrderId);
         return;
       } else if (event.kind === "fill" && pending.size) {
         const fill = event.fill;
@@ -851,10 +889,11 @@ write: (fields: Record<string, unknown>, eventId: string) => void) {
         fillsByOrder.set(fill.orderId, fills);
       }
       for (const [clientOrderId, order] of pending) {
-        const indexed = lookup(clientOrderId);
+        const indexed = lookup(clientOrderId) ?? exitLookup(clientOrderId);
+        const abandoned = indexed && ("stage" in indexed ? indexed.stage.status : indexed.exit.status) === "ABANDONED";
         // A FAK's fill can beat its HTTP reply: wait for the reply's update so ack_ms is known.
         const submitDone = order.status === "REJECTED" || order.httpAckAt !== undefined || order.totalLatencyMs !== undefined;
-        if ((LEAD_ORDER_TERMINAL.has(order.status) && submitDone) || indexed?.stage.status === "ABANDONED"
+        if ((LEAD_ORDER_TERMINAL.has(order.status) && submitDone) || abandoned
           || (event.kind === "error" && event.code === "order_abandoned" && event.clientOrderId === clientOrderId)
           || (indexed && now >= indexed.round.endsAt)) emit(clientOrderId);
       }
@@ -1166,7 +1205,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         setImmediate(() => journal?.write("lead_signal", fields, `lead:${JSON.stringify([event.assetId, event.venue, event.tradeId])}`));
       };
       const orderLog = leadOrders = createLeadOrderLog(clientOrderId => lead.stageFor(clientOrderId),
-        (fields, eventId) => journal?.write("lead_order", { ...fields, engine_ts: Date.now() / 1000 }, eventId));
+        (fields, eventId) => journal?.write("lead_order", { ...fields, engine_ts: Date.now() / 1000 }, eventId),
+        clientOrderId => lead.exitFor(clientOrderId));
       const exitLog = createLeadExitShadowLog(() => lead.roundList(),
         (fields, eventId) => journal?.write("lead_exit_shadow", { ...fields, engine_ts: Date.now() / 1000 }, eventId), Date.now() / 1000);
       const onEvent = lead.onEvent.bind(lead);
@@ -1264,9 +1304,10 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         assetId: options.assetId, strategyId: strategy?.id, leadFeed: leadFeed?.feed,
         // The saved config's limits; a round frozen with other values signs on the spot.
         presignPlan: strategyConfig ? market => market.instruments.map(instrument => {
-          const size = new Map(presignPrices(strategyConfig!.config, instrument.tickSize).map(item => [item.price, item.shares]));
-          return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices: [...size.keys()],
-            size: (price: number) => size.get(price) ?? strategyConfig!.config.shares };
+          const plan = presignPrices(strategyConfig!.config, instrument.tickSize);
+          const sizes = new Map(plan.map(item => [item.price, item.sizes]));
+          return { tokenId: instrument.tokenId, tickSize: instrument.tickSize, prices: plan.map(item => item.price),
+            size: (price: number) => sizes.get(price) ?? [strategyConfig!.config.shares] };
         }) : undefined });
       unsubscribe = connection.platform.subscribe(record);
       if (strategy) connection.platform.core.setStrategyState(STRATEGY_ID, strategy.exportState());

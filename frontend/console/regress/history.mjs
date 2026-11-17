@@ -85,5 +85,23 @@ assert.equal(requests.at(-1), `/api/orders/lead?range=run&limit=100&before=${T0 
 assert.equal((rows().match(/class="row-click"/g) || []).length, 5, "appended");
 assert.equal(node("[data-more]").hidden, true, "no further page");
 
+// --- the exit sell (exitOnReverse) and the edge record ---
+const H = window.PolyHistory;
+const sellRow = { stage: "exit", client_order_id: "c9x", recv_ts: T0, round_start: T0 - 90, direction: "UP", status: "FILLED",
+  bid_at_signal: 0.5, limit_price: 0.42, shares: 10, filled_shares: 10, outcome: "lost", pnl: null, proceeds_usd: 4.9, exit_vs_hold_usd: 4.9 };
+const sellText = text(H.renderRows([sellRow]));
+for (const piece of ["反向卖出", "卖出持仓", "0.50 0.42 10 10", "已卖（拿着会输）"]) assert.ok(sellText.includes(piece), `sell row: ${piece}: ${sellText}`);
+assert.ok(!sellText.includes("Bybit"), "no signal venue on the sell row");
+assert.equal(H.result({ ...sellRow, outcome: "won" }).text, "已卖（拿着会赢）");
+assert.equal(H.result({ ...sellRow, filled_shares: 0, status: "CANCELLED" }).text, "没卖掉");
+assert.ok(text(H.detail(sellRow)).includes("信号时买一 0.50 · 收回 $4.90 · 比拿到结算 +$4.90"), text(H.detail(sellRow)));
+const bought = { stage: "gtc", client_order_id: "c9", direction: "UP", status: "FILLED", filled_shares: 10, shares: 10, outcome: "lost", pnl: -1.2,
+  exit_shares: 10, exit_proceeds_usd: 4.9, fair: 0.66, edge: 0.012, edge_shares: 10, edge_sizing: false };
+const boughtDetail = text(H.detail(bought));
+for (const piece of ["卖了 10 股 · 收回 $4.90（已算进盈亏）", "公允价 0.66 · 优势 +0.012 · 会按 10 股"]) {
+  assert.ok(boughtDetail.includes(piece), `buy detail: ${piece}: ${boughtDetail}`);
+}
+assert.ok(text(H.detail({ ...bought, edge: -0.05, edge_shares: 5, edge_sizing: true })).includes("优势 -0.050 · 已按 5 股"));
+
 console.log("history OK");
 process.exit(0);

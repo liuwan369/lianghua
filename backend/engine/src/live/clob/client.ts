@@ -801,22 +801,25 @@ export class ClobWrapper {
    * its timestamp is only for uniqueness (docs order-lifecycle); a cached order
    * is used once and dropped. Signing yields between orders so feeds keep
    * flowing. A failure here never reaches trading: submitOrder signs on the spot. */
-  presign(tokenId: string, prices: readonly number[], sizes: (price: number) => number, tickSize: number): Promise<void> {
+  presign(tokenId: string, prices: readonly number[], sizes: (price: number) => number | readonly number[], tickSize: number): Promise<void> {
     const key = `${tokenId}|${tickSize}`;
     const previous = this.presignJobs.get(key) ?? Promise.resolve();
     const job = previous.then(async () => {
       const negRisk = await this.negRisk(tokenId);
       for (const price of prices) {
-        const size = sizes(price);
-        const slot = presignKey(tokenId, "BUY", price, size, "FAK", false);
-        if (this.presigned.has(slot)) continue;
-        const version = this.orderVersion;
-        const order = await this.client.createOrder({ tokenID: tokenId, price, size, side: ClobSide.BUY },
-          { tickSize: sdkTickSize(tickSize), negRisk, version });
-        if (version === this.orderVersion) {
-          this.presigned.set(slot, { order, hash: signedV2OrderHash(order, negRisk), negRisk, version });
+        // One size, or each share count the strategy can send at this limit.
+        const wanted = sizes(price);
+        for (const size of typeof wanted === "number" ? [wanted] : wanted) {
+          const slot = presignKey(tokenId, "BUY", price, size, "FAK", false);
+          if (this.presigned.has(slot)) continue;
+          const version = this.orderVersion;
+          const order = await this.client.createOrder({ tokenID: tokenId, price, size, side: ClobSide.BUY },
+            { tickSize: sdkTickSize(tickSize), negRisk, version });
+          if (version === this.orderVersion) {
+            this.presigned.set(slot, { order, hash: signedV2OrderHash(order, negRisk), negRisk, version });
+          }
+          await new Promise<void>(resolve => setImmediate(resolve));
         }
-        await new Promise<void>(resolve => setImmediate(resolve));
       }
     }).catch(() => { /* on-the-spot signing remains */ });
     this.presignJobs.set(key, job);

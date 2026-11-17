@@ -31,10 +31,11 @@ const S = window.PolySettings;
 
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
-  "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
-  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, maxQuoteAgeSeconds: 2,
+  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false,
+  edgeSizing: false, exitOnReverse: false, maxQuoteAgeSeconds: 2,
   maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, durationMinutes: 0, maxRounds: 12, mode: "live" };
 
 // --- the published config round-trips unchanged ---
@@ -80,6 +81,14 @@ assert.equal(S.buildConfig({ ...inputs, entryOrder: "ioc" }, published).config.e
 assert.equal(S.inputsFrom(published).regimePause, false);
 assert.equal(S.buildConfig({ ...inputs, regimePause: true }, published).config.regimePause, true);
 assert.equal(S.buildConfig({ ...inputs, regimePause: "yes" }, published).config.regimePause, false, "only true turns it on");
+// Size by edge and exit on the first reverse signal: off by default (only recorded), checkboxes.
+for (const key of ["edgeSizing", "exitOnReverse"]) {
+  assert.equal(S.inputsFrom(published)[key], false, key);
+  assert.equal(S.inputsFrom({ ...published, [key]: true })[key], true, key);
+  assert.equal(S.inputsFrom({ regimePause: true })[key], false, `${key}: an older config without it is off`);
+  assert.equal(S.buildConfig({ ...inputs, [key]: true }, published).config[key], true, key);
+  assert.equal(S.buildConfig({ ...inputs, [key]: "yes" }, published).config[key], false, `${key}: only true turns it on`);
+}
 
 // --- validation ---
 const errorsOf = (patch) => Object.keys(S.buildConfig({ ...inputs, ...patch }, published).errors).sort();

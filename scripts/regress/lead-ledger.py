@@ -197,5 +197,91 @@ class LeadLedger(unittest.TestCase):
         self.assertAlmostEqual(row["pnl"], 3 - (0.57 * 3 + 0.04), places=6)
 
 
+class SoldBeforeClose(unittest.TestCase):
+    """exitOnReverse sold the whole holding before the close: the wallet held
+    nothing to redeem (the engine's no-holdings settlement), and the round's
+    PnL is the sale's proceeds less the buy's cost, both legs' fees included.
+    Bought 10 at 0.60 (fee 0.10), sold 10 at 0.50 (fee 0.10): -1.20. A sale
+    still unconfirmed books nothing; one share short stays unbooked."""
+
+    def run_round(self, sell_status="CONFIRMED", sold=10, split=False, sell_fee_source="reported"):
+        start = 1_800_000_000
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        slug = f"btc-updown-5m-{start}"
+        common = {"strategy_id": "binance-lead", "asset_id": "btc", "market_id": "0xm", "round_id": str(start),
+                  "market_slug": slug, "side": "Up", "token_id": UP, "fee_source": "reported", "is_maker": False}
+        runtime = {"schemaVersion": 1, "engine": "platform", "execution": "strategy", "strategy_id": "binance-lead",
+                   "status": "running", "mode": "live", "assetId": "btc", "positions": [], "positions_count": 0,
+                   "markets": [{"id": "0xm", "assetId": "btc", "roundId": str(start), "name": slug, "startsAt": start,
+                                "endsAt": start + 300, "instruments": [{"tokenId": UP, "outcome": "Up"},
+                                                                       {"tokenId": DOWN, "outcome": "Down"}]}],
+                   "snapshots": [], "books": []}
+        lines = [{"event": "fill", "recv_ts": start + 30, "trade_id": "t1", "order_id": "0xb", "price": 0.6, "shares": 10,
+                  "fee": 0.1, "trade_status": "CONFIRMED", "direction": "BUY", "created_at": start + 30, **common},
+                 {"event": "fill", "recv_ts": start + 90, "trade_id": "t2", "order_id": "0xs", "price": 0.5, "shares": sold,
+                  "fee": 0.1, "trade_status": sell_status, "direction": "SELL", "created_at": start + 90,
+                  **{**common, "fee_source": sell_fee_source}},
+                 {"event": "platform_status", "recv_ts": start + 400, "runtime": runtime},
+                 {"event": "platform_settlement", "recv_ts": start + 401, "asset_id": "btc", "market_id": "0xm",
+                  "round_id": str(start), "market_slug": slug, "state": "confirmed",
+                  "reason": "链上无该场持仓，无需赎回；未记录赎回收益", "payout_verified": False}]
+        ledger = Ledger(root / "ledger.sqlite3")
+        # split: the run stopped after the round; the next run records the settlement.
+        runs = [("run-x", lines[:3]), ("run-y", lines[3:])] if split else [("run-x", lines)]
+        for run, records in runs:
+            journal = root / f"{run}.jsonl"
+            journal.write_text("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in records), encoding="utf-8")
+            ledger.register_run(run, "live", ACCOUNT, str(journal))
+            ledger.ingest(run, max_bytes=8 << 20, max_records=10000)
+        with ledger._connect() as db:
+            row = db.execute("SELECT pnl,payload FROM settlement_details WHERE run_id='run-x'").fetchone()
+            self.market = dict(db.execute("SELECT status,pnl FROM market_details WHERE run_id='run-x'").fetchone())
+        self.ledger, self.start = ledger, start
+        return row["pnl"], json.loads(row["payload"])
+
+    def test_sold_round_books_the_sale(self):
+        pnl, payload = self.run_round()
+        self.assertAlmostEqual(pnl, 5.0 - 0.1 - 6.0 - 0.1, places=6)
+        self.assertEqual((payload["accounting_state"], payload["pnl_error"]), ("confirmed", None))
+        self.assertEqual(self.market["status"], "已结算", "the round is settled in the market rows too")
+        self.assertAlmostEqual(self.market["pnl"], -1.2, places=6)
+        summary = self.ledger.summary("run-x")
+        self.assertAlmostEqual(summary["settled_pnl"], -1.2, places=6)
+        self.assertEqual((summary["unsettled_rounds"], summary["unsettled_cost"]), (0, 0.0))
+        rounds = self.ledger.rounds_page("run-x")["rounds"]
+        self.assertEqual((rounds[0]["shares"], rounds[0]["soldShares"]), (10, 10), "bought and sold shares apart")
+        self.assertAlmostEqual(rounds[0]["averagePrice"], 0.6, places=6, msg="the buy's average price")
+        self.assertAlmostEqual(rounds[0]["cost"], 6.0 - 5.0 + 0.2, places=6, msg="cost net of the sale")
+        traded = self.ledger.traded_rounds("run-x", range="run")
+        self.assertAlmostEqual(traded[("btc", str(self.start))], 1.2, places=6, msg="committed cost net of the sale")
+
+    def test_settlement_in_the_next_run_books_where_it_traded(self):
+        pnl, payload = self.run_round(split=True)
+        self.assertAlmostEqual(pnl, -1.2, places=6, msg="handed over to the run holding the fills")
+        self.assertEqual(self.market["status"], "已结算")
+        self.assertAlmostEqual(self.ledger.summary("run-x")["settled_pnl"], -1.2, places=6)
+
+    def test_estimated_fee_in_the_next_run_does_not_break_ingest(self):
+        # An estimate fee is stored as None: the handover must not do money math on it.
+        pnl, payload = self.run_round(split=True, sell_fee_source="estimate")
+        self.assertIsNone(pnl, "the fee is not real yet: no result")
+        with self.ledger._connect() as db:
+            offsets = {row["run_id"]: row["byte_offset"] for row in db.execute("SELECT run_id, byte_offset FROM runs")}
+        self.assertGreater(offsets["run-y"], 0, "the next run's journal was read past the settlement")
+
+    def test_unconfirmed_sale_books_nothing(self):
+        pnl, payload = self.run_round(sell_status="MATCHED")
+        self.assertIsNone(pnl)
+        self.assertEqual(payload["pnl_error"], "cost_basis_unverified")
+        self.assertNotEqual(self.market["status"], "已结算")
+
+    def test_shares_left_stay_unbooked(self):
+        pnl, payload = self.run_round(sold=9)
+        self.assertIsNone(pnl, "1 share left with no payout record: not a proven result")
+        self.assertEqual(payload["pnl_error"], "cost_basis_unverified")
+
+
 if __name__ == "__main__":
     unittest.main()

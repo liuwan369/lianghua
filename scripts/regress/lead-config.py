@@ -127,7 +127,8 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 # --- the exact field set: no retired field, nothing missing ---
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
-ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause")
+ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
+         "edgeSizing", "exitOnReverse")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
@@ -141,6 +142,12 @@ assert rejected({**defaults, "entryOrder": "ioc"})
 assert old["regimePause"] is False, "an older config keeps trading in a wild market"
 assert validate_config({**defaults, "regimePause": True})["regimePause"] is True
 assert rejected({**defaults, "regimePause": "on"})
+# Size by edge and exit on the first reverse signal: off in an older config (only recorded).
+assert old["edgeSizing"] is False and old["exitOnReverse"] is False, "an older config keeps its sizing and holds to the close"
+for field in ("edgeSizing", "exitOnReverse"):
+    assert validate_config({**defaults, field: True})[field] is True, field
+    assert rejected({**defaults, field: "on"}), field
+    assert rejected({**defaults, field: 1}), field
 assert (old["maxAsk"], old["openBandBp"], old["openLine"], old["leadVenues"], old["tokyoRelay"]) == \
     (0.8, 0, "tick", ["bybit", "binance", "okx"], True)
 

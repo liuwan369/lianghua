@@ -119,9 +119,9 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | 文件 | 职责 |
 |---|---|
 | `auto-trade.html` + `live.js` | 实盘：启停命令、今日数字、信号源、当前场盘口、本场信号与下单 |
-| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、没买到、挂单/限价单、反向信号卖出（模拟）、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
+| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、没买到、挂单/限价单、反向信号就卖出、按优势定股数、反向信号卖出（第 3 个，模拟）、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
 | `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，点一行展开 |
-| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布，含第一单方式、挂单秒数、行情太乱就暂停）、账户只读、系统健康、运行日志、清空统计 |
+| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布，含第一单方式、挂单秒数、行情太乱就暂停、按优势定股数、反向信号就卖出）、账户只读、系统健康、运行日志、清空统计 |
 | `console.css` | 全站唯一样式表 |
 | `shared/preview-core.js` | 请求、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏 |
 | `shared/stream.js` | 推送客户端：登记页面的 GET，用一条 EventSource 订阅 |
@@ -148,10 +148,12 @@ Bybit ×2 / 币安 / OKX 直连 + 东京转发 ─> lead-trades 每家去重 ─
 
 ## 策略 `binance-lead`
 
-默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`leadVenues [bybit, binance, okx]`、`tokyoRelay true`、`openBandBp 0`、`openLine tick`、`restAfterMissSec 0`、`restShadow true`、`entryOrder fak`、`regimePause false`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。实盘配置在控制台设置页，见 [STRATEGY.md](STRATEGY.md)。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`leadVenues [bybit, binance, okx]`、`tokyoRelay true`、`openBandBp 0`、`openLine tick`、`restAfterMissSec 0`、`restShadow true`、`entryOrder fak`、`regimePause false`、`edgeSizing false`、`exitOnReverse false`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。实盘配置在控制台设置页，见 [STRATEGY.md](STRATEGY.md)。
 
 - 开盘线（`openBandBp`、`openLine`）：`LeadSignalDetector` 按成交时间记下每场开盘价（`openPrice`，本场开始时刻或之前最后一笔成交）和开盘前 60 秒均价（`openMean60`，每整秒最后一笔成交的均价，和官方目标价的 Chainlink 60 s TWAP 同一窗口）。策略只在信号离开盘线 −openBandBp ≤ d < openBandBp 时下单（d 按信号方向取正负，单位 bp），`openLine` 选用哪条线。
 - 信号源（`leadVenues`、`tokyoRelay`，引擎启动时生效）：每家交易所一个检测器，窗口里只有那一家的价格；同一笔成交从直连和东京两条线来，谁先到用谁（`line` 记 `direct`/`tokyo`）。
+- 按优势定股（`edgeSizing`）：`leadFairValue()` 用信号的 `price`/`openMean60`/`vol300Bp` 和剩余秒数算公允价，`decide` 算优势 = 公允价 − 限价 − 吃单费，`edgeShares()` 挑 5 / `shares` / 15；stage 记 `fair`/`edge`/`edgeShares`，开关关着时下单仍用 `shares`。`presignPrices` 返回每个限价的 `sizes`，`clob/client.ts presign` 每种股数各签一张。restore 时第一张 stage 的股数必须是三种之一。
+- 反向信号卖出（`exitOnReverse`）：`decideExit` 在 `shadowExit` 之后跑，每场一次；记 `round.exitFirst`（时间、买一、股数、`sent`、`skip`），开着时发 FAK SELL，订单记在 `round.exit`（不是 stage，不进预算），`exitsByClient` 按 client id 索引，`recordExit` 收订单更新、认回只有核心有的 `:exit` 单。核心的 SELL 走现有路径（日亏到线时只放行 SELL）。`createLeadOrderLog` 用 `exitFor` 把卖单写成 `stage: exit` 的 `lead_order`（`proceeds_usd` = 成交额 − 手续费），`lead_exit_shadow` 在收盘后每场一行，带 `first_*` 和 `exit_*`。`live-settlement.ts receiptIsTrade`：带交易所 `OrderFilled` 的回执是撮合不是赎回，`externalPayout` 不算它。账本：`_apply_exit` 把卖出收回并进这场买单行的盈亏，`stage exit` 行不进漏斗；没有持仓可赎回的已结算场按成交算盈亏（`_trade_net`）。
 - 行情太乱（`regimePause`）：每个信号带 `signals300`（这家检测器信号前 300 s 的信号数）和 `vol300Bp`（前 300 个整秒的每秒对数收益标准差）；`regimePause()` 判 > 12 或 > 0.89。开关开着时 `decide` 跳过这个信号，本场等下一个；关着时只在 `lead_order` 记 `regime_pause`。重启后前 300 s 没有这两个数，照常下单。
 - 信号（`LeadSignalDetector`，在 feed 一侧）：领先成交价比之前 `windowMs` 内（按成交时间）最低价高 ≥ `thresholdBp` 为 UP，比最高价低 ≥ `thresholdBp` 为 DOWN；只认本地收到时间在开盘后 `[fromSec, toSec)` 秒内的成交。检测器参数跟当前场的配置走，场与场之间跟已保存配置。
 - 一场一份配置：发现新场时复制当前配置；开场前 10 s（`CONFIG_FREEZE_SEC`）之前保存的修改还会跟进，之后冻结。

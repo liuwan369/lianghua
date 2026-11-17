@@ -128,6 +128,9 @@ LEAD_OUTCOMES = frozenset({"order_submitted", "skipped", "no_round", "stopping"}
 LEAD_VENUES = ("bybit", "binance", "okx")
 LEAD_LINES = ("direct", "tokyo")
 # lead_order (cli/platform.ts leadOrderFields): one record per order.
+# Why the exit on the first reverse signal did not sell (strategies/binance-lead.ts decideExit).
+EXIT_SKIPS = frozenset({"off", "paused", "halted", "market_blocked", "buy_working", "no_bid", "no_rules", "below_min_size",
+                        "too_late", "restart"})
 LEAD_ORDER_STATUSES = frozenset({"CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED",
                                  "UNKNOWN", "ABANDONED"})
 LEAD_ORDER_TEXT = ("client_order_id", "order_id", "market_id", "round_id", "token_id", "venue_status", "error",
@@ -137,7 +140,9 @@ LEAD_ORDER_NUMBERS = ("round_start", "relay_recv_ms", "trade_time_ms", "signal_r
                       "filled_shares", "avg_fill_price", "fee_usd", "decision_ms", "post_sent_ms", "ack_ms",
                       "ask_gone_ms", "ask_gone_venue_ms", "t_signal_ms", "t_decide_ms", "t_post_ms", "t_ack_ms",
                       "t_total_ms", "ask_gone_after_trade_ms", "late_by_ms", "rest_shadow_fill_ms",
-                      "taker_shares", "maker_shares", "signals300", "vol300_bp")
+                      "taker_shares", "maker_shares", "signals300", "vol300_bp",
+                      # Size by edge (cli/platform.ts leadOrderFields) and the exit sell (leadExitOrderFields).
+                      "fair", "edge", "edge_shares", "bid_at_signal", "proceeds_usd")
 LATENCY_METRICS = frozenset({
     "durable_commit", "order_sign", "trigger_to_http_post", "decision_to_http_post",
     "order_submit_roundtrip", "order_http_ack", "reaction", "authenticated_trade_report", "cancel_http_ack",
@@ -294,6 +299,25 @@ def _settlement_unresolvable(payload, round_id, now=None):
     return (time.time() if now is None else now) - closed_at >= _SETTLEMENT_ABANDON_AFTER_SEC
 
 
+def _trade_booked(item):
+    """A confirmed trade with its real fee, amount and shares: one a round's
+    result can be booked from."""
+    return (item.get("trade_status") == "CONFIRMED" and item.get("fee_source") in ("reported", "rate-derived")
+            and item.get("amount") is not None and item.get("fee") is not None and item["fee"] >= 0
+            and item.get("shares") is not None and item.get("direction") in ("BUY", "SELL")
+            and bool(item.get("token_id")))
+
+
+def _trade_net(trades):
+    """Shares left per token, and the net cash out (buys and fees less sales)."""
+    net_shares, net_cost = {}, 0.0
+    for item in trades:
+        sign = 1 if item["direction"] == "BUY" else -1
+        net_shares[item["token_id"]] = net_shares.get(item["token_id"], 0.0) + sign * item["shares"]
+        net_cost += sign * item["amount"] + item["fee"]
+    return net_shares, net_cost
+
+
 def _explicit_no_redemption(payload):
     """Recognize the live adapter's terminal no-holdings response."""
     if not isinstance(payload, dict):
@@ -398,6 +422,9 @@ def _strategy_projection(value):
         result["leadVenues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
         result["tokyoRelay"] = source.get("tokyoRelay") if isinstance(source.get("tokyoRelay"), bool) else None
         result["openLine"] = source.get("openLine") if source.get("openLine") in ("tick", "mean60") else None
+        result["entryOrder"] = source.get("entryOrder") if source.get("entryOrder") in ("fak", "gtc") else None
+        for flag in ("regimePause", "edgeSizing", "exitOnReverse"):
+            result[flag] = source.get(flag) if isinstance(source.get(flag), bool) else None
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
         return result
     def signal_view(source):
@@ -675,9 +702,18 @@ def _projection(record):
     if record["event"] == "lead_exit_shadow":
         for field in ("market_id", "round_id", "token_id"):
             result[field] = _text(record.get(field))
-        for field in ("round_start", "held_shares", "opposite_signals", "trigger_ms", "trigger_sec_since_open", "bid", "sell_shares"):
+        for field in ("round_start", "held_shares", "opposite_signals", "trigger_ms", "trigger_sec_since_open", "bid", "sell_shares",
+                      "first_ms", "first_sec_since_open", "first_bid", "first_shares",
+                      "exit_price", "exit_shares", "exit_filled"):
             result[field] = _number(record.get(field))
         result["triggered"] = record.get("triggered") is True
+        # Exit on the first reverse signal (exitOnReverse): recorded always, sent when on.
+        result["first_triggered"] = record.get("first_triggered") is True
+        result["first_sent"] = record.get("first_sent") if isinstance(record.get("first_sent"), bool) else None
+        result["first_skip"] = record.get("first_skip") if record.get("first_skip") in EXIT_SKIPS else None
+        result["exit_status"] = record.get("exit_status") if record.get("exit_status") in LEAD_ORDER_STATUSES else None
+        for field in ("exit_client_order_id", "exit_order_id"):
+            result[field] = _text(record.get(field))
         result["direction"] = record.get("direction") if record.get("direction") in ("UP", "DOWN") else None
         result["price"] = result["amount"] = result["pnl"] = None
         return result
@@ -697,7 +733,10 @@ def _projection(record):
         result["line"] = record.get("line") if record.get("line") in LEAD_LINES else None
         # The round's FAK, or the rest order placed after its miss; and what the
         # round's config did after a miss (live / shadow / off).
-        result["stage"] = record.get("stage") if record.get("stage") in ("rest", "gtc") else "fak"
+        result["stage"] = record.get("stage") if record.get("stage") in ("rest", "gtc", "exit") else "fak"
+        # The exit sell is the round's one SELL; every other lead order buys.
+        result["order_side"] = "SELL" if result["stage"] == "exit" else "BUY"
+        result["edge_sizing"] = record.get("edge_sizing") if isinstance(record.get("edge_sizing"), bool) else None
         result["rest_mode"] = record.get("rest_mode") if record.get("rest_mode") in ("live", "shadow", "off", "gtc") else None
         # Shadow regime pause: would the round's signal have been skipped as wild.
         result["regime_pause"] = record.get("regime_pause") if isinstance(record.get("regime_pause"), bool) else None
@@ -726,6 +765,8 @@ EPS_SHARES = 1e-8
 MISSED_STATUSES = frozenset({"CANCELLED", "REJECTED", "ABANDONED"})
 # Crypto taker fee rate (official formula fee = C x 0.07 x p x (1-p)).
 TAKER_FEE_RATE = 0.07
+# Size-by-edge tiers (strategies/binance-lead.ts EDGE_HIGH / EDGE_LOW).
+EDGE_HIGH, EDGE_LOW = 0.07, -0.04
 LATE_BUCKETS = (("<0", None, 0), ("0-50", 0, 50), ("50-100", 50, 100), ("100-200", 100, 200),
                 ("200-400", 200, 400), (">400", 400, None))
 # Skip reasons of binance-lead.ts (decide/fund/roundReason/onEvent) and the
@@ -819,6 +860,46 @@ def _lead_outcome(order, winning_token):
             pnl = round((filled if outcome == "won" else 0) - filled * price - (order.get("fee_usd") or 0), 6)
     return {"outcome": outcome, "filled": filled > EPS_SHARES, "pnl": pnl,
             "would_have_won": None if filled > EPS_SHARES or outcome == "pending" else outcome == "won"}
+
+
+def _lead_exit_outcome(sell, winning_token):
+    """The exit sell's own row: the held side's result once known (what the
+    sale avoided or gave up), never a PnL of its own (the round's buy rows
+    carry it)."""
+    if winning_token is None or not sell.get("token_id"):
+        outcome = "pending"
+    else:
+        outcome = "won" if sell["token_id"] == winning_token else "lost"
+    sold = sell.get("filled_shares") or 0
+    # Against holding to the close: a sold winner gave up 1 per share, a sold loser got its proceeds back.
+    change = None
+    if outcome != "pending" and sold > EPS_SHARES and sell.get("proceeds_usd") is not None:
+        change = round(sell["proceeds_usd"] - (sold if outcome == "won" else 0.0), 6)
+    return {"outcome": outcome, "filled": sold > EPS_SHARES, "pnl": None, "would_have_won": None,
+            "exit_vs_hold_usd": change}
+
+
+def _apply_exit(buys, sells):
+    """Book the round's exit sells into its buy rows' PnL: the shares sold pay
+    their proceeds instead of the close's 1 or 0. One buy row (the usual
+    round): all of it there; several: by filled shares."""
+    sold = sum(s.get("filled_shares") or 0 for s in sells)
+    if not buys or sold <= EPS_SHARES:
+        return
+    if any(s.get("proceeds_usd") is None for s in sells if (s.get("filled_shares") or 0) > EPS_SHARES):
+        for buy in buys:
+            buy["pnl"] = None
+        return
+    proceeds = sum(s.get("proceeds_usd") or 0 for s in sells)
+    held = sum(b.get("filled_shares") or 0 for b in buys)
+    for buy in buys:
+        share = (buy.get("filled_shares") or 0) / held if held > EPS_SHARES else 0
+        buy["exit_shares"] = round(sold * share, 6)
+        buy["exit_proceeds_usd"] = round(proceeds * share, 6)
+        if buy.get("pnl") is None or buy["outcome"] == "pending":
+            continue
+        payout = buy["exit_shares"] if buy["outcome"] == "won" else 0.0
+        buy["pnl"] = round(buy["pnl"] - payout + buy["exit_proceeds_usd"], 6)
 
 
 def _rest_pnl(order):
@@ -1866,9 +1947,11 @@ class Ledger:
         return next(iter(matches.values())) if len(matches) == 1 else None
 
     @staticmethod
-    def _settle_in_trading_run(db, run_id, row):
+    def _settle_in_trading_run(db, run_id, row, sold_out=False):
         """Copy a verified settlement into the account's run that holds the fills
-        for the same asset and round, and settle it there. True if one was found."""
+        for the same asset and round, and settle it there. True if one was found.
+        sold_out: a no-holdings settlement, handed over only to a run whose
+        trades of the round net to zero shares (everything bought was sold)."""
         if not row["round_id"]:
             return False
         targets = db.execute("""SELECT m.run_id, m.market FROM markets m JOIN runs r ON r.run_id=m.run_id
@@ -1880,6 +1963,16 @@ class Ledger:
         if len(targets) != 1:
             return False
         target = targets[0]
+        if sold_out:
+            # Only the net shares matter here; the money fields (fee/amount) may
+            # be None on an estimate-fee fill, and _trade_net would raise on them.
+            trades = Ledger._settlement_trades(db, target["run_id"], target["market"], row["asset_id"], row["round_id"])
+            net = {}
+            for item in trades:
+                if item.get("direction") in ("BUY", "SELL") and item.get("shares") is not None and item.get("token_id"):
+                    net[item["token_id"]] = net.get(item["token_id"], 0.0) + (1 if item["direction"] == "BUY" else -1) * item["shares"]
+            if not trades or any(abs(value) > 1e-6 for value in net.values()):
+                return False
         existing = db.execute("SELECT verified,payload FROM settlement_details WHERE run_id=? AND market=?",
                               (target["run_id"], target["market"])).fetchone()
         if not (existing and existing["verified"]):
@@ -1896,6 +1989,15 @@ class Ledger:
         return True
 
     @staticmethod
+    def _settlement_trades(db, run_id, market, asset_id, round_id):
+        """The round's trades as the settlement books them (failed ones dropped)."""
+        trades = [json.loads(item[0]) for item in db.execute(
+            "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=? "
+            "AND json_extract(payload,'$.round_id') IS ? AND COALESCE(json_extract(payload,'$.asset_id'),asset_id)=?",
+            (run_id, _market_value(asset_id, market), round_id, asset_id))]
+        return [item for item in trades if item.get("trade_status") != "FAILED"]
+
+    @staticmethod
     def _refresh_settlement(db, run_id, market, asset_id=None):
         if not asset_id:
             return
@@ -1908,9 +2010,11 @@ class Ledger:
         # The venue usually settles a round after the run that traded it has
         # stopped, so the confirmation lands in the NEXT run, which has no fills
         # for it. Book it where the fills are (BUGS P1-4); here it is a no-trade.
-        handed_over = (row["verified"] and (market_row is None or not market_row["fills"])
-                       and Ledger._settle_in_trading_run(db, run_id, row))
         no_redemption = not row["verified"] and _explicit_no_redemption(payload)
+        # A round sold to zero before the close (exitOnReverse) settles as "no
+        # holdings to redeem"; it too belongs to the run holding its fills.
+        handed_over = ((row["verified"] or no_redemption) and (market_row is None or not market_row["fills"])
+                       and Ledger._settle_in_trading_run(db, run_id, row, sold_out=no_redemption))
         no_trade = handed_over or (not row["verified"] and market_row is not None and market_row["fills"] == 0
                                    and (no_redemption or _explicit_zero_coverage(payload.get("coverage"))))
         pnl = None
@@ -1934,29 +2038,24 @@ class Ledger:
             # Redemption is terminally unnecessary, but observed fills still
             # need cost/fee reconciliation before they can produce PnL.
             reason = "cost_basis_unverified"
+            # Everything bought was sold before the close (exitOnReverse): the
+            # wallet held nothing to redeem, so the payout is 0 and the round's
+            # result is what the sales got back less what the buys cost.
+            trades = Ledger._settlement_trades(db, run_id, market, asset_id, row["round_id"])
+            if trades and all(_trade_booked(item) for item in trades):
+                net_shares, net_cost = _trade_net(trades)
+                if all(abs(value) <= 1e-6 for value in net_shares.values()):
+                    pnl = _number(-net_cost)
+                    accounting_state, reason = ("confirmed", None) if pnl is not None else ("pending", "invalid_pnl")
         elif row["verified"]:
             accounting_state = "confirmed"
-            round_id = row["round_id"]
-            trades = [json.loads(item[0]) for item in db.execute(
-                "SELECT payload FROM trade_details WHERE run_id=? AND json_extract(payload,'$.market')=? "
-                "AND json_extract(payload,'$.round_id') IS ? AND COALESCE(json_extract(payload,'$.asset_id'),asset_id)=?",
-                (run_id, _market_value(asset_id, market), round_id, asset_id))]
-            trades = [item for item in trades if item.get("trade_status") != "FAILED"]
+            trades = Ledger._settlement_trades(db, run_id, market, asset_id, row["round_id"])
             coverage = payload.get("coverage")
             reason = "cost_basis_unverified"
             if (trades and isinstance(coverage, dict)
-                    and all(item.get("trade_status") == "CONFIRMED"
-                            and item.get("fee_source") in ("reported", "rate-derived")
-                            and item.get("amount") is not None and item.get("fee") is not None
-                            and item["fee"] >= 0 and item.get("shares") is not None
-                            and item.get("direction") in ("BUY", "SELL") and item.get("token_id") in coverage
-                            for item in trades)):
-                net_shares = {token: 0.0 for token in coverage}
-                net_cost = 0.0
-                for item in trades:
-                    sign = 1 if item["direction"] == "BUY" else -1
-                    net_shares[item["token_id"]] += sign * item["shares"]
-                    net_cost += sign * item["amount"] + item["fee"]
+                    and all(_trade_booked(item) and item.get("token_id") in coverage for item in trades)):
+                net_shares, net_cost = _trade_net(trades)
+                net_shares = {token: net_shares.get(token, 0.0) for token in coverage}
                 # Coverage is what the account still held at settlement. A
                 # redemption (ours or the venue's) can only lower it, so held
                 # <= bought proves no buy is missing; held == bought was wrong
@@ -1974,7 +2073,10 @@ class Ledger:
         prior = db.execute("SELECT m.settled,m.fills,d.pnl FROM markets m JOIN market_details d "
                            "ON d.run_id=m.run_id AND d.asset_id=m.asset_id AND d.market=m.market WHERE m.run_id=? AND m.asset_id=? AND m.market=?",
                            (run_id, asset_id, market)).fetchone()
-        if row["verified"] and prior and prior["fills"]:
+        # A round sold to zero before the close (no payout to verify) is booked
+        # like a verified one once its trades prove the result.
+        booked = row["verified"] or (no_redemption and accounting_state == "confirmed")
+        if booked and prior and prior["fills"]:
             settled, old_pnl = prior["settled"], prior["pnl"]
             db.execute("UPDATE markets SET settled=1 WHERE run_id=? AND asset_id=? AND market=?", (run_id, asset_id, market))
             db.execute("UPDATE market_details SET pnl=?,status='已结算' WHERE run_id=? AND asset_id=? AND market=?", (pnl, run_id, asset_id, market))
@@ -2370,7 +2472,9 @@ class Ledger:
             # committed cost of those rounds too; the two converge on confirmation.
             unsettled = db.execute("""SELECT COUNT(*) AS rounds, COALESCE(SUM(cost),0) AS cost FROM (
                     SELECT json_extract(t.payload,'$.round_id') AS round_id,
-                        SUM(COALESCE(json_extract(t.payload,'$.amount'),0)
+                        -- A sale (exitOnReverse) gives its amount back.
+                        SUM(CASE WHEN json_extract(t.payload,'$.direction')='SELL' THEN -1 ELSE 1 END
+                                * COALESCE(json_extract(t.payload,'$.amount'),0)
                             + COALESCE(json_extract(t.payload,'$.fee'),
                                        json_extract(t.payload,'$.fee_estimate'),0)) AS cost
                     FROM trade_details t
@@ -2657,7 +2761,9 @@ class Ledger:
                     continue
                 if (fill_asset, fill_market, fill_round) in settled_keys:
                     continue
-                unsettled_cost += (fill.get("amount") or 0) + (fill.get("fee") or _number(fill.get("fee_estimate")) or 0)
+                # A sale (exitOnReverse) gives its amount back.
+                sign = -1 if fill.get("direction") == "SELL" else 1
+                unsettled_cost += sign * (fill.get("amount") or 0) + (fill.get("fee") or _number(fill.get("fee_estimate")) or 0)
                 unsettled_rounds.add((fill_asset, fill_market, fill_round))
             known_pnl = (sum(value for value in pnl_values if value is not None)
                          if any(value is not None for value in pnl_values) else None)
@@ -2743,8 +2849,22 @@ class Ledger:
             order["recv_ts"] = row["recv_ts"]
             orders[order.get("client_order_id")] = order
         winners = self._winners(db, [order.get("market_id") for order in orders.values()])
+        # The exit sell (stage exit) of a round: what it sold and got back
+        # goes on the round's buy rows; the sell row itself has no outcome.
+        exits = {}
         for order in orders.values():
-            order.update(_lead_outcome(order, winners.get(order.get("market_id"))))
+            if order.get("stage") == "exit":
+                exits.setdefault(order.get("market_id"), []).append(order)
+        for order in orders.values():
+            win = winners.get(order.get("market_id"))
+            if order.get("stage") == "exit":
+                order.update(_lead_exit_outcome(order, win))
+                continue
+            order.update(_lead_outcome(order, win))
+        for market_id, sells in exits.items():
+            buys = [o for o in orders.values() if o.get("market_id") == market_id and o.get("stage") != "exit"
+                    and (o.get("filled_shares") or 0) > EPS_SHARES]
+            _apply_exit(buys, sells)
         return list(orders.values())
 
     def _lead_base(self, db, run_ids, start):
@@ -2804,6 +2924,10 @@ class Ledger:
                             _LEAD_BASE_CACHE.popitem(last=False)
         signals, in_window, skips = base["signals"], base["in_window"], dict(base["skips"])
         every = [dict(order) for order in base["orders"]]
+        # The exit sell (stage "exit") is not a buy: its proceeds are already
+        # on the round's buy rows, and it is reported on its own.
+        exit_sells = [o for o in every if o.get("stage") == "exit"]
+        every = [o for o in every if o.get("stage") != "exit"]
         # The round's FAK is the order every figure below counts; a rest order
         # placed after its miss (stage "rest") is reported on its own.
         orders = [o for o in every if o.get("stage") != "rest"]
@@ -2876,6 +3000,64 @@ class Ledger:
                        "saved": len(saved), "saved_usd": _sum(_sell_change(item) for item in saved),
                        "net_usd": _sum(_sell_change(item) for item in sold),
                        "bid_p50": _quantile(sorted(item["bid"] for item in sold), 0.5)}
+        # Exit on the first reverse signal. Shadow (exitOnReverse off): per held
+        # round, a sell of what it held at the bid then, minus the taker fee,
+        # against holding to the close. Live: the sells sent and what they
+        # changed against holding.
+        first_shadow = [item for item in done_exits if item.get("first_triggered") and item.get("first_skip") == "off"
+                        and item.get("first_bid") is not None and item.get("first_shares")]
+
+        def _first_change(item):
+            n, b = item["first_shares"], item["first_bid"]
+            return n * b - TAKER_FEE_RATE * b * (1 - b) * n - (n if item["won"] else 0.0)
+        first_skips = {}
+        for item in exits:
+            if item.get("first_triggered") and item.get("first_skip"):
+                first_skips[item["first_skip"]] = first_skips.get(item["first_skip"], 0) + 1
+        sells_got = [o for o in exit_sells if (o.get("filled_shares") or 0) > EPS_SHARES]
+        sells_done = [o for o in sells_got if o.get("exit_vs_hold_usd") is not None]
+        exit_first = {"held_rounds": len(exits), "settled": len(done_exits),
+                      "triggered": sum(1 for item in exits if item.get("first_triggered")),
+                      "trigger_rate": _ratio(sum(1 for item in done_exits if item.get("first_triggered")), len(done_exits)),
+                      "skips": first_skips,
+                      "shadow": {"rounds": len(first_shadow),
+                                 "mistaken": sum(1 for item in first_shadow if item["won"]),
+                                 "saved": sum(1 for item in first_shadow if not item["won"]),
+                                 "net_usd": _sum(_first_change(item) for item in first_shadow)},
+                      "live": {"sells": len(exit_sells), "filled": len(sells_got),
+                               "fill_rate": _ratio(len(sells_got), len(exit_sells)),
+                               "settled": len(sells_done),
+                               "mistaken": sum(1 for o in sells_done if o["outcome"] == "won"),
+                               "saved": sum(1 for o in sells_done if o["outcome"] == "lost"),
+                               "proceeds_usd": _sum(o.get("proceeds_usd") for o in sells_got),
+                               "net_vs_hold_usd": _sum(o["exit_vs_hold_usd"] for o in sells_done)}}
+        # Size by edge. Shadow (edgeSizing off): each settled filled order's
+        # result scaled to the shares its edge picked (same fill, same price).
+        # Live: the orders sized by edge. Tiers: low (edge < EDGE_LOW, 5
+        # shares), mid (the configured size), high (edge >= EDGE_HIGH, 15).
+        sized = [o for o in settled if o.get("edge") is not None and o.get("edge_shares") is not None and o.get("shares")]
+        shadow_sized = [o for o in sized if o.get("edge_sizing") is not True]
+
+        def _scaled(o):
+            value = pnl_of(o)[0]
+            return None if value is None else value * o["edge_shares"] / o["shares"]
+        tiers = {}
+        for o in sized:
+            label = "high" if o["edge"] >= EDGE_HIGH else "low" if o["edge"] < EDGE_LOW else "mid"
+            row = tiers.setdefault(label, {"settled": 0, "won": 0, "pnl_usd": None})
+            row["settled"] += 1
+            row["won"] += o["outcome"] == "won"
+            value = pnl_of(o)[0]
+            if value is not None:
+                row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
+        for row in tiers.values():
+            row["win_rate"] = _ratio(row["won"], row["settled"])
+        live_sized = [o for o in sized if o.get("edge_sizing") is True]
+        edge_sizing = {"judged": len(sized), "tiers": tiers,
+                       "shadow": {"settled": len(shadow_sized),
+                                  "actual_pnl_usd": _sum(pnl_of(o)[0] for o in shadow_sized),
+                                  "sized_pnl_usd": _sum(_scaled(o) for o in shadow_sized)},
+                       "live": {"settled": len(live_sized), "pnl_usd": _sum(pnl_of(o)[0] for o in live_sized)}}
         # entryOrder gtc: the round's one GTC. How many rounds used it, how many
         # bought at all, and how its shares split between the immediate (taker)
         # fill and what the resting remainder later filled (maker).
@@ -2980,7 +3162,7 @@ class Ledger:
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
                 "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc, "regime": regime,
-                "exit_shadow": exit_shadow}
+                "exit_shadow": exit_shadow, "exit_first": exit_first, "edge_sizing": edge_sizing}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
         """GET /api/orders/lead: lead orders newest first, with the round's
@@ -2998,13 +3180,16 @@ class Ledger:
         page = orders[:limit]
         filled_rows = {}
         for order in orders:
-            if (order.get("filled_shares") or 0) > EPS_SHARES:
+            # The venue's round PnL includes an exit sale: it belongs to the round's buy row.
+            if (order.get("filled_shares") or 0) > EPS_SHARES and order.get("stage") != "exit":
                 filled_rows[str(order.get("round_id"))] = filled_rows.get(str(order.get("round_id")), 0) + 1
         for order in page:
             key = ("btc", str(order.get("round_id")))
             # The venue's round PnL goes on the round's one filled row; an
             # unfilled FAK whose rest order filled shows none.
-            if (order["outcome"] in ("won", "lost") and (order.get("filled_shares") or 0) > EPS_SHARES
+            if order.get("stage") == "exit":
+                order["pnl_source"] = None
+            elif (order["outcome"] in ("won", "lost") and (order.get("filled_shares") or 0) > EPS_SHARES
                     and filled_rows.get(key[1]) == 1 and key in official and official[key].get("pnl") is not None):
                 order["pnl"], order["pnl_source"] = official[key]["pnl"], "official"
             elif order["outcome"] in ("won", "lost") and order.get("pnl") is not None:
@@ -3108,7 +3293,9 @@ class Ledger:
                 args.append(asset_id)
             rows = db.execute(f"""SELECT asset_id, round_id, SUM(cost) AS cost FROM (
                     SELECT asset_id, json_extract(payload,'$.round_id') AS round_id,
-                        COALESCE(json_extract(payload,'$.amount'),0)
+                        -- a sale (exitOnReverse) gives its amount back
+                        CASE WHEN json_extract(payload,'$.direction')='SELL' THEN -1 ELSE 1 END
+                            * COALESCE(json_extract(payload,'$.amount'),0)
                             + COALESCE(json_extract(payload,'$.fee'), json_extract(payload,'$.fee_estimate'),0) AS cost
                     FROM trade_details WHERE run_id IN ({marks})
                       AND COALESCE(json_extract(payload,'$.trade_status'),'') != 'FAILED'
@@ -3156,9 +3343,17 @@ class Ledger:
                         json_extract(t.payload,'$.round_id') AS round_id,
                         MIN(json_extract(t.payload,'$.market_id')) AS market_id,
                         COUNT(*) AS fills,
-                        SUM(COALESCE(json_extract(t.payload,'$.amount'),0)) AS notional,
-                        SUM(COALESCE(json_extract(t.payload,'$.filled_shares'),
-                                     json_extract(t.payload,'$.shares'),0)) AS shares,
+                        SUM(CASE WHEN json_extract(t.payload,'$.direction')='SELL' THEN 0
+                                 ELSE COALESCE(json_extract(t.payload,'$.amount'),0) END) AS notional,
+                        SUM(CASE WHEN json_extract(t.payload,'$.direction')='SELL' THEN 0
+                                 ELSE COALESCE(json_extract(t.payload,'$.filled_shares'),
+                                               json_extract(t.payload,'$.shares'),0) END) AS shares,
+                        -- what an exit sale (exitOnReverse) got back
+                        SUM(CASE WHEN json_extract(t.payload,'$.direction')='SELL'
+                                 THEN COALESCE(json_extract(t.payload,'$.amount'),0) ELSE 0 END) AS sold_notional,
+                        SUM(CASE WHEN json_extract(t.payload,'$.direction')='SELL'
+                                 THEN COALESCE(json_extract(t.payload,'$.filled_shares'),
+                                               json_extract(t.payload,'$.shares'),0) ELSE 0 END) AS sold_shares,
                         SUM(COALESCE(json_extract(t.payload,'$.fee'),0)) AS fees,
                         SUM(COALESCE(json_extract(t.payload,'$.fee_estimate'),0)) AS fee_estimates,
                         SUM(json_extract(t.payload,'$.fee') IS NULL) AS missing_fees,
@@ -3186,7 +3381,8 @@ class Ledger:
                 fees = row["fees"] or 0
                 # A derived fee is not confirmed cost, so keep it separate; total
                 # cost falls back to the estimate only to show committed capital.
-                cost = notional + (fees if not row["missing_fees"] else fees + (row["fee_estimates"] or 0))
+                sold_notional = row["sold_notional"] or 0
+                cost = notional - sold_notional + (fees if not row["missing_fees"] else fees + (row["fee_estimates"] or 0))
                 rounds.append({
                     "roundId": row["round_id"], "assetId": row["asset_id"], "marketId": row["market_id"],
                     "fills": row["fills"], "shares": shares or None,
@@ -3195,6 +3391,7 @@ class Ledger:
                     "notional": notional, "fees": fees, "missingFees": row["missing_fees"],
                     "estimatedFees": row["fee_estimates"] or 0, "cost": cost,
                     "averagePrice": (notional / shares) if shares else None,
+                    "soldShares": row["sold_shares"] or 0, "soldNotional": sold_notional,
                     "status": outcome["status"] if outcome else None,
                     "pnl": outcome["pnl"] if outcome else None,
                     "settlementState": payload.get("state"),

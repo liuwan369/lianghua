@@ -82,5 +82,15 @@ for (const piece of ["OKX", "400 ms", "≥ 3 bp", "只用爱尔兰直连", "第 
 }
 assert.ok(!L.strategyNote({ ...{ leadVenues: ["bybit"], tokyoRelay: true, thresholdBp: 2, windowMs: 250, fromSec: 15, toSec: 265, openBandBp: 0, openLine: "tick", maxAsk: 0.8, limitPremium: 0.03, shares: 5 } }).includes("±"), "no band text when openBandBp is 0");
 
+// The switches show in the note: limit order, size by edge, regime pause, exit on reverse.
+const base = { leadVenues: ["bybit"], tokyoRelay: true, thresholdBp: 2, windowMs: 250, fromSec: 30, toSec: 265, openBandBp: 5, openLine: "mean60",
+  maxAsk: 0.8, limitPremium: 0.08, shares: 10 };
+const plain = L.strategyNote(base);
+assert.ok(plain.includes("FAK 买 10 股") && plain.includes("持有到结算") && !plain.includes("反向信号") && !plain.includes("暂停"), plain);
+const all = L.strategyNote({ ...base, entryOrder: "gtc", edgeSizing: true, regimePause: true, exitOnReverse: true });
+for (const piece of ["限价单 买 按优势 5/10/15 股", "行情太乱就暂停", "买到后第一个反向信号就卖出，否则持有到结算"]) {
+  assert.ok(all.includes(piece), `note has ${piece}: ${all}`);
+}
+
 console.log("sources OK");
 process.exit(0);

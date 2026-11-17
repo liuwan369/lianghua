@@ -7,7 +7,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { loadAccountConfig } from "../live/account.js";
 import { checkSettlementCredentials, envWalletOverrides, inspectWalletAddress, resolveWallet } from "../live/clob/wallet.js";
-import { CTF, PUSD } from "../live/contracts.js";
+import { CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD } from "../live/contracts.js";
 import type { AssetId, PlatformAdapters, SettlementRequest, SettlementResult } from "./contracts.js";
 import { COLLATERAL_ADAPTER, redemptionPlan, type RedemptionTransaction } from "./settlement.js";
 
@@ -31,6 +31,14 @@ const REDEMPTION_LOOKBACK_BLOCKS = 1800n;
 /** Log query size and retries for the payout lookup (see externalPayout). */
 const LOG_CHUNK_BLOCKS = 500n;
 const LOG_ATTEMPTS = 4;
+/** Exchange V2 OrderFilled (live/account-finance.ts FILLED): a match, never a redemption. */
+const ORDER_FILLED = "0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2ea84d8ee";
+const EXCHANGES = new Set([CTF_EXCHANGE.toLowerCase(), NEG_RISK_CTF_EXCHANGE.toLowerCase()]);
+/** A receipt with an exchange OrderFilled is a match (a sale of the tokens pays
+ * pUSD in and moves them out, like a redemption), never a payout. */
+export function receiptIsTrade(logs: readonly { address: string; topics: readonly (string | null | undefined)[] }[]): boolean {
+  return logs.some(log => EXCHANGES.has(log.address.toLowerCase()) && log.topics[0]?.toLowerCase() === ORDER_FILLED);
+}
 
 export interface PreparedSettlementTransaction {
   kind: "eoa" | "deposit";
@@ -74,6 +82,8 @@ export interface SettlementReceipt {
   status: "success" | "reverted";
   block: bigint;
   creditedPusd: bigint;
+  /** An exchange match (a sell of these tokens), not a redemption. */
+  trade?: boolean;
 }
 /** The narrow IO boundary is injectable for fault/restart tests, never a paper sender. */
 export interface LiveSettlementBackend {
@@ -495,6 +505,9 @@ async function createBackend(): Promise<LiveSettlementBackend> {
     try { receipt = await client.getTransactionReceipt({ hash }); }
     catch (error) { if (error instanceof TransactionReceiptNotFoundError) return undefined; throw error; }
     let credited = 0n;
+    // A sale moves the tokens out and pays pUSD in too; the exchange's
+    // OrderFilled marks it (exitOnReverse sells before the close).
+    const trade = receiptIsTrade(receipt.logs);
     for (const log of receipt.logs) {
       if (log.address.toLowerCase() !== PUSD.toLowerCase()) continue;
       try {
@@ -503,7 +516,7 @@ async function createBackend(): Promise<LiveSettlementBackend> {
         if (parsed.args.from.toLowerCase() === wallet.toLowerCase()) credited -= parsed.args.value;
       } catch { /* Other pUSD events do not prove a transfer. */ }
     }
-    return { transactionHash: hash, status: receipt.status, block: receipt.blockNumber, creditedPusd: credited };
+    return { transactionHash: hash, status: receipt.status, block: receipt.blockNumber, creditedPusd: credited, ...(trade ? { trade } : {}) };
   }
   return {
     wallet,
@@ -629,8 +642,9 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       }
       if (!hashes.size) return undefined;
       // Only a settled receipt proves cash arrived; sum every such redemption.
+      // A sale of the tokens is a trade the fills already book, not a payout.
       const receipts = (await Promise.all([...hashes].map(hash => receiptFor(hash))))
-        .filter(item => item?.status === "success" && item.creditedPusd > 0n);
+        .filter(item => item?.status === "success" && item.creditedPusd > 0n && !item.trade);
       if (!receipts.length) return undefined;
       // The first paying transaction identifies the payout; the amount is the sum.
       return { creditedPusd: receipts.reduce((sum, item) => sum + item!.creditedPusd, 0n),

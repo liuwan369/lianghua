@@ -27,7 +27,7 @@
   ];
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
-    "tokyoRelay", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
+    "tokyoRelay", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
     "dailyLossUsd", "durationMinutes", "maxRounds", "mode"];
 
   // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues: string[]} -> {config, errors}
@@ -64,6 +64,8 @@
     config.openLine = inputs.openLine === "mean60" ? "mean60" : "tick";
     config.restShadow = inputs.restShadow !== false;
     config.regimePause = inputs.regimePause === true;
+    config.edgeSizing = inputs.edgeSizing === true;
+    config.exitOnReverse = inputs.exitOnReverse === true;
     const ordered = Object.fromEntries(CONFIG_KEYS.map((key) => [key, config[key]]));
     return { config: ordered, errors };
   };
@@ -83,6 +85,8 @@
     inputs.restShadow = config?.restShadow !== false;
     inputs.entryOrder = config?.entryOrder === "gtc" ? "gtc" : "fak";
     inputs.regimePause = config?.regimePause === true;
+    inputs.edgeSizing = config?.edgeSizing === true;
+    inputs.exitOnReverse = config?.exitOnReverse === true;
     return inputs;
   };
 
@@ -156,6 +160,8 @@
         <div class="field"><span>东京转发</span><div class="checks"><label><input type="checkbox" data-field="tokyoRelay"> 开启</label></div><small>同时接东京转发来的成交，谁先到用谁</small></div>
         <label class="field"><span>第一单方式</span><select data-field="entryOrder"><option value="fak">吃单 + 没买到再挂单</option><option value="gtc">限价单（能成交的立即成交，剩下的挂着）</option></select><small>限价单：一张单，剩余部分从交易所回复起就挂着，挂单秒数后撤</small></label>
         <div class="field"><span>行情太乱就暂停</span><div class="checks"><label><input type="checkbox" data-field="regimePause"> 开启</label></div><small>信号前 5 分钟信号数 > 12 或每秒波动 > 0.89 bp 就不下，等下一个信号；关着时只记录（统计页可看）</small></div>
+        <div class="field"><span>按优势定股数</span><div class="checks"><label><input type="checkbox" data-field="edgeSizing"> 开启</label></div><small>按信号时的公允价算优势：优势 ≥ 0.07 买 15 股，< -0.04 买 5 股，其余按上面的股数；开前把单场预算调到 15 股够用；关着时只记录（统计页可看）</small></div>
+        <div class="field"><span>反向信号就卖出</span><div class="checks"><label><input type="checkbox" data-field="exitOnReverse"> 开启</label></div><small>买到后第一个反方向信号（成交 0.5 秒后，收盘前 5 秒前）就按买一价 - 0.08 吃单卖掉持仓，一场只卖一次；关着时只记录（统计页可看）</small></div>
         <div class="field"><span>挂单模拟记录</span><div class="checks"><label><input type="checkbox" data-field="restShadow"> 开启</label></div><small>挂单关着时，记录没买到后 5 秒内挂单会不会成交（不下单），统计页可看</small></div>
         ${FIELDS.slice(8).map(field)}
       </div>
@@ -184,6 +190,8 @@
     inputs.restShadow = $('[data-field="restShadow"]').checked;
     inputs.entryOrder = $('[data-field="entryOrder"]').value;
     inputs.regimePause = $('[data-field="regimePause"]').checked;
+    inputs.edgeSizing = $('[data-field="edgeSizing"]').checked;
+    inputs.exitOnReverse = $('[data-field="exitOnReverse"]').checked;
     inputs.leadVenues = ALL_VENUES.filter((venue) => $(`[data-venue="${venue}"]`).checked);
     return inputs;
   };
@@ -195,6 +203,8 @@
     $('[data-field="restShadow"]').checked = inputs.restShadow;
     $('[data-field="entryOrder"]').value = inputs.entryOrder;
     $('[data-field="regimePause"]').checked = inputs.regimePause;
+    $('[data-field="edgeSizing"]').checked = inputs.edgeSizing;
+    $('[data-field="exitOnReverse"]').checked = inputs.exitOnReverse;
     for (const venue of ALL_VENUES) $(`[data-venue="${venue}"]`).checked = inputs.leadVenues.includes(venue);
     state.dirty = false;
     showErrors({});

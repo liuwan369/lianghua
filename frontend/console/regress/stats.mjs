@@ -57,6 +57,32 @@ for (const piece of ["记录的单 30 单", "会暂停 6 单", "占 20.0%", "信
 }
 assert.ok(text(S.renderRegime({ judged: 0 })).includes("还没有带行情记录的单"));
 
+// --- exit on the first reverse signal: shadow while off, the sells while on ---
+const first = text(S.renderExitFirst({ held_rounds: 12, settled: 11, triggered: 9, trigger_rate: 0.8, skips: { off: 5, no_bid: 1 },
+  shadow: { rounds: 5, mistaken: 2, saved: 3, net_usd: 4.2 },
+  live: { sells: 3, filled: 3, fill_rate: 1, settled: 3, mistaken: 1, saved: 2, proceeds_usd: 14.7, net_vs_hold_usd: 1.25 } }));
+for (const piece of ["买到的场 12 场", "出现反向信号 9 场", "实盘卖出 3 / 3 单", "收回 +$14.70", "误卖 / 止损 1 / 2 场", "+$1.25",
+  "模拟：会卖出 5 场", "误卖 2 · 止损 3", "+$4.20", "没有买一价 1 场"]) {
+  assert.ok(first.includes(piece), `exit first: ${piece}: ${first}`);
+}
+assert.ok(!first.includes("开关关着 5 场"), "the off count is the shadow, not a skip");
+const offOnly = text(S.renderExitFirst({ held_rounds: 2, settled: 2, triggered: 1, trigger_rate: 0.5, skips: { off: 1 },
+  shadow: { rounds: 1, mistaken: 0, saved: 1, net_usd: 2 }, live: { sells: 0 } }));
+assert.ok(!offOnly.includes("实盘卖出"), "no live cards while off");
+assert.ok(text(S.renderExitFirst({ held_rounds: 0 })).includes("还没有持仓的场"));
+// --- size by edge: the tiers, the shadow and the live result ---
+const edge = text(S.renderEdge({ judged: 10, tiers: { low: { settled: 3, won: 1, win_rate: 1 / 3, pnl_usd: -4 },
+  mid: { settled: 5, won: 3, win_rate: 0.6, pnl_usd: 2 }, high: { settled: 2, won: 2, win_rate: 1, pnl_usd: 6 } },
+  shadow: { settled: 10, actual_pnl_usd: 4, sized_pnl_usd: 9 }, live: { settled: 0, pnl_usd: null } }));
+for (const piece of ["优势 < -0.04（买 5 股） 3 33.3% -$4.00", "中间（原股数） 5 60.0% +$2.00", "优势 ≥ 0.07（买 15 股） 2 100.0% +$6.00",
+  "模拟：按优势定股 +$9.00", "原股数 +$4.00", "如果开了 +$5.00"]) {
+  assert.ok(edge.includes(piece), `edge: ${piece}: ${edge}`);
+}
+assert.ok(!edge.includes("实盘按优势定股"), "no live card before it is on");
+assert.ok(text(S.renderEdge({ judged: 0 })).includes("还没有带优势记录的单"));
+assert.ok(text(S.renderEdge({ judged: 1, tiers: {}, shadow: { settled: 1, actual_pnl_usd: null, sized_pnl_usd: null }, live: {} })).includes("--"),
+  "nulls render --");
+
 // --- late_by_ms ---
 const late = String(parts.late);
 const lateText = text(late);

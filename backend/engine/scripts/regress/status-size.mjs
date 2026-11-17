@@ -9,7 +9,7 @@
 // _runtime_projection, system-dashboard-server.py runtime_book/_modern_runtime,
 // Ledger.position, settlement coverage) and nothing else. Built here with the
 // real strategy: a running round that placed its FAK, two ended rounds still
-// holding a position (redemption follows within minutes), two resolved rounds; the line must stay under 6 KB.
+// holding a position (redemption follows within minutes), two resolved rounds; the line must stay under 6.5 KB.
 //
 // Run after `npm run build`:  node scripts/regress/status-size.mjs
 import assert from "node:assert/strict";
@@ -115,7 +115,8 @@ assert.deepEqual(Object.keys(runtime.positions[0]).sort(), ["costUsd", "shares",
 assert.equal(runtime.risk.availableUsd, 91);
 assert.equal(runtime.lead_lines.venues.bybit.tokyo.delivered, 34567);
 // --- size ---
-assert.ok(size < 6 * 1024, `status line must stay under 6 KB; got ${size} bytes`);
+// 6.5 KB: the bound against the old ~50 KB line, with room for the round config's switches.
+assert.ok(size < 6.5 * 1024, `status line must stay under 6.5 KB; got ${size} bytes`);
 // A run that cannot redeem (RPC down) keeps every round in the line until it
 // can: each costs its identity and coverage only.
 const stuck = Buffer.byteLength(JSON.stringify(build((id) => id !== markets[4].id && id !== markets[5].id)));

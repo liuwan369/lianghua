@@ -196,7 +196,7 @@ export interface ConnectOptions {
   leadFeed?: (sink: (event: FeedEvent) => void) => { stop: () => void; isHealthy?: () => boolean };
   /** BUY orders to sign ahead for a new market: per token, the prices and the
    * size at each (binance-lead presignPlan). Signed in the background. */
-  presignPlan?: (market: MarketInfo) => Array<{ tokenId: string; tickSize: number; prices: number[]; size: (price: number) => number }>;
+  presignPlan?: (market: MarketInfo) => Array<{ tokenId: string; tickSize: number; prices: number[]; size: (price: number) => number | readonly number[] }>;
   /** Strategy that receives the feed/recovery notices (market_feed_unhealthy,
    * market_snapshot_rejected, account_recovery_started, ...). None without a strategy. */
   strategyId?: string;

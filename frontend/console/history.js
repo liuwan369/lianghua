@@ -9,6 +9,15 @@
 
   const filled = (order) => (num(order.filled_shares) ?? 0) > 1e-8;
   const result = (order) => {
+    // The exit sell (exitOnReverse): sold or not, and whether holding would have won.
+    if (order.stage === "exit") {
+      if (!filled(order)) {
+        if (order.status && !["CANCELLED", "REJECTED", "ABANDONED"].includes(order.status)) return { text: "处理中", tone: "warn" };
+        return { text: "没卖掉", tone: "" };
+      }
+      return order.outcome === "won" ? { text: "已卖（拿着会赢）", tone: "down" } : order.outcome === "lost" ? { text: "已卖（拿着会输）", tone: "up" }
+        : { text: "已卖", tone: "" };
+    }
     if (!filled(order)) {
       if (order.status && !["CANCELLED", "REJECTED", "ABANDONED"].includes(order.status)) return { text: "处理中", tone: "warn" };
       const hint = order.would_have_won === true ? "（买到会赢）" : order.would_have_won === false ? "（买到会输）" : "";
@@ -31,6 +40,9 @@
       ["卖单消失（我们收到）", stamp(o.ask_gone_ms)], ["卖单消失（交易所时间）", stamp(o.ask_gone_venue_ms)],
       ["成交后多久卖单消失", ms(o.ask_gone_after_trade_ms)], ["晚了", ms(o.late_by_ms)],
       ["盈亏来源", o.pnl_source === "official" ? "官方结算" : o.pnl_source === "ledger" ? "账本估算" : "--"],
+      ...(o.stage === "exit" ? [["反向信号卖出", `信号时买一 ${fmt.price(o.bid_at_signal)} · 收回 ${fmt.usd(o.proceeds_usd)} · 比拿到结算 ${fmt.money(o.exit_vs_hold_usd)}`]] : []),
+      ...(num(o.exit_shares) !== null ? [["反向信号卖出", `卖了 ${fmt.shares(o.exit_shares)} 股 · 收回 ${fmt.usd(o.exit_proceeds_usd)}（已算进盈亏）`]] : []),
+      ...(num(o.edge) !== null ? [["按优势定股", `公允价 ${fmt.price(o.fair)} · 优势 ${o.edge >= 0 ? "+" : ""}${o.edge.toFixed(3)} · ${o.edge_sizing ? "已按" : "会按"} ${fmt.shares(o.edge_shares)} 股`]] : []),
       ...(o.stage === "gtc" ? [["限价单", `立即成交 ${fmt.shares(o.taker_shares)} 股 · 挂着成交 ${fmt.shares(o.maker_shares)} 股`]] : []),
       ["挂单补单", o.stage === "gtc" ? "--" : o.stage === "rest" ? `是 · 跟在 ${o.parent_client_order_id || "--"} 后面` : o.rest_mode === "shadow" ? (num(o.rest_shadow_fill_ms) === null ? "模拟：5 秒内不会成交" : `模拟：${stamp(o.rest_shadow_fill_ms)} 会成交`) : o.rest_mode === "live" ? "已开启" : "--"],
     ];
@@ -43,9 +55,9 @@
       const r = result(o);
       const key = rowKey(o);
       return html`<tr class="row-click" data-key="${key}"><td class="num">${fmt.dateTime(o.recv_ts)}</td><td class="num">${fmt.hm(o.round_start)}</td>
-        <td class="l">${o.stage === "rest" ? html`<span class="tag">挂单补单</span> ` : o.stage === "gtc" ? html`<span class="tag">限价单</span> ` : ""}${VENUES[o.venue] || o.venue || "--"} · ${LINES[o.line] || o.line || "--"}</td>
+        <td class="l">${o.stage === "rest" ? html`<span class="tag">挂单补单</span> ` : o.stage === "gtc" ? html`<span class="tag">限价单</span> ` : o.stage === "exit" ? html`<span class="tag warn">反向卖出</span> ` : ""}${o.stage === "exit" ? "卖出持仓" : html`${VENUES[o.venue] || o.venue || "--"} · ${LINES[o.line] || o.line || "--"}`}</td>
         <td class="l ${o.direction === "UP" ? "up" : "down"}">${DIRECTIONS[o.direction] || o.direction || "--"}</td>
-        <td class="num">${fmt.price(o.ask_at_signal)}</td><td class="num">${fmt.price(o.limit_price)}</td><td class="num">${fmt.shares(o.shares)}</td>
+        <td class="num">${fmt.price(o.stage === "exit" ? o.bid_at_signal : o.ask_at_signal)}</td><td class="num">${fmt.price(o.limit_price)}</td><td class="num">${fmt.shares(o.shares)}</td>
         <td class="num">${fmt.shares(o.filled_shares)}</td><td class="l ${r.tone}">${r.text}</td><td class="num ${fmt.tone(o.pnl)}">${fmt.money(o.pnl)}</td>
         <td class="num">${ms(o.t_total_ms)}</td><td class="num">${ms(o.late_by_ms)}</td></tr>${open.has(key) ? html`<tr class="detail"><td colspan="12">${detail(o)}</td></tr>` : ""}`;
     })}`;

@@ -21,8 +21,9 @@ import { presignPrices, leadLimitPrice, leadShares } from "../../dist/strategies
 {
   const plan = presignPrices({ maxAsk: 0.8, limitPremium: 0.03, shares: 5 }, 0.01);
   assert.equal(plan.length, 80, "asks 0.01..0.80 give limits 0.04..0.83");
-  assert.deepEqual(plan.slice(0, 3), [{ price: 0.04, shares: 25 }, { price: 0.05, shares: 20 }, { price: 0.06, shares: 17 }], "1 USD minimum");
-  assert.deepEqual(plan.at(-1), { price: 0.83, shares: 5 });
+  assert.deepEqual(plan.slice(0, 3), [{ price: 0.04, shares: 25, sizes: [25] }, { price: 0.05, shares: 20, sizes: [20] },
+    { price: 0.06, shares: 17, sizes: [17] }], "1 USD minimum");
+  assert.deepEqual(plan.at(-1), { price: 0.83, shares: 5, sizes: [5] });
   for (let n = 1; n <= 80; n++) {
     const ask = Number((n / 100).toFixed(2));
     const limit = leadLimitPrice(ask, 0.03, 0.01);

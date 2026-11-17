@@ -12,6 +12,10 @@ the real control-plane handler.
   the Tokyo-first share from lead_lines), skip buckets mapped from the
   strategy's Chinese reasons, by_hour in UTC+8;
 - GET /api/orders/lead: newest first, outcome and PnL joined, paging by before;
+- exit on the first reverse signal and size by edge: the exit sell's row
+  (stage exit) is not a buy, its proceeds move the round's buy PnL, the
+  venue's round PnL still lands on the one buy row; exit_first and
+  edge_sizing report the shadow (switch off) and the live (switch on) results;
 - GET /api/runtime/book: {running:false} without an engine, the current
   round's book from the engine's snapshot with one;
 - mutations pass only behind the HTTPS proxy (Basic Auth): trusted headers
@@ -399,6 +403,132 @@ class LeadStats(unittest.TestCase):
             self.assertTrue(server.runtime_book()["stale"], "an expired snapshot is stale")
         finally:
             server._running_runtime = saved
+
+
+def first_exit(n, *, direction, round_start, bid, shares, sent, skip, status=None, filled=None):
+    token = f"{'U' if direction == 'UP' else 'D'}{n}"
+    return {"event": "lead_exit_shadow", "event_id": f"lead_exit_shadow:0xm{n}", "recv_ts": round_start + 301,
+            "market_id": f"0xm{n}", "round_id": str(round_start), "round_start": round_start, "direction": direction,
+            "token_id": token, "held_shares": shares, "opposite_signals": 1, "triggered": False, "trigger_ms": None,
+            "trigger_sec_since_open": None, "bid": None, "sell_shares": None,
+            "first_triggered": True, "first_ms": (round_start + 90) * 1000, "first_sec_since_open": 90,
+            "first_bid": bid, "first_shares": shares, "first_sent": sent, "first_skip": skip,
+            "exit_status": status, "exit_price": None if bid is None else round(bid - 0.08, 2), "exit_shares": shares if sent else None,
+            "exit_filled": filled, "exit_client_order_id": f"c{n}x" if sent else None, "exit_order_id": f"o{n}x" if sent else None}
+
+
+def exit_sell(n, *, round_start, direction, filled, avg, fee, status="FILLED"):
+    token = f"{'U' if direction == 'UP' else 'D'}{n}"
+    return {"event": "lead_order", "event_id": f"lead_order:c{n}x", "recv_ts": round_start + 91, "stage": "exit",
+            "side": "SELL", "rest_mode": None, "client_order_id": f"c{n}x", "order_id": f"o{n}x",
+            "market_id": f"0xm{n}", "round_id": str(round_start), "round_start": round_start, "direction": direction,
+            "token_id": token, "status": status, "venue_status": None, "error": None, "sec_since_open": 90,
+            "bid_at_signal": 0.5, "limit_price": 0.42, "shares": 10, "filled_shares": filled, "avg_fill_price": avg,
+            "fee_usd": fee, "proceeds_usd": None if avg is None else round(avg * filled - fee, 6),
+            "decision_ms": None, "post_sent_ms": None, "ack_ms": None}
+
+
+class ExitAndEdge(unittest.TestCase):
+    """Rounds of 10 shares at 0.6 (fee 0.1). E1: exitOnReverse on, sold 10 at
+    0.5 (fee 0.1), UP lost: PnL 4.9 - 6.1 = -1.2 instead of -6.1. E2: on, sold,
+    UP won: 4.9 - 6.1 = -1.2 instead of 3.9. E3: off (shadow), lost, bid 0.3.
+    E4: off, won, no reverse signal. Size by edge (shadow): E3 edge -0.1 -> 5
+    shares, E4 edge 0.1 -> 15."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        dashboard = root / "backend" / "engine" / "results" / "dashboard"
+        dashboard.mkdir(parents=True)
+        journal = root / "e.jsonl"
+        base = R1 + 20 * 300
+        cls.rounds = [base, base + 300, base + 600, base + 900]
+
+        def buy(n, start, direction, *, edge, edge_shares, sizing=False):
+            return {**order(n, venue="bybit", line="tokyo", direction=direction, status="FILLED", filled=10, avg=0.6,
+                            fee=0.1, limit=0.68, round_start=start, ack=40),
+                    "shares": 10, "stage": "gtc", "rest_mode": "gtc", "taker_shares": 10, "maker_shares": 0,
+                    "fair": 0.6 + edge, "edge": edge, "edge_shares": edge_shares, "edge_sizing": sizing}
+        records = [
+            buy(41, cls.rounds[0], "UP", edge=0.0, edge_shares=10),
+            exit_sell(41, round_start=cls.rounds[0], direction="UP", filled=10, avg=0.5, fee=0.1),
+            first_exit(41, direction="UP", round_start=cls.rounds[0], bid=0.5, shares=10, sent=True, skip=None,
+                       status="FILLED", filled=10),
+            buy(42, cls.rounds[1], "UP", edge=0.0, edge_shares=10),
+            exit_sell(42, round_start=cls.rounds[1], direction="UP", filled=10, avg=0.5, fee=0.1),
+            first_exit(42, direction="UP", round_start=cls.rounds[1], bid=0.5, shares=10, sent=True, skip=None,
+                       status="FILLED", filled=10),
+            buy(43, cls.rounds[2], "UP", edge=-0.1, edge_shares=5),
+            first_exit(43, direction="UP", round_start=cls.rounds[2], bid=0.3, shares=10, sent=False, skip="off"),
+            buy(44, cls.rounds[3], "UP", edge=0.1, edge_shares=15),
+            {**first_exit(44, direction="UP", round_start=cls.rounds[3], bid=None, shares=10, sent=False, skip=None),
+             "first_triggered": False, "first_bid": None, "first_shares": None, "first_skip": None},
+            settlement(41, "D41", base + 1500), settlement(42, "U42", base + 1501),
+            settlement(43, "D43", base + 1502), settlement(44, "U44", base + 1503)]
+        write(journal, records)
+        cls.ledger = Ledger(dashboard / "ledger.sqlite3")
+        cls.ledger.register_run("run-e", "live", ACCOUNT, str(journal))
+        cls.ledger.ingest("run-e", max_bytes=8 << 20, max_records=10000)
+        cls.stats = cls.ledger.lead_stats("run-e", range="all", now=base + 2000)
+        cls.page = cls.ledger.lead_orders_page("run-e", range="all", now=base + 2000)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_sell_is_not_a_buy(self):
+        funnel = self.stats["funnel"]
+        self.assertEqual((funnel["orders"], funnel["filled"], funnel["settled"], funnel["won"]), (4, 4, 4, 2),
+                         "the two exit sells add no order")
+        # E1 -1.2, E2 -1.2, E3 -6.1, E4 +3.9
+        self.assertAlmostEqual(funnel["pnl_usd"], -1.2 - 1.2 - 6.1 + 3.9, places=6)
+
+    def test_rows(self):
+        rows = {item["client_order_id"]: item for item in self.page["items"]}
+        self.assertAlmostEqual(rows["c41"]["pnl"], -1.2, places=6, msg="lost, sold: proceeds instead of 0")
+        self.assertAlmostEqual(rows["c42"]["pnl"], -1.2, places=6, msg="won, sold: proceeds instead of 1 a share")
+        self.assertEqual((rows["c41"]["exit_shares"], rows["c41"]["exit_proceeds_usd"]), (10, 4.9))
+        sell = rows["c41x"]
+        self.assertEqual((sell["stage"], sell["order_side"], sell["pnl"], sell["pnl_source"]), ("exit", "SELL", None, None))
+        self.assertAlmostEqual(sell["exit_vs_hold_usd"], 4.9, places=6, msg="a sold loser got its proceeds back")
+        self.assertAlmostEqual(rows["c42x"]["exit_vs_hold_usd"], 4.9 - 10, places=6, msg="a sold winner gave up 1 a share")
+        # The venue's round PnL lands on the buy row (the round's one filled buy).
+        page = self.ledger.lead_orders_page("run-e", range="all", now=self.rounds[0] + 2000,
+                                            official={("btc", str(self.rounds[0])): {"pnl": -1.25}})
+        official = {item["client_order_id"]: item for item in page["items"]}
+        self.assertEqual((official["c41"]["pnl"], official["c41"]["pnl_source"]), (-1.25, "official"))
+        self.assertIsNone(official["c41x"]["pnl_source"])
+
+    def test_exit_first(self):
+        e = self.stats["exit_first"]
+        self.assertEqual((e["held_rounds"], e["settled"], e["triggered"]), (4, 4, 3))
+        self.assertEqual(e["skips"], {"off": 1})
+        self.assertEqual((e["shadow"]["rounds"], e["shadow"]["mistaken"], e["shadow"]["saved"]), (1, 0, 1))
+        # E3: sell 10 at 0.3 less the fee, against 0 at the close.
+        self.assertAlmostEqual(e["shadow"]["net_usd"], 3 - 0.07 * 0.3 * 0.7 * 10, places=6)
+        live = e["live"]
+        self.assertEqual((live["sells"], live["filled"], live["settled"], live["mistaken"], live["saved"]), (2, 2, 2, 1, 1))
+        self.assertAlmostEqual(live["proceeds_usd"], 9.8, places=6)
+        self.assertAlmostEqual(live["net_vs_hold_usd"], 4.9 + (4.9 - 10), places=6)
+
+    def test_edge_sizing(self):
+        e = self.stats["edge_sizing"]
+        self.assertEqual(e["judged"], 4)
+        self.assertEqual((e["tiers"]["low"]["settled"], e["tiers"]["mid"]["settled"], e["tiers"]["high"]["settled"]), (1, 2, 1))
+        self.assertEqual(e["shadow"]["settled"], 4)
+        # Scaled: E1/E2 x1, E3 x0.5, E4 x1.5.
+        self.assertAlmostEqual(e["shadow"]["sized_pnl_usd"], -1.2 - 1.2 - 6.1 * 0.5 + 3.9 * 1.5, places=6)
+        self.assertAlmostEqual(e["shadow"]["actual_pnl_usd"], -1.2 - 1.2 - 6.1 + 3.9, places=6)
+        self.assertEqual(e["live"]["settled"], 0)
+
+    def test_projection_types(self):
+        with self.ledger._connect() as db:
+            shadow = json.loads(db.execute("SELECT payload FROM lead_exit_shadows WHERE market_id='0xm43'").fetchone()[0])
+            order_row = json.loads(db.execute("SELECT payload FROM lead_orders WHERE client_order_id='c41x'").fetchone()[0])
+        self.assertEqual((shadow["first_triggered"], shadow["first_sent"], shadow["first_skip"], shadow["first_bid"]),
+                         (True, False, "off", 0.3))
+        self.assertEqual((order_row["stage"], order_row["proceeds_usd"], order_row["bid_at_signal"]), ("exit", 4.9, 0.5))
 
 
 class Auth(unittest.TestCase):
