@@ -8,9 +8,14 @@ const EPS = 1e-8;
  * 4.40); this only absorbs rounding in the reported trade price and size. */
 const BUY_BUDGET_TOLERANCE_USD = 0.01;
 /** A trade leg's price is the venue's matched USDC / shares, not a tick: a
- * maker leg at a 0.23 limit came back 0.2300000681417075 (2026-11-14). The
- * limit check allows this much rounding; a real tick over it is still refused. */
+ * maker leg at a 0.23 limit came back 0.2300000681417075 (2026-11-14). USDC
+ * has 6 decimals, so one unit of rounding moves a leg's price by 1e-6 / shares:
+ * a 0.142858 mint leg at a 0.65 limit paid 0.092858 and came back
+ * 0.6500020999874001 (2026-11-17). The limit check allows both; a real tick
+ * over it is still refused. */
 const FILL_PRICE_TOLERANCE = 1e-6;
+const USDC_UNIT = 1e-6;
+const fillPriceTolerance = (shares: number) => FILL_PRICE_TOLERANCE + USDC_UNIT / shares;
 /** Shares trade in steps of 0.01 (official precision table, every tick). */
 const SHARE_STEP = 0.01;
 const active = (order: OrderRecord) => ["SUBMITTING", "OPEN", "PARTIAL", "UNKNOWN"].includes(order.status);
@@ -1388,7 +1393,8 @@ export class TradingCore {
         && !(order.timeInForce === "FAK" && order.venueStatus === "matched"))
       || !fill.tradeId || ![fill.shares, fill.price, fill.feeUsd, fill.ts].every(finite)
       || fill.shares <= 0 || fill.price <= 0 || fill.price >= 1 || fill.feeUsd < 0
-      || (fill.direction === "BUY" ? fill.price > order.price + FILL_PRICE_TOLERANCE : fill.price < order.price - FILL_PRICE_TOLERANCE)
+      || (fill.direction === "BUY" ? fill.price > order.price + fillPriceTolerance(fill.shares)
+        : fill.price < order.price - fillPriceTolerance(fill.shares))
       || (fill.direction === "BUY"
         ? spentUsd + fill.shares * fill.price > order.shares * order.price + BUY_BUDGET_TOLERANCE_USD
         : order.filledShares + fill.shares > order.shares + EPS)) throw new Error("invalid or unowned fill");

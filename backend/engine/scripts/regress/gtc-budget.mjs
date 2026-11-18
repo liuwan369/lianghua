@@ -149,6 +149,28 @@ const restoredStuck = async ({ settled }) => {
   assert.ok(Math.abs(order.reservedUsd - (5 * 0.63 - 4.0 * 0.55)) < 1e-6, `unspent budget reserved: ${order.reservedUsd}`);
   h.done();
 }
+// --- a mint leg priced over the limit by the venue's USDC rounding (live
+// 2026-11-17 21:50: 10 @ 0.65 matched 9.85 @ 0.65 and 0.142858 for 0.092858
+// USDC, which the venue reports as @0.6500020999874001; refused as over the
+// limit, the order stayed UNKNOWN with 0.10 reserved and the stop drained 5 min) ---
+{
+  const h = await placed({ price: 0.65, shares: 10, cancel: async () => false, venueStatus: "matched" });
+  h.fill("a", 0.65, 9.85, { isMaker: true });
+  assert.doesNotThrow(() => h.fill("b", 0.6500020999874001, 0.142858, { isMaker: true }),
+    "0.092858 USDC for 0.142858 is 0.65 rounded up to the USDC unit: not over the limit");
+  const order = h.platform.core.order(h.hash);
+  assert.ok(Math.abs(order.filledShares - 9.992858) < 1e-9, `both legs held: ${order.filledShares}`);
+  assert.equal(order.status, "FILLED", "budget spent to 0.0046: nothing left to trade");
+  assert.equal(order.reservedUsd, 0);
+  h.done();
+}
+// --- a price really over the limit is still refused ---
+{
+  const h = await placed({ price: 0.65, shares: 10 });
+  assert.throws(() => h.fill("a", 0.651, 1), /invalid or unowned fill/, "a tenth of a cent over: not rounding");
+  assert.throws(() => h.fill("b", 0.6502, 0.01), /invalid or unowned fill/, "a dust leg 0.0002 over: not rounding");
+  h.done();
+}
 // --- a late leg never re-opens a FILLED order ---
 {
   const h = await placed({ price: 0.63, shares: 5 });

@@ -171,6 +171,8 @@ const position = (r, tokenId = UP) => r.platform.core.positions().find(p => p.to
   assert.equal(tryIngest(r, fill("t1", 3.53, 0.42, 0)), true);
   assert.equal(tryIngest(r, fill("t2", 1.46753, 0.42 + 6.8e-8, 0)), true, "a leg priced a rounding hair over the limit is ours");
   close(r.platform.core.order(ORDER).filledShares, 4.99753, "both legs");
-  assert.match(String(tryIngest(r, fill("t3", 0.01, 0.4201, 0))), /invalid or unowned fill/, "a real price over the limit is still refused");
+  // 0.01 @ 0.4201 is 0.004201 USDC, one USDC unit over: rounding (gtc-budget
+  // 2026-11-17). Three units over is not.
+  assert.match(String(tryIngest(r, fill("t3", 0.01, 0.4203, 0))), /invalid or unowned fill/, "a real price over the limit is still refused");
 }
 console.log("fak-better-price OK");
