@@ -191,6 +191,7 @@ summary { color: #8cc6f2; font-size: 12px; cursor: pointer; }
 .log time { color: #7d94aa; }
 .log .error { color: #f08aa4; }
 .log .warning { color: #f0c477; }
+.log .info { color: #9cb4c9; }
 
 @media (max-width: 1120px) {
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }

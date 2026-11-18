@@ -160,11 +160,42 @@
       <dt>转发监听</dt><dd>${!feed.running ? html`<span class="muted">引擎没在运行</span>` : !feed.relayConfigured ? "本次运行没有开启" : !relay ? "没有数据" : relay.error ? html`<span class="bad">${relay.error}</span>` : relay.listening ? html`<span class="up">监听中</span> 端口 ${relay.port} · 接受 ${fmt.int(relay.accepted)} 条` : html`<span class="bad">没有监听</span>`}</dd>
     </dl>`;
   };
-  const SEVERITY = (item) => item.severity === "warning" || item.kind === "unresolved" ? "warning" : item.kind === "error" ? "error" : "";
+  // The engine writes notices and book gaps on its error channel
+  // (kind=error): [tier, what it means] by code, or by code:reason. info is
+  // routine, warning a gap that only matters if it keeps coming, error real.
+  const EVENT_CODES = {
+    account_recovery_started: ["info", "引擎启动或重连时对账：读余额、持仓、挂单，和本地比对"],
+    startup_account_recovery_pending: ["info", "启动时账户还在读，读完再下单"],
+    "market_feed_unhealthy:connected_waiting_book": ["info", "已连上盘口推送，等第一份完整盘口（几百毫秒）"],
+    "market_feed_unhealthy:incomplete_book": ["warning", "盘口一边没有报价，这一刻不下单；快收盘时常见"],
+    "market_feed_unhealthy:stale_book": ["warning", "盘口几秒没更新，这一刻不下单"],
+    "market_feed_unhealthy:transport_disconnected": ["warning", "盘口推送断了，正在重连"],
+    market_feed_unhealthy: ["warning", "盘口暂时不可用，这一刻不下单"],
+    "market_snapshot_rejected:invalid_yes_quote": ["warning", "UP 一边盘口是空的或过期，这一刻不下单"],
+    "market_snapshot_rejected:invalid_no_quote": ["warning", "DOWN 一边盘口是空的或过期，这一刻不下单"],
+    "market_snapshot_rejected:book_unhealthy": ["warning", "盘口暂时不可用，这一刻不下单"],
+    market_snapshot_rejected: ["warning", "这一刻的盘口不能用，等下一份"],
+    market_feed_disconnected: ["warning", "盘口推送断了，正在重连"],
+    order_abandoned: ["info", "对账确认这张单在交易所不存在，本地删掉"],
+    settlement_reconciliation_pending: ["warning", "结算还在确认，稍后再试"],
+    settlement_drain_timeout: ["error", "停止收尾时等结算超时（5 分钟），有场次没确认赎回"],
+  };
+  const TIERS = { info: "提示", warning: "注意", error: "错误" };
+  const eventInfo = (item) => {
+    const reason = String(item.message || "").startsWith(`${item.code}:`) ? String(item.message) : null;
+    const known = (reason && EVENT_CODES[reason]) || EVENT_CODES[item.code];
+    if (known) return { tier: known[0], text: known[1] };
+    const tier = item.severity === "warning" || item.kind === "unresolved" ? "warning" : item.kind === "error" ? "error" : "info";
+    return { tier, text: item.message && item.message !== item.code ? item.message : "" };
+  };
   const renderEvents = (items, kind) => {
     const list = (items || []).filter((item) => !kind || item.kind === kind);
     if (!list.length) return html`<li class="empty">没有事件</li>`;
-    return html`${list.map((item) => html`<li><time>${fmt.dateTime(item.time)}</time><span class="${SEVERITY(item)}">${item.kind || "--"}</span><span class="${SEVERITY(item)}">${item.code ? `${item.code} · ` : ""}${item.message || ""}</span></li>`)}`;
+    return html`${list.map((item) => {
+      const { tier, text } = eventInfo(item);
+      const name = item.kind === "error" ? TIERS[tier] : item.kind || "--";
+      return html`<li><time>${fmt.dateTime(item.time)}</time><span class="${tier}">${name}</span><span class="${tier}">${text}${item.code ? html` <small class="muted">${item.code}</small>` : ""}</span></li>`;
+    })}`;
   };
   window.PolySettings = Object.freeze({ buildConfig, draftPayload, save, inputsFrom, renderAccount, renderHealth, renderEvents, CONFIG_KEYS });
 

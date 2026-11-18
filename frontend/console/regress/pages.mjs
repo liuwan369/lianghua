@@ -34,7 +34,13 @@ const REPLIES = {
   "/api/diagnostics/health": { status: "ok", nodeLabel: "爱尔兰", resources: { cpu: { percent: 12, cores: 4 }, memory: { used_bytes: 2e9, total_bytes: 4e9, percent: 50 }, disk: { used_bytes: 1e10, total_bytes: 4e10, percent: 25 } },
     services: { engine: { running: true, process: { state: "running", pid: 42 } }, accountBridge: { stale: false }, projection: { state: "ready", stale: false } },
     leadFeed: { running: true, relayConfigured: true, lines: { bybit: { direct: { lastTradeAgeSeconds: 0.5, delivered: 5 } } }, relayListener: { listening: true, port: 9555, accepted: 3 } } },
-  "/api/events": { available: true, items: [{ kind: "error", code: "market_feed_unhealthy", message: "行情断开", time: NOW - 10 }, { kind: "platform_status", message: "running", time: NOW - 20 }] },
+  "/api/events": { available: true, items: [{ kind: "error", code: "market_feed_unhealthy", message: "行情断开", time: NOW - 10 }, { kind: "platform_status", message: "running", time: NOW - 20 },
+    // What a restart and a round's close write (2026-11-18): notices and warnings, not errors.
+    { kind: "error", code: "account_recovery_started", message: "account_recovery_started", time: NOW - 30 },
+    { kind: "error", code: "market_feed_unhealthy", message: "market_feed_unhealthy:connected_waiting_book", time: NOW - 31 },
+    { kind: "error", code: "market_feed_unhealthy", message: "market_feed_unhealthy:incomplete_book", time: NOW - 32 },
+    { kind: "error", code: "market_snapshot_rejected", message: "market_snapshot_rejected:invalid_yes_quote", time: NOW - 33 },
+    { kind: "error", code: "settlement_drain_timeout", message: "settlement_drain_timeout", time: NOW - 34 }] },
   "/api/stats/lead": { available: true, run_count: 1, to: NOW, funnel: { signals: 3, signals_in_window: 3, orders: 1, filled: 1, fill_rate: 1, settled: 0, won: 0, win_rate: null, pnl_usd: null, fees_usd: 0.07 } },
   "/api/orders/lead": { available: true, items: [{ round_id: String(ROUND), open_line: "mean60", open_value: 98000.5, band_bp: 1.25 }], next_before: null },
   "/api/rounds/": { available: true, attempt: { direction: "UP", price: 0.56, askAtSignal: 0.53, shares: 5, filledShares: 5, status: "FILLED", venue: "bybit", line: "tokyo", moveBp: 2.1, signalAt: NOW - 30 },
@@ -125,7 +131,7 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
   assert.equal(page.node('[data-field="roundBudgetUsd"]').value, "", "null budget is empty");
   assert.equal(page.node('[data-venue="okx"]').checked, true);
   const shown = text(page.html());
-  for (const piece of ["0x1234…5678", "检查通过", "已授权", "可赎回", "账户密钥只在服务器上配置，网页不输入、不显示", "一切正常", "监听中", "行情断开", "已发布 r4"]) {
+  for (const piece of ["0x1234…5678", "检查通过", "已授权", "可赎回", "账户密钥只在服务器上配置，网页不输入、不显示", "一切正常", "监听中", "盘口暂时不可用", "已发布 r4"]) {
     assert.ok(shown.includes(piece), `设置 shows ${piece}`);
   }
   assert.ok(!/type="password"|私钥输入|控制密码/.test(page.node("#app").innerHTML), "no credential or password inputs");
@@ -140,6 +146,17 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
     assert.equal(app.split(`data-field="${key}"`).length - 1, 1, `one input for ${key}`);
   }
   assert.ok(!app.includes("开前把单场预算调到"), "no stale note");
+  // The run log: a notice is grey, a book gap yellow, only a real failure red;
+  // each says in plain words what it is.
+  const log = page.node("[data-events]").innerHTML;
+  const line = (needle) => log.split("<li>").find((item) => item.includes(needle)) || "";
+  for (const [needle, tier, words] of [["引擎启动或重连时对账", "info", "提示"], ["已连上盘口推送", "info", "提示"],
+    ["一边没有报价", "warning", "注意"], ["一边盘口是空的", "warning", "注意"], ["等结算超时", "error", "错误"]]) {
+    const item = line(needle);
+    assert.ok(item, `log explains: ${needle}: ${log.slice(0, 600)}`);
+    assert.ok(item.includes(`class="${tier}"`) && item.includes(words), `${needle} is ${tier}: ${item}`);
+  }
+  assert.ok(!line("引擎启动或重连时对账").includes('class="error"'), "a notice is not red");
   // Settled losers ($0, "redeemable" for nothing) are one line, not 500 rows.
   assert.ok(shown.includes("持仓（1）"), `only positions worth something are listed: ${shown}`);
   assert.ok(!shown.includes("Lost round A"), "a $0 settled loser is not a row");
