@@ -902,6 +902,119 @@ def _apply_exit(buys, sells):
         buy["pnl"] = round(buy["pnl"] - payout + buy["exit_proceeds_usd"], 6)
 
 
+SWITCH_VARIANTS = ("none", "sizing", "exit", "both")
+
+
+def _switches(every, orders, sells, exits, pnl_of, base_shares=None):
+    """The two switches side by side, on the rounds that held shares with an
+    edge record: each round's result with neither, size by edge only, exit on
+    the first reverse signal only, and both. Per round, `hold` is what holding
+    to the close made at the shares sent and `x` what the exit changed (the
+    live sell's exit_vs_hold, else the shadow sell at the bid then less the
+    taker fee); kb / ks scale the sent shares to the configured size / the
+    edge's pick (same fills, same prices). The configured size of a 5 or 15
+    share order sent with sizing on is the nearest mid-edge order's (its
+    edge_shares is the configured size), else `base_shares`."""
+    exit_by_market = {item.get("market_id"): item for item in exits}
+    sells_by_market = {}
+    for sell in sells:
+        if (sell.get("filled_shares") or 0) > EPS_SHARES:
+            sells_by_market.setdefault(sell.get("market_id"), []).append(sell)
+    filled_by_market = {}
+    for order in every:
+        if (order.get("filled_shares") or 0) > EPS_SHARES:
+            filled_by_market.setdefault(order.get("market_id"), []).append(order)
+    mids = sorted((o.get("recv_ts") or 0, o["edge_shares"]) for o in orders
+                  if o.get("edge") is not None and o.get("edge_shares") and EDGE_LOW <= o["edge"] < EDGE_HIGH)
+
+    def configured(at):
+        before = [shares for t, shares in mids if t <= at]
+        after = [shares for t, shares in mids if t > at]
+        return before[-1] if before else after[0] if after else base_shares
+
+    rounds, skipped = [], 0
+    firsts = {}
+    for order in orders:
+        if order.get("edge") is None or not order.get("edge_shares") or not order.get("shares"):
+            continue
+        market = order.get("market_id")
+        if market not in firsts or (order.get("recv_ts") or 0) < (firsts[market].get("recv_ts") or 0):
+            firsts[market] = order
+    for market, first in firsts.items():
+        buys = filled_by_market.get(market, [])
+        if not buys or any(b.get("outcome") not in ("won", "lost") for b in buys):
+            continue
+        record = exit_by_market.get(market)
+        values = [pnl_of(b)[0] for b in buys]
+        live_sells = sells_by_market.get(market, [])
+        if record is None or None in values or any(s.get("exit_vs_hold_usd") is None for s in live_sells):
+            skipped += 1
+            continue
+        actual = sum(values)
+        won = first["outcome"] == "won"
+        if live_sells:
+            x = sum(s["exit_vs_hold_usd"] for s in live_sells)
+            hold = actual - x
+        else:
+            hold, x = actual, 0.0
+            if record.get("first_triggered") and record.get("first_skip") == "off" \
+                    and record.get("first_bid") is not None and record.get("first_shares"):
+                n, b = record["first_shares"], record["first_bid"]
+                x = n * b - TAKER_FEE_RATE * b * (1 - b) * n - (n if won else 0.0)
+        sent, picked = first["shares"], first["edge_shares"]
+        if first.get("edge_sizing") is True:
+            ks = 1.0
+            mid = EDGE_LOW <= first["edge"] < EDGE_HIGH
+            base = sent if mid or abs(sent - picked) > EPS_SHARES else configured(first.get("recv_ts") or 0)
+        else:
+            ks, base = picked / sent, sent
+        if not base:
+            skipped += 1
+            continue
+        kb = base / sent
+        start = first.get("round_start") or first.get("recv_ts") or 0
+        rounds.append({"start": start, "none": hold * kb, "sizing": hold * ks, "exit": (hold + x) * kb, "both": (hold + x) * ks,
+                       "sizing_on": first.get("edge_sizing") is True,
+                       "exit_state": None if not record.get("first_triggered") else "sent" if record.get("first_sent") else record.get("first_skip"),
+                       "sold": bool(live_sells)})
+    rounds.sort(key=lambda r: r["start"])
+    # What actually ran: sizing from the latest round's order, the exit from
+    # the latest reverse signal (a sell or a skip other than "off" = on).
+    live = None
+    if rounds:
+        exit_on = False
+        for r in reversed(rounds):
+            if r["sold"] or r["exit_state"] is not None:
+                exit_on = r["sold"] or r["exit_state"] != "off"
+                break
+        sizing_on = rounds[-1]["sizing_on"]
+        live = "both" if sizing_on and exit_on else "sizing" if sizing_on else "exit" if exit_on else "none"
+    days = {}
+    for r in rounds:
+        days.setdefault(datetime.fromtimestamp(r["start"], RISK_DAY_TZ).date(), []).append(r)
+    variants = {}
+    for key in SWITCH_VARIANTS:
+        run = peak = drawdown = 0.0
+        for r in rounds:
+            run += r[key]
+            peak = max(peak, run)
+            drawdown = min(drawdown, run - peak)
+        diffs = [r[key] - r["none"] for r in rounds]
+        t = None
+        if key != "none" and len(diffs) > 1:
+            mean = sum(diffs) / len(diffs)
+            sd = math.sqrt(sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1))
+            t = round(mean / (sd / math.sqrt(len(diffs))), 2) if sd > 0 else None
+        variants[key] = {
+            "pnl_usd": round(sum(r[key] for r in rounds), 6) if rounds else None,
+            "vs_none_usd": None if key == "none" or not rounds else round(sum(diffs), 6),
+            "t": t, "max_drawdown_usd": round(drawdown, 6) if rounds else None,
+            "days": len(days),
+            "days_better": None if key == "none" else sum(1 for day in days.values()
+                                                          if sum(r[key] - r["none"] for r in day) > 1e-9)}
+    return {"rounds": len(rounds), "skipped": skipped, "live": live, "variants": variants}
+
+
 def _rest_pnl(order):
     """What a rest order would have made for a missed order: its shares filled
     at the limit as a maker (no fee)."""
@@ -2903,9 +3016,11 @@ class Ledger:
         return {"signals": signals, "in_window": in_window, "skips": skips,
                 "orders": self._lead_order_rows(db, run_ids, start), "exits": list(exits.values())}
 
-    def lead_stats(self, run_id, *, range="run", official=None, now=None):
+    def lead_stats(self, run_id, *, range="run", official=None, now=None, base_shares=None):
         """GET /api/stats/lead. `official` is {(asset, roundId): {"pnl": ...}}
-        from the venue (official_pnl); a round it covers uses that PnL."""
+        from the venue (official_pnl); a round it covers uses that PnL.
+        `base_shares` is the saved config's shares, the switches comparison's
+        base for a run without a mid-edge order."""
         now = time.time() if now is None else now
         with self._connect() as db:
             run_ids, start = self._lead_scope(db, run_id, range, now)
@@ -3042,6 +3157,7 @@ class Ledger:
                                   "actual_pnl_usd": _sum(pnl_of(o)[0] for o in shadow_sized),
                                   "sized_pnl_usd": _sum(_scaled(o) for o in shadow_sized)},
                        "live": {"settled": len(live_sized), "pnl_usd": _sum(pnl_of(o)[0] for o in live_sized)}}
+        switches = _switches(every, orders, exit_sells, exits, pnl_of, base_shares)
         # entryOrder gtc: the round's one GTC. How many rounds used it, how many
         # bought at all, and how its shares split between the immediate (taker)
         # fill and what the resting remainder later filled (maker).
@@ -3146,7 +3262,7 @@ class Ledger:
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
                 "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc, "regime": regime,
-                "exit_first": exit_first, "edge_sizing": edge_sizing}
+                "exit_first": exit_first, "edge_sizing": edge_sizing, "switches": switches}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
         """GET /api/orders/lead: lead orders newest first, with the round's

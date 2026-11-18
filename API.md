@@ -113,8 +113,14 @@
                       tokyo_first_share,          // tokyo.delivered / (tokyo + direct)，取当前运行最新的 lead_lines
                       tokyo_lead_mean_ms, direct_lead_mean_ms}]},
  skips: {time_window, band, ask_too_high, book, budget, paused, mid_round_start, already_attempted, other},
- by_hour: [24 × {hour, orders, filled, settled, won, pnl_usd}]}   // 北京时间小时，按场次开始时间
+ by_hour: [24 × {hour, orders, filled, settled, won, pnl_usd}],   // 北京时间小时，按场次开始时间
+ switches: {rounds,             // 买到、已出结果、带优势记录和持仓记录（lead_exit_shadow）的场
+            skipped,            // 带优势记录、已出结果但缺盈亏/持仓记录/原股数的场
+            live,               // 实际在跑的：none / sizing / exit / both
+            variants: {none|sizing|exit|both: {pnl_usd, vs_none_usd, t, max_drawdown_usd, days, days_better}}}}
 ```
+
+`switches`（`ledger.py _switches`）：同一批场次四种算法。每场 hold = 拿到结算的盈亏（按实发股数），x = 反向卖改变的钱（实盘卖单的 `exit_vs_hold_usd`；没开时按反向信号时的买一价 b、股数 n：n×b − 0.07×b×(1−b)×n − 赢则 n）；kb = 原股数 / 实发，ks = 优势选的股数 / 实发；none = hold×kb，sizing = hold×ks，exit = (hold+x)×kb，both = (hold+x)×ks。按优势定股开着时 5/15 股单的原股数取最近一张中间档单的 `edge_shares`，没有就用已保存参数的 `shares`（服务器传 `base_shares`）；超预算退回的单原股数 = 实发。`live`：最新一场的 `edge_sizing`，加上最新一次反向信号卖了或不是因 `off` 没卖 = 反向卖开着。`t` 是每场与 none 之差的 t 值；`max_drawdown_usd` 从 0 起按场次顺序；`days_better` 按北京时间每天比 none 多的天数。
 
 分位数用相邻秩线性插值，没有数据为 null。`skips` 数 `outcome` 为 `skipped`/`stopping` 的信号，入账时按原因归类一次存进 `lead_signals.bucket`（`dashboard/ledger.py` `SKIP_RULES`，对应 `binance-lead.ts` 的中文原因）：`time_window`「不在本场」；`band`「超出 ±」「开盘价未知」「开盘前 60 秒均价未知」；`ask_too_high`「高于上限」「高于最高限价」；`book`「没有当前盘口」「一边没有卖价」「不新鲜」「行情恢复中」；`budget`「预算」「可用余额不足」「daily loss」；`paused`「已暂停新增交易」；`mid_round_start`「中途启动」「错过本场开始」；`already_attempted`「本场已尝试」「本场已买到」「已下单（FAK）」；其余 `other`（如「交易所规则暂不可用」「停机中」）。
 

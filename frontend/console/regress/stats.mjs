@@ -79,6 +79,24 @@ assert.ok(text(S.renderEdge({ judged: 0 })).includes("还没有带优势记录�
 assert.ok(text(S.renderEdge({ judged: 1, tiers: {}, shadow: { settled: 1, actual_pnl_usd: null, sized_pnl_usd: null }, live: {} })).includes("--"),
   "nulls render --");
 
+// --- the two switches side by side: four rows, the live one tagged, the best marked ---
+const switches = { rounds: 54, skipped: 1, live: "both", variants: {
+  none: { pnl_usd: -18.75, vs_none_usd: null, t: null, max_drawdown_usd: -43.56, days: 2, days_better: null },
+  sizing: { pnl_usd: 7.33, vs_none_usd: 26.08, t: 2.06, max_drawdown_usd: -33.24, days: 2, days_better: 2 },
+  exit: { pnl_usd: 11.23, vs_none_usd: 29.98, t: 1.13, max_drawdown_usd: -18.01, days: 2, days_better: 1 },
+  both: { pnl_usd: 16.23, vs_none_usd: 34.98, t: 1.26, max_drawdown_usd: -12.8, days: 2, days_better: 2 } } };
+const sw = text(S.renderSwitches(switches));
+for (const piece of ["都不开 -$18.75 -- -- -$43.56 --", "只开按优势定股数 +$7.33 +$26.08 2.06 -$33.24 2 / 2 天",
+  "只开反向信号就卖出 +$11.23 +$29.98 1.13 -$18.01 1 / 2 天", "两个都开 实际在跑 最好 +$16.23 +$34.98 1.26 -$12.80 2 / 2 天", "54 场"]) {
+  assert.ok(sw.includes(piece), `switches: ${piece}: ${sw}`);
+}
+const swMarkup = String(S.renderSwitches(switches));
+assert.equal((swMarkup.match(/<span class="tag">实际在跑<\/span>/g) || []).length, 1, "one live row");
+assert.equal((swMarkup.match(/<span class="tag up">最好<\/span>/g) || []).length, 1, "one best row");
+assert.ok(text(S.renderSwitches({ rounds: 0, skipped: 0, live: null, variants: {} })).includes("还没有可比的场"));
+assert.ok(text(S.renderSwitches(null)).includes("没有数据"));
+assert.ok("switches" in parts, "the comparison is a stats section");
+
 // --- late_by_ms ---
 const late = String(parts.late);
 const lateText = text(late);

@@ -522,6 +522,28 @@ class ExitAndEdge(unittest.TestCase):
         self.assertAlmostEqual(e["shadow"]["actual_pnl_usd"], -1.2 - 1.2 - 6.1 + 3.9, places=6)
         self.assertEqual(e["live"]["settled"], 0)
 
+    def test_switches(self):
+        # Per round: hold = what holding to the close made at the shares sent;
+        # exit = what the exit changed (live sell, else the shadow at the bid);
+        # sizing scales to the base shares (kb) or the edge's pick (ks).
+        # E1 hold -6.1 exit +4.9; E2 hold +3.9 exit -5.1; E3 hold -6.1 exit
+        # +2.853 ks 0.5; E4 hold +3.9 exit 0 ks 1.5. Exit was live in E1/E2 and
+        # off from E3 (the latest reverse signal), sizing shadow: live is "none".
+        s = self.stats["switches"]
+        self.assertEqual((s["rounds"], s["skipped"], s["live"]), (4, 0, "none"))
+        v = s["variants"]
+        e3 = 3 - 0.07 * 0.3 * 0.7 * 10
+        self.assertAlmostEqual(v["none"]["pnl_usd"], -6.1 + 3.9 - 6.1 + 3.9, places=6)
+        self.assertAlmostEqual(v["sizing"]["pnl_usd"], -6.1 + 3.9 - 6.1 * 0.5 + 3.9 * 1.5, places=6)
+        self.assertAlmostEqual(v["exit"]["pnl_usd"], -1.2 - 1.2 + (-6.1 + e3) + 3.9, places=6)
+        self.assertAlmostEqual(v["both"]["pnl_usd"], -1.2 - 1.2 + (-6.1 + e3) * 0.5 + 3.9 * 1.5, places=6)
+        self.assertAlmostEqual(v["exit"]["pnl_usd"], self.stats["funnel"]["pnl_usd"] + e3, places=6,
+                               msg="the live variant is the actual result plus the shadow of what was not live")
+        self.assertIsNone(v["none"]["vs_none_usd"])
+        self.assertAlmostEqual(v["both"]["vs_none_usd"], v["both"]["pnl_usd"] - v["none"]["pnl_usd"], places=6)
+        self.assertAlmostEqual(v["none"]["max_drawdown_usd"], -8.3, places=6, msg="-6.1, +3.9, -6.1, +3.9: down to -8.3 from 0")
+        self.assertEqual((v["sizing"]["days"], v["sizing"]["days_better"]), (1, 1))
+
     def test_projection_types(self):
         with self.ledger._connect() as db:
             shadow = json.loads(db.execute("SELECT payload FROM lead_exit_shadows WHERE market_id='0xm43'").fetchone()[0])
@@ -529,6 +551,64 @@ class ExitAndEdge(unittest.TestCase):
         self.assertEqual((shadow["first_triggered"], shadow["first_sent"], shadow["first_skip"], shadow["first_bid"]),
                          (True, False, "off", 0.3))
         self.assertEqual((order_row["stage"], order_row["proceeds_usd"], order_row["bid_at_signal"]), ("exit", 4.9, 0.5))
+
+
+class SizingLive(unittest.TestCase):
+    """edgeSizing on, exitOnReverse off, configured 10 shares, all at 0.6 (fee
+    0.01 a share). E5 high: sent 15, lost. E6 mid: 10, won. E7 high over the
+    budget: fell back to 10, lost. E8 low: 5, won. The base (10) comes from
+    the run's mid order; without one, from the saved config."""
+
+    @staticmethod
+    def buy(n, start, direction, *, sent, edge, edge_shares):
+        return {**order(n, venue="bybit", line="tokyo", direction=direction, status="FILLED", filled=sent, avg=0.6,
+                        fee=0.01 * sent, limit=0.68, round_start=start, ack=40),
+                "shares": sent, "stage": "gtc", "rest_mode": "gtc", "taker_shares": sent, "maker_shares": 0,
+                "fair": 0.6 + edge, "edge": edge, "edge_shares": edge_shares, "edge_sizing": True}
+
+    @staticmethod
+    def held(n, start, direction, shares):
+        return {**first_exit(n, direction=direction, round_start=start, bid=None, shares=shares, sent=False, skip=None),
+                "first_triggered": False, "first_bid": None, "first_shares": None, "first_skip": None}
+
+    def ledger_for(self, records):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        journal = Path(tmp.name) / "s.jsonl"
+        write(journal, records)
+        ledger = Ledger(Path(tmp.name) / "ledger.sqlite3")
+        ledger.register_run("run-s", "live", ACCOUNT, str(journal))
+        ledger.ingest("run-s", max_bytes=8 << 20, max_records=10000)
+        return ledger
+
+    def test_base_from_the_mid_order(self):
+        base = R1 + 40 * 300
+        starts = [base, base + 300, base + 600, base + 900]
+        records = [self.buy(51, starts[0], "UP", sent=15, edge=0.1, edge_shares=15), self.held(51, starts[0], "UP", 15),
+                   self.buy(52, starts[1], "UP", sent=10, edge=0.0, edge_shares=10), self.held(52, starts[1], "UP", 10),
+                   self.buy(53, starts[2], "UP", sent=10, edge=0.1, edge_shares=15), self.held(53, starts[2], "UP", 10),
+                   self.buy(54, starts[3], "UP", sent=5, edge=-0.1, edge_shares=5), self.held(54, starts[3], "UP", 5),
+                   settlement(51, "D51", base + 1500), settlement(52, "U52", base + 1501),
+                   settlement(53, "D53", base + 1502), settlement(54, "U54", base + 1503)]
+        s = self.ledger_for(records).lead_stats("run-s", range="all", now=base + 2000)["switches"]
+        self.assertEqual((s["rounds"], s["skipped"], s["live"]), (4, 0, "sizing"))
+        v = s["variants"]
+        actual = -9.15 + 3.9 - 6.1 + 1.95
+        self.assertAlmostEqual(v["sizing"]["pnl_usd"], actual, places=6, msg="the live variant is the actual result")
+        self.assertAlmostEqual(v["none"]["pnl_usd"], -6.1 + 3.9 - 6.1 + 3.9, places=6,
+                               msg="15 and 5 back to 10; the budget fallback was already 10")
+        self.assertAlmostEqual(v["exit"]["pnl_usd"], v["none"]["pnl_usd"], places=6, msg="no reverse signal: no exit change")
+
+    def test_base_from_the_saved_config(self):
+        base = R1 + 60 * 300
+        records = [self.buy(55, base, "UP", sent=15, edge=0.1, edge_shares=15), self.held(55, base, "UP", 15),
+                   settlement(55, "D55", base + 400)]
+        ledger = self.ledger_for(records)
+        s = ledger.lead_stats("run-s", range="all", now=base + 500)["switches"]
+        self.assertEqual((s["rounds"], s["skipped"]), (0, 1), "no mid order and no saved size: base unknown")
+        s = ledger.lead_stats("run-s", range="all", now=base + 500, base_shares=10)["switches"]
+        self.assertEqual((s["rounds"], s["skipped"]), (1, 0))
+        self.assertAlmostEqual(s["variants"]["none"]["pnl_usd"], -9.15 * 10 / 15, places=6)
 
 
 class Auth(unittest.TestCase):

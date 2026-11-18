@@ -117,6 +117,17 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
     assert.ok(shown.includes(piece), `设置 shows ${piece}`);
   }
   assert.ok(!/type="password"|私钥输入|控制密码/.test(page.node("#app").innerHTML), "no credential or password inputs");
+  // Grouped: the switches first, then signal / when / how / risk; every input once.
+  const app = page.node("#app").innerHTML;
+  const order = ["<h3>开关", "<b>行情太乱就暂停", "<b>按优势定股数", "<b>反向信号就卖出", "<h3>信号", "<h3>什么时候买", "<h3>怎么买", "<h3>风控",
+    "<summary>高级"].map((t) => app.indexOf(t));
+  assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), `groups in order: ${order}`);
+  for (const key of ["shares", "thresholdBp", "windowMs", "limitPremium", "maxAsk", "fromSec", "toSec", "openBandBp", "openLine", "tokyoRelay",
+    "entryOrder", "restAfterMissSec", "regimePause", "edgeSizing", "exitOnReverse", "restShadow", "roundBudgetUsd", "totalBudgetUsd",
+    "dailyLossUsd", "maxRounds", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds"]) {
+    assert.equal(app.split(`data-field="${key}"`).length - 1, 1, `one input for ${key}`);
+  }
+  assert.ok(!app.includes("开前把单场预算调到"), "no stale note");
 }
 console.log("pages OK");
 process.exit(0);

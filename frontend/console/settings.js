@@ -5,25 +5,39 @@
   const P = window.PolyPreview;
   const { html, fmt, num, VENUES, LINES } = P;
   const ALL_VENUES = ["bybit", "binance", "okx"];
-  // [key, label, note, step, kind]; kind: number | optional (empty = 不限) | int
-  const FIELDS = [
-    ["shares", "每笔股数", "每场那一笔 FAK 买多少股", "1", "number"],
-    ["thresholdBp", "信号阈值（bp）", "成交价在窗口内涨跌多少 bp 算信号", "0.1", "number"],
+  // [key, label, note, step, kind]; kind: number | optional (empty = 不限) | int.
+  // Grouped as the form shows them.
+  const SIGNAL = [
+    ["thresholdBp", "信号阈值（bp）", "成交价在窗口内涨跌这么多算一个信号", "0.1", "number"],
     ["windowMs", "信号窗口（毫秒）", "在多长时间内涨跌到阈值", "10", "number"],
-    ["limitPremium", "限价加价", "限价 = 信号时卖价 + 这个数，例如 0.03", "0.01", "number"],
-    ["maxAsk", "卖价上限", "信号那边卖价高于这个就不买，例如 0.80", "0.01", "number"],
-    ["fromSec", "开盘后起始秒", "开盘后第几秒开始接信号", "1", "number"],
-    ["toSec", "开盘后截止秒", "开盘后第几秒以后不再下单（≤ 300）", "1", "number"],
-    ["openBandBp", "开盘线范围 ±bp", "价格离开盘线超过这么多 bp 就不买；0 = 不限", "0.5", "number"],
-    ["roundBudgetUsd", "单场预算 $", "一场最多花多少；空 = 不限", "1", "optional"],
-    ["totalBudgetUsd", "总预算 $", "本次运行最多占用多少；空 = 不限", "1", "optional"],
-    ["dailyLossUsd", "每日亏损上限 $", "北京时间当天亏到这个数就停止下新单；空 = 不限", "1", "optional"],
-    ["maxRounds", "每次运行场数", "跑满这么多场自动停止；0 = 一直跑", "1", "int"],
-    ["restAfterMissSec", "挂单秒数", "吃单+补单：没买到时在同一限价挂只挂单的买单，这么多秒后撤；限价单：没立即成交的部分挂这么多秒后撤；挂单不收手续费；0 = 关（限价单不能 0）", "1", "number"],
   ];
+  const WHEN = [
+    ["fromSec", "开盘后起始秒", "开盘后第几秒开始接信号", "1", "number"],
+    ["toSec", "开盘后截止秒", "第几秒以后不再下单（≤ 300）", "1", "number"],
+    ["openBandBp", "开盘线范围 ±bp", "离开盘线超过这么多就不买；0 = 不限", "0.5", "number"],
+  ];
+  const HOW = [
+    ["shares", "每场股数", "第一单买多少股；按优势定股数开着时是中间那档", "1", "number"],
+    ["limitPremium", "限价加价", "限价 = 信号时卖价 + 这个数", "0.01", "number"],
+    ["maxAsk", "卖价上限", "卖价高于这个就不买", "0.01", "number"],
+    ["restAfterMissSec", "挂单秒数", "没立即成交的部分挂多少秒后撤（挂单不收手续费）；吃单方式填 0 = 不挂", "1", "number"],
+  ];
+  const RISK = [
+    ["roundBudgetUsd", "单场预算 $", "一场最多花多少；15 股最多 13.2；空 = 不限", "1", "optional"],
+    ["totalBudgetUsd", "总预算 $", "本次运行最多占用多少；空 = 不限", "1", "optional"],
+    ["dailyLossUsd", "每日亏损上限 $", "北京时间当天亏到这个数就不下新单；空 = 不限", "1", "optional"],
+    ["maxRounds", "每次运行场数", "跑满这么多场自动停；0 = 一直跑", "1", "int"],
+  ];
+  const FIELDS = [...SIGNAL, ...WHEN, ...HOW, ...RISK];
   const ADVANCED = [
     ["maxQuoteAgeSeconds", "盘口最大年龄（秒）", "盘口比这个旧就不下单", "0.1", "number"],
     ["maxQuoteSkewSeconds", "两边盘口时间差（秒）", "UP/DOWN 两边盘口时间相差超过这个就不下单", "0.1", "number"],
+  ];
+  // The three switches: [key, name, what it does].
+  const SWITCHES = [
+    ["regimePause", "行情太乱就暂停", "信号前 5 分钟信号数 > 12 或每秒波动 > 0.89 bp 就不下这个信号"],
+    ["edgeSizing", "按优势定股数", "优势 ≥ 0.07 买 15 股，< −0.04 买 5 股，其余按每场股数"],
+    ["exitOnReverse", "反向信号就卖出", "买到后第一个反方向信号就按买一价 − 0.08 卖掉，一场只卖一次"],
   ];
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
@@ -150,22 +164,25 @@
   window.PolySettings = Object.freeze({ buildConfig, draftPayload, save, inputsFrom, renderAccount, renderHealth, renderEvents, CONFIG_KEYS });
 
   const field = ([key, labelText, note, step, kind]) => html`<label class="field"><span>${labelText}</span><input type="number" step="${step}" data-field="${key}"${kind === "optional" ? html` placeholder="不限"` : ""}><small data-note="${key}">${note}</small></label>`;
+  const group = (title, body, hint = "") => html`<div class="group"><h3>${title}${hint ? html`<small>${hint}</small>` : ""}</h3><div class="form">${body}</div></div>`;
+  const toggle = ([key, name, note]) => html`<label class="switch"><input type="checkbox" data-field="${key}"><span><b>${name}</b><small>${note}</small></span></label>`;
   const root = P.mount("settings", "设置", "策略参数、账户（只读）和系统状态。", html`
-    <section class="panel">
+    <section class="panel" data-config>
       <div class="panel-head"><h2>策略参数</h2><span class="panel-meta" data-revision></span></div>
-      <div class="form">
-        ${FIELDS.slice(0, 8).map(field)}
-        <label class="field"><span>开盘线</span><select data-field="openLine"><option value="tick">开盘那一笔</option><option value="mean60">开盘前 60 秒均价</option></select><small>开盘线范围从哪条线量</small></label>
-        <div class="field"><span>信号交易所</span><div class="checks">${ALL_VENUES.map((venue) => html`<label><input type="checkbox" data-venue="${venue}"> ${VENUES[venue]}</label>`)}</div><small data-note="leadVenues">哪几家的永续合约成交算信号；至少一家</small></div>
-        <div class="field"><span>东京转发</span><div class="checks"><label><input type="checkbox" data-field="tokyoRelay"> 开启</label></div><small>同时接东京转发来的成交，谁先到用谁</small></div>
-        <label class="field"><span>第一单方式</span><select data-field="entryOrder"><option value="fak">吃单 + 没买到再挂单</option><option value="gtc">限价单（能成交的立即成交，剩下的挂着）</option></select><small>限价单：一张单，剩余部分从交易所回复起就挂着，挂单秒数后撤</small></label>
-        <div class="field"><span>行情太乱就暂停</span><div class="checks"><label><input type="checkbox" data-field="regimePause"> 开启</label></div><small>信号前 5 分钟信号数 > 12 或每秒波动 > 0.89 bp 就不下，等下一个信号；关着时只记录（统计页可看）</small></div>
-        <div class="field"><span>按优势定股数</span><div class="checks"><label><input type="checkbox" data-field="edgeSizing"> 开启</label></div><small>按信号时的公允价算优势：优势 ≥ 0.07 买 15 股，< -0.04 买 5 股，其余按上面的股数；开前把单场预算调到 15 股够用；关着时只记录（统计页可看）</small></div>
-        <div class="field"><span>反向信号就卖出</span><div class="checks"><label><input type="checkbox" data-field="exitOnReverse"> 开启</label></div><small>买到后第一个反方向信号（成交 0.5 秒后，收盘前 5 秒前）就按买一价 - 0.08 吃单卖掉持仓，一场只卖一次；关着时只记录（统计页可看）</small></div>
-        <div class="field"><span>挂单模拟记录</span><div class="checks"><label><input type="checkbox" data-field="restShadow"> 开启</label></div><small>挂单关着时，记录没买到后 5 秒内挂单会不会成交（不下单），统计页可看</small></div>
-        ${FIELDS.slice(8).map(field)}
-      </div>
-      <details><summary>高级</summary><div class="form" style="margin-top:10px">${ADVANCED.map(field)}</div></details>
+      <div class="group"><h3>开关<small>打勾 = 真的这样交易；不打勾也照样记录，统计页"两个开关哪个好"能比</small></h3>
+        <div class="switches">${SWITCHES.map(toggle)}</div></div>
+      ${group("信号", html`
+        <div class="field"><span>信号交易所</span><div class="checks">${ALL_VENUES.map((venue) => html`<label><input type="checkbox" data-venue="${venue}"> ${VENUES[venue]}</label>`)}</div><small data-note="leadVenues">哪几家的合约成交算信号；至少一家</small></div>
+        <div class="field"><span>东京转发</span><div class="checks"><label><input type="checkbox" data-field="tokyoRelay"> 开启</label></div><small>同时接东京转发的成交，谁先到用谁</small></div>
+        ${SIGNAL.map(field)}`, "交易所和东京转发下次启动才生效")}
+      ${group("什么时候买", html`${WHEN.map(field)}
+        <label class="field"><span>开盘线</span><select data-field="openLine"><option value="tick">开盘那一笔</option><option value="mean60">开盘前 60 秒均价</option></select><small>开盘线范围从哪条线量</small></label>`)}
+      ${group("怎么买", html`
+        <label class="field"><span>第一单方式</span><select data-field="entryOrder"><option value="fak">吃单 + 没买到再挂单</option><option value="gtc">限价单（能成交的立即成交，剩下的挂着）</option></select><small>限价单要填挂单秒数</small></label>
+        ${HOW.map(field)}`)}
+      ${group("风控", RISK.map(field))}
+      <details><summary>高级</summary><div class="form" style="margin-top:10px">${ADVANCED.map(field)}
+        <div class="field"><span>挂单模拟记录</span><div class="checks"><label><input type="checkbox" data-field="restShadow"> 开启</label></div><small>只在吃单方式、挂单秒数 0 时有用：记录没买到后 5 秒内挂单会不会成交</small></div></div></details>
       <div class="form-foot"><button class="btn primary" type="button" data-save>保存并发布</button><button class="btn" type="button" data-reset>恢复已发布的值</button><span class="feedback" data-save-feedback role="status"></span></div>
       <p class="note">保存后从下一场生效；信号交易所和东京转发下次启动才生效。</p>
     </section>
@@ -225,8 +242,10 @@
     const c = state.config;
     $("[data-revision]").textContent = c ? `已发布 r${c.savedRevision || 0}${c.savedAt ? ` · ${fmt.dateTime(c.savedAt)}` : ""}${c.activeRevision ? ` · 当前场用 r${c.activeRevision}` : ""}${c.savedRevision ? "" : " · 还没发布过，启动前要先保存"}` : "";
   };
-  root.addEventListener("input", (event) => { if (event.target.closest?.(".form")) { state.dirty = true; showErrors(buildConfig(read(), state.config?.config).errors); } });
-  root.addEventListener("change", (event) => { if (event.target.closest?.(".form")) { state.dirty = true; showErrors(buildConfig(read(), state.config?.config).errors); } });
+  // Any input of the strategy panel (the switches sit outside .form) marks it edited.
+  const edited = (event) => { if (event.target.closest?.("[data-config]")) { state.dirty = true; showErrors(buildConfig(read(), state.config?.config).errors); } };
+  root.addEventListener("input", edited);
+  root.addEventListener("change", edited);
   $("[data-reset]").addEventListener("click", () => { if (state.config) fill(state.config.config); saveFeedback(""); });
   $("[data-save]").addEventListener("click", async () => {
     if (!state.config) { saveFeedback("还没读到已发布的参数", true); return; }

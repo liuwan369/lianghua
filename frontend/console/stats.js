@@ -98,6 +98,28 @@
       ${live.settled ? card("实盘按优势定股", fmt.money(live.pnl_usd), `${fmt.int(live.settled)} 单`, fmt.tone(live.pnl_usd)) : ""}
     </div><p class="note">优势 = 信号时的公允价（离开盘线多远、剩多少秒、前 5 分钟波动）- 限价 - 手续费。模拟按同样的成交价把盈亏换算成 5 / 15 股，偏乐观（大单不一定都能买到）。</p>`;
   };
+  // The two switches side by side (ledger _switches): the same rounds with
+  // neither, size by edge only, exit only, and both; the one that ran is tagged.
+  const VARIANTS = [["none", "都不开"], ["sizing", "只开按优势定股数"], ["exit", "只开反向信号就卖出"], ["both", "两个都开"]];
+  const renderSwitches = (s) => {
+    if (!s) return html`<p class="empty">没有数据</p>`;
+    if (!s.rounds) return html`<p class="empty">还没有可比的场（要买到、已出结果、带优势记录）</p>`;
+    const v = s.variants || {};
+    const best = VARIANTS.map(([key]) => key).filter((key) => num(v[key]?.pnl_usd) !== null)
+      .reduce((a, b) => (a === null || v[b].pnl_usd > v[a].pnl_usd ? b : a), null);
+    return html`<div class="table-wrap"><table class="t"><thead><tr><th class="l">方案</th><th>盈亏</th><th>比都不开</th><th>t</th><th>最大回撤</th><th>赢过都不开</th></tr></thead><tbody>
+      ${VARIANTS.map(([key, name]) => {
+        const row = v[key] || {};
+        return html`<tr class="${key === s.live ? "live-row" : ""}"><td class="l">${name}${key === s.live ? html` <span class="tag">实际在跑</span>` : ""}${key === best ? html` <span class="tag up">最好</span>` : ""}</td>
+          <td class="num ${fmt.tone(row.pnl_usd)}">${fmt.money(row.pnl_usd ?? null)}</td>
+          <td class="num ${fmt.tone(row.vs_none_usd)}">${fmt.money(row.vs_none_usd ?? null)}</td>
+          <td class="num">${num(row.t) === null ? "--" : row.t.toFixed(2)}</td>
+          <td class="num">${fmt.money(row.max_drawdown_usd ?? null)}</td>
+          <td class="num">${row.days_better === null || row.days_better === undefined ? "--" : `${fmt.int(row.days_better)} / ${fmt.int(row.days)} 天`}</td></tr>`;
+      })}
+      </tbody></table></div>
+      <p class="note">同一批 ${fmt.int(s.rounds)} 场（买到、已出结果）${s.skipped ? `，另有 ${fmt.int(s.skipped)} 场缺记录没算` : ""}。实际在跑的那行是真实结果；其余按同样的成交价换算股数（5 / 10 / 15），没开的反向卖按当时的买一价算（偏乐观）。t 过 2 才算靠谱；"赢过都不开"按北京时间每天比。</p>`;
+  };
   // Shadow regime pause (records only): orders whose signal came in a wild
   // market (more than 12 signals, or a 1 s std above 0.89 bp, in 5 min).
   const renderRegime = (g) => {
@@ -155,19 +177,19 @@
       </tbody></table></div>`;
   };
   const renderAll = (data) => ({
-    funnel: renderFunnel(data?.funnel), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exitFirst: renderExitFirst(data?.exit_first), edge: renderEdge(data?.edge_sizing), regime: renderRegime(data?.regime), late: renderLate(data?.late_by_ms),
+    funnel: renderFunnel(data?.funnel), switches: renderSwitches(data?.switches), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exitFirst: renderExitFirst(data?.exit_first), edge: renderEdge(data?.edge_sizing), regime: renderRegime(data?.regime), late: renderLate(data?.late_by_ms),
     latency: renderLatency(data?.latency), sources: renderBySource(data?.by_source), skips: renderSkips(data?.skips), hours: renderHours(data?.by_hour),
   });
-  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderMisses, renderRest, renderExitFirst, renderEdge, renderRegime, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
+  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderSwitches, renderMisses, renderRest, renderExitFirst, renderEdge, renderRegime, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
 
   const section = (key, title, meta = "") => html`<section class="panel"><div class="panel-head"><h2>${title}</h2><span class="panel-meta">${meta}</span></div><div data-part="${key}"></div></section>`;
   const root = P.mount("stats", "统计", "领先策略的漏斗、没买到的单、速度和按来源的结果，全部从账本算。", html`
     <section class="panel"><div class="panel-head"><div class="seg" data-ranges>${RANGES.map(([key, text]) => html`<button type="button" data-range="${key}">${text}</button>`)}</div><span class="panel-meta" data-meta></span></div><p class="error-line" data-error></p></section>
     ${section("funnel", "漏斗", "信号 → 下单 → 买到 → 结算 → 赢")}
+    ${section("switches", "两个开关哪个好", "同一批场次：都不开 / 只开一个 / 两个都开")}
+    <div class="grid2">${section("exitFirst", "反向信号就卖出", "买到后第一个反向信号就卖")}${section("edge", "按优势定股数", "优势大多买，优势小少买")}</div>
     ${section("misses", "没买到的单")}
     ${section("rest", "没买到后挂单")}
-    ${section("exitFirst", "反向信号就卖出", "买到后第一个反向信号就卖")}
-    ${section("edge", "按优势定股数", "优势大多买，优势小少买")}
     ${section("regime", "行情太乱就暂停（模拟）", "信号前 5 分钟太乱就不下，只记录")}
     <div class="grid2">${section("late", "晚了多少毫秒")}${section("latency", "速度分解", "每笔单从交易所成交到收到回复")}</div>
     ${section("sources", "按信号源")}

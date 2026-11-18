@@ -1986,7 +1986,10 @@ def make_handler(root: Path):
                 # (not a status line) or new venue results: repeats from memory.
                 def build():
                     if path == "/api/stats/lead":
-                        return _api_ledger().lead_stats(run_id, range=requested_range, official=results)
+                        # The saved size: the switches comparison's base when no mid-edge order says it.
+                        shares = (strategy_config_store().get().get("config") or {}).get("shares")
+                        return _api_ledger().lead_stats(run_id, range=requested_range, official=results,
+                                                        base_shares=shares if isinstance(shares, (int, float)) else None)
                     before = query.get("before", [None])[0]
                     return _api_ledger().lead_orders_page(
                         run_id, range=requested_range, limit=int(query.get("limit", ["200"])[0]),

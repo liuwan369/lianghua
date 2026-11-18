@@ -119,9 +119,9 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | 文件 | 职责 |
 |---|---|
 | `auto-trade.html` + `live.js` | 实盘：启停命令、今日数字、信号源、当前场盘口、本场信号与下单 |
-| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、没买到、挂单/限价单、反向信号就卖出、按优势定股数、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
+| `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、两个开关哪个好（都不开 / 只开一个 / 两个都开）、反向信号就卖出、按优势定股数、没买到、挂单/限价单、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
 | `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，点一行展开 |
-| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布，含第一单方式、挂单秒数、行情太乱就暂停、按优势定股数、反向信号就卖出）、账户只读、系统健康、运行日志、清空统计 |
+| `settings.html` + `settings.js` | 设置：策略参数（草稿→发布；分组：开关〔行情太乱就暂停、按优势定股数、反向信号就卖出〕、信号、什么时候买、怎么买、风控、高级）、账户只读、系统健康、运行日志、清空统计 |
 | `console.css` | 全站唯一样式表 |
 | `shared/preview-core.js` | 请求、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏 |
 | `shared/stream.js` | 推送客户端：登记页面的 GET，用一条 EventSource 订阅 |

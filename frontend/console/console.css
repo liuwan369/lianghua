@@ -118,6 +118,7 @@ table.t th, table.t td { padding: 6px 8px; border-bottom: 1px solid #1d3d5c; tex
 table.t th:first-child, table.t td:first-child, table.t .l { text-align: left; }
 table.t thead th { background: #10273d; color: #8ca6bc; font-weight: 600; font-size: 12px; }
 table.t tbody tr:hover { background: #14304b; }
+table.t tr.live-row td { background: #12304d; }
 table.t td.wrap { white-space: normal; text-align: left; }
 tr.row-click { cursor: pointer; }
 tr.detail td { background: #0c1a2b; text-align: left; white-space: normal; }
@@ -173,6 +174,16 @@ summary { color: #8cc6f2; font-size: 12px; cursor: pointer; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; min-height: 34px; align-items: center; font-size: 13px; }
 .checks label { display: inline-flex; align-items: center; gap: 5px; }
 .form-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.group { padding: 14px 0; border-top: 1px solid #1d3349; }
+.panel-head + .group { border-top: 0; padding-top: 0; }
+.group > h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin: 0 0 10px; color: #f4f8fb; font-size: 14px; font-weight: 650; }
+.group > h3 small { color: #7d94aa; font-size: 11px; font-weight: 400; }
+.switches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.switch { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid #29445f; border-radius: 7px; background: #13263d; cursor: pointer; }
+.switch:has(input:checked) { border-color: #3a90ff; background: #142f4f; }
+.switch input { width: 18px; height: 18px; margin: 2px 0 0; flex: none; }
+.switch b { display: block; color: #f4f8fb; font-size: 14px; font-weight: 650; }
+.switch small { display: block; margin-top: 4px; color: #8da3b7; font-size: 12px; line-height: 1.5; }
 
 /* --- log --- */
 .log { list-style: none; margin: 0; padding: 0; max-height: 520px; overflow-y: auto; font-size: 12px; }
@@ -195,7 +206,7 @@ summary { color: #8cc6f2; font-size: 12px; cursor: pointer; }
   .main { padding: 16px 12px 24px; }
   .page-header { display: block; }
   .header-side { justify-items: start; margin-top: 12px; }
-  .grid2, .sources, .book, .form, .chain { grid-template-columns: minmax(0, 1fr); }
+  .grid2, .sources, .book, .form, .chain, .switches { grid-template-columns: minmax(0, 1fr); }
   .panel { padding: 14px; }
   .bar-row { grid-template-columns: 88px minmax(0, 1fr) 72px; }
   .log li { grid-template-columns: 1fr; gap: 2px; }
