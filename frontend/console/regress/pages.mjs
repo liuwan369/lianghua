@@ -38,7 +38,11 @@ const REPLIES = {
   "/api/stats/lead": { available: true, run_count: 1, to: NOW, funnel: { signals: 3, signals_in_window: 3, orders: 1, filled: 1, fill_rate: 1, settled: 0, won: 0, win_rate: null, pnl_usd: null, fees_usd: 0.07 } },
   "/api/orders/lead": { available: true, items: [{ round_id: String(ROUND), open_line: "mean60", open_value: 98000.5, band_bp: 1.25 }], next_before: null },
   "/api/rounds/": { available: true, attempt: { direction: "UP", price: 0.56, askAtSignal: 0.53, shares: 5, filledShares: 5, status: "FILLED", venue: "bybit", line: "tokyo", moveBp: 2.1, signalAt: NOW - 30 },
-    yesShares: 5, noShares: 0, averagePrice: 0.54, occupiedUsd: 2.77, outcomePnl: { yes: 2.23, no: -2.77 }, orders: [] },
+    yesShares: 5, noShares: 0, averagePrice: 0.54, occupiedUsd: 2.77, outcomePnl: { yes: 2.23, no: -2.77 },
+    // Newest first (the 20:10 round of 2026-11-18): the reverse-signal sell, rejected, then the buy.
+    orders: [{ direction: "SELL", side: "UP", status: "REJECTED", price: 0.47, shares: 5, filledShares: 0, averagePrice: null, fee: 0, createdAt: NOW - 10, fills: [] },
+      { direction: "BUY", side: "UP", status: "FILLED", price: 0.56, shares: 5, filledShares: 5, averagePrice: null, fee: 0.08, createdAt: NOW - 30,
+        fills: [{ price: 0.54, shares: 5, fee: 0.08 }] }] },
 };
 
 function boot(script) {
@@ -92,6 +96,12 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
     "全部买到", "如果涨 +$2.23", "一场最多一笔"]) {
     assert.ok(shown.includes(piece), `实盘 shows ${piece}: ${shown.slice(0, 600)}`);
   }
+  // The round's orders: the buy first, then the reverse-signal sell, each named;
+  // the average comes from the fills; a rejected sell says it sold nothing.
+  const buyAt = shown.indexOf("买入 全部成交 5 / 5 股 · 限价 0.56 · 均价 0.54 · 手续费 $0.08");
+  const sellAt = shown.indexOf("反向信号卖出 被拒绝（买价没了） 卖掉 0 / 5 股 · 限价 0.47");
+  assert.ok(buyAt >= 0 && sellAt > buyAt, `buy then sell: ${shown.slice(shown.indexOf("持仓"), shown.indexOf("持仓") + 400)}`);
+  assert.ok(!shown.includes("订单 被拒绝 · 买到 0 股"), "a sell is not described as a buy");
 }
 // --- 统计 ---
 {

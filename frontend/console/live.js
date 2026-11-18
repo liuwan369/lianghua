@@ -127,10 +127,23 @@
     if (!order || num(order.open_value) === null) return html`<p class="muted">开盘线：本场下单后才有记录</p>`;
     return html`<p class="muted">开盘线（${order.open_line === "mean60" ? "开盘前 60 秒均价" : "开盘那一笔"}）${fmt.btc(order.open_value)} · 信号时离开盘线 ${fmt.bp(order.band_bp)}</p>`;
   };
+  // One of the round's orders: the buy, or the exit sell on a reverse signal
+  // (exitOnReverse). Its average comes from its fills when the row has none.
+  const BUY_STATUS = { FILLED: "全部成交", PARTIAL: "部分成交", CANCELLED: "没成交（已撤）", REJECTED: "被拒绝" };
+  const SELL_STATUS = { FILLED: "全部卖出", PARTIAL: "部分卖出", CANCELLED: "没卖掉（已撤）", REJECTED: "被拒绝（买价没了）" };
+  const orderRow = (o) => {
+    const sell = o.direction === "SELL";
+    const fills = Array.isArray(o.fills) ? o.fills : [];
+    const filledFromFills = fills.reduce((a, f) => a + (num(f.shares) ?? 0), 0);
+    const average = num(o.averagePrice ?? o.average_price) ?? (filledFromFills > 0 ? fills.reduce((a, f) => a + (num(f.price) ?? 0) * (num(f.shares) ?? 0), 0) / filledFromFills : null);
+    const status = (sell ? SELL_STATUS : BUY_STATUS)[o.status] || ORDER_STATUS[o.status] || o.status || "--";
+    return html`<dt>${sell ? "反向信号卖出" : "买入"}</dt><dd>${status} ${sell ? "卖掉 " : ""}${fmt.shares(o.filledShares ?? o.filled_shares)} / ${fmt.shares(o.shares)} 股 · 限价 ${fmt.price(o.price)}${average === null ? "" : ` · 均价 ${fmt.price(average)}`} · 手续费 ${fmt.usd(o.fee)}${o.error ? ` · ${o.error}` : ""}</dd>`;
+  };
   const renderPosition = (position, orders) => {
     const attempt = position?.attempt;
     if (!attempt) return html`<p class="empty">${P.label(position?.reason) || "本场还没有下单"}</p>`;
-    const list = Array.isArray(orders?.orders) ? orders.orders : [];
+    // Oldest first: the buy, then what was sold.
+    const list = (Array.isArray(orders?.orders) ? [...orders.orders] : []).sort((a, b) => (num(a.createdAt ?? a.created_at) ?? 0) - (num(b.createdAt ?? b.created_at) ?? 0));
     const pnl = position.outcomePnl || {};
     return html`<dl class="kv">
       <dt>下单</dt><dd><b class="${attempt.direction === "UP" ? "up" : "down"}">${DIRECTIONS[attempt.direction] || attempt.direction}</b> ${fmt.shares(attempt.shares)} 股 · 限价 ${fmt.price(attempt.price)} · 信号时卖价 ${fmt.price(attempt.askAtSignal)}</dd>
@@ -138,7 +151,7 @@
       <dt>结果</dt><dd>${ORDER_STATUS[attempt.status] || attempt.status || "--"} · 买到 ${fmt.shares(attempt.filledShares)} / ${fmt.shares(attempt.shares)} 股${attempt.error ? ` · ${attempt.error}` : ""}</dd>
       <dt>持仓</dt><dd>UP ${fmt.shares(position.yesShares)} 股 · DOWN ${fmt.shares(position.noShares)} 股 · 均价 ${fmt.price(position.averagePrice)} · 成本 ${fmt.usd(position.occupiedUsd)}</dd>
       <dt>结算后</dt><dd>如果涨 <span class="${fmt.tone(pnl.yes)}">${fmt.money(pnl.yes)}</span> · 如果跌 <span class="${fmt.tone(pnl.no)}">${fmt.money(pnl.no)}</span></dd>
-      ${list.map((o) => html`<dt>订单</dt><dd>${ORDER_STATUS[o.status] || o.status || "--"} · 买到 ${fmt.shares(o.filledShares ?? o.filled_shares)} 股 · 均价 ${fmt.price(o.averagePrice ?? o.average_price)} · 手续费 ${fmt.usd(o.fee)}</dd>`)}
+      ${list.map(orderRow)}
     </dl>`;
   };
   const strategyNote = (c) => {
