@@ -25,7 +25,9 @@ const REPLIES = {
   "/api/runtime/book": { running: true, available: true, stale: false, ageMs: 900, twoSided: true, up: side(0.51, 0.53), down: side(0.46, 0.48) },
   "/api/strategy/config": { strategyId: "binance-lead", config, savedRevision: 4, savedAt: NOW - 3600, activeRevision: 4 },
   "/api/account/snapshot": { asOf: NOW, stale: false, collateral: { available: true, value: 321.5 }, occupancy: { available: true, balance_after_open_buy_notional: 300.25 },
-    positions: { available: true, items: [{ title: "BTC Up or Down", outcome: "Up", size: 5, avgPrice: 0.5, curPrice: 1, currentValue: 5, redeemable: true }] },
+    positions: { available: true, items: [{ title: "BTC Up or Down", outcome: "Up", size: 5, avgPrice: 0.5, curPrice: 1, currentValue: 5, redeemable: true },
+      { title: "Lost round A", outcome: "Down", size: 10, avgPrice: 0.4, curPrice: 0, currentValue: 0, redeemable: true },
+      { title: "Lost round B", outcome: "Up", size: 5, avgPrice: 0.3, curPrice: 0, currentValue: 0, redeemable: true }] },
     open_orders: { available: true, items: [] } },
   "/api/account/status": { wallet: "0x1234567890abcdef1234567890abcdef12345678", account_check_state: "ready", last_check_at: NOW - 60,
     last_check: { approvals_ready: true, signer_matches: true }, execution_credentials_ready: true, settlement_credentials_ready: true, server_live_enabled: true },
@@ -128,6 +130,10 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
     assert.equal(app.split(`data-field="${key}"`).length - 1, 1, `one input for ${key}`);
   }
   assert.ok(!app.includes("开前把单场预算调到"), "no stale note");
+  // Settled losers ($0, "redeemable" for nothing) are one line, not 500 rows.
+  assert.ok(shown.includes("持仓（1）"), `only positions worth something are listed: ${shown}`);
+  assert.ok(!shown.includes("Lost round A"), "a $0 settled loser is not a row");
+  assert.ok(shown.includes("已结算输掉的 2 场"), "they are counted in one line");
 }
 console.log("pages OK");
 process.exit(0);

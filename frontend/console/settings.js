@@ -108,7 +108,11 @@
   const shortWallet = (wallet) => wallet ? `${wallet.slice(0, 6)}…${wallet.slice(-4)}` : "未配置";
   const renderAccount = (status, snapshot) => {
     const check = status?.last_check || {};
-    const positions = snapshot?.positions?.items || [];
+    // A settled losing round stays in the venue's list at $0, "redeemable" for
+    // nothing (549 of them on 2026-11-18): counted in one line, not listed.
+    const every = snapshot?.positions?.items || [];
+    const settledLost = every.filter((p) => p.redeemable && !(Number(p.currentValue) >= 0.005));
+    const positions = every.filter((p) => !settledLost.includes(p));
     const orders = snapshot?.open_orders?.items || [];
     const STATE = { ready: "检查通过", stale: "检查过期或未通过", unknown: "还没有检查" };
     return html`<dl class="kv">
@@ -121,6 +125,7 @@
       <dt>余额</dt><dd>${fmt.usd(snapshot?.collateral?.value ?? null)}${snapshot?.stale ? html` <span class="warn">（数据过期）</span>` : ""} · 读取 ${fmt.time(snapshot?.asOf)}</dd>
     </dl>
     <h3 class="muted" style="margin:14px 0 6px">持仓（${positions.length}）</h3>
+    ${settledLost.length ? html`<p class="note">另有已结算输掉的 ${fmt.int(settledLost.length)} 场，价值 $0，不用管（交易所列表里会一直留着）。</p>` : ""}
     ${positions.length ? html`<div class="table-wrap"><table class="t"><thead><tr><th>市场</th><th class="l">方向</th><th>股数</th><th>均价</th><th>现价</th><th>市值</th><th class="l">状态</th></tr></thead><tbody>${positions.map((p) => html`<tr><td class="wrap">${p.title || p.slug || "--"}</td><td class="l">${p.outcome || "--"}</td><td class="num">${fmt.shares(num(Number(p.size)))}</td><td class="num">${fmt.price(num(Number(p.avgPrice)))}</td><td class="num">${fmt.price(num(Number(p.curPrice)))}</td><td class="num">${fmt.usd(num(Number(p.currentValue)))}</td><td class="l">${p.redeemable ? html`<span class="tag warn">可赎回</span>` : "持有中"}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">没有持仓</p>`}
     <h3 class="muted" style="margin:14px 0 6px">挂单（${orders.length}）</h3>
     ${orders.length ? html`<div class="table-wrap"><table class="t"><thead><tr><th>方向</th><th class="l">结果</th><th>价格</th><th>数量</th><th>已成交</th><th>时间</th></tr></thead><tbody>${orders.map((o) => html`<tr><td>${o.side || "--"}</td><td class="l">${o.outcome || "--"}</td><td class="num">${fmt.price(num(Number(o.price)))}</td><td class="num">${fmt.shares(num(Number(o.original_size)))}</td><td class="num">${fmt.shares(num(Number(o.size_matched)))}</td><td class="num">${fmt.dateTime(num(Number(o.created_at)))}</td></tr>`)}</tbody></table></div>` : html`<p class="empty">没有挂单</p>`}
@@ -227,7 +232,7 @@
     showErrors({});
   };
   const NOTES = Object.fromEntries([...FIELDS, ...ADVANCED].map(([key, , note]) => [key, note]));
-  NOTES.leadVenues = "哪几家的永续合约成交算信号；至少一家";
+  NOTES.leadVenues = "哪几家的合约成交算信号；至少一家";
   const showErrors = (errors) => {
     for (const [key, note] of Object.entries(NOTES)) {
       const node = $(`[data-note="${key}"]`);
