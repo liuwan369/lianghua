@@ -152,6 +152,11 @@ export interface LeadExitFirst {
   /** Decided to sell, waiting for the round's buy to stop working (a GTC or
    * rest remainder being cancelled, a FAK still reporting). */
   waiting?: boolean;
+  /** Where BTC stood against the round's 60 s pre-open mean at the signal,
+   * in bp, + = on the held side's side (user 2026-11-19: "keep when it is
+   * still >= 3-5 bp ours", recorded only; 29-day backtest +14 / +24 held out,
+   * not significant). Absent without an open line, or on an older record. */
+  leadBp?: number;
 }
 /** The exit sell (exitOnReverse): one FAK SELL of what the round held, client
  * id <instance>:<market>:exit. Never in `stages` (those are the round's buys). */
@@ -776,6 +781,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       || seen < first + EXIT_AFTER_SEC || seen >= round.endsAt - EXIT_LAST_SEC) return { changed: false };
     const bid = buy.direction === "UP" ? round.latest?.upBid : round.latest?.downBid;
     const record: LeadExitFirst = { at: seen, bid: unitPrice(bid) ? bid : null, shares: held, sent: false };
+    if (positive(event.openMean60) && positive(event.price)) {
+      record.leadBp = Math.log(event.price / event.openMean60) * 1e4 * (buy.direction === "UP" ? 1 : -1);
+    }
     round.exitFirst = record;
     if (!round.config.exitOnReverse) { record.skip = "off"; return { changed: true }; }
     record.waiting = true;
@@ -1176,7 +1184,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         || typeof round.reason !== "string"
         || (round.exitFirst !== undefined && (!finite(round.exitFirst.at) || !finite(round.exitFirst.shares)
           || (round.exitFirst.bid !== null && !unitPrice(round.exitFirst.bid)) || typeof round.exitFirst.sent !== "boolean"
-          || (round.exitFirst.waiting !== undefined && round.exitFirst.waiting !== true)))
+          || (round.exitFirst.waiting !== undefined && round.exitFirst.waiting !== true)
+          || (round.exitFirst.leadBp !== undefined && !finite(round.exitFirst.leadBp))))
         || (round.exit !== undefined && (![round.upTokenId, round.downTokenId].includes(round.exit.tokenId)
           || round.exit.clientOrderId !== `${state.instanceId}:${round.marketId}:exit` || !unitPrice(round.exit.price)
           || !positive(round.exit.shares) || !finite(round.exit.createdAt) || !finite(round.exit.filledShares)

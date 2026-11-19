@@ -74,11 +74,11 @@ const close = (a, b, m, tol = 1e-6) => assert.ok(Math.abs(a - b) < tol, `${m}: $
   assert.throws(() => normalizeBinanceLeadConfig({ exitOnReverse: 1 }), /exitOnReverse/);
 }
 // A round with a signal 3 bp ahead of the line, 240 s left, ask 0.55 (limit 0.63).
-const placed = (config, extra) => {
+const placed = (config, extra, direction = "UP") => {
   const s = createStrategy({ limitPremium: 0.08, shares: 10, entryOrder: "gtc", restAfterMissSec: 4, ...config });
   at(s, { kind: "timer", ts: START - 20 }, START - 20);
   at(s, book(S - 1, 0.55, 0.47), S - 1);
-  const [buy] = submits(at(s, lead(S, "UP", extra), S + 0.002));
+  const [buy] = submits(at(s, lead(S, direction, extra), S + 0.002));
   return { s, buy };
 };
 {
@@ -124,6 +124,9 @@ const held = account({ positions: [{ tokenId: UP, shares: 10, costUsd: 6.3, real
   assert.deepEqual(submits(at(r.s, lead(S + 10, "DOWN"), S + 10, held)), [], "off: no sell");
   const ef = r.s.exportState().rounds[0].exitFirst;
   assert.deepEqual([ef.at, ef.bid, ef.shares, ef.sent, ef.skip], [S + 10, 0.58, 10, false, "off"], "recorded with the bid");
+  // Where BTC stood against the open line then, signed for the held side
+  // (UP held, DOWN signal at 100030 vs the 60 s mean 100020: +1.0 bp ours).
+  close(ef.leadBp, Math.log(100030 / 100020) * 1e4, "lead over the open line, held side +");
   at(r.s, book(S + 11, 0.70, 0.32, 0.68, 0.30), S + 11);
   at(r.s, lead(S + 20, "DOWN"), S + 20, held);
   assert.equal(r.s.exportState().rounds[0].exitFirst.at, S + 10, "only the first is recorded");
@@ -426,6 +429,22 @@ for (const [label, acct, skip] of [
   at(off.s, lead(S + 10, "DOWN"), S + 10, held);
   const o = leadExitShadowFields(off.s.exportState().rounds[0]);
   assert.deepEqual([o.first_triggered, o.first_sent, o.first_skip, o.exit_status], [true, false, "off", null]);
+  close(o.first_lead_bp, Math.log(100030 / 100020) * 1e4, "the shadow line carries the lead");
+  // DOWN held: the same price is 1 bp against us; no open line: null.
+  const dn = placed({}, {}, "DOWN");
+  at(dn.s, { kind: "order", order: { ...record(dn.buy, "FILLED", 10, "0xd", S + 0.6), httpAckAt: S + 0.6 } }, S + 0.6);
+  at(dn.s, book(S + 1, 0.60, 0.42, 0.58, 0.40), S + 1);
+  at(dn.s, lead(S + 10, "UP"), S + 10, account({ positions: [{ tokenId: DOWN, shares: 10, costUsd: 6.3, realizedPnlUsd: 0 }] }));
+  close(dn.s.exportState().rounds[0].exitFirst.leadBp, -Math.log(100030 / 100020) * 1e4, "held DOWN: signed the other way");
+  const nl = filled({});
+  at(nl.s, lead(S + 10, "DOWN", { openMean60: undefined }), S + 10, held);
+  assert.equal(nl.s.exportState().rounds[0].exitFirst.leadBp, undefined, "no open line: no lead");
+  assert.equal(leadExitShadowFields(nl.s.exportState().rounds[0]).first_lead_bp, null);
+  // A state saved before the field restores.
+  const old = filled({});
+  at(old.s, lead(S + 10, "DOWN"), S + 10, held);
+  const saved = old.s.exportState(); delete saved.rounds[0].exitFirst.leadBp;
+  assert.doesNotThrow(() => createStrategy({ ...normalizeBinanceLeadConfig({}), exitOnReverse: false }, saved), "an older exit record restores");
 }
 {
   // Settlement: a sale's receipt (exchange OrderFilled) is never a redemption payout.

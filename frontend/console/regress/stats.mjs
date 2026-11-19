@@ -62,6 +62,18 @@ for (const piece of ["买到的场 12 场", "出现反向信号 9 场", "实盘�
   assert.ok(first.includes(piece), `exit first: ${piece}: ${first}`);
 }
 assert.ok(!first.includes("开关关着 5 场"), "the off count is the shadow, not a skip");
+// --- the reverse signal by where BTC stood against the open line (recorded only) ---
+const byLead = text(S.renderExitFirst({ held_rounds: 12, settled: 11, triggered: 9, trigger_rate: 0.8, skips: {}, shadow: { rounds: 0 }, live: { sells: 0 },
+  by_lead: { judged: 9, sell_change_usd: 6.5, bands: [{ band: "<0", n: 4, won: 1, win_rate: 0.25, sell_change_usd: 9.0 },
+    { band: "0-3", n: 2, won: 1, win_rate: 0.5, sell_change_usd: 0.5 }, { band: "3-6", n: 2, won: 2, win_rate: 1, sell_change_usd: -2.0 },
+    { band: ">=6", n: 1, won: 1, win_rate: 1, sell_change_usd: -1.0 }],
+    keep: [{ min_bp: 3, kept: 3, kept_won: 3, vs_sell_usd: 3.0 }, { min_bp: 5, kept: 1, kept_won: 1, vs_sell_usd: 1.0 }] } }));
+for (const piece of ["落后开盘线 4 次 25.0% +$9.00", "领先 3~6 bp 2 次 100.0% -$2.00",
+  "领先 ≥3 bp 不卖 3 次 100.0% 比都卖 +$3.00", "领先 ≥5 bp 不卖 1 次 100.0% 比都卖 +$1.00"]) {
+  assert.ok(byLead.includes(piece), `by lead: ${piece}: ${byLead}`);
+}
+assert.ok(!text(S.renderExitFirst({ held_rounds: 2, settled: 2, triggered: 1, skips: {}, shadow: {}, live: {}, by_lead: { judged: 0, bands: [], keep: [] } })).includes("离开盘线"),
+  "no table before a record has the lead");
 const offOnly = text(S.renderExitFirst({ held_rounds: 2, settled: 2, triggered: 1, trigger_rate: 0.5, skips: { off: 1 },
   shadow: { rounds: 1, mistaken: 0, saved: 1, net_usd: 2 }, live: { sells: 0 } }));
 assert.ok(!offOnly.includes("实盘卖出"), "no live cards while off");

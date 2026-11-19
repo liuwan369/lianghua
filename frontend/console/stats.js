@@ -78,7 +78,20 @@
       ${shadow.rounds ? html`${card("模拟：会卖出", `${fmt.int(shadow.rounds)} 场`, `误卖 ${fmt.int(shadow.mistaken)} · 止损 ${fmt.int(shadow.saved)}`)}
         ${card("如果开了", fmt.money(shadow.net_usd), "按买一价卖（扣吃单手续费），比拿到结算", fmt.tone(shadow.net_usd))}` : ""}
     </div>${skips.length ? html`<p class="note">开着但没卖：${skips.map(([key, n], i) => html`${i ? " · " : ""}${FIRST_SKIPS[key] || key} ${fmt.int(n)} 场`)}</p>` : ""}
+    ${renderByLead(e.by_lead)}
     <p class="note">买到后第一个反方向信号就按买一价 - 0.08 吃单卖掉持仓，一场只卖一次。开关关着时只记录当时的买一价。</p>`;
+  };
+  // The reverse signal by where BTC stood against the round's open line then
+  // (recorded only, user 2026-11-19): keep the shares when still >= X bp ours?
+  const LEAD_BANDS = { "<0": "落后开盘线", "0-3": "领先 0~3 bp", "3-6": "领先 3~6 bp", ">=6": "领先 ≥6 bp" };
+  const renderByLead = (b) => {
+    if (!b || !b.judged) return "";
+    return html`<h3 class="muted" style="margin:14px 0 6px">反向信号时 BTC 离开盘线（只记录，${fmt.int(b.judged)} 次）</h3>
+      <div class="table-wrap"><table class="t"><thead><tr><th class="l">离开盘线</th><th>次数</th><th>拿着会赢</th><th>卖掉比拿着</th></tr></thead><tbody>
+      ${(b.bands || []).map((r) => html`<tr><td class="l">${LEAD_BANDS[r.band] || r.band}</td><td class="num">${fmt.int(r.n)} 次</td><td class="num">${fmt.pct(r.win_rate)}</td><td class="num ${fmt.tone(r.sell_change_usd)}">${fmt.money(r.sell_change_usd)}</td></tr>`)}
+      ${(b.keep || []).map((r) => html`<tr><td class="l"><b>领先 ≥${fmt.int(r.min_bp)} bp 不卖</b></td><td class="num">${fmt.int(r.kept)} 次</td><td class="num">${fmt.pct(r.kept ? r.kept_won / r.kept : null)}</td><td class="num ${fmt.tone(r.vs_sell_usd)}">比都卖 ${fmt.money(r.vs_sell_usd)}</td></tr>`)}
+      </tbody></table></div>
+      <p class="note">开盘线 = 开盘前 60 秒均价。29 天回测"领先 ≥3~5 bp 不卖"两段都正但不显著，先攒实盘：最后两行为正就是不卖更好。</p>`;
   };
   // Size by edge (edgeSizing): the fair value at the signal less the limit
   // and fee. Shadow while off: each order's result scaled to the shares its

@@ -705,7 +705,7 @@ def _projection(record):
         # (A line before 2026-11-17 also carried the 3rd-reverse-signal shadow:
         # opposite_signals, triggered, bid, sell_shares. Retired, not projected.)
         for field in ("round_start", "held_shares", "first_ms", "first_sec_since_open", "first_bid", "first_shares",
-                      "exit_price", "exit_shares", "exit_filled"):
+                      "first_lead_bp", "exit_price", "exit_shares", "exit_filled"):
             result[field] = _number(record.get(field))
         # Exit on the first reverse signal (exitOnReverse): recorded always, sent when on.
         result["first_triggered"] = record.get("first_triggered") is True
@@ -900,6 +900,44 @@ def _apply_exit(buys, sells):
             continue
         payout = buy["exit_shares"] if buy["outcome"] == "won" else 0.0
         buy["pnl"] = round(buy["pnl"] - payout + buy["exit_proceeds_usd"], 6)
+
+
+EXIT_KEEP_LEADS = (3, 5)
+EXIT_LEAD_BANDS = (("<0", None, 0.0), ("0-3", 0.0, 3.0), ("3-6", 3.0, 6.0), (">=6", 6.0, None))
+
+
+def _exit_by_lead(done_exits, sells_done, shadow_change):
+    """The first reverse signal by where BTC stood against the round's open
+    line then (first_lead_bp, + = ours; user 2026-11-19, recorded only): what
+    each round's sale changed against holding (the live sell's exit_vs_hold,
+    else the shadow sale at the bid then), and what keeping the shares when
+    the lead is >= X bp would have changed against selling."""
+    sold = {}
+    for o in sells_done:
+        sold[o.get("market_id")] = sold.get(o.get("market_id"), 0.0) + o["exit_vs_hold_usd"]
+    rows = []
+    for item in done_exits:
+        lead = item.get("first_lead_bp")
+        if not item.get("first_triggered") or lead is None:
+            continue
+        if item.get("market_id") in sold:
+            change = sold[item["market_id"]]
+        elif item.get("first_skip") == "off" and item.get("first_bid") is not None and item.get("first_shares"):
+            change = shadow_change(item)
+        else:
+            continue                                   # on, not sold (no bid, too late, ...): nothing to compare
+        rows.append({"lead": lead, "change": change, "won": bool(item["won"])})
+    bands = []
+    for name, lo, hi in EXIT_LEAD_BANDS:
+        g = [r for r in rows if (lo is None or r["lead"] >= lo) and (hi is None or r["lead"] < hi)]
+        bands.append({"band": name, "n": len(g), "won": sum(r["won"] for r in g),
+                      "win_rate": _ratio(sum(r["won"] for r in g), len(g)), "sell_change_usd": _sum(r["change"] for r in g)})
+    keep = []
+    for x in EXIT_KEEP_LEADS:
+        g = [r for r in rows if r["lead"] >= x]
+        keep.append({"min_bp": x, "kept": len(g), "kept_won": sum(r["won"] for r in g),
+                     "vs_sell_usd": None if not g else round(-sum(r["change"] for r in g), 6)})
+    return {"judged": len(rows), "sell_change_usd": _sum(r["change"] for r in rows), "bands": bands, "keep": keep}
 
 
 SWITCH_VARIANTS = ("none", "sizing", "exit", "both")
@@ -3129,7 +3167,8 @@ class Ledger:
                                "mistaken": sum(1 for o in sells_done if o["outcome"] == "won"),
                                "saved": sum(1 for o in sells_done if o["outcome"] == "lost"),
                                "proceeds_usd": _sum(o.get("proceeds_usd") for o in sells_got),
-                               "net_vs_hold_usd": _sum(o["exit_vs_hold_usd"] for o in sells_done)}}
+                               "net_vs_hold_usd": _sum(o["exit_vs_hold_usd"] for o in sells_done)},
+                      "by_lead": _exit_by_lead(done_exits, sells_done, _first_change)}
         # Size by edge. Shadow (edgeSizing off): each settled filled order's
         # result scaled to the shares its edge picked (same fill, same price).
         # Live: the orders sized by edge. Tiers: low (edge < EDGE_LOW, 5

@@ -816,6 +816,7 @@ export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string,
     first_sec_since_open: round.exitFirst ? round.exitFirst.at - round.startsAt : null,
     first_bid: round.exitFirst?.bid ?? null, first_shares: round.exitFirst?.shares ?? null,
     first_sent: round.exitFirst?.sent ?? null, first_skip: round.exitFirst?.skip ?? null,
+    first_lead_bp: round.exitFirst?.leadBp ?? null,
     exit_status: round.exit?.status ?? null, exit_price: round.exit?.price ?? null,
     exit_shares: round.exit?.shares ?? null, exit_filled: round.exit?.filledShares ?? null,
     exit_client_order_id: round.exit?.clientOrderId ?? null, exit_order_id: round.exit?.orderId ?? null };

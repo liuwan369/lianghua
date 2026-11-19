@@ -453,14 +453,15 @@ class ExitAndEdge(unittest.TestCase):
         records = [
             buy(41, cls.rounds[0], "UP", edge=0.0, edge_shares=10),
             exit_sell(41, round_start=cls.rounds[0], direction="UP", filled=10, avg=0.5, fee=0.1),
-            first_exit(41, direction="UP", round_start=cls.rounds[0], bid=0.5, shares=10, sent=True, skip=None,
-                       status="FILLED", filled=10),
+            {**first_exit(41, direction="UP", round_start=cls.rounds[0], bid=0.5, shares=10, sent=True, skip=None,
+                          status="FILLED", filled=10), "first_lead_bp": -2.0},
             buy(42, cls.rounds[1], "UP", edge=0.0, edge_shares=10),
             exit_sell(42, round_start=cls.rounds[1], direction="UP", filled=10, avg=0.5, fee=0.1),
-            first_exit(42, direction="UP", round_start=cls.rounds[1], bid=0.5, shares=10, sent=True, skip=None,
-                       status="FILLED", filled=10),
+            {**first_exit(42, direction="UP", round_start=cls.rounds[1], bid=0.5, shares=10, sent=True, skip=None,
+                          status="FILLED", filled=10), "first_lead_bp": 6.0},
             buy(43, cls.rounds[2], "UP", edge=-0.1, edge_shares=5),
-            first_exit(43, direction="UP", round_start=cls.rounds[2], bid=0.3, shares=10, sent=False, skip="off"),
+            {**first_exit(43, direction="UP", round_start=cls.rounds[2], bid=0.3, shares=10, sent=False, skip="off"),
+             "first_lead_bp": 4.0},
             buy(44, cls.rounds[3], "UP", edge=0.1, edge_shares=15),
             {**first_exit(44, direction="UP", round_start=cls.rounds[3], bid=None, shares=10, sent=False, skip=None),
              "first_triggered": False, "first_bid": None, "first_shares": None, "first_skip": None},
@@ -511,6 +512,22 @@ class ExitAndEdge(unittest.TestCase):
         self.assertEqual((live["sells"], live["filled"], live["settled"], live["mistaken"], live["saved"]), (2, 2, 2, 1, 1))
         self.assertAlmostEqual(live["proceeds_usd"], 9.8, places=6)
         self.assertAlmostEqual(live["net_vs_hold_usd"], 4.9 + (4.9 - 10), places=6)
+        # Keep when BTC is still >= X bp on our side of the open line (user
+        # 2026-11-19, recorded only): what each round's sale changed against
+        # holding, and what keeping the ones at >= X would change.
+        # E1 lead -2 sold lost: +4.9; E2 lead +6 sold won: 4.9 - 10 = -5.1;
+        # E3 lead +4, the shadow sale (off) lost: 3 - 0.147 = +2.853.
+        lead = e["by_lead"]
+        self.assertEqual(lead["judged"], 3, "rounds with a lead and a sale's result")
+        e3 = 3 - 0.07 * 0.3 * 0.7 * 10
+        self.assertAlmostEqual(lead["sell_change_usd"], 4.9 - 5.1 + e3, places=6)
+        k3, k5 = {r["min_bp"]: r for r in lead["keep"]}[3], {r["min_bp"]: r for r in lead["keep"]}[5]
+        self.assertEqual((k3["kept"], k3["kept_won"]), (2, 1), "E2 and E3 are >= 3 bp ours")
+        self.assertAlmostEqual(k3["vs_sell_usd"], 5.1 - e3, places=6, msg="keeping them gives back what selling them changed")
+        self.assertEqual((k5["kept"], k5["kept_won"]), (1, 1), "only E2 is >= 5 bp")
+        self.assertAlmostEqual(k5["vs_sell_usd"], 5.1, places=6)
+        bands = {b["band"]: b for b in lead["bands"]}
+        self.assertEqual((bands["<0"]["n"], bands["3-6"]["n"], bands[">=6"]["n"]), (1, 1, 1))
 
     def test_edge_sizing(self):
         e = self.stats["edge_sizing"]
