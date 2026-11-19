@@ -35,7 +35,9 @@
 
 引擎跑在独立 systemd scope `pm-engine-<run_id>` 里，所以重启控制面不会停掉引擎，控制面重启后按 pid 重新接管。
 
-行情采集与录制（`cli/market-snapshot.ts`、`cli/market-recorder.ts`、`dashboard/market-projection.ts`）现在不在任何机器上跑：2026-11-12 停了都柏林的录制，爱尔兰不装这个服务。代码留着，给计划中的伦敦录制机用；录好的数据在本机 `E:/pm-backup/market-history/`（到 11-13）。
+行情采集与录制（`cli/market-snapshot.ts`、`cli/market-recorder.ts`、`dashboard/market-projection.ts`）现在不在任何机器上跑：2026-11-12 停了都柏林的录制，爱尔兰不装这个服务；旧录制在本机 `E:/pm-backup/market-history/`（到 11-13）。
+
+伦敦录制机（2026-11-19 起，`pm-rec`）跑的是独立脚本 `backend/engine/scripts/recorder/rec.mjs`（systemd `pm-rec.service`，`Restart=always`），只读公开数据、没有任何密钥，一个时钟（chrony），每个源一个文件 `<UTC 日>/<源>-<启动秒>.jsonl.gz`：`pm`（Polymarket btc 5m 当前场和后两场：全部档位盘口 `book`、档位变化 `pc`、成交 `tr`、最优价 `bbo`、tick 变化）、`meta`（每场代币/条件 ID/tick/最小股数，结算后官方结果 `res`）、`by`（Bybit 合约成交 + 1/50 档盘口）、`bn`（币安合约成交 + 最优价）、`bs`（币安现货成交）、`ok`（OKX 合约成交 + 最优价）、`cl`（RTDS Chainlink BTC/USD，结算价）、`stat`（每分钟计数和内存）。格式见脚本开头。`pm-rec-prune.timer` 每天删 10 天前的；本机 `pull-rec.sh` 拉回 `E:/pm-backup/rec-london/`。
 
 ### 启动与停止
 

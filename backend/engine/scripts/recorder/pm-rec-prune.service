@@ -1,0 +1,8 @@
+[Unit]
+Description=Prune recorder days older than 10
+
+[Service]
+Type=oneshot
+ExecStart=/root/rec/prune.sh 10
+StandardOutput=append:/root/rec/prune.log
+StandardError=append:/root/rec/prune.log

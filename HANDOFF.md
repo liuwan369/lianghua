@@ -22,6 +22,7 @@ Polymarket 加密货币 5 分钟涨跌盘的**币安领先策略（binance-lead�
 
 - 爱尔兰 AWS eu-west-1：`ssh pm-ire`（root@3.254.138.119，2 vCPU、2 GB），控制面 + 引擎，目录 `/root/pm-system`。控制面 systemd `pm-console`，引擎由控制面按需启动在 scope `pm-engine-<run_id>`。公网 `https://3-254-138-119.sslip.io/console/`（nginx basic auth）。
 - 东京 AWS ap-northeast-1：`ssh pm-tokyo`，只跑 `pm-relay`（`/root/pm-relay`）：收 Bybit/币安/OKX 成交，HMAC 签名后 UDP×2 + TCP 发爱尔兰 47001 端口。
+- 伦敦 AWS eu-west-2：`ssh pm-rec`（16.60.186.91，t3.micro 945 MB + 2 GB swap），只跑录制 `pm-rec`（`/root/rec/rec.mjs`，数据 `/root/rec/data/<UTC 日>/<源>-<启动秒>.jsonl.gz`，留 10 天）。本机 `bash backend/engine/scripts/recorder/pull-rec.sh` 拉到 `E:/pm-backup/rec-london/`。别在上面跑分析。
 - 都柏林旧机器：`ssh pm-new`（166.1.221.53，本机走代理 127.0.0.1:10808），不交易；predict.fun API key 在 `/root/.config/pm-system/predictfun.key`，历史下载在 `/root/pf-history/`。
 - 控制面只在爱尔兰本机：`curl -s http://127.0.0.1:18766/api/...`（GET 只读）。写操作（启动/停止/发布配置）要走 nginx：本机脚本把口令从 stdin 传进去，不打印（口令本机在 `E:/pm-backup/aws-probe/.console_pw`）。
 - 部署：`python scripts/deploy.py [ireland|tokyo|all]`（部署已提交的 HEAD，交易必须停着），部署后控制台点启动。

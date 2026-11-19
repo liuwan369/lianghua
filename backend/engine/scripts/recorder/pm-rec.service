@@ -1,0 +1,20 @@
+[Unit]
+Description=Polymarket btc 5m recorder (read-only public data)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/node /root/rec/rec.mjs /root/rec/data
+Restart=always
+RestartSec=3
+# Keep it light on the 945 MB box; never let it take the machine down. rss is
+# ~240 MB; 600 is headroom for a burst, and a kill restarts in 3 s (gaps are
+# one gzip member, read fine). The 2 GB swap absorbs the rest.
+MemoryMax=600M
+Nice=5
+StandardOutput=append:/root/rec/rec.log
+StandardError=append:/root/rec/rec.log
+
+[Install]
+WantedBy=multi-user.target
