@@ -6,8 +6,8 @@
   const { html, fmt, num, VENUES, LINES, DIRECTIONS, ORDER_STATUS } = P;
   const RANGES = [["run", "本次运行"], ["today", "今天"], ["7d", "7 天"], ["all", "全部"]];
   const PAGE = 100;
+  const filled = (order) => !!order && (num(order.filled_shares) ?? 0) > 1e-8;
 
-  const filled = (order) => (num(order.filled_shares) ?? 0) > 1e-8;
   const result = (order) => {
     // The exit sell (exitOnReverse): sold or not, and whether holding would have won.
     if (order.stage === "exit") {
@@ -48,28 +48,67 @@
     ];
     return html`<div class="detail-grid">${items.map(([k, v]) => html`<div><span>${k}</span> <b>${v}</b></div>`)}</div>${o.error ? html`<p class="error-line">错误：${o.error}</p>` : ""}`;
   };
-  const rowKey = (o) => String(o.client_order_id ?? `${o.round_id}:${o.recv_ts}`);
-  const renderRows = (items, open = new Set()) => {
-    if (!items.length) return html`<tr><td colspan="12" class="empty">这个范围没有下单</td></tr>`;
-    return html`${items.map((o) => {
-      const r = result(o);
-      const key = rowKey(o);
-      return html`<tr class="row-click" data-key="${key}"><td class="num">${fmt.dateTime(o.recv_ts)}</td><td class="num">${fmt.hm(o.round_start)}</td>
-        <td class="l">${o.stage === "rest" ? html`<span class="tag">挂单补单</span> ` : o.stage === "gtc" ? html`<span class="tag">限价单</span> ` : o.stage === "exit" ? html`<span class="tag warn">反向卖出</span> ` : ""}${o.stage === "exit" ? "卖出持仓" : html`${VENUES[o.venue] || o.venue || "--"} · ${LINES[o.line] || o.line || "--"}`}</td>
-        <td class="l ${o.direction === "UP" ? "up" : "down"}">${DIRECTIONS[o.direction] || o.direction || "--"}</td>
-        <td class="num">${fmt.price(o.stage === "exit" ? o.bid_at_signal : o.ask_at_signal)}</td><td class="num">${fmt.price(o.limit_price)}</td><td class="num">${fmt.shares(o.shares)}</td>
-        <td class="num">${fmt.shares(o.filled_shares)}</td><td class="l ${r.tone}">${r.text}</td><td class="num ${fmt.tone(o.pnl)}">${fmt.money(o.pnl)}</td>
-        <td class="num">${ms(o.t_total_ms)}</td><td class="num">${ms(o.late_by_ms)}</td></tr>${open.has(key) ? html`<tr class="detail"><td colspan="12">${detail(o)}</td></tr>` : ""}`;
+  // One row per round (user 2026-11-19): the round's buy (gtc / fak, plus a
+  // rest order after a miss) and its reverse-signal sell (stage exit) side by
+  // side; the buy row's PnL already counts what the sale got back.
+  const roundKey = (o) => String(o.market_id ?? o.round_id ?? o.client_order_id ?? o.recv_ts);
+  const groupRounds = (items) => {
+    const byRound = new Map();
+    for (const o of items) {
+      const key = roundKey(o);
+      const r = byRound.get(key) ?? byRound.set(key, { key, buy: null, rest: null, sell: null, at: o.recv_ts }).get(key);
+      if (o.stage === "exit") r.sell = o;
+      else if (o.stage === "rest") r.rest = o;
+      else r.buy = o;
+      r.at = Math.max(num(r.at) ?? 0, num(o.recv_ts) ?? 0);
+    }
+    return [...byRound.values()].filter((r) => r.buy || r.rest).sort((a, b) => b.at - a.at);
+  };
+  const roundResult = ({ buy, rest, sell }) => {
+    const main = buy && filled(buy) ? buy : rest && filled(rest) ? rest : buy ?? rest;
+    if (!filled(main)) return result(main).text.startsWith("未成交") ? { ...result(main), text: result(main).text.replace("未成交", "没买到") } : result(main);
+    if (sell && filled(sell)) {
+      // What the sale did against holding: the held side lost = the sale saved
+      // money; the held side won = it gave up some of the win.
+      if (main.outcome === "won") return { text: "卖了（拿着会赢）", tone: "warn" };
+      if (main.outcome === "lost") return { text: "卖了（拿着会输）", tone: "up" };
+      return { text: "已卖，待结算", tone: "warn" };
+    }
+    return result(main);
+  };
+  const sellCell = (sell) => {
+    if (!sell) return "--";
+    if (filled(sell)) return `卖 ${fmt.shares(sell.filled_shares)} 股 @${fmt.price(sell.avg_fill_price ?? sell.limit_price)}`;
+    if (sell.status && !["CANCELLED", "REJECTED", "ABANDONED"].includes(sell.status)) return "卖出处理中";
+    return `没卖掉（限 ${fmt.price(sell.limit_price)}）`;
+  };
+  const renderRows = (rounds, open = new Set()) => {
+    if (!rounds.length) return html`<tr><td colspan="12" class="empty">这个范围没有下单</td></tr>`;
+    return html`${rounds.map((r) => {
+      const main = r.buy && filled(r.buy) ? r.buy : r.rest && filled(r.rest) ? r.rest : r.buy ?? r.rest;
+      const got = (num(r.buy?.filled_shares) ?? 0) + (num(r.rest?.filled_shares) ?? 0);
+      const pnl = [r.buy, r.rest].reduce((sum, o) => (num(o?.pnl) === null ? sum : (sum ?? 0) + o.pnl), null);
+      const res = roundResult(r);
+      const tag = main.stage === "gtc" ? html`<span class="tag">限价单</span> ` : r.rest ? html`<span class="tag">吃单 + 挂单补单</span> ` : "";
+      return html`<tr class="row-click" data-key="${r.key}"><td class="num">${fmt.dateTime(main.recv_ts)}</td><td class="num">${fmt.hm(main.round_start)}</td>
+        <td class="l">${tag}${VENUES[main.venue] || main.venue || "--"} · ${LINES[main.line] || main.line || "--"}</td>
+        <td class="l ${main.direction === "UP" ? "up" : "down"}">${DIRECTIONS[main.direction] || main.direction || "--"}</td>
+        <td class="num">${fmt.price(main.ask_at_signal)}</td><td class="num">${fmt.price(main.limit_price)}</td>
+        <td class="num">${fmt.shares(got)} / ${fmt.shares(main.shares)}</td><td class="l">${sellCell(r.sell)}</td>
+        <td class="l ${res.tone}">${res.text}</td><td class="num ${fmt.tone(pnl)}">${fmt.money(pnl)}</td>
+        <td class="num">${ms(main.t_total_ms)}</td><td class="num">${ms(main.late_by_ms)}</td></tr>${open.has(r.key) ? html`<tr class="detail"><td colspan="12">${roundDetail(r)}</td></tr>` : ""}`;
     })}`;
   };
-  window.PolyHistory = Object.freeze({ renderRows, result, detail, rowKey });
+  const roundDetail = (r) => html`${[["买入", r.buy], ["挂单补单", r.rest], ["反向信号卖出", r.sell]].filter(([, o]) => o)
+    .map(([title, o]) => html`<h4 class="muted" style="margin:6px 0 2px">${title}</h4>${detail(o)}`)}`;
+  window.PolyHistory = Object.freeze({ renderRows, result, detail, groupRounds, roundResult, roundKey });
 
   const root = P.mount("history", "历史", "每一笔下单：信号来源、价格、买到没有、结果和耗时。点一行看全部时间。", html`
     <section class="panel">
       <div class="panel-head"><div class="seg">${RANGES.map(([key, text]) => html`<button type="button" data-range="${key}">${text}</button>`)}</div>
         <span class="actions"><span class="panel-meta" data-meta></span><button class="btn small" type="button" data-reload>刷新</button></span></div>
       <p class="error-line" data-error></p>
-      <div class="table-wrap"><table class="t"><thead><tr><th>时间</th><th>场次</th><th class="l">交易所 / 线路</th><th class="l">方向</th><th>卖价</th><th>限价</th><th>股数</th><th>买到</th><th class="l">结果</th><th>盈亏</th><th>总耗时</th><th>晚了</th></tr></thead><tbody data-rows></tbody></table></div>
+      <div class="table-wrap"><table class="t"><thead><tr><th>时间</th><th>场次</th><th class="l">信号</th><th class="l">方向</th><th>卖价</th><th>限价</th><th>买到 / 股数</th><th class="l">反向卖出</th><th class="l">结果</th><th>盈亏</th><th>总耗时</th><th>晚了</th></tr></thead><tbody data-rows></tbody></table></div>
       <div class="form-foot"><button class="btn" type="button" data-more hidden>再看 ${PAGE} 条</button></div>
     </section>`);
   if (!root) return;
@@ -77,9 +116,10 @@
   const state = { range: "run", items: [], next: null, open: new Set() };
   const paint = () => {
     for (const button of root.querySelectorAll("[data-range]")) button.classList.toggle("active", button.dataset.range === state.range);
-    P.put($("[data-rows]"), renderRows(state.items, state.open));
+    const rounds = groupRounds(state.items);
+    P.put($("[data-rows]"), renderRows(rounds, state.open));
     $("[data-more]").hidden = state.next == null;
-    $("[data-meta]").textContent = `${state.items.length} 条`;
+    $("[data-meta]").textContent = `${rounds.length} 场`;
   };
   const load = async (more = false) => {
     const range = state.range;

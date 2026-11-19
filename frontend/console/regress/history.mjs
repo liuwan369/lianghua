@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
 const T0 = 1763000100; // 2025-11-13 02:15:00 UTC = 10:15:00 北京时间
-const order = (patch) => ({ client_order_id: "c1", order_id: "0xabc", round_id: String(T0 - 100), round_start: T0 - 100, recv_ts: T0,
+const order = (patch) => ({ client_order_id: "c1", market_id: `0xm-${patch.client_order_id ?? "c1"}`, order_id: "0xabc", round_id: String(T0 - 100), round_start: T0 - 100, recv_ts: T0,
   direction: "UP", venue: "bybit", line: "tokyo", ask_at_signal: 0.55, limit_price: 0.58, shares: 5, filled_shares: 5, status: "FILLED",
   outcome: "won", pnl: 2.1234, pnl_source: "official", avg_fill_price: 0.56, fee_usd: 0.07, move_bp: 2.4, signal_price: 98765.4,
   open_line: "mean60", open_value: 98700.12, band_bp: 1.8, sec_since_open: 100.2, trade_time_ms: T0 * 1000 - 120, relay_recv_ms: T0 * 1000 - 113,
@@ -56,8 +56,8 @@ const rows = () => node("[data-rows]").innerHTML;
 assert.equal(requests[0], "/api/orders/lead?range=run&limit=100");
 const rowTexts = [...rows().matchAll(/<tr class="row-click"[\s\S]*?<\/tr>/g)].map((m) => text(m[0]));
 assert.equal(rowTexts.length, 4);
-assert.equal(rowTexts[0], "11-13 10:15:00 10:13 Bybit · 东京转发 涨 UP 0.55 0.58 5 5 赢 +$2.12 100 ms --");
-assert.ok(rowTexts[1].includes("OKX · 爱尔兰直连 跌 DOWN") && rowTexts[1].includes("未成交（买到会赢）") && rowTexts[1].endsWith("-- 100 ms 40 ms"), rowTexts[1]);
+assert.equal(rowTexts[0], "11-13 10:15:00 10:13 Bybit · 东京转发 涨 UP 0.55 0.58 5 / 5 -- 赢 +$2.12 100 ms --");
+assert.ok(rowTexts[1].includes("OKX · 爱尔兰直连 跌 DOWN") && rowTexts[1].includes("没买到（买到会赢）") && rowTexts[1].endsWith("-- 100 ms 40 ms"), rowTexts[1]);
 assert.ok(rowTexts[2].includes("待结算") && rowTexts[2].includes(" -- "), rowTexts[2]);
 assert.ok(rowTexts[3].includes("输 -$2.90"), rowTexts[3]);
 assert.ok(!rows().includes('class="detail"'), "collapsed at first");
@@ -65,7 +65,7 @@ assert.equal(node("[data-more]").hidden, false, "another page exists");
 
 // --- click a row: its detail opens ---
 const click = (key) => node("[data-rows]").handlers.click({ target: { closest: () => ({ dataset: { key } }) } });
-click("c2");
+click("0xm-c2");
 const detail = text(rows().match(/<tr class="detail">[\s\S]*?<\/tr>/)[0]);
 for (const piece of ["成交→收到 t_signal 12 ms", "收到→决策 t_decide 1 ms", "决策→发出 t_post 1 ms", "发出→回复 t_ack 86 ms", "总计 t_total 100 ms",
   "开盘线 开盘前 60 秒均价 98700.12", "离开盘线 1.8 bp", "卖单消失（我们收到） 10:14:59.940", "成交后多久卖单消失 60 ms", "晚了 40 ms",
@@ -73,9 +73,9 @@ for (const piece of ["成交→收到 t_signal 12 ms", "收到→决策 t_decide
   assert.ok(detail.includes(piece), `detail has ${piece}: ${detail}`);
 }
 assert.equal((rows().match(/<tr class="detail">/g) || []).length, 1, "only that row expands");
-const index = rows().indexOf('data-key="c2"');
-assert.ok(rows().indexOf('class="detail"') > index && rows().indexOf('class="detail"') < rows().indexOf('data-key="c3"'), "the detail sits under its row");
-click("c2");
+const index = rows().indexOf('data-key="0xm-c2"');
+assert.ok(rows().indexOf('class="detail"') > index && rows().indexOf('class="detail"') < rows().indexOf('data-key="0xm-c3"'), "the detail sits under its row");
+click("0xm-c2");
 assert.ok(!rows().includes('class="detail"'), "a second click closes it");
 
 // --- next page ---
@@ -85,23 +85,37 @@ assert.equal(requests.at(-1), `/api/orders/lead?range=run&limit=100&before=${T0 
 assert.equal((rows().match(/class="row-click"/g) || []).length, 5, "appended");
 assert.equal(node("[data-more]").hidden, true, "no further page");
 
-// --- the exit sell (exitOnReverse) and the edge record ---
+// --- one row per round: the buy and its reverse-signal sell together (user 2026-11-19) ---
 const H = window.PolyHistory;
-const sellRow = { stage: "exit", client_order_id: "c9x", recv_ts: T0, round_start: T0 - 90, direction: "UP", status: "FILLED",
-  bid_at_signal: 0.5, limit_price: 0.42, shares: 10, filled_shares: 10, outcome: "lost", pnl: null, proceeds_usd: 4.9, exit_vs_hold_usd: 4.9 };
-const sellText = text(H.renderRows([sellRow]));
-for (const piece of ["反向卖出", "卖出持仓", "0.50 0.42 10 10", "已卖（拿着会输）"]) assert.ok(sellText.includes(piece), `sell row: ${piece}: ${sellText}`);
-assert.ok(!sellText.includes("Bybit"), "no signal venue on the sell row");
-assert.equal(H.result({ ...sellRow, outcome: "won" }).text, "已卖（拿着会赢）");
-assert.equal(H.result({ ...sellRow, filled_shares: 0, status: "CANCELLED" }).text, "没卖掉");
-assert.ok(text(H.detail(sellRow)).includes("信号时买一 0.50 · 收回 $4.90 · 比拿到结算 +$4.90"), text(H.detail(sellRow)));
-const bought = { stage: "gtc", client_order_id: "c9", direction: "UP", status: "FILLED", filled_shares: 10, shares: 10, outcome: "lost", pnl: -1.2,
-  exit_shares: 10, exit_proceeds_usd: 4.9, fair: 0.66, edge: 0.012, edge_shares: 10, edge_sizing: false };
-const boughtDetail = text(H.detail(bought));
-for (const piece of ["卖了 10 股 · 收回 $4.90（已算进盈亏）", "公允价 0.66 · 优势 +0.012 · 会按 10 股"]) {
-  assert.ok(boughtDetail.includes(piece), `buy detail: ${piece}: ${boughtDetail}`);
+// 17:35 on 11-19: UP bought 10 at 0.59, sold 10 at 0.81 on the reverse signal, UP lost: +2.90.
+const buy = order({ client_order_id: "b1", market_id: "0xr", stage: "gtc", round_start: T0 - 90, recv_ts: T0 - 60, ask_at_signal: 0.51, limit_price: 0.59,
+  shares: 10, filled_shares: 10, avg_fill_price: 0.59, outcome: "lost", pnl: 2.9, exit_shares: 10, exit_proceeds_usd: 8.78,
+  fair: 0.66, edge: 0.012, edge_shares: 10, edge_sizing: false });
+const sell = { stage: "exit", client_order_id: "b1x", market_id: "0xr", recv_ts: T0 - 40, round_start: T0 - 90, direction: "UP", status: "FILLED",
+  bid_at_signal: 0.89, limit_price: 0.81, shares: 10, filled_shares: 10, avg_fill_price: 0.81, outcome: "lost", pnl: null,
+  proceeds_usd: 8.78, exit_vs_hold_usd: 8.78 };
+const rounds = H.groupRounds([sell, buy]);
+assert.equal(rounds.length, 1, "the buy and its sell are one round");
+const one = text(H.renderRows(rounds));
+assert.equal((String(H.renderRows(rounds)).match(/class="row-click"/g) || []).length, 1, "one row");
+for (const piece of ["Bybit · 东京转发 涨 UP 0.51 0.59 10 / 10", "卖 10 股 @0.81", "卖了（拿着会输）", "+$2.90"]) {
+  assert.ok(one.includes(piece), `round row: ${piece}: ${one}`);
 }
-assert.ok(text(H.detail({ ...bought, edge: -0.05, edge_shares: 5, edge_sizing: true })).includes("优势 -0.050 · 已按 5 股"));
+assert.ok(!one.includes("反向卖出 卖出持仓"), "no separate sell row");
+// The other results.
+const res = (b, s) => H.roundResult({ buy: b, sell: s }).text;
+assert.equal(res({ ...buy, outcome: "won" }, { ...sell, outcome: "won" }), "卖了（拿着会赢）", "sold, would have won");
+assert.equal(res({ ...buy, outcome: "won", pnl: 4.1 }, null), "赢");
+assert.equal(res(buy, { ...sell, filled_shares: 0, status: "REJECTED" }), "输", "the sell did not fill: held to the close");
+assert.ok(text(H.renderRows(H.groupRounds([buy, { ...sell, filled_shares: 0, status: "REJECTED" }]))).includes("没卖掉（限 0.81）"));
+assert.equal(res({ ...buy, filled_shares: 0, status: "CANCELLED", outcome: "lost", pnl: null, would_have_won: true }, null), "没买到（买到会赢）");
+// Its detail shows both orders.
+const open = String(H.renderRows(rounds, new Set(["0xr"])));
+const opened = text(open.match(/<tr class="detail">[\s\S]*?<\/tr>/)[0]);
+for (const piece of ["买入", "反向信号卖出", "信号时买一 0.89 · 收回 $8.78 · 比拿到结算 +$8.78", "公允价 0.66 · 优势 +0.012 · 会按 10 股"]) {
+  assert.ok(opened.includes(piece), `detail: ${piece}: ${opened}`);
+}
+assert.ok(text(H.detail({ ...buy, edge: -0.05, edge_shares: 5, edge_sizing: true })).includes("优势 -0.050 · 已按 5 股"));
 
 console.log("history OK");
 process.exit(0);

@@ -47,9 +47,11 @@ check("relay error", L.renderSources({ processRunning: true, leadVenues: ["bybit
 // --- 统计 / 历史 ---
 check("by source venue", window.PolyStats.renderBySource({ rows: [{ venue: EVIL, line: EVIL }], lines: [{ venue: EVIL }] }));
 const H = window.PolyHistory;
-const row = { client_order_id: EVIL, venue: EVIL, line: EVIL, direction: EVIL, status: EVIL, error: EVIL, filled_shares: 0 };
-check("history row", H.renderRows([row]));
-check("history detail", H.renderRows([row], new Set([H.rowKey(row)])));
+const row = { client_order_id: EVIL, market_id: EVIL, venue: EVIL, line: EVIL, direction: EVIL, status: EVIL, error: EVIL, filled_shares: 0 };
+const sellRow = { stage: "exit", client_order_id: EVIL + "x", market_id: EVIL, direction: EVIL, status: EVIL, error: EVIL, filled_shares: 0 };
+const rounds = H.groupRounds([row, sellRow]);
+check("history row", H.renderRows(rounds));
+check("history detail", H.renderRows(rounds, new Set([H.roundKey(row)])));
 
 // --- 设置 ---
 const S = window.PolySettings;
