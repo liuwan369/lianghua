@@ -120,7 +120,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 |---|---|
 | `auto-trade.html` + `live.js` | 实盘：启停命令、今日数字、信号源、当前场盘口、本场信号与下单 |
 | `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、两个开关哪个好（都不开 / 只开一个 / 两个都开）、反向信号就卖出、按优势定股数、没买到、挂单/限价单、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
-| `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，点一行展开 |
+| `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，按 `market_id` 合成一场一行（买单、挂单补单、反向卖单），点一行展开看每张单 |
 | `settings.html` + `settings.js` | 设置：策略参数（草稿→发布；分组：开关〔行情太乱就暂停、按优势定股数、反向信号就卖出〕、信号、什么时候买、怎么买、风控、高级）、账户只读、系统健康、运行日志、清空统计 |
 | `console.css` | 全站唯一样式表 |
 | `shared/preview-core.js` | 请求、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏 |

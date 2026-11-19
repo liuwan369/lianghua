@@ -1,8 +1,10 @@
-// 历史 (history.js): rows from /api/orders/lead and a click that expands one.
+// 历史 (history.js): rows from /api/orders/lead, one per round, and a click that expands one.
 // - a row shows time (Beijing), round, venue/line, direction, ask, limit,
-//   shares, filled, result (赢/输/待结算/未成交), PnL, total ms, late ms;
-// - clicking a row adds its detail row (all t_* fields, open line, ask gone
-//   times, error text); clicking again closes it;
+//   bought / shares, the reverse-signal sell, the round's result
+//   (赢/输/待结算/没买到/卖了（拿着会赢/会输）), PnL, total ms, late ms;
+// - the buy and its sell (stage exit) are one row (user 2026-11-19);
+// - clicking a row adds its detail row (each order's t_* fields, open line,
+//   ask gone times, error text); clicking again closes it;
 // - 再看 100 条 asks for the next page with before = next_before.
 //
 // Run:  node frontend/console/regress/history.mjs
