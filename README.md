@@ -13,7 +13,7 @@ https://194-87-245-135.sslip.io/console/ （nginx basic auth）。四个页面�
 
 ## 服务器
 
-- 爱尔兰 AWS eu-west-1（`ssh pm-ire`，3.254.138.119，2 vCPU 2 GB）：控制台和交易引擎，运行目录 `/root/pm-system`。nginx 443 做 basic auth，反代到只监听 `127.0.0.1:18766` 的控制面。交易引擎只能在控制台由人启动。账户秘密只在这台机器上。
+- 爱尔兰（`ssh pm-ire2`，194.87.245.135，Baxet 都柏林 4 核独占 3.9 GB，2026-11-20 起）：控制台和交易引擎，运行目录 `/root/pm-system`。nginx 443 做 basic auth，反代到只监听 `127.0.0.1:18766` 的控制面。交易引擎只能在控制台由人启动。账户秘密只在这台机器上。
 - 东京 AWS ap-northeast-1（`ssh pm-tokyo`）：只跑转发 `pm-relay`，把三家交易所的成交签名后发给爱尔兰。
 - 都柏林旧机器（`ssh pm-new`）：不交易，只做研究下载（predict.fun 历史）。
 
