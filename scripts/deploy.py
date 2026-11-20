@@ -15,10 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent   # remote: __file__ is "<stdin>", ROOT unused
 E = "backend/engine/"
-SITE, IRELAND_IP, TOKYO_IP, NODE = "3-254-138-119.sslip.io", "3.254.138.119", "52.195.223.179", "v24.13.0"
+SITE, IRELAND_IP, TOKYO_IP, NODE = "194-87-245-135.sslip.io", "194.87.245.135", "52.195.223.179", "v24.22.3"
 DEPLOYED_PATHS = ("backend/engine", "frontend/console", "scripts", "config")
 TARGETS = {
-    "ireland": {"host": "pm-ire", "root": "/root/pm-system", "releases": "/root/pm-releases",
+    "ireland": {"host": "pm-ire2", "root": "/root/pm-system", "releases": "/root/pm-releases",
                 "unit": "pm-console.service", "env": "/root/.config/pm-system/console.env",
                 "lock": "/root/pm-system/data/dashboard/deployment.lock",   # the console's start lock too
                 "sweep": (E + "dist/", E + "scripts/", "frontend/console/", "scripts/", "config/"),
