@@ -549,6 +549,18 @@ export function createRelaySender(options: { host: string; port: number; key: Ke
   };
 }
 
+/** One sender per engine box: every trade goes to each target on its own
+ * sockets, so a dead or slow target never holds up the others. */
+export function createRelayFanout(targets: readonly { host: string; port: number }[], key: KeyObject) {
+  const senders = targets.map(target => ({ target: `${target.host}:${target.port}`,
+    sender: createRelaySender({ host: target.host, port: target.port, key }) }));
+  return {
+    send(trade: LeadTrade, tokyoRecvMs: number): void { for (const { sender } of senders) sender.send(trade, tokyoRecvMs); },
+    stats: () => senders.map(({ target, sender }) => ({ target, ...sender.stats() })),
+    close(): void { for (const { sender } of senders) sender.close(); },
+  };
+}
+
 // --- all venues and lines together ---
 
 export interface LeadTradesOptions {

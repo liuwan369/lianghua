@@ -9,6 +9,9 @@
 //    message and a wrong source are ignored.
 // 3) a venue left out of directVenues opens no direct socket and still
 //    arrives over Tokyo.
+// 4) several engines: PM_RELAY_TARGET_HOST is a comma list; the fan-out sends
+//    every trade to each target on its own sender, so one dead target does not
+//    hold up the others.
 // Run after `npm run build`:  node scripts/regress/lead-relay.mjs
 import assert from "node:assert/strict";
 import dgram from "node:dgram";
@@ -18,8 +21,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer } from "ws";
-import { createRelaySender, decodeRelay, encodeRelay, readRelayKey, runLeadTrades, startRelayListener,
+import { createRelayFanout, createRelaySender, decodeRelay, encodeRelay, readRelayKey, runLeadTrades, startRelayListener,
   RELAY_BAD_FORMAT, RELAY_BAD_MAC } from "../../dist/live/feeds/lead-trades.js";
+import { parseRelayOptions } from "../../dist/cli/relay.js";
 import { leadPerpProducts } from "../../dist/live/feeds/btc.js";
 
 const dir = mkdtempSync(join(tmpdir(), "lead-relay-"));
@@ -163,6 +167,38 @@ try {
     assert.deepEqual(delivered.map(t => [t.venue, t.id, t.line]), [["okx", 200, "tokyo"]]);
     assert.equal(feed.stats().venues.okx.direct.frames, 0, "no direct frames for okx");
     sender.close(); feed.stop(); okxWs.close();
+  }
+
+  // --- 4. several engines: a comma list of targets, one sender each ---
+  {
+    const env = { PM_RELAY_KEY_FILE: keyFile };
+    assert.deepEqual(parseRelayOptions([], { ...env, PM_RELAY_TARGET_HOST: "1.2.3.4" }).hosts, ["1.2.3.4"]);
+    assert.deepEqual(parseRelayOptions([], { ...env, PM_RELAY_TARGET_HOST: " 1.2.3.4 , 5.6.7.8,1.2.3.4 " }).hosts,
+      ["1.2.3.4", "5.6.7.8"], "trimmed, de-duplicated, in order");
+    assert.deepEqual(parseRelayOptions(["--host", "9.9.9.9,8.8.8.8"], env).hosts, ["9.9.9.9", "8.8.8.8"]);
+    assert.throws(() => parseRelayOptions([], { ...env, PM_RELAY_TARGET_HOST: " , " }), /PM_RELAY_TARGET_HOST/);
+    // Two engines on loopback; a third target nobody listens on.
+    const got = [[], []];
+    const listeners = [0, 1].map(k => startRelayListener({ port: 0, host: "127.0.0.1", key, allowedIp: "127.0.0.1" },
+      trade => got[k].push(trade.id)));
+    await Promise.all(listeners.map(l => l.ready));
+    const dead = net.createServer().listen(0, "127.0.0.1");
+    await new Promise(r => dead.on("listening", r));
+    const deadPort = dead.address().port;
+    dead.close();
+    const targets = [...listeners.map(l => ({ host: "127.0.0.1", port: l.stats().port })), { host: "127.0.0.1", port: deadPort }];
+    const fanout = createRelayFanout(targets, key);
+    assert.ok(await until(() => fanout.stats().filter(s => s.tcpConnected).length === 2), "both live targets connect");
+    const now = Date.now();
+    fanout.send({ venue: "bybit", id: "u-7", seq: 70, price: 80000, tradeTimeMs: now - 30 }, now - 5);
+    fanout.send({ venue: "okx", id: 71, price: 80001, tradeTimeMs: now - 20 }, now - 2);
+    assert.ok(await until(() => got[0].length >= 2 && got[1].length >= 2), "each engine gets every trade");
+    const stats = fanout.stats();
+    assert.deepEqual(stats.map(s => s.target), targets.map(t => `${t.host}:${t.port}`));
+    assert.deepEqual(stats.map(s => s.sent), [2, 2, 2], "every target counts its own sends");
+    assert.equal(stats[2].tcpConnected, false, "the dead target is only down itself");
+    noKey(JSON.stringify(stats), "fan-out stats");
+    fanout.close(); listeners.forEach(l => l.stop());
   }
 } finally { rmSync(dir, { recursive: true, force: true }); }
 console.log("lead-relay OK");

@@ -69,7 +69,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | 文件 | 职责 |
 |---|---|
 | `cli/platform.ts` | 引擎唯一入口：参数、市场发现与换轮（15 s 发现，提前 10 s 预热下一场）、策略挂载、配置/控制文件 1 s 轮询、结算调度 15 s、写 journal、停机流程 |
-| `cli/relay.ts` | 东京转发入口：三家交易所成交 → HMAC 签名 → UDP×2 + TCP 发给爱尔兰 |
+| `cli/relay.ts` | 东京转发入口：三家交易所成交 → HMAC 签名 → UDP×2 + TCP 发给每台引擎机（`PM_RELAY_TARGET_HOST` 逗号分隔多个，`createRelayFanout` 每台一个发送器，一台断了不影响别的） |
 | `cli/market-snapshot.ts`、`cli/market-recorder.ts` | 行情采集与全量录制（现在不运行，留给伦敦录制机） |
 | `cli/account-data.ts` | 账户读取器入口（stdin 收只读命令，JSONL 输出） |
 | `cli/account-check.ts` | 一次性账户检查（钱包、签名、授权、余额） |
