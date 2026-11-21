@@ -351,9 +351,9 @@ class LeadStats(unittest.TestCase):
 
     # --- HTTP ---
     def test_http_routes(self):
-        saved = {name: getattr(server, name) for name in ("TRADING_ROOT", "_api_run_id", "_official_or_last")}
+        saved = {name: getattr(server, name) for name in ("DATA_DIR", "_api_run_id", "_official_or_last")}
         try:
-            server.TRADING_ROOT = self.engine
+            server.DATA_DIR = self.engine / "results" / "dashboard"
             server._api_run_id = lambda: "run-b"
             server._official_or_last = lambda: (None, None)
             render = server.make_handler(SCRIPTS.parent).push_hub.render

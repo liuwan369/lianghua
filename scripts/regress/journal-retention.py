@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-spec = importlib.util.spec_from_file_location("server", ROOT / "scripts" / "system-dashboard-server.py")
+spec = importlib.util.spec_from_file_location("engine_agent", ROOT / "scripts" / "engine_agent.py")
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 

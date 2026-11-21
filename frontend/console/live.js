@@ -11,10 +11,12 @@
     running: { text: "运行中", tone: "ok" }, paused: { text: "已暂停", tone: "warn" },
     stopped: { text: "已停止", tone: "" }, failed: { text: "已停止（异常退出）", tone: "bad" },
     starting: { text: "启动中", tone: "warn" }, stopping: { text: "停止中", tone: "warn" },
-    unknown: { text: "状态未知", tone: "" },
+    unknown: { text: "状态未知", tone: "" }, unreachable: { text: "连不上引擎机", tone: "bad" },
   };
   const runState = (status, pendingStop = false) => {
     if (!status) return "unknown";
+    // The engine box is out of reach: its engine may well be trading. Not 已停止.
+    if (status.processRunning === null) return "unreachable";
     if (status.processRunning === true) {
       if (pendingStop) return "stopping";
       return status.status === "paused" ? "paused" : status.status === "running" ? "running" : "starting";
@@ -298,7 +300,9 @@
       <span class="panel-meta">参数版本 ${s?.processRunning && running ? `运行 r${running}` : ""}${published ? ` 已发布 r${published}` : " 未发布"}${s?.processRunning && running && published && running !== published ? "（下一场生效）" : ""}</span>`);
     const can = allowed(key);
     for (const button of root.querySelectorAll("[data-cmd]")) button.disabled = state.busy || !can[button.dataset.cmd];
-    $("[data-run-meta]").textContent = s?.startedAt && s.processRunning ? `启动于 ${fmt.dateTime(s.startedAt)}` : (s?.stopResult?.message || "");
+    $("[data-run-meta]").textContent = key === "unreachable"
+      ? `${s?.agent?.mismatch || s?.agent?.error || "连不上引擎机"}；引擎机上的交易不受影响，风控照常。恢复连接前不能启停。`
+      : s?.startedAt && s.processRunning ? `启动于 ${fmt.dateTime(s.startedAt)}` : (s?.stopResult?.message || "");
   };
   const renderCards = () => {
     const risk = state.status?.risk;

@@ -2,109 +2,56 @@ from __future__ import annotations
 
 import argparse
 import copy
-from contextlib import contextmanager
-from collections import deque, OrderedDict
+from collections import OrderedDict
 import hashlib
 import io
 import json
 import math
 import os
-import shutil
-import signal
-import shlex
 import sqlite3
-import subprocess
 import sys
 import threading
 import time
-import uuid
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs, unquote
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - Windows development fallback
-    fcntl = None
-
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import dashboard_account as account_store
-from dashboard.config import ConfigConflictError
-from dashboard.strategy_config import StrategyConfigStore, STRATEGY_ID, ASSET_ID
+from dashboard.agent import AgentClient, AgentError, AgentUnavailable
+from dashboard.strategy_config import STRATEGY_ID, ASSET_ID
 from dashboard.ledger import Ledger, LEAD_RANGES, _range_start
 from dashboard.read_model import ReadModel
-from dashboard.account_data import AccountData
+from dashboard.replica import JournalReplica
 from dashboard.push import PushHub
 from dashboard import official_pnl
 from dashboard.system_metrics import SystemMetrics
+from dashboard.timestamps import epoch as _epoch
 
 
-_REPO_ENGINE = Path(__file__).resolve().parents[2] / "engine"
-_DEPLOYED_ENGINE = Path(__file__).resolve().parents[1] / "backend" / "engine"
-TRADING_ROOT = next((path for path in (_DEPLOYED_ENGINE, _REPO_ENGINE)
-                     if (path / "package.json").is_file()), _REPO_ENGINE)
-DEPLOYMENT_LOCK_PATH = TRADING_ROOT.parents[1] / "data" / "dashboard" / "deployment.lock"
+CONSOLE_ROOT = Path(__file__).resolve().parents[1]
+# This console's own data: the ledger, its projection files, the journal
+# replica and the run selection. Never the engine box's results/ (on the same
+# box the agent writes backend/engine/results; this is data/console).
+DATA_DIR = Path(os.environ.get("PM_CONSOLE_DATA", str(CONSOLE_ROOT / "data" / "console")))
+AGENT_URL = os.environ.get("PM_AGENT_URL", "http://127.0.0.1:18767")
+EXPECTED_BOX = os.environ.get("PM_AGENT_BOX", "")
+EXPECTED_WALLET = os.environ.get("PM_ACCOUNT_WALLET", "")
 _trading_lock = threading.RLock()
-_account_check_lock = threading.Lock()
-_trading_process: subprocess.Popen[str] | None = None
-_trading_pid: int | None = None
-_trading_started_at: float | None = None
-_trading_mode: str | None = None
-_trading_params: dict | None = None
-_trading_log: Path | None = None
-_trading_console_log: Path | None = None
-_trading_exit_code: int | None = None
-_trading_stop_result: dict | None = None
-_trading_state_loaded = False
-_official_cache: tuple = (None, None)   # (account checked marker, round results)
+_official_cache: tuple = (None, None)   # (account snapshot, round results)
 _official_last_good: tuple | None = None   # (round results, time) of the last complete venue read
 _ACCOUNT_HISTORY_SECTIONS = frozenset({"trades", "activity", "closed_positions", "order_history", "fees", "rewards", "reconciliation"})
-_account_report: dict | None = None
-_account_report_identity: str | None = None
-_account_startup_check_error: str | None = None
-_account_data: AccountData | None = None
-_account_data_lock = threading.Lock()
+_agent: AgentClient | None = None
+_agent_lock = threading.Lock()
 _read_model: ReadModel | None = None
-_strategy_config_store: StrategyConfigStore | None = None
-_config_control_lock = threading.RLock()
 _read_model_init_lock = threading.Lock()
-_trading_run_id: str | None = None
-_trading_config_revision: int | None = None
-_trading_account_id: str | None = None
-_trading_request_id: str | None = None
-_trading_engine: str | None = None
-_projection_pending: deque = deque()
+_config_control_lock = threading.RLock()
 _system_metrics: SystemMetrics | None = None
 _system_metrics_lock = threading.Lock()
 _modern_cache_lock = threading.Lock()
 _modern_response_cache: OrderedDict = OrderedDict()
-# Account checks are read-only RPC probes. Refresh before the 15-minute
-# readiness window expires so a long-running dashboard does not become stale.
-_ACCOUNT_CHECK_REFRESH_SECONDS = 10 * 60
-# The account reader's regular refresh. Each read costs ~1.6 s of CPU; at 15 s
-# it took ~11% of a core, half the AWS box's 20% baseline (2026-11-21). A fill
-# still refreshes at once (_note_fill_watermark), and 60 s stays well inside
-# the 180 s a snapshot counts as fresh for confirming a stop.
-_ACCOUNT_READ_SECONDS = 60
-
-
-@contextmanager
-def deployment_mutex():
-    """Serialize operator starts with the release script's OS-level lock."""
-    DEPLOYMENT_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    handle = DEPLOYMENT_LOCK_PATH.open("a+")
-    try:
-        if fcntl is not None:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise RuntimeError("程序正在更新，请更新完成后再启动") from None
-        yield
-    finally:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
+# The run the console shows: the agent's current run, kept here so a stopped
+# run stays selected after a restart (data/console/selection-run.json).
+_selected: dict | None = None
 
 _STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
@@ -120,16 +67,13 @@ def _static_content_type(path: Path) -> str:
     return _STATIC_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
-def _state_path() -> Path:
-    return TRADING_ROOT / "results" / "dashboard-state.json"
-
-
-def account_data() -> AccountData:
-    global _account_data
-    with _account_data_lock:
-        if _account_data is None:
-            _account_data = AccountData(TRADING_ROOT, _account_values, interval=_ACCOUNT_READ_SECONDS)
-        return _account_data
+def agent() -> AgentClient:
+    global _agent
+    with _agent_lock:
+        if _agent is None:
+            _agent = AgentClient(AGENT_URL, expected_box=EXPECTED_BOX, expected_wallet=EXPECTED_WALLET,
+                                 replica=JournalReplica(DATA_DIR / "replica"))
+        return _agent
 
 
 _fill_watermark: tuple | None = None
@@ -137,7 +81,7 @@ _fill_watermark_lock = threading.Lock()
 
 
 def _note_fill_watermark(value: dict) -> None:
-    """Invalidate the cached account snapshot when a newer fill appears.
+    """Ask the agent to re-read the account when a newer fill appears.
 
     Balance only moves on fills, so instead of polling the wallet harder we let
     the fills projection drive the refresh. Cheap: compares the newest fill
@@ -159,55 +103,43 @@ def _note_fill_watermark(value: dict) -> None:
             first_seen = _fill_watermark is None
             _fill_watermark = mark
         # Skip the very first observation: it is the existing history, not a new
-        # fill, and invalidating there would cost a wallet read on every restart.
+        # fill, and a refresh there would cost a wallet read on every restart.
         if first_seen:
             return
-        reader = _account_data
-        if reader is not None:
-            reader.invalidate()
+
+        def refresh():
+            try:
+                agent().post("/account/refresh", {})
+            except (AgentUnavailable, AgentError):
+                pass
+        threading.Thread(target=refresh, daemon=True).start()
     except Exception:
         return
 
 
-def _remote_orders_empty_from_fresh_snapshot() -> bool:
-    """Return true only when a fresh account read proves there are no orders.
-
-    This is a cache-only check.  Stop handling must not perform network I/O or
-    wait for the slow account reader; an unavailable or incomplete snapshot
-    remains unconfirmed until a later account refresh provides the evidence.
-    """
-    try:
-        snapshot = account_data().snapshot()
-    except Exception:
-        return False
-    if not isinstance(snapshot, dict) or snapshot.get("available") is not True or snapshot.get("stale") is not False:
-        return False
-    orders = snapshot.get("open_orders")
-    return (isinstance(orders, dict)
-            and orders.get("available") is True
-            and orders.get("complete") is True
-            and isinstance(orders.get("items"), list)
-            and not orders["items"])
+def _account_snapshot() -> dict:
+    """The agent's last account snapshot; stale whenever the agent is unreachable."""
+    view = agent().view()
+    snapshot = agent().account_snapshot()
+    if not isinstance(snapshot, dict):
+        return {"schemaVersion": 1, "read_only": True, "available": False, "stale": True, "checked_at": None,
+                "error_code": "account_reader_unavailable" if view["reachable"] else "engine_box_unreachable"}
+    if not view["reachable"]:
+        return {**snapshot, "available": False, "stale": True, "error_code": "engine_box_unreachable"}
+    meta = (view["state"] or {}).get("accountSnapshot") or {}
+    return {**snapshot, "stale": bool(snapshot.get("stale") or meta.get("stale")),
+            "cache_age_seconds": meta.get("cacheAgeSeconds")}
 
 
 def _metric_services() -> dict:
-    """Return process identities from memory; the sampler performs OS reads."""
-    with _trading_lock:
-        trader_pid, trader_log = _trading_pid, _trading_log
-    trader_running = _process_matches(trader_pid, trader_log)
-    bridge = getattr(_account_data, "_process", None) if _account_data else None
-    bridge_running = bool(bridge and bridge.poll() is None)
+    """This box's console processes; the engine box reports its own through the agent."""
     with _read_model_init_lock:
         projection_process = getattr(_read_model, "_process", None) if _read_model else None
         projection_pid = getattr(projection_process, "pid", None)
         projection_running = bool(projection_process and projection_process.poll() is None)
     return {
         "dashboard": {"pid": os.getpid(), "state": "active"},
-        "account_bridge": {"pid": bridge.pid if bridge_running else None, "state": "active" if bridge_running else "stopped"},
-        "trader": {"pid": trader_pid if trader_running else None, "state": "active" if trader_running else "stopped"},
         "projection": {"pid": projection_pid if projection_running else None, "state": "active" if projection_running else "stopped"},
-        "journal_backlog": len(_projection_pending),
-        "event_loop_lag_ms": None,
     }
 
 
@@ -215,7 +147,7 @@ def system_metrics() -> SystemMetrics:
     global _system_metrics
     with _system_metrics_lock:
         if _system_metrics is None:
-            _system_metrics = SystemMetrics(Path(__file__).resolve().parents[1], _metric_services)
+            _system_metrics = SystemMetrics(CONSOLE_ROOT, _metric_services)
         return _system_metrics
 
 
@@ -223,618 +155,169 @@ def refresh_system_metrics(stop: threading.Event) -> None:
     system_metrics().run(stop)
 
 
-def _persist_trading_state() -> None:
-    """Persist enough state for the dashboard to recover after a restart."""
-    state = {
-        "pid": _trading_pid,
-        "started_at": _trading_started_at,
-        "mode": _trading_mode,
-        "params": _trading_params,
-        "log": str(_trading_log) if _trading_log else None,
-        "console_log": str(_trading_console_log) if _trading_console_log else None,
-        "exit_code": _trading_exit_code,
-        "stop_result": _trading_stop_result,
-        "run_id": _trading_run_id,
-        "config_revision": _trading_config_revision,
-        "account_id": _trading_account_id,
-        "request_id": _trading_request_id,
-        "engine": _trading_engine,
-    }
-    path = _state_path()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(path)
-    except OSError:
-        # A read-only filesystem must not prevent the trading engine from stopping.
-        pass
+def _selection_path() -> Path:
+    return DATA_DIR / "selection-run.json"
 
 
-def _process_command(pid: int) -> str:
-    """Return a process command line so a recycled PID is never trusted blindly."""
-    proc_cmdline = Path(f"/proc/{pid}/cmdline")
-    try:
-        if proc_cmdline.is_file():
-            return shlex.join(part.decode("utf-8", "replace") for part in proc_cmdline.read_bytes().split(b"\0") if part)
-    except OSError:
-        return ""
-    if os.name == "nt":
+def _load_selection() -> dict | None:
+    global _selected
+    if _selected is None:
         try:
-            completed = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-NonInteractive", "-Command",
-                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
-                    f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\").CommandLine",
-                ],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="strict",
-                timeout=5,
-            )
-            return completed.stdout.strip() if completed.returncode == 0 else ""
-        except (OSError, subprocess.SubprocessError, UnicodeError):
-            return ""
-    return ""
+            value = json.loads(_selection_path().read_text(encoding="utf-8"))
+            _selected = value if isinstance(value, dict) and isinstance(value.get("run_id"), str) else {}
+        except (OSError, ValueError):
+            _selected = {}
+    return _selected or None
 
 
-def _process_matches(pid: int | None, log_path: Path | None) -> bool:
-    if not pid or pid <= 0 or log_path is None:
-        return False
-    try:
-        args = shlex.split(_process_command(pid).replace("\\", "/"))
-    except ValueError:
-        return False
-    # Match the exact journal argument as well as the executable; a recycled
-    # PID or another run with a similar filename must never receive a signal.
-    executable, flag = "dist/cli/platform.js", "--journal-file"
-    if not any(arg == executable or arg.endswith("/" + executable) for arg in args) or flag not in args:
-        return False
-    index = args.index(flag) + 1
-    expected = os.path.normcase(str(log_path).replace("\\", "/"))
-    return index < len(args) and os.path.normcase(args[index]) == expected
+def _save_selection(value: dict | None) -> None:
+    global _selected
+    _selected = value or {}
+    path = _selection_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(_selected, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
 
 
-def _engine_process_present() -> bool | None:
-    """True if any trading engine process exists, None when that cannot be determined.
-
-    `_process_matches` answers "is THIS pid still our run", and returns False
-    whenever the persisted state was lost — which must never be read as "nothing
-    is running" before a destructive action. This asks the OS instead.
-    """
-    try:
-        listing = subprocess.run(["ps", "-eo", "args="], capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if listing.returncode != 0:
-        return None
-    target = "dist/cli/platform.js"
-    return any(target in line.replace("\\", "/") for line in listing.stdout.splitlines())
-
-
-def _restore_trading_state() -> None:
-    with _trading_lock:
-        _restore_trading_state_locked()
-
-
-def _restore_trading_state_locked() -> None:
-    global _trading_pid, _trading_started_at, _trading_mode, _trading_params
-    global _trading_log, _trading_console_log, _trading_exit_code
-    global _trading_stop_result, _trading_state_loaded
-    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
-    global _trading_engine
-    if _trading_state_loaded:
+def _sync_selection() -> None:
+    """Follow the agent's current run; a stopped run stays selected."""
+    view = agent().view()
+    status = (view["state"] or {}).get("status") or {}
+    run_id = status.get("run_id")
+    if not view["reachable"] or view["mismatch"] or not isinstance(run_id, str) or not run_id:
         return
-    _trading_state_loaded = True
-    try:
-        state = json.loads(_state_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    if not isinstance(state, dict):
-        return
-    log_value = state.get("log")
-    console_value = state.get("console_log")
-    _trading_log = Path(log_value) if isinstance(log_value, str) and log_value else None
-    _trading_console_log = Path(console_value) if isinstance(console_value, str) and console_value else None
-    _trading_started_at = state.get("started_at") if isinstance(state.get("started_at"), (int, float)) else None
-    _trading_mode = "live" if state.get("mode") == "live" else None
-    _trading_params = state.get("params") if isinstance(state.get("params"), dict) else None
-    _trading_exit_code = state.get("exit_code") if isinstance(state.get("exit_code"), int) else None
-    _trading_stop_result = state.get("stop_result") if isinstance(state.get("stop_result"), dict) else None
-    _trading_run_id = state.get("run_id") if isinstance(state.get("run_id"), str) else None
-    _trading_config_revision = state.get("config_revision") if type(state.get("config_revision")) is int else None
-    _trading_account_id = state.get("account_id") if isinstance(state.get("account_id"), str) else None
-    _trading_request_id = state.get("request_id") if isinstance(state.get("request_id"), str) else None
-    _trading_engine = "platform" if state.get("engine") == "platform" else None
-    candidate_pid = state.get("pid") if isinstance(state.get("pid"), int) else None
-    _trading_pid = candidate_pid if _process_matches(candidate_pid, _trading_log) else None
-    if candidate_pid and _trading_pid is None and (not _trading_stop_result or _trading_stop_result.get("process_stopped") is False):
-        # The engine died with the control plane (systemd stops the whole
-        # unit). Without a stop result the run stayed "executing" forever and
-        # nothing said why (BUGS P3-7). Record what happened instead.
-        outcome = _automatic_stop_result(_trading_exit_code, _trading_console_log)
-        # Relabel only a run that left no terminal status: a normal finish or a
-        # reported failure keeps the engine's own reason (review).
-        if not _console_terminal_status(_trading_console_log):
-            outcome = {**outcome, "reason": "control_plane_restarted",
-                       "message": "控制面重启时交易进程一起停止了；远端挂单以账户快照为准，请核对。"}
-        _trading_stop_result = outcome
-        _persist_trading_state()
-    # A stopped run may be deliberately removed during a data reset. Do not
-    # resurrect its missing journal as a live dashboard selection on restart.
-    if _trading_pid is None and (_trading_log is None or not _trading_log.is_file()):
-        _trading_started_at = None
-        _trading_mode = None
-        _trading_params = None
-        _trading_log = None
-        _trading_console_log = None
-        _trading_exit_code = None
-        _trading_stop_result = None
-        _trading_run_id = None
-        _trading_config_revision = None
-        _trading_account_id = None
-        _trading_request_id = None
-        _trading_engine = None
-        _persist_trading_state()
-
-
-def _tail_lines(path: Path | None, count: int = 100, max_bytes: int = 131_072) -> list[str]:
-    if path is None or not path.is_file():
-        return []
-    try:
-        with path.open("rb") as handle:
-            size = handle.seek(0, os.SEEK_END)
-            handle.seek(max(0, size - max_bytes))
-            text = handle.read().decode("utf-8", "replace")
-        return text.splitlines()[-count:]
-    except OSError:
-        return []
-
-
-_AUTOMATIC_STOP_MESSAGES = {
-    "journal_failed": "交易进程因交易日志写入异常自动停止。",
-    "duration_elapsed": "交易进程已按配置运行时长自动停止。",
-    "markets_expired": "交易进程因所选市场已结束而自动停止。",
-    "market_end_event_failed": "交易进程因场次结束处理异常自动停止。",
-    "controller_stop": "交易进程已响应停止请求。",
-    "SIGINT": "交易进程收到中断信号后停止。",
-    "SIGTERM": "交易进程收到终止信号后停止。",
-    "SIGBREAK": "交易进程收到中断信号后停止。",
-    "round_limit_reached": "交易进程已按设定场数运行完毕，自动停止。",
-    "timer_event_failed": "交易进程因定时任务异常停止。",
-    "status_failed": "交易进程因状态上报异常停止。",
-    "control_plane_restarted": "控制面重启时交易进程一起停止了；远端挂单以账户快照为准，请核对。",
-}
-
-
-def _console_terminal_status(console_path: Path | None) -> str | None:
-    for line in reversed(_tail_lines(console_path)):
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError):
-            continue
-        if isinstance(event, dict) and event.get("kind") == "platform_status" and event.get("status") in {"stopped", "failed"}:
-            return event["status"]
-    return None
-
-
-def _automatic_stop_result(exit_code: int | None, console_path: Path | None) -> dict:
-    terminal_status = None
-    terminal_reason = None
-    for line in reversed(_tail_lines(console_path)):
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(event, dict) or event.get("kind") != "platform_status":
-            continue
-        if event.get("status") not in {"stopped", "failed"}:
-            continue
-        terminal_status = event["status"]
-        candidate = event.get("reason")
-        terminal_reason = candidate if candidate in _AUTOMATIC_STOP_MESSAGES else None
-        break
-    # The platform can finish its own drain after receiving SIGTERM/SIGINT and
-    # still leave a non-zero process code.  A terminal platform_status event is
-    # the authoritative outcome; only an explicit failed event or an exit
-    # without a known terminal status is an execution failure.
-    failed = terminal_status == "failed" or (terminal_status is None and exit_code is not None and exit_code != 0)
-    reason = terminal_reason or ("process_failed" if failed else "process_exited")
-    message = _AUTOMATIC_STOP_MESSAGES.get(
-        reason,
-        "交易进程异常退出，请核对运行记录。" if failed else "交易进程已停止，请核对订单与持仓状态。",
-    )
-    if failed:
-        # Show the engine's own (already secret-filtered) cause next to the
-        # generic text, so a failed start says why (BUGS P2-7).
-        for line in reversed(_tail_lines(console_path)):
-            try:
-                event = json.loads(line)
-            except (TypeError, ValueError):
-                continue
-            if (isinstance(event, dict) and event.get("kind") == "platform_error"
-                    and event.get("code") == "platform_run_failed" and isinstance(event.get("message"), str)):
-                message = f"{message}（{event.get('phase') or '未知阶段'}：{event['message'][:300]}）"
-                break
-    remote_confirmed = _remote_orders_empty_from_fresh_snapshot()
-    return {"confirmed": remote_confirmed, "process_stopped": True, "automatic": True,
-            "remote_orders_state": "confirmed" if remote_confirmed else "unconfirmed",
-            "exit_code": exit_code, "reason": reason, "message": message}
-
-
-def _account_values() -> dict[str, str]:
-    """Load only supported account fields; never return them through the API."""
-    names = {
-        "POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER",
-        "POLY_SIGNATURE_TYPE",
-        "POLYMARKET_OWNER_PRIVATE_KEY", "POLYMARKET_PRIVATE_KEY",
-        "POLYMARKET_SESSION_PRIVATE_KEY", "RELAYER_API_KEY",
-        "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY",
-        "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE",
-    }
-    profile = account_store.load_profile()
-    result = {name: os.environ.get(name, "") for name in names}
-    env_path = TRADING_ROOT / ".env"
-    try:
-        for raw in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            name, value = line.split("=", 1)
-            name = name.strip()
-            if name in names and not result.get(name):
-                result[name] = value
-    except OSError:
-        pass
-    if profile is not None:
-        profile_wallet = profile.get("POLYMARKET_WALLET_ADDRESS") or profile.get("POLY_FUNDER")
-        env_wallet = result.get("POLYMARKET_WALLET_ADDRESS") or result.get("POLY_FUNDER")
-        clean = lambda value: str(value or "").strip().strip("'\"").lower()
-        # Missing fields may inherit the same account's bootstrap. Explicit
-        # empty fields clear values; switching wallets never inherits secrets.
-        if profile_wallet and clean(profile_wallet) != clean(env_wallet):
-            result = {name: "" for name in names}
-        result.update({name: profile[name] for name in names if name in profile})
-        if not result.get("POLYMARKET_OWNER_PRIVATE_KEY") and profile.get("POLYMARKET_PRIVATE_KEY"):
-            result["POLYMARKET_PRIVATE_KEY"] = profile["POLYMARKET_PRIVATE_KEY"]
-    if not result.get("POLYMARKET_WALLET_ADDRESS"):
-        result["POLYMARKET_WALLET_ADDRESS"] = result.get("POLY_FUNDER", "")
-    return result
-
-
-def _account_identity(values: dict) -> str:
-    fields = {name: str(values.get(name, "")).strip().strip("'\"")
-              for name in account_store.ACCOUNT_ENV_FIELDS}
-    fields["POLYMARKET_OWNER_PRIVATE_KEY"] = (fields.get("POLYMARKET_OWNER_PRIVATE_KEY")
-                                               or values.get("POLYMARKET_PRIVATE_KEY", ""))
-    fields.pop("POLYMARKET_PRIVATE_KEY", None)
-    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
-
-
-def _meaningful_account_value(value: str) -> bool:
-    clean = value.strip().strip("'\"").strip()
-    if not clean or (clean.startswith("<") and clean.endswith(">")):
-        return False
-    lowered = clean.lower()
-    return "your_" not in lowered and "真实值" not in clean and "已隐藏" not in clean
-
-
-def account_config_status() -> dict:
-    """Describe credential roles without exposing credential values."""
-    try:
-        values = _account_values()
-        config_error = None
-    except RuntimeError as exc:
-        values = {}
-        config_error = str(exc)
-    present = lambda name: _meaningful_account_value(values.get(name, ""))
-    wallet_value = values.get("POLYMARKET_WALLET_ADDRESS") or values.get("POLY_FUNDER", "")
-    wallet_clean = wallet_value.strip().strip("'\"").strip()
-    wallet_valid = bool(
-        len(wallet_clean) == 42
-        and wallet_clean.startswith("0x")
-        and all(char in "0123456789abcdefABCDEF" for char in wallet_clean[2:])
-    )
-    # An explicitly invalid new key must not fall back to a legacy private key.
-    owner_raw = values.get("POLYMARKET_OWNER_PRIVATE_KEY", "") or values.get("POLYMARKET_PRIVATE_KEY", "")
-    owner_signer = bool(account_store.KEY.fullmatch(owner_raw.strip().strip("'\"")))
-    session_signer = present("POLYMARKET_SESSION_PRIVATE_KEY")
-    builder = all(present(name) for name in (
-        "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET", "POLY_BUILDER_PASSPHRASE"
-    ))
-    report = _account_report if isinstance(_account_report, dict) else None
-    report_wallet = report.get("wallet") if report else None
-    report_matches = bool(wallet_valid and isinstance(report_wallet, str)
-                          and report_wallet.lower() == wallet_clean.lower()
-                          and _account_report_identity == _account_identity(values))
-    checked_at = _epoch(report.get("checked_at")) if report else None
-    check_fresh = bool(checked_at is not None and 0 <= time.time() - checked_at <= 15 * 60)
-    # The background refresh may fail transiently while the last report is
-    # still inside its 15-minute validity window. Keep that verified report
-    # usable; only surface the refresh error once it cannot support readiness.
-    check_error = (_account_startup_check_error
-                   if not (report_matches and check_fresh) else None)
-    account_check_ready = bool(not check_error and report_matches and check_fresh
-                               and report.get("account_ready") is True
-                               and report.get("signer_matches") is True
-                               and report.get("approvals_ready") is True
-                               and report.get("compromised") is not True)
-    if account_check_ready:
-        check_state = "ready"
-    elif report is None or not report_matches:
-        check_state = "unknown"
-    else:
-        check_state = "stale"
-    return {
-        "wallet": wallet_clean if wallet_valid else "",
-        "config_error": config_error,
-        "server_live_enabled": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
-        "last_check": report,
-        "last_check_error": check_error,
-        "startup_check_error": _account_startup_check_error,
-        "last_check_at": checked_at,
-        "account_check_state": check_state,
-        "account_check_ready": account_check_ready,
-        "accountCheckState": check_state,
-        "accountCheckReady": account_check_ready,
-        "wallet_configured": wallet_valid,
-        "owner_signer_configured": owner_signer,
-        "session_signer_configured": session_signer,
-        "relayer_api_configured": present("RELAYER_API_KEY") and present("RELAYER_API_KEY_ADDRESS"),
-        "builder_api_configured": builder,
-        # The current execution adapter uses the Owner signer. Session Key is
-        # an optional delegated signer and is not required for this route.
-        "execution_credentials_ready": wallet_valid and owner_signer,
-        # Trading runtime requires an explicit settlement readiness result.
-        # Missing/unknown is deliberately not enough for live start: an EOA
-        # or Deposit Wallet may otherwise discover redeem credentials only
-        # after a real position has been traded.
-        "live_start_ready": bool(wallet_valid and owner_signer and account_check_ready
-                                  and report and report.get("settlement_credentials_ready") is True),
-        "executionCredentialsReady": wallet_valid and owner_signer,
-        "liveStartReady": bool(wallet_valid and owner_signer and account_check_ready
-                                and report and report.get("settlement_credentials_ready") is True),
-        "wallet_kind": report.get("wallet_kind") if report else None,
-        "signature_type": report.get("signature_type") if report else None,
-        "settlement_credentials_ready": (report.get("settlement_credentials_ready")
-                                          if report and isinstance(report.get("settlement_credentials_ready"), bool)
-                                          else None),
-        "settlement_reason": report.get("settlement_reason") if report else None,
-        "walletKind": report.get("wallet_kind") if report else None,
-        "signatureType": report.get("signature_type") if report else None,
-        "settlementCredentialsReady": (report.get("settlement_credentials_ready")
-                                        if report and isinstance(report.get("settlement_credentials_ready"), bool)
-                                        else None),
-        "read_only_only": wallet_valid and not owner_signer and not session_signer,
-    }
-
-
-def warm_account_check() -> None:
-    """Refresh the saved account check after startup without blocking serving."""
-    global _account_report, _account_report_identity, _account_startup_check_error
-    if not _account_check_lock.acquire(blocking=False):
-        return
-    try:
-        values = _account_values()
-        if not values.get("POLYMARKET_WALLET_ADDRESS"):
-            return
-        identity = _account_identity(values)
-        report = account_store.check_account(TRADING_ROOT, values)
+    current = _load_selection() or {}
+    wanted = {"run_id": run_id, "account_id": status.get("account_id"),
+              "config_revision": status.get("config_revision"), "mode": "live"}
+    if {key: current.get(key) for key in wanted} != wanted:
         with _trading_lock:
-            # The operator may have replaced the profile while the RPC check
-            # was in flight. Never attach an old report to the new account.
-            if _account_identity(_account_values()) != identity:
-                return
-            _account_report = report
-            _account_report_identity = identity
-            _account_startup_check_error = None
-    except Exception as exc:
-        # Startup probing is best effort. A failed probe leaves the durable
-        # config intact and deliberately keeps readiness at unknown.
-        with _trading_lock:
-            _account_startup_check_error = getattr(exc, "code", None) or "account_check_failed"
-            if _account_report is None:
-                _account_report_identity = None
-    finally:
-        _account_check_lock.release()
+            _save_selection(wanted)
+            _modern_response_cache.clear()
 
 
-def account_check_background(stop: threading.Event) -> None:
-    """Keep the saved account readiness report fresh without blocking runtime."""
-    while not stop.is_set():
-        warm_account_check()
-        stop.wait(_ACCOUNT_CHECK_REFRESH_SECONDS)
-
-
-def _clear_account_run_selection() -> None:
-    """Drop the last account's default selection without deleting its ledger."""
-    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
-    global _trading_log, _trading_console_log, _trading_started_at, _trading_exit_code
-    global _trading_stop_result, _trading_engine
-    _trading_run_id = None
-    _trading_config_revision = None
-    _trading_account_id = None
-    _trading_request_id = None
-    _trading_log = None
-    _trading_console_log = None
-    _trading_started_at = None
-    _trading_exit_code = None
-    _trading_stop_result = None
-    _trading_engine = None
-    _projection_pending.clear()
-    _modern_response_cache.clear()
-    _persist_trading_state()
+def _selection_tuple() -> tuple:
+    selected = _load_selection() or {}
+    run_id = selected.get("run_id")
+    path = agent().replica.path(run_id) if run_id else None
+    return (run_id, path, "live" if run_id else None, selected.get("account_id"), selected.get("config_revision"))
 
 
 def supervise_projection(stop: threading.Event) -> None:
     while not stop.wait(1):
         try:
+            _sync_selection()
             _activate_projection()
         except (OSError, sqlite3.Error, ValueError):
             pass
 
 
+def account_config_status() -> dict:
+    """The engine box's account status (from the agent), or an unknown state."""
+    view = agent().view()
+    account = ((view["state"] or {}).get("status") or {}).get("account")
+    if not view["reachable"] or not isinstance(account, dict):
+        return {"wallet": EXPECTED_WALLET or "", "account_check_state": "unknown", "account_check_ready": False,
+                "accountCheckState": "unknown", "accountCheckReady": False, "live_start_ready": False,
+                "liveStartReady": False, "last_check": None, "last_check_at": None,
+                "last_check_error": "engine_box_unreachable", "server_live_enabled": None}
+    return account
+
+
 def trading_status(include_stats: bool = True) -> dict:
-    global _trading_process, _trading_pid, _trading_exit_code
-    global _trading_stop_result
-    _restore_trading_state()
-    with _trading_lock:
-        process = _trading_process
-        if process is not None:
-            _trading_exit_code = process.poll()
-            if _trading_exit_code is not None:
-                # A stop that timed out left a "still stopping" result; the
-                # process exiting later is the real outcome (BUGS P3-9).
-                if not _trading_stop_result or _trading_stop_result.get("process_stopped") is False:
-                    _trading_stop_result = _automatic_stop_result(_trading_exit_code, _trading_console_log)
-                _trading_process = None
-                _trading_pid = None
-                _persist_trading_state()
-        running = (process is not None and process.poll() is None) or _process_matches(_trading_pid, _trading_log)
-        if (not running and process is None and isinstance(_trading_stop_result, dict)
-                and _trading_stop_result.get("process_stopped") is False):
-            # A restored pid that exited after a slow stop: same as above.
-            _trading_stop_result = {**_automatic_stop_result(None, _trading_console_log),
-                                    "requested_pid": _trading_stop_result.get("requested_pid")}
-            _trading_pid = None
-            _persist_trading_state()
-        # The account reader is intentionally asynchronous.  A stop request
-        # can finish before its next cache refresh, so reconcile the persisted
-        # stop result on later status reads as soon as a fresh, complete empty
-        # open-order snapshot becomes available.  This is cache-only and never
-        # waits for the reader or performs network I/O on the status path.
-        if (not running and isinstance(_trading_stop_result, dict)
-                and _trading_stop_result.get("confirmed") is not True
-                and _remote_orders_empty_from_fresh_snapshot()):
-            _trading_stop_result = {
-                **_trading_stop_result,
-                "confirmed": True,
-                "remote_orders_state": "confirmed",
-                "message": "进程已停止，账户快照已确认无远端挂单。",
-            }
-            _persist_trading_state()
-        account = account_config_status()
-        stop_reason = (_trading_stop_result or {}).get("reason")
-        stop_failed = stop_reason in {"journal_failed", "market_end_event_failed", "process_failed"}
-        status = {
-            "available": (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file(),
-            "execution_target": "platform",
-            "engine": _trading_engine,
-            "execution": (("strategy" if (_trading_params or {}).get("strategy_id") else "observation") if _trading_engine == "platform" else None),
-            "strategy_id": (_trading_params or {}).get("strategy_id"),
-            "running": running,
-            "mode": _trading_mode,
-            "pid": process.pid if process and running else (_trading_pid if running else None),
-            "exit_code": _trading_exit_code,
-            "started_at": _trading_started_at,
-            "params": dict(_trading_params or {}),
-            "stop_result": dict(_trading_stop_result or {}),
-            "live_unlocked": os.environ.get("PM_TRADING_LIVE_UNLOCK") == "1",
-            # A present .env is not enough: report configured only when the key
-            # exists and is non-empty after dotenv loading by the child process.
-            "account_configured": account["live_start_ready"],
-            "service_state": "running" if running else ("failed" if stop_failed else "stopped"),
-            # Process exit only confirms the local process. A live stop is
-            # confirmed after the runtime/account projection confirms remote
-            # order reconciliation; until then keep the command executing.
-            "command_status": "executing" if running else ("failed" if stop_failed
-                              else "confirmed" if (_trading_stop_result or {}).get("confirmed") is True
-                              else "executing"),
-            "account": account,
-            "log": str(_trading_log).replace("\\", "/") if _trading_log else None,
-            "run_id": _trading_run_id,
-            "config_revision": _trading_config_revision,
-            "account_id": _trading_account_id,
-        }
-    # No journal parsing, database aggregation or console scans in this lock.
-        selection = (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision)
-    if include_stats:
-        stats = trade_log_stats(selection)
-        projection = stats.get("projection")
-        if isinstance(projection, dict):
-            # `worker_alive` describes the low-priority analytics worker. It is
-            # intentionally allowed to outlive a finished run, so expose the
-            # trading process state separately instead of making the UI infer
-            # execution state from the projection worker.
-            stats = {**stats, "projection": {**projection, "trader_alive": running}}
-        runtime = stats.get("runtime")
-        if not running and isinstance(runtime, dict):
-            runtime = dict(runtime)
-            automatic = status["stop_result"] if status["stop_result"].get("automatic") else {}
-            runtime["status"] = ("failed" if automatic.get("reason") in {
-                "journal_failed", "market_end_event_failed", "process_failed",
-            } else "stopped")
-            runtime["stale"] = True
-            stats = {**stats, "runtime": runtime}
-        status["stats"] = stats
-        runtime = stats.get("runtime")
-        if running:
-            strategy_runtime = runtime.get("strategy_runtime") if isinstance(runtime, dict) else None
-            if isinstance(strategy_runtime, dict) and strategy_runtime.get("paused") is True:
-                status["service_state"] = "paused"
-            elif isinstance(runtime, dict) and runtime.get("status") == "running":
-                status["service_state"] = "running"
-            else:
-                status["service_state"] = "starting"
-            pending = (status.get("params") or {}).get("pendingControl") or {}
-            source_at = _epoch(runtime.get("source_at")) if isinstance(runtime, dict) else None
-            expires_at = _epoch(runtime.get("expires_at")) if isinstance(runtime, dict) else None
-            expected_paused = pending.get("action") == "pause"
-            projection_ready = (isinstance(projection, dict)
-                                and projection.get("state") == "ready"
-                                and projection.get("stale") is False)
-            # No runtime row exists for the first 0-3 s of a run (BUGS P2-11).
-            runtime_row_fresh = (isinstance(runtime, dict) and runtime.get("stale") is not True
-                                  and source_at is not None and source_at <= time.time() + 1
-                                  and expires_at is not None and expires_at > time.time())
-            confirmed = (isinstance(runtime, dict) and runtime.get("status") == "running"
-                         and source_at is not None
-                         and (runtime_row_fresh or projection_ready)
-                         and source_at >= (pending.get("requestedAt") or status.get("started_at") or float("inf"))
-                         and isinstance(strategy_runtime, dict)
-                         and strategy_runtime.get("paused") is expected_paused)
-            status["command_status"] = "confirmed" if confirmed else "executing"
+    """The engine box's process facts (agent) merged with this console's
+    projection of the replicated journal. Unreachable is "unknown": running is
+    None, never False."""
+    view = agent().view()
+    agent_status = dict(((view["state"] or {}).get("status")) or {})
+    reachable = view["reachable"] and not view["mismatch"]
+    running = agent_status.get("running") if reachable else None
+    status = {**agent_status, "running": running,
+              "agent": {"reachable": view["reachable"], "error": view["error"], "mismatch": view["mismatch"],
+                        "box": (view["state"] or {}).get("box"), "clockSkewSeconds": view["clockSkewSeconds"],
+                        "ageSeconds": view["ageSeconds"]}}
+    if not reachable:
+        status["service_state"] = "unknown"
+        status["command_status"] = "executing"
+    if not include_stats:
+        return status
+    stats = trade_log_stats(_selection_tuple())
+    projection = stats.get("projection")
+    if isinstance(projection, dict):
+        stats = {**stats, "projection": {**projection, "trader_alive": running}}
+    runtime = stats.get("runtime")
+    if running is False and isinstance(runtime, dict):
+        runtime = dict(runtime)
+        stop_result = status.get("stop_result") or {}
+        automatic = stop_result if stop_result.get("automatic") else {}
+        runtime["status"] = ("failed" if automatic.get("reason") in {
+            "journal_failed", "market_end_event_failed", "process_failed",
+        } else "stopped")
+        runtime["stale"] = True
+        stats = {**stats, "runtime": runtime}
+    status["stats"] = stats
+    runtime = stats.get("runtime")
+    if running is True:
+        strategy_runtime = runtime.get("strategy_runtime") if isinstance(runtime, dict) else None
+        if isinstance(strategy_runtime, dict) and strategy_runtime.get("paused") is True:
+            status["service_state"] = "paused"
+        elif isinstance(runtime, dict) and runtime.get("status") == "running":
+            status["service_state"] = "running"
+        else:
+            status["service_state"] = "starting"
+        pending = (status.get("params") or {}).get("pendingControl") or {}
+        source_at = _epoch(runtime.get("source_at")) if isinstance(runtime, dict) else None
+        expires_at = _epoch(runtime.get("expires_at")) if isinstance(runtime, dict) else None
+        expected_paused = pending.get("action") == "pause"
+        projection_ready = (isinstance(projection, dict)
+                            and projection.get("state") == "ready"
+                            and projection.get("stale") is False)
+        # No runtime row exists for the first 0-3 s of a run (BUGS P2-11).
+        runtime_row_fresh = (isinstance(runtime, dict) and runtime.get("stale") is not True
+                              and source_at is not None and source_at <= time.time() + 1
+                              and expires_at is not None and expires_at > time.time())
+        confirmed = (isinstance(runtime, dict) and runtime.get("status") == "running"
+                     and source_at is not None
+                     and (runtime_row_fresh or projection_ready)
+                     and source_at >= (pending.get("requestedAt") or status.get("started_at") or float("inf"))
+                     and isinstance(strategy_runtime, dict)
+                     and strategy_runtime.get("paused") is expected_paused)
+        status["command_status"] = "confirmed" if confirmed else "executing"
     return status
 
 
 def _run_identity() -> str | None:
-    if _trading_run_id:
-        return _trading_run_id
-    return None
+    return (_load_selection() or {}).get("run_id")
 
 
 def _projection_snapshot(selection: tuple | None = None) -> dict:
-    # Snapshot the selection once so a concurrent new run cannot mix fields.
-    if selection is None:
-        with _trading_lock:
-            selection = (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision)
+    selection = selection or _selection_tuple()
     run_id, path, mode, account, revision = selection
     if not path or not run_id or mode != "live":
         return {"state": "idle", "run_id": None, "stale": True}
     try:
         with _read_model_init_lock:
-            return _read_model.snapshot(run_id) if _read_model else {"state": "waiting", "run_id": run_id, "stale": True}
+            view = _read_model.snapshot(run_id) if _read_model else {"state": "waiting", "run_id": run_id, "stale": True}
     except (OSError, ValueError):
         return {"state": "unavailable", "run_id": run_id, "stale": True}
+    # The replica compares itself with itself, so a stalled copy would look
+    # caught up. The agent's size of this run is the truth.
+    if not agent().replica_complete(run_id):
+        view = {**view, "stale": True, "replication_behind": True,
+                "state": "catching_up" if view.get("state") == "ready" else view.get("state")}
+    return view
 
 
 def _activate_projection() -> None:
     """Single supervisor owns analytics selection; requests cannot rewind it."""
     global _read_model
-    with _trading_lock:
-        selection = (_projection_pending[0] if _projection_pending else
-                     (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision))
-    run_id, path, mode, account, revision = selection
+    run_id, path, mode, account, revision = _selection_tuple()
     if not path or mode != "live":
         return
     with _read_model_init_lock:
         if _read_model is None:
-            _read_model = ReadModel(TRADING_ROOT / "results" / "dashboard")
+            _read_model = ReadModel(DATA_DIR)
         _read_model.select(run_id, mode, account, path, revision)
-    with _trading_lock:
-        if _projection_pending and _projection_pending[0] == selection:
-            _projection_pending.popleft()
 
 
 def trade_log_stats(selection: tuple | None = None) -> dict:
@@ -854,7 +337,7 @@ def trade_log_stats(selection: tuple | None = None) -> dict:
         runtime["stale"] = bool(runtime.get("stale") or view.get("stale") or not valid_times
                                 or time.time() >= expires_at)
     return {**stats, "runtime": runtime, "projection": {k: view.get(k) for k in
-             ("state", "run_id", "as_of", "age_seconds", "stale", "worker_alive", "projection_ms")},
+             ("state", "run_id", "as_of", "age_seconds", "stale", "worker_alive", "projection_ms", "replication_behind")},
             "pending": bool(stats.get("pending") or view.get("ingestion", {}).get("pending"))}
 
 
@@ -889,18 +372,12 @@ def _mutation_request_error(headers) -> tuple[int, str] | None:
 def _running_runtime() -> tuple[bool, dict | None, dict]:
     """(engine process running, its latest projected runtime, projection view).
 
-    Reads process state and the projection snapshot only: no account status or
-    console scan, so a 0.5 s push of the book stays cheap."""
-    _restore_trading_state()
-    with _trading_lock:
-        process = _trading_process
-        running = (_trading_engine == "platform"
-                   and ((process is not None and process.poll() is None)
-                        or _process_matches(_trading_pid, _trading_log)))
-        selection = (_run_identity(), _trading_log, _trading_mode, _trading_account_id, _trading_config_revision)
-    if not running:
+    Reads the agent cache and the projection snapshot only, so a 1 s push of
+    the book stays cheap. Unknown counts as not running here: no book is shown
+    for an engine nobody can see."""
+    if agent().process_running() is not True:
         return False, None, {}
-    stats = trade_log_stats(selection)
+    stats = trade_log_stats(_selection_tuple())
     runtime = stats.get("runtime") if isinstance(stats.get("runtime"), dict) else None
     return True, runtime, stats.get("projection") or {}
 
@@ -979,16 +456,25 @@ def _lead_feed_view(runtime: dict | None, running: bool) -> dict:
 
 
 def health() -> dict:
-    """GET /api/diagnostics/health: this box, the engine, the account bridge,
-    the projection worker and the lead feed. Problems are listed in `error`."""
+    """GET /api/diagnostics/health: the engine box through its agent (CPU,
+    memory, engine, account reader), this console box (projection) and the
+    lead feed. Problems are listed in `error`."""
     status = trading_status()
-    metrics = system_metrics().snapshot()
+    view = agent().view()
+    engine_box = (view["state"] or {}).get("metrics") or {}
+    console_box = system_metrics().snapshot()
     runtime_view = _modern_runtime(status)
     stats = status.get("stats") or {}
     runtime = stats.get("runtime") if isinstance(stats.get("runtime"), dict) else None
     projection = stats.get("projection") or {}
-    account = account_data().snapshot()
+    account = _account_snapshot()
     problems = []
+    if not view["reachable"]:
+        problems.append("engine_box_unreachable")
+    elif view["mismatch"]:
+        problems.append("engine_box_mismatch")
+    if view["clockSkewSeconds"] is not None and abs(view["clockSkewSeconds"]) > 1:
+        problems.append("clock_skew")
     # A stopped process intentionally has an expired last-round snapshot. That
     # is not a runtime outage when it stopped cleanly; report failures, and
     # stale runtime data while a process is expected to publish.
@@ -1001,8 +487,8 @@ def health() -> dict:
         problems.append("trading_runtime_unavailable")
     if status.get("run_id") and (projection.get("stale", True) or projection.get("state") != "ready"):
         problems.append("ledger_projection_unavailable")
-    metric_at = _epoch(metrics.get("asOf"))
-    if metric_at is None or not -1 <= time.time() - metric_at <= 15 or metrics.get("stale"):
+    metric_at = _epoch(console_box.get("asOf"))
+    if metric_at is None or not -1 <= time.time() - metric_at <= 15 or console_box.get("stale"):
         problems.append("resource_snapshot_stale")
     feed = _lead_feed_view(runtime, status.get("running") is True)
     if feed["running"] and feed["healthy"] is False:
@@ -1012,420 +498,84 @@ def health() -> dict:
         problems.append("relay_listener_down")
     if account.get("error_code") not in (None, "account_not_configured", "not_checked") and account.get("stale"):
         problems.append("account_bridge_unavailable")
-    services = metrics.get("services") or {}
+    engine_services = engine_box.get("services") or {}
+    console_services = console_box.get("services") or {}
     return {"schemaVersion": 1, "status": "degraded" if problems else "ok", "nodeLabel": NODE_LABEL,
             "source": "control-plane", "asOf": metric_at, "stale": bool(problems),
+            "engineBox": {"box": (view["state"] or {}).get("box"), "reachable": view["reachable"],
+                          "mismatch": view["mismatch"], "clockSkewSeconds": view["clockSkewSeconds"]},
             "services": {
                 "engine": {"running": status.get("running"), "pid": status.get("pid"),
                            "state": status.get("service_state"), "runId": status.get("run_id"),
                            "runtimeStale": runtime_view["stale"], "runtimeAsOf": runtime_view["asOf"],
-                           "process": services.get("trader")},
+                           "process": engine_services.get("trader")},
                 "accountBridge": {"available": account.get("available"), "stale": account.get("stale"),
                                   "error": account.get("error_code"),
                                   "cacheAgeSeconds": account.get("cache_age_seconds"),
-                                  "process": services.get("account_bridge")},
-                "projection": {**projection, "process": services.get("projection")},
-                "console": {"process": services.get("dashboard")}},
-            "leadFeed": feed, "resources": metrics,
+                                  "process": engine_services.get("account_bridge")},
+                "projection": {**projection, "process": console_services.get("projection")},
+                "console": {"process": console_services.get("dashboard")}},
+            "leadFeed": feed, "resources": engine_box, "consoleResources": console_box,
             "error": "; ".join(problems) if problems else None}
 
 
-def strategy_config_store() -> StrategyConfigStore:
-    """binance-lead's own file. The retired btc-reversal-config.json beside it
-    is never read: until a binance-lead config is published the store answers
-    the defaults at revision 0, and a start needs a published revision."""
-    global _strategy_config_store
-    path = (TRADING_ROOT / "results" / "dashboard" / f"{STRATEGY_ID}-config.json").resolve()
-    if _strategy_config_store is None or _strategy_config_store.path != path:
-        _strategy_config_store = StrategyConfigStore(path)
-    return _strategy_config_store
-
-
 def strategy_config_status() -> dict:
-    saved = strategy_config_store().get()
+    """The published config lives on the engine box (the engine hot-reloads it)."""
+    view = agent().view()
+    saved = (view["state"] or {}).get("config")
+    if not isinstance(saved, dict):
+        raise RuntimeError("engine_box_unreachable")
     status = trading_status()
     runtime = (status.get("stats", {}).get("runtime") or {}).get("strategy_runtime") or {}
     active = (runtime.get("currentRound") or {}).get("configRevision") if status.get("running") else None
     if isinstance(active, str) and active.isdigit():
         active = int(active)
     return {**saved, "assetId": saved["config"].get("assetId", "btc"), "activeRevision": active,
-            "nextRoundRevision": saved["savedRevision"] if status.get("running") and active != saved["savedRevision"] else None}
+            "nextRoundRevision": saved["savedRevision"] if status.get("running") and active != saved["savedRevision"] else None,
+            "stale": not view["reachable"]}
+
+
+def strategy_draft() -> dict | None:
+    return (agent().view()["state"] or {}).get("draft")
 
 
 def strategy_control(payload: dict) -> dict:
-    action = payload.get("action")
-    if payload.get("strategy_id", STRATEGY_ID) != STRATEGY_ID:
-        raise ValueError("策略不存在")
-    if action == "stop":
-        return stop_trading()
-    if action in {"pause", "resume"}:
-        with _trading_lock:
-            status = trading_status(include_stats=False)
-            if not status["running"] or status["strategy_id"] != STRATEGY_ID or not _trading_log:
-                raise ValueError("策略尚未运行")
-            control = _trading_log.with_suffix(".control.json")
-            temporary = control.with_suffix(".next")
-            temporary.write_text(json.dumps({"paused": action == "pause"}), encoding="utf-8")
-            temporary.replace(control)
-            if _trading_params is not None:
-                _trading_params["pendingControl"] = {"action": action, "requestedAt": time.time()}
-                _persist_trading_state()
-            return {**status, "control_requested": action, "control_pending": True,
-                    "command_status": "accepted", "requested_state": "paused" if action == "pause" else "running"}
-    if action != "start":
-        raise ValueError("操作必须为start、pause、resume或stop")
-    if type(payload.get("revision")) is not int:
-        raise ValueError("启动需要已保存的策略版本")
-    try:
-        request_id = str(uuid.UUID(payload.get("request_id")))
-    except (ValueError, TypeError, AttributeError):
-        raise ValueError("启动请求编号必须是UUID") from None
-    with _config_control_lock, _trading_lock:
-        _restore_trading_state()
-        if request_id == _trading_request_id:
-            if payload["revision"] != _trading_config_revision:
-                raise ValueError("同一启动请求不能改变配置版本")
-            return trading_status(include_stats=False)
-        saved = strategy_config_store().get()
-        if payload["revision"] != saved["savedRevision"]:
-            raise ConfigConflictError(saved["savedRevision"])
-        if not saved["savedRevision"]:
-            raise ValueError("请先在策略页保存并发布 binance-lead 参数")
-        # No market is chosen here: the engine discovers the current round
-        # itself (Gamma) and waits for the next one when started mid-round.
-        return start_trading({"mode": saved["config"]["mode"], "confirm_live": True,
-                              "duration_min": saved["config"]["durationMinutes"],
-                              "start_paused": payload.get("start_paused") is True},
-                             config_revision=saved["savedRevision"], request_id=request_id,
-                             strategy_config=saved)
+    """Run control goes to the engine box's agent; the answer is its status
+    merged with this console's view, like a status read."""
+    result = agent().command(payload)
+    agent().poll()   # the next status read reflects the command at once
+    status = trading_status(include_stats=False)
+    return {**status, **{key: result[key] for key in ("command_status", "control_requested", "control_pending",
+                                                       "requested_state") if key in result}}
 
 
-def _start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
-                  strategy_config: dict | None = None) -> dict:
-    global _trading_process, _trading_pid, _trading_started_at, _trading_mode, _trading_params
-    global _trading_log, _trading_console_log, _trading_exit_code, _trading_stop_result
-    global _trading_run_id, _trading_config_revision, _trading_account_id, _trading_request_id
-    global _trading_engine
-    if _account_check_lock.locked():
-        raise account_store.AccountCheckError("account_check_busy")
-    mode = str(payload.get("mode") or "live").lower()
-    if mode != "live":
-        raise ValueError("新版交易入口只支持 live 模式")
-    if not TRADING_ROOT.is_dir() or not (TRADING_ROOT / "dist" / "cli" / "platform.js").is_file():
-        raise RuntimeError("交易引擎尚未构建")
-    if mode == "live":
-        if payload.get("confirm_live") is not True:
-            raise PermissionError("实盘必须明确确认")
-        if os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1":
-            raise PermissionError("服务器未开启实盘解锁")
-        account_status = account_config_status()
-        if not account_status["execution_credentials_ready"]:
-            raise PermissionError("未配置交易账户")
-        if (not account_status["account_check_ready"]
-                or account_status["settlement_credentials_ready"] is not True):
-            raise PermissionError("账户尚未通过最近一次钱包、签名、授权和余额检查")
-    # 运行时间允许填 0，表示不按时间自动停止，直到用户手动停止。
-    duration_raw = payload.get("duration_min", 15)
-    if type(duration_raw) not in {int, float}:
-        raise ValueError("duration_min must be a finite JSON number")
-    try:
-        duration_min = float(duration_raw)
-    except OverflowError:
-        raise ValueError("duration_min must be a finite JSON number") from None
-    if not math.isfinite(duration_min) or duration_min < 0:
-        raise ValueError("duration_min 必须为非负数字")
-    # Rounds are the operator's real unit; a five-minute window means any minute
-    # count can cut off mid round. 0 keeps the previous time-only behaviour.
-    rounds_raw = payload.get("max_rounds", (strategy_config or {}).get("config", {}).get("maxRounds", 0) or 0)
-    if type(rounds_raw) not in {int, float}:
-        raise ValueError("max_rounds must be a finite JSON number")
-    if not math.isfinite(float(rounds_raw)) or float(rounds_raw) < 0 or float(rounds_raw) != int(rounds_raw):
-        raise ValueError("max_rounds 必须为非负整数")
-    max_rounds = int(rounds_raw)
-    if not math.isfinite(duration_min) or duration_min < 0 or (duration_min != 0 and duration_min < 0.1):
-        raise ValueError("duration_min 必须为 0（一直运行）或至少 0.1 分钟")
+def _console_reset() -> dict:
+    """Delete this console's ledger, projection files and journal replicas.
+    The engine box deletes its own journals and state first (agent /reset)."""
+    global _read_model
+    report = {"replicas": 0, "projection": False}
+    with _read_model_init_lock:
+        if _read_model is not None:
+            _read_model.close()
+            _read_model = None
+    replicas = DATA_DIR / "replica"
+    for path in replicas.glob("dashboard-*.jsonl") if replicas.is_dir() else []:
+        path.unlink()
+        report["replicas"] += 1
+    for suffix in ("", "-wal", "-shm"):
+        projection = DATA_DIR / f"ledger.sqlite3{suffix}"
+        if projection.exists():
+            projection.unlink()
+            report["projection"] = True
+    Ledger(DATA_DIR / "ledger.sqlite3")
+    for name in ("selection.json", "snapshot.json", "heartbeat.json"):
+        stale = DATA_DIR / name
+        if stale.exists():
+            stale.unlink()
     with _trading_lock:
-        if _account_check_lock.locked():
-            raise account_store.AccountCheckError("account_check_busy")
-        _restore_trading_state()
-        if _trading_process is None and _process_matches(_trading_pid, _trading_log):
-            raise RuntimeError("已有交易进程运行中")
-        if _trading_process is not None and _trading_process.poll() is None:
-            raise RuntimeError("已有交易进程运行中")
-        # A stop still waiting for its child must finish first: a start here
-        # could be overwritten by that stop and run unseen (review).
-        if isinstance(_trading_stop_result, dict) and _trading_stop_result.get("process_stopped") is False:
-            raise RuntimeError("上一次停止仍在进行，请等它完成后再启动")
-        if mode == "live":
-            account_status = account_config_status()
-            if (os.environ.get("PM_TRADING_LIVE_UNLOCK") != "1"
-                    or not account_status["execution_credentials_ready"]
-                    or not account_status["account_check_ready"]
-                    or account_status["settlement_credentials_ready"] is not True):
-                raise PermissionError("账户配置或实盘授权已变化，请重新检查")
-        log_dir = TRADING_ROOT / "results" / "live"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        run_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:12]
-        # Journals grew 69-113 MB/h while trading; older runs go to results/archive.
-        prune_run_journals(log_dir, RUN_JOURNALS_KEPT - 1)
-        candidate_log = log_dir / f"dashboard-{run_id}.jsonl"
-        candidate_console_log = log_dir / f"dashboard-{run_id}.console.log"
-        candidate_state = log_dir / f"dashboard-{run_id}.platform-state.json"
-        account_wallet = account_config_status().get("wallet") if mode == "live" else None
-        # Account aggregation and restart deduplication are case-insensitive
-        # for Ethereum addresses; keep the internal account key canonical.
-        account_id = account_wallet.lower() if isinstance(account_wallet, str) and account_wallet else None
-        if strategy_config:
-            identity = hashlib.sha256((account_id or "live").lower().encode()).hexdigest()[:20]
-            # The account's state, shared by every run and every strategy. The
-            # engine keeps settlement records at <state>.settlements.json, so a
-            # new name would orphan an unfinished redemption and the account's
-            # orders/positions; the "btc-reversal" prefix is only a file name.
-            candidate_state = log_dir / f"btc-reversal-{identity}.platform-state.json"
-        # Create the selected journal before returning the start response.
-        # The status endpoint must never fall back to a previous run while the
-        # child process is still starting.
-        candidate_log.touch()
-        if strategy_config:
-            # A new operator start resumes the saved strategy unless it asks to
-            # start paused (a dry run: feeds, signals and skip reasons, no
-            # orders until 继续). Reusing a process/state alone must still
-            # preserve an intentional pause.
-            candidate_log.with_suffix(".control.json").write_text(
-                json.dumps({"paused": payload.get("start_paused") is True}), encoding="utf-8")
-        console_handle = candidate_console_log.open("a", encoding="utf-8")
-        args = [
-            "node", "dist/cli/platform.js", "--live",
-            "--duration-sec", str(duration_min * 60), "--status-sec", "2",
-            "--max-rounds", str(max_rounds),
-            "--journal-file", str(candidate_log), "--state-file", str(candidate_state),
-            "--stop-file", str(candidate_log.with_suffix(".stop")),
-        ]
-        if strategy_config:
-            configured_asset = strategy_config.get("config", {}).get("assetId", "btc")
-            args.extend(["--strategy", STRATEGY_ID, "--asset", configured_asset,
-                         "--strategy-config", str(strategy_config_store().path),
-                         "--control-file", str(candidate_log.with_suffix(".control.json"))])
-        env = _trading_environment()
-        env["LIVE"] = "true"
-        # The engine runs in its own systemd scope: in this unit's cgroup a
-        # control-plane restart, crash or OOM kill took the live engine down
-        # mid-round (BUGS O2). The scope survives; restore reattaches by pid.
-        systemd_run = shutil.which("systemd-run") if os.environ.get("INVOCATION_ID") else None
-        if systemd_run:
-            args = _engine_scope_args(systemd_run, run_id, args)
-        creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        try:
-            _trading_process = subprocess.Popen(
-                args, cwd=TRADING_ROOT, env=env, stdout=console_handle,
-                stderr=subprocess.STDOUT,
-                creationflags=creationflags,
-            )
-        except Exception:
-            console_handle.close()
-            raise
-        console_handle.close()
-        _trading_log = candidate_log
-        _trading_console_log = candidate_console_log
-        _trading_pid = _trading_process.pid
-        _trading_started_at = time.time()
-        _trading_mode = mode
-        _trading_run_id = run_id
-        _trading_engine = "platform"
-        _trading_config_revision = config_revision
-        _trading_request_id = request_id
-        _trading_account_id = account_id
-        _trading_params = {"mode": mode, "duration_min": duration_min}
-        if strategy_config:
-            _trading_params = {"strategy_id": STRATEGY_ID, "mode": mode,
-                               "duration_min": duration_min, "assetId": strategy_config["config"].get("assetId", "btc"),
-                               "config": strategy_config["config"]}
-        _trading_exit_code = None
-        _trading_stop_result = None
-        _persist_trading_state()
-        _projection_pending.append((_trading_run_id, _trading_log, _trading_mode, _trading_account_id, _trading_config_revision))
-        return trading_status(include_stats=False)
-
-
-ENGINE_NICE = -5
-ENGINE_CPU_WEIGHT = 200
-
-
-def _engine_scope_args(systemd_run: str, run_id: str, args: list[str]) -> list[str]:
-    """The engine's command inside its own transient scope.
-
-    `systemd-run --scope` puts the scope in system.slice, beside pm-console,
-    not under it: the console's cgroup limits (CPUWeight, IOWeight, MemoryMax)
-    and a console restart or OOM kill never reach the engine (BUGS O2), and
-    the scope gets its own CPUWeight. A scope runs the command in place, so the
-    pid stays the engine's (stop and restore signal and match it directly),
-    but that also means the engine inherits the console's process niceness
-    (Nice=10), which is not a cgroup setting and which a scope cannot set.
-    `nice -n` resets it to ENGINE_NICE; choom makes the kernel pick anything
-    else first under memory pressure. nice and choom both exec in place.
-    """
-    current = os.nice(0) if hasattr(os, "nice") else 0
-    return [systemd_run, "--scope", "--quiet", "--collect", f"--unit=pm-engine-{run_id}",
-            "-p", f"CPUWeight={ENGINE_CPU_WEIGHT}",
-            "nice", "-n", str(ENGINE_NICE - current),
-            "choom", "-n", "-500", "--", *args]
-
-
-def start_trading(payload: dict, *, config_revision: int | None = None, request_id: str | None = None,
-                  strategy_config: dict | None = None) -> dict:
-    with deployment_mutex():
-        return _start_trading(payload, config_revision=config_revision, request_id=request_id,
-                              strategy_config=strategy_config)
-
-
-def _trading_environment() -> dict:
-    env = os.environ.copy()
-    env.update(_account_values())
-    if not env.get("POLYMARKET_OWNER_PRIVATE_KEY") and env.get("POLYMARKET_PRIVATE_KEY"):
-        env["POLYMARKET_OWNER_PRIVATE_KEY"] = env["POLYMARKET_PRIVATE_KEY"]
-    # Control-plane and diagnostic credentials/configuration belong to the
-    # parent process. Do not leak them into a trading child environment.
-    for name in ("PM_ACCOUNT_PROFILE", "PM_ACCOUNT_RPC_URL",
-                 "PM_ACCOUNT_RPC_FALLBACK_URL", "PM_TRADING_LIVE_UNLOCK"):
-        env.pop(name, None)
-    # Pin the exact checked wallet; blank also prevents dotenv restoring overrides.
-    env["POLY_FUNDER"] = env.get("POLYMARKET_WALLET_ADDRESS") or env.get("POLY_FUNDER", "")
-    # Preserve an explicitly configured legacy signature mode. An empty value
-    # remains empty for deployments whose runtime selects the default.
-    env["POLY_SIGNATURE_TYPE"] = env.get("POLY_SIGNATURE_TYPE", "")
-    return env
-
-
-def stop_trading() -> dict:
-    global _trading_process, _trading_pid, _trading_exit_code, _trading_stop_result
-    _restore_trading_state()
-    with _trading_lock:
-        process = _trading_process
-        restored_pid = _trading_pid if process is None else None
-        candidate_pid = restored_pid or (process.pid if process else None)
-        if (_trading_mode == "live" and candidate_pid
-                and (_trading_stop_result or {}).get("requested_pid") == candidate_pid
-                and not (_trading_stop_result or {}).get("process_stopped")
-                and _process_matches(candidate_pid, _trading_log)):
-            # A repeated signal can terminate a child whose one-shot signal
-            # handler is already draining orders. The first request owns stop.
-            return trading_status(include_stats=False)
-        stop_requested = False
-        if process is None and not _process_matches(candidate_pid, _trading_log):
-            remote_confirmed = _remote_orders_empty_from_fresh_snapshot()
-            _trading_stop_result = {
-                "confirmed": remote_confirmed,
-                "process_stopped": True,
-                "remote_orders_state": "confirmed" if remote_confirmed else "unconfirmed",
-                "message": ("当前没有正在运行的交易任务，账户快照已确认无远端挂单。"
-                            if remote_confirmed else "当前没有正在运行的交易任务，远端挂单状态尚未通过账户查询确认。"),
-            }
-            _persist_trading_state()
-            return trading_status(include_stats=False)
-        if process is None and restored_pid and _process_matches(restored_pid, _trading_log):
-            try:
-                if os.name == "nt":
-                    if _trading_engine == "platform" and _trading_log:
-                        _trading_log.with_suffix(".stop").touch()
-                    else:
-                        subprocess.run(["taskkill", "/PID", str(restored_pid), "/T"], timeout=10, check=False)
-                else:
-                    os.kill(restored_pid, signal.SIGTERM)
-                stop_requested = True
-            except (ProcessLookupError, OSError, subprocess.SubprocessError):
-                pass
-        if process is not None and process.poll() is None:
-            try:
-                if os.name == "nt":
-                    if _trading_engine == "platform" and _trading_log:
-                        _trading_log.with_suffix(".stop").touch()
-                    else:
-                        process.send_signal(signal.CTRL_BREAK_EVENT)
-                else:
-                    process.send_signal(signal.SIGTERM)
-                stop_requested = True
-            except (ProcessLookupError, OSError):
-                pass
-        if stop_requested:
-            # Recorded before waiting, so a repeated stop request does not signal
-            # a child that is already draining (see the guard above).
-            _trading_stop_result = {"confirmed": False, "process_stopped": False, "remote_orders_state": "unconfirmed",
-                                    "requested_pid": candidate_pid,
-                                    "message": "已请求停止，正在等待撤单及成交对账完成。"}
-            _persist_trading_state()
-        mode, log, run_id = _trading_mode, _trading_log, _trading_run_id
-    # Wait without _trading_lock: holding it for up to 8 s blocked every status
-    # read and the console's requests timed out mid-stop (BUGS P3-8).
-    timeout = 8 if mode == "live" else 20
-    if process is None and restored_pid:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and _process_matches(restored_pid, log):
-            time.sleep(0.2)
-    elif process is not None and process.poll() is None:
-            try:
-                process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                # Live shutdown drains in-flight POSTs, cancels, and reconciles
-                # fills. Keep it alive and report pending instead of killing
-                # the very process responsible for resolving remote exposure.
-                if mode != "live":
-                    try:
-                        process.kill()
-                    except (ProcessLookupError, OSError):
-                        pass
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
-    with _trading_lock:
-        # Only the stop's own run may be updated. While it waited, another poll
-        # may have closed it and a new run started; touching state then would
-        # hide a live engine (review).
-        if _trading_run_id != run_id or (process is not None and _trading_process not in (process, None)):
-            return trading_status(include_stats=False)
-        _trading_exit_code = process.poll() if process else None
-        stopped = (process.poll() is not None) if process is not None else not _process_matches(restored_pid, _trading_log)
-        if stopped and stop_requested and _trading_console_log:
-            # Report the engine's own outcome, including a failure (BUGS P3-9).
-            outcome = _automatic_stop_result(_trading_exit_code, _trading_console_log)
-            if outcome.get("reason") not in (None, "process_exited"):
-                _trading_stop_result = {**outcome, "requested_pid": candidate_pid}
-                _trading_process = None
-                _trading_pid = None
-                _persist_trading_state()
-                return trading_status(include_stats=False)
-        # A stopped process does not prove remote live orders were cancelled.
-        # Only a fresh, complete account snapshot with an empty open-order
-        # section can confirm the remote side of the stop.
-        confirmed = bool(stopped and _remote_orders_empty_from_fresh_snapshot())
-        if not stopped:
-            message = "已请求停止，正在等待撤单及成交对账完成；后台进程保留，请稍后核对。"
-        elif confirmed:
-            message = "进程已停止，账户快照已确认无远端挂单。"
-        else:
-            message = "进程已停止；实盘挂单尚未通过账户查询确认。"
-        _trading_stop_result = {"confirmed": confirmed, "process_stopped": stopped,
-                                "remote_orders_state": "confirmed" if confirmed else "unconfirmed",
-                                "message": message}
-        if stop_requested:
-            _trading_stop_result["requested_pid"] = candidate_pid
-        if stopped:
-            _trading_process = None
-            _trading_pid = None
-        _persist_trading_state()
-        return trading_status(include_stats=False)
-
-
-def _epoch(value):
-    if type(value) in (int, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, str):
-        try:
-            stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return stamp.timestamp() if stamp.tzinfo else None
-        except (ValueError, OverflowError, OSError):
-            pass
-    return None
+        _save_selection(None)
+        _modern_response_cache.clear()
+    return report
 
 
 def _money(value):
@@ -1521,21 +671,7 @@ def _modern_runtime(status: dict) -> dict:
 
 
 def _api_run_id() -> str | None:
-    _restore_trading_state()
-    with _trading_lock:
-        run_id = _run_identity()
-        # A test or an in-process root switch can leave the previous runtime
-        # identity loaded while its journal belongs to another data root.
-        # Never let that stale identity make modern read endpoints probe an
-        # unrelated or missing ledger projection.
-        if run_id and _trading_log is None:
-            return None
-        if run_id and _trading_log is not None:
-            try:
-                _trading_log.resolve().relative_to((TRADING_ROOT / "results").resolve())
-            except (OSError, RuntimeError, ValueError):
-                return None
-        return run_id
+    return _run_identity()
 
 
 def _official_results() -> dict | None:
@@ -1543,10 +679,10 @@ def _official_results() -> dict | None:
     reader's last snapshot (no extra request). Recomputed only when that
     snapshot changes."""
     global _official_cache, _official_last_good
-    reader = account_data()
-    snapshot = reader.snapshot()
-    marker = (reader._checked, snapshot.get("stale") is True)
-    if marker[0] and _official_cache[0] == marker:
+    raw = agent().account_snapshot()
+    snapshot = _account_snapshot()
+    marker = (id(raw), snapshot.get("stale") is True)
+    if raw is not None and _official_cache[0] == marker:
         return _official_cache[1]
     results = official_pnl.round_results(snapshot)
     if results is not None:
@@ -1607,7 +743,7 @@ def _range_start_for(range_name: str):
 
 
 def _api_ledger() -> Ledger:
-    return Ledger(TRADING_ROOT / "results" / "dashboard" / "ledger.sqlite3", readonly=True)
+    return Ledger(DATA_DIR / "ledger.sqlite3", readonly=True)
 
 
 _lead_cache: OrderedDict = OrderedDict()
@@ -1641,121 +777,11 @@ def _cached_view(key: tuple, build) -> dict:
     return copy.deepcopy(cached)
 
 
-RUN_JOURNALS_KEPT = 3
-
-
-def prune_run_journals(live: Path, keep: int = RUN_JOURNALS_KEPT, archive: Path | None = None) -> list[str]:
-    """Keep the newest `keep` runs in `live`; pack each older one into
-    `archive/<run>.tar.gz` and remove its files (2026-11-13: the box keeps 3
-    raw runs, old runs are 6.5 GB raw / 0.36 GB packed; nothing is deleted
-    unpacked). The console statistics only read the runs the ledger has.
-
-    A run is `dashboard-<run_id>.*`: journal, console log, control and stop
-    files. Settlement records and the strategy's platform-state are shared
-    across runs and never touched. Called before a new run starts, with no
-    engine running, so no file here is being written. A run whose pack fails
-    is left in place.
-    """
-    import tarfile
-    archive = archive or live.parent / "archive"
-    runs: dict[str, list[Path]] = {}
-    for path in live.glob("dashboard-*") if live.exists() else []:
-        if not path.is_file() or ".settlements.json" in path.name or ".platform-state.json" in path.name:
-            continue
-        runs.setdefault(path.name.split(".", 1)[0], []).append(path)
-    newest = sorted(runs, key=lambda run: max(p.stat().st_mtime for p in runs[run]), reverse=True)
-    removed = []
-    for run in newest[keep:]:
-        archive.mkdir(parents=True, exist_ok=True)
-        target = archive / f"{run}.tar.gz"
-        partial = target.with_name(target.name + ".part")
-        try:
-            with tarfile.open(partial, "w:gz", compresslevel=6) as pack:
-                for path in runs[run]:
-                    pack.add(path, arcname=path.name)
-            partial.replace(target)
-        except OSError:
-            partial.unlink(missing_ok=True)
-            continue
-        for path in runs[run]:
-            path.unlink(missing_ok=True)
-            removed.append(path.name)
-    return removed
-
-
-def reset_ledger_data() -> dict:
-    """Delete run journals and the projection so statistics start from empty.
-
-    Deliberately preserved:
-    - `*.settlements.json` — the on-chain settlement records. A `prepared` or
-      `submitted` record is an unfinished redemption; losing it would abandon
-      winnings that are still on chain. Money state is never console-resettable.
-    - strategy config and drafts — configuration, not run data.
-
-    Deleted (this was the gap): the main `*.platform-state.json` engine state —
-    orders, fills, positions, cash. It is run data, so a reset that kept it left
-    the next run replaying old fills.
-
-    The caller MUST hold `_trading_lock` and must already have proven that no
-    trading process is running: this deletes the journal a live run is appending
-    to, and the engine would keep writing to an unlinked inode.
-    """
-    global _read_model
-    results = TRADING_ROOT / "results"
-    live, dashboard = results / "live", results / "dashboard"
-    report = {"journals": 0, "logs": 0, "controls": 0, "state": 0, "bytes": 0, "projection": False, "preserved": []}
-    # The projection worker opens ledger.sqlite3 once and never reopens it, and
-    # the supervisor only respawns a *dead* worker. Unlinking under it would
-    # leave it ingesting into a deleted inode, so every later run would report
-    # zero fills and flat PnL until the server restarted. Stop it first and let
-    # the supervisor rebuild it against the new file.
-    if _read_model is not None:
-        _read_model.close()
-        _read_model = None
-    for path in sorted(live.glob("*")) if live.exists() else []:
-        if not path.is_file():
-            continue
-        name = path.name
-        # Only the SETTLEMENT side is money state (an unfinished redemption would
-        # be abandoned if deleted). The main platform-state file is run data —
-        # orders, fills, positions, cash — but the old `.platform-state.json`
-        # substring preserved it too, so a reset left 42 terminal orders and 38
-        # fills behind for the next run's recovery scan to replay as new fills.
-        if ".settlements.json" in name:
-            report["preserved"].append(name)
-            continue
-        key = ("journals" if name.endswith(".jsonl") else "logs" if name.endswith(".console.log")
-               else "controls" if name.endswith(".control.json")
-               else "state" if ".platform-state.json" in name else None)
-        if key is None:
-            continue
-        size = path.stat().st_size
-        path.unlink()
-        report[key] += 1
-        report["bytes"] += size
-    for suffix in ("", "-wal", "-shm"):
-        projection = dashboard / f"ledger.sqlite3{suffix}"
-        if projection.exists():
-            projection.unlink()
-            report["projection"] = True
-    # Recreate an empty projection so readers get "no runs" instead of an error.
-    Ledger(dashboard / "ledger.sqlite3")
-    for name in ("selection.json", "snapshot.json", "heartbeat.json"):
-        stale = dashboard / name
-        if stale.exists():
-            stale.unlink()
-    # Drop this run's identity, cached responses and projection bookkeeping. The
-    # caller holds _trading_lock, which these globals are guarded by.
-    _clear_account_run_selection()
-    return report
-
-
 def _current_account_id() -> str | None:
-    with _trading_lock:
-        account_id = _trading_account_id
+    account_id = (_load_selection() or {}).get("account_id")
     if account_id:
         return account_id.lower()
-    wallet = account_config_status().get("wallet")
+    wallet = EXPECTED_WALLET or account_config_status().get("wallet")
     return wallet.lower() if isinstance(wallet, str) and wallet else None
 
 
@@ -1954,7 +980,7 @@ def make_handler(root: Path):
                 return
             if path == "/api/strategy/config":
                 config = strategy_config_status()
-                draft = strategy_config_store().get_draft()
+                draft = strategy_draft()
                 if draft:
                     draft = {**draft, "savedAt": _epoch(draft.get("savedAt"))}
                 self._send_json(json.dumps({"schemaVersion": 1, "source": "control-plane",
@@ -1963,7 +989,7 @@ def make_handler(root: Path):
                     "activationScope": "future_uncreated_round"}, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/account/snapshot":
-                snapshot = account_data().snapshot()
+                snapshot = _account_snapshot()
                 # The console reads balance, occupancy, positions and open
                 # orders. Trade history, on-chain activity, closed positions and
                 # fee history were 400 KB of the 440 KB body, pushed every
@@ -1994,7 +1020,7 @@ def make_handler(root: Path):
                 def build():
                     if path == "/api/stats/lead":
                         # The saved size: the switches comparison's base when no mid-edge order says it.
-                        shares = (strategy_config_store().get().get("config") or {}).get("shares")
+                        shares = (((agent().view()["state"] or {}).get("config") or {}).get("config") or {}).get("shares")
                         return _api_ledger().lead_stats(run_id, range=requested_range, official=results,
                                                         base_shares=shares if isinstance(shares, (int, float)) else None)
                     before = query.get("before", [None])[0]
@@ -2295,7 +1321,7 @@ def make_handler(root: Path):
                 cacheable = self.command == "GET" and (path in {
                     "/api/events", "/api/fills", "/api/settlements", "/api/metrics/summary",
                     "/api/rounds", "/api/stats/lead", "/api/orders/lead"} or path.startswith("/api/rounds/"))
-                key = (_trading_run_id, self.path)
+                key = (_run_identity(), self.path)
                 with _modern_cache_lock:
                     if cacheable and status >= 500 and key in _modern_response_cache:
                         value = {**_modern_response_cache[key], "stale": True, "error": value.get("error")}
@@ -2359,7 +1385,8 @@ def make_handler(root: Path):
                     if payload.get("strategyId", STRATEGY_ID) != STRATEGY_ID:
                         raise ValueError("策略不存在")
                     with _config_control_lock:
-                        result = strategy_config_store().save_draft(modern_config, expected)
+                        result = agent().post("/config/draft", {"config": modern_config, "expectedRevision": expected})
+                        agent().poll()
                     self._send_json(json.dumps({"accepted": True, **result, "savedRevision": result["expectedRevision"],
                                                 "revision": result["expectedRevision"], "savedAt": _epoch(result.get("savedAt"))}, ensure_ascii=False,
                                                 allow_nan=False).encode("utf-8"))
@@ -2371,7 +1398,9 @@ def make_handler(root: Path):
                         self._send_json(b'{"accepted":false,"status":"unsupported","error":"activation_at_round_unsupported"}', 501)
                         return
                     with _config_control_lock:
-                        config = strategy_config_store().activate_draft(payload.get("expectedRevision"), payload.get("draftId"))
+                        config = agent().post("/config/activate", {"expectedRevision": payload.get("expectedRevision"),
+                                                                  "draftId": payload.get("draftId")})
+                        agent().poll()
                     self._send_json(json.dumps({"accepted": True, "strategyId": STRATEGY_ID,
                         "revision": config["savedRevision"], "savedRevision": config["savedRevision"], "effectiveRoundId": None,
                         "activationScope": "future_uncreated_round", "status": "published",
@@ -2383,25 +1412,20 @@ def make_handler(root: Path):
                         self._send_json(json.dumps({"accepted": False, "error": "缺少确认标记，未清空任何数据"},
                                                    ensure_ascii=False).encode("utf-8"), 400)
                         return
-                    # Wiping the projection while a run is writing to it would
-                    # discard records for capital already committed on chain, so
-                    # the liveness check and the delete must be atomic: without
-                    # the lock, _start_trading can win the gap and the engine
-                    # ends up appending to an unlinked journal. The guard also
-                    # fails closed — "cannot prove it is stopped" is not
-                    # "stopped", because _process_matches() reports False
-                    # whenever the persisted trading state was lost.
+                    # The engine box deletes its journals and state first and
+                    # refuses while an engine runs (or when it cannot tell);
+                    # only then does this console drop its ledger and replicas.
                     try:
                         with _trading_lock:
-                            present = _engine_process_present()
-                            if present is None:
-                                raise RuntimeError("无法确认交易进程是否已停止，未清空任何数据")
-                            if present or _process_matches(_trading_pid, _trading_log):
-                                raise RuntimeError("交易进程仍在运行，请先停止交易再清空数据")
-                            report = reset_ledger_data()
-                    except RuntimeError as exc:
+                            engine = agent().post("/reset", {"confirm": "RESET"})
+                            report = {**(engine.get("report") or {}), "console": _console_reset()}
+                    except AgentUnavailable as exc:
                         self._send_json(json.dumps({"accepted": False, "error": str(exc)},
-                                                   ensure_ascii=False).encode("utf-8"), 409)
+                                                   ensure_ascii=False).encode("utf-8"), 503)
+                        return
+                    except AgentError as exc:
+                        self._send_json(json.dumps({"accepted": False, "error": str(exc)},
+                                                   ensure_ascii=False).encode("utf-8"), exc.status)
                         return
                     except (OSError, sqlite3.Error) as exc:
                         self._send_json(json.dumps({"accepted": False, "error": f"清空失败：{exc}"},
@@ -2412,13 +1436,15 @@ def make_handler(root: Path):
                         ensure_ascii=False).encode("utf-8"))
                     return
                 raise ValueError("不支持的交易接口")
-            except account_store.AccountCheckError as exc:
-                self._send_json(json.dumps({"ok": False, "error": str(exc), "error_code": exc.code,
-                                            "retryable": exc.retryable}, ensure_ascii=False).encode("utf-8"), exc.http_status)
-            except ConfigConflictError as exc:
-                self._send_json(json.dumps({"ok": False, "error": str(exc), "current_revision": exc.current_revision}, ensure_ascii=False).encode(), 409)
-            except PermissionError as exc:
-                self._send_json(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8"), 403)
+            except AgentUnavailable as exc:
+                self._send_json(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8"), 503)
+            except AgentError as exc:
+                # The engine box's own refusal (unlock off, stale revision,
+                # account check, ...) with its status and fields.
+                passed = {key: value for key, value in exc.body.items()
+                          if key in {"error_code", "retryable", "current_revision"}}
+                self._send_json(json.dumps({**passed, "ok": False, "error": str(exc)},
+                                           ensure_ascii=False).encode("utf-8"), exc.status)
             except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
                 self._send_json(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False).encode("utf-8"), 400)
 
@@ -2453,7 +1479,7 @@ def make_handler(root: Path):
         capture.do_GET()
         return capture.status, capture.wfile.getvalue()
 
-    ledger_dir = TRADING_ROOT / "results" / "dashboard"
+    ledger_dir = DATA_DIR
 
     def token(path: str):
         # Ledger-backed blocks change only when the projection writes the
@@ -2473,7 +1499,7 @@ def make_handler(root: Path):
                              "/api/stats/", "/api/orders/")):
             return _ledger_stamp()
         if route == "/api/account/snapshot":
-            return account_data()._checked
+            return id(agent().account_snapshot())
         return None
 
     Handler.push_hub = PushHub(render, token=token)
@@ -2491,11 +1517,9 @@ def main() -> int:
     system_metrics().refresh()
     server = ThreadingHTTPServer((args.host, args.port), make_handler(Path(args.root).resolve()))
     stop = threading.Event()
+    threading.Thread(target=agent().run, args=(stop,), name="engine-agent", daemon=True).start()
     threading.Thread(target=supervise_projection, args=(stop,), daemon=True).start()
-    threading.Thread(target=account_data().run, args=(stop,), daemon=True).start()
     threading.Thread(target=refresh_system_metrics, args=(stop,), daemon=True).start()
-    threading.Thread(target=account_check_background, args=(stop,),
-                     name="account-check-background", daemon=True).start()
     threading.Thread(target=server.RequestHandlerClass.push_hub.run, args=(stop,),
                      name="console-push", daemon=True).start()
     try:
@@ -2505,8 +1529,6 @@ def main() -> int:
         server.server_close()
         if _read_model:
             _read_model.close()
-        if _account_data:
-            _account_data.close()
     return 0
 
 

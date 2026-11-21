@@ -1,4 +1,4 @@
-"""Starting binance-lead from the control plane, on the real module.
+"""Starting binance-lead on the engine box, on the real agent (scripts/engine_agent.py).
 
 - the published reversal config (btc-reversal-config.json, revision 22, as on
   the server) is never read: the strategy shows new defaults at revision 0, a
@@ -46,7 +46,7 @@ REVERSAL = {"schemaVersion": 1, "strategyId": "btc-reversal", "savedRevision": 2
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("dashboard_server", SCRIPTS / "system-dashboard-server.py")
+    spec = importlib.util.spec_from_file_location("engine_agent", SCRIPTS / "engine_agent.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -78,7 +78,6 @@ class LeadStart(unittest.TestCase):
                                            "wallet": WALLET}
         s._account_values = lambda: {}
         s._remote_orders_empty_from_fresh_snapshot = lambda: False
-        s.trade_log_stats = lambda selection=None: {"runtime": None, "projection": {"state": "ready", "stale": False}}
         self.spawned = []
         self.popen = s.subprocess.Popen
         s.subprocess.Popen = lambda args, **kw: self.spawned.append((args, kw)) or Child()
@@ -104,7 +103,7 @@ class LeadStart(unittest.TestCase):
 
     def test_old_reversal_config_is_not_read_and_blocks_start(self):
         s = self.server
-        status = s.strategy_config_status()
+        status = s.strategy_config_store().get()
         self.assertEqual(status["strategyId"], "binance-lead")
         self.assertEqual(status["savedRevision"], 0, "nothing published for binance-lead yet")
         self.assertEqual(status["config"], default_config())
@@ -142,7 +141,7 @@ class LeadStart(unittest.TestCase):
                          "the account's state file, and with it <state>.settlements.json, keeps its name")
         self.assertEqual(Path(options["cwd"]), self.engine)
         self.server._process_command = lambda pid: ""
-        self.assertEqual(self.server.trading_status(include_stats=False)["strategy_id"], "binance-lead")
+        self.assertEqual(self.server.trading_status()["strategy_id"], "binance-lead")
         self.server.subprocess.Popen = self.popen
         # The built engine accepts this exact command line and reads the file as saved.
         probe = Path(self.tmp.name) / "probe.mjs"

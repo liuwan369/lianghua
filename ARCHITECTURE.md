@@ -4,36 +4,45 @@
 
 ## 进程
 
-两台 AWS（2 vCPU、2 GB）：**爱尔兰 eu-west-1**（`pm-ire`，控制台 + 交易引擎，离 Polymarket 伦敦撮合约 24 ms）和**东京 ap-northeast-1**（`pm-tokyo`，只做转发：在东京收 Bybit/币安/OKX 成交，签名后转给爱尔兰）。旧的都柏林机器（`pm-new`）不跑交易，只做研究下载。
+控制台和交易引擎分成两半（2026-11-21）：**控制台**（`system-dashboard-server.py`）只看数据、发命令，不碰私钥；**引擎代理**（`engine_agent.py`，每台交易机一个）管引擎进程、账户私钥、策略参数和运行记录。两者之间只走代理的 HTTP 接口（只监听本机，跨机器走 SSH 隧道）。现在两半还都在爱尔兰 `pm-ire` 上；之后每个账户一台交易机（`pm-a`、`pm-b`），`pm-ire` 只留控制台。**东京 ap-northeast-1**（`pm-tokyo`）只做转发：收 Bybit/币安/OKX 成交，签名后发给每台交易机。
 
 ```
  浏览器 ──https──> nginx 443（basic auth，读 10 r/s、写 1 r/s）
                       │ X-PM-Authenticated
                       ▼
-        控制面 system-dashboard-server.py  127.0.0.1:18766
-        (systemd: pm-console，Nice 10，CPUWeight 20，MemoryMax 600M)
-          │ 子进程: projection_worker.py ── journal → ledger.sqlite3
-          │ 子进程: node dist/cli/account-data.js（账户只读，--max-old-space-size=160）
+        控制台 system-dashboard-server.py  127.0.0.1:18766（systemd pm-console，不含私钥）
+          │ 每秒 GET /state（缓存，网页都读缓存）；运行记录按字节复制到 data/console/replica/
+          │ 子进程: projection_worker.py ── 副本 → data/console/ledger.sqlite3
+          ▼  http://127.0.0.1:18767（同机直连；跨机器经 SSH 隧道）
+        引擎代理 engine_agent.py（systemd pm-agent，只监听本机）
+          │ 子进程: node dist/cli/account-data.js（账户只读，--max-old-space-size=160）、账户检查
           │ 启停: systemd-run --scope pm-engine-<run_id>（CPUWeight 200，Nice -5）
           ▼
         交易引擎 node dist/cli/platform.js --live ──WS/HTTP──> Polymarket CLOB / Polygon
-          │ ← 领先成交：爱尔兰直连三家交易所 + 东京转发（UDP×2 + TCP，端口 47001，HMAC）
+          │ ← 领先成交：Bybit 直连 + 东京转发（UDP×2 + TCP，端口 47001，HMAC）
           │ 写 results/live/dashboard-<run_id>.jsonl
 
- 东京  pm-relay（systemd，node dist/cli/relay.js）── 三家交易所 WS ──> 签名转发到爱尔兰
+ 东京  pm-relay（systemd，node dist/cli/relay.js）── 三家交易所 WS ──> 签名转发到每台交易机
 ```
 
 | 进程 | 机器 | 启动方式 | 职责 |
 |---|---|---|---|
-| 控制面 | 爱尔兰 | systemd `pm-console` | HTTP API、托管前端、启停引擎、账户检查、SSE 推送 |
-| 交易引擎 | 爱尔兰 | 控制面 `_start_trading`，一次只跑一个 | 领先信号 → 策略 → 下单 → 成交 → 结算 |
-| 账本投影 | 爱尔兰 | 控制面拉起 `scripts/dashboard/projection_worker.py` | 读 journal，写 `results/dashboard/ledger.sqlite3` |
-| 账户读取 | 爱尔兰 | 控制面常驻子进程 `dist/cli/account-data.js` | 余额、挂单、持仓、成交、Data API 平仓结果 |
-| 转发 | 东京 | systemd `pm-relay` | 收 Bybit/币安/OKX 成交，`venue|id|seq|tradeTimeMs|price|tokyoRecvMs|mac` 发给爱尔兰 |
+| 控制台 | 控制台机 | systemd `pm-console` | HTTP API、托管前端、SSE 推送、复制运行记录、账本投影；命令转给代理 |
+| 引擎代理 | 交易机 | systemd `pm-agent` | 启停引擎、暂停/继续、账户检查、账户读取、策略参数、按字节提供运行记录、本机 CPU（含被抢比例）和内存 |
+| 交易引擎 | 交易机 | 代理 `_start_trading`，一台一个 | 领先信号 → 策略 → 下单 → 成交 → 结算 |
+| 账本投影 | 控制台机 | 控制台拉起 `scripts/dashboard/projection_worker.py` | 读运行记录副本，写 `data/console/ledger.sqlite3` |
+| 账户读取 | 交易机 | 代理常驻子进程 `dist/cli/account-data.js` | 余额、挂单、持仓、成交、Data API 平仓结果 |
+| 转发 | 东京 | systemd `pm-relay` | 收 Bybit/币安/OKX 成交，`venue|id|seq|tradeTimeMs|price|tokyoRecvMs|mac` 发给每台交易机 |
 
 引擎下单用自己的行情 WS，市场发现只走 Gamma（`live/discovery.ts`）。
 
-引擎跑在独立 systemd scope `pm-engine-<run_id>` 里，所以重启控制面不会停掉引擎，控制面重启后按 pid 重新接管。
+引擎跑在独立 systemd scope `pm-engine-<run_id>` 里，重启代理或控制台都不会停掉引擎；代理重启后按 pid 重新接管（`results/engine-run.json`）。
+
+**代理接口**（`engine_agent.py make_handler`，`dashboard/agent.py` 是控制台这边的客户端）：`GET /state`（进程事实、已发布配置和草稿、账户快照版本、本机指标、运行记录列表、`box`、`now`）、`GET /account/snapshot`、`GET /journal?run=&offset=&tail=&max=`（只按运行编号，`tail` 是控制台副本末尾 256 字节的 sha256，对不上返回 `diverged`）、`POST /commands`、`/config/draft`、`/config/activate`、`/account/refresh`、`/reset`。回复里不含任何秘密。
+
+**连不上 ≠ 停了**：控制台 5 s 内没拿到 `/state`，`processRunning` 为 null，页面显示「连不上引擎机」，启动、发布参数、清空数据一律拒绝（503）；引擎照常交易，风控在引擎里。代理报的 `box` 或钱包和控制台设的 `PM_AGENT_BOX`/`PM_ACCOUNT_WALLET` 不一致时同样拒绝所有写操作。
+
+**运行记录复制**（`dashboard/replica.py`）：只追加写（不改名，账本对新 inode 会判成重写），最后一行没传完整没关系（账本只读到最后一个换行）。副本落后时投影标 `stale`、`replication_behind`；上一次运行没复制完不准启动下一次，否则那段尾巴会丢。
 
 行情采集与录制（`cli/market-snapshot.ts`、`cli/market-recorder.ts`、`dashboard/market-projection.ts`）现在不在任何机器上跑：2026-11-12 停了都柏林的录制，爱尔兰不装这个服务；旧录制在本机 `E:/pm-backup/market-history/`（到 11-13）。
 
@@ -41,7 +50,7 @@
 
 ### 启动与停止
 
-启动（`POST /api/runtime/commands {action:"start", requestId, revision}` → `strategy_control` → `_start_trading`）必须同时满足：`revision` 等于已发布的版本号（> 0）、`requestId` 是 UUID（同一个编号重发只返回当前状态）、服务器环境 `PM_TRADING_LIVE_UNLOCK=1`、账户检查通过（签名、授权、结算凭据）、没有在跑的引擎、拿到 `deployment.lock`。不选市场：引擎自己从 Gamma 发现当前场，中途启动就等下一场。启动前把旧 run 的 journal 打包进 `results/archive/<run>.tar.gz`，`results/live/` 只留最新 3 个（`prune_run_journals`）。
+启动（`POST /api/runtime/commands {action:"start", requestId, revision}` → 控制台 `strategy_control` → 代理 `POST /commands` → `_start_trading`）必须同时满足：`revision` 等于已发布的版本号（> 0）、`requestId` 是 UUID（同一个编号重发只返回当前状态）、服务器环境 `PM_TRADING_LIVE_UNLOCK=1`、账户检查通过（签名、授权、结算凭据）、没有在跑的引擎、拿到 `deployment.lock`。不选市场：引擎自己从 Gamma 发现当前场，中途启动就等下一场。启动前把旧 run 的 journal 打包进 `results/archive/<run>.tar.gz`，`results/live/` 只留最新 3 个（`prune_run_journals`）。
 
 ```
 node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds <n>
@@ -56,9 +65,9 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 旧的 `results/dashboard/btc-reversal-config.json` 不再读。没有 `binance-lead-config.json` 时控制面返回 binance-lead 默认值、`savedRevision: 0`，启动要求已发布的版本，所以部署后必须在策略页保存并激活一次才能启动。
 
-暂停/恢复：控制面写 `<journal>.control.json` 的 `paused`，引擎每 1 s 读一次（同一个定时器也热加载策略配置）。
+暂停/恢复：代理写 `<journal>.control.json` 的 `paused`，引擎每 1 s 读一次（同一个定时器也热加载策略配置）。
 
-停止：Linux 发 SIGTERM。引擎暂停 → 撤掉所有挂单 → 对账 → 最多再等 5 分钟把结算跑完 → 落盘退出。控制面最多等 8 s，超时也不 kill 实盘进程。账户快照读到零挂单才算"已确认停止"。
+停止：代理发 SIGTERM。引擎暂停 → 撤掉所有挂单 → 对账 → 最多再等 5 分钟把结算跑完 → 落盘退出。代理最多等 8 s，超时也不 kill 实盘进程。代理自己的账户快照读到零挂单才算"已确认停止"。
 
 启动失败会写进 `<journal>.console.log` 的 `platform_error`（例：2026-11-15 地区检查 `polymarket.com/api/geoblock` 超时一次，`GEO-CHECK FAILED`），引擎不重试，控制台再点启动即可。
 
@@ -101,19 +110,23 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
-| `system-dashboard-server.py` | 控制面：路由、鉴权、启停引擎、PnL 拼装、静态前端 |
+| `system-dashboard-server.py` | 控制台：路由、鉴权、把代理的进程事实和本地投影合起来、PnL 拼装、静态前端；不启停进程、不读私钥 |
+| `engine_agent.py` | 引擎代理（交易机）：启停引擎、暂停/继续、账户检查与账户读取、策略参数、运行记录按字节提供、清空本机运行数据 |
+| `dashboard/agent.py` | 控制台调代理的客户端：每秒缓存 `/state`，连不上/接错时拒绝写操作，驱动运行记录复制 |
+| `dashboard/replica.py` | 运行记录按字节复制（控制台副本 + 代理那头读取），对不上就停 |
+| `migrate_console_data.py` | 一次性：把控制台的账本和运行选择从 `backend/engine/results` 复制到 `data/console`（只复制、不删） |
 | `dashboard/push.py` | `PushHub`：SSE 推送，按路径节奏重渲染 |
 | `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计）；`_strategy_projection` 投影 binance-lead 的 getStatus，`platform_status` 只覆盖 `platform_runtime`（每个 run 一行，不进事件表）；`lead_signal` 进事件表，同时把 outcome 和跳过原因分类存进 `lead_signals`，最近 20 条随运行快照给控制台；`data_version` 每次业务写入加一，控制面按它缓存统计 |
 | `dashboard/projection_worker.py` | 投影子进程，不读账户配置 |
 | `dashboard/read_model.py` | 拉起并读取投影快照 |
 | `dashboard/official_pnl.py` | 从 Data API 结果按场次算官方盈亏 |
-| `dashboard/account_data.py` | 管理 account-data 子进程，缓存快照（控制面每 60 秒读一次，有新成交立即读） |
+| `dashboard/account_data.py` | 管理 account-data 子进程，缓存快照（代理每 60 秒读一次，控制台看到新成交时让它立即读） |
 | `dashboard/strategy_config.py` | binance-lead 配置与草稿持久化（默认值、校验范围同引擎）、支持的币种 |
 | `dashboard/config.py` | 配置文件锁与错误类型 |
 | `dashboard/market_snapshot.py` | 校验采集器快照 |
-| `dashboard/system_metrics.py` | 主机与进程指标 |
+| `dashboard/system_metrics.py` | 主机与进程指标（CPU 不含被抢部分，被抢单独给 `steal_percent`） |
 | `dashboard_account.py` | 账户配置的检查与保存，响应不含秘密 |
-| `deploy.py` | 部署（爱尔兰控制台 + 引擎、东京转发） |
+| `deploy.py` | 部署（爱尔兰控制台 + 代理 + 引擎、东京转发） |
 | `backtest.py` | 读录制行情（本机回测用） |
 
 ### `frontend/console/`
@@ -134,8 +147,8 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 行情 WS ─> feeds/polymarket ─> FeedQueue ─> snapshot-gate ─> platform.publish ─> 策略 onEvent
 策略 submit ─> core 风控/预留 ─> .intent fsync ─> CLOB POST /order
 用户 WS 订单/成交 ─> core 入账（状态 fsync）─> journal
-journal ─> projection_worker ─> ledger.sqlite3 ─> 控制面 API ─> /api/stream (SSE) ─> 页面
-账户读取器 ─> /api/account/snapshot、official_pnl ─> 统计与历史
+journal（交易机）─> 代理 /journal ─> 控制台副本 ─> projection_worker ─> ledger.sqlite3 ─> 控制台 API ─> /api/stream (SSE) ─> 页面
+账户读取器（交易机）─> 代理 /account/snapshot ─> 控制台缓存 ─> /api/account/snapshot、official_pnl ─> 统计与历史
 ```
 
 成交校验（`TradingCore.applyFill`）：价格不劣于限价；买单按花的钱判断（已成交成本 + 这笔 ≤ 股数 × 限价 + 0.01 USDC），因为买单签的是 USDC 上限，按更便宜的价格成交会多给股数；卖单按股数判断。FAK 从不挂单：交易所回 `matched` 后，回执列出的成交（`tradeIds`）都入账了就终结（买满为 `FILLED`，否则 `CANCELLED`，剩余作废、释放预留）；对回 `matched` 的 FAK 不发撤单（交易所会拒），还没到的成交留给账户恢复去扫。
@@ -209,26 +222,28 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 | `E/results/live/dashboard-<run_id>.jsonl`、`.console.log`、`.control.json`、`.stop` | 每个 run 的 journal 及附属文件；启动新 run 时只留最新 3 个，更早的打包进 `E/results/archive/<run>.tar.gz`。延迟只记下单路径（每笔订单一次），不记每个盘口；platform_status 每 --status-sec 写 journal，stdout（`.console.log`）只在状态或原因变化时、否则每 60 s 打一行，停止/失败那一行必打 |
 | `E/results/live/btc-reversal-<hash>.platform-state.json`（含 `.intent` `.lock` `.next`） | 引擎状态，按账户跨 run、跨策略共用（名字是历史遗留，见"启动与停止"） |
 | `…platform-state.json.settlements.json` | 结算记录，清空数据时保留 |
-| `E/results/dashboard/binance-lead-config.json`、`binance-lead-config.draft.json` | 已发布配置、草稿（旧的 `btc-reversal-config*.json` 不再读，留在原处） |
-| `E/results/dashboard/market_pool.json` | 运行池 |
-| `E/results/dashboard/ledger.sqlite3`、`snapshot.json` | 账本投影 |
-| `E/results/dashboard-state.json` | 控制面当前 run 信息 |
+| `E/results/dashboard/binance-lead-config.json`、`binance-lead-config.draft.json` | 已发布配置、草稿，在交易机上，引擎热加载（旧的 `btc-reversal-config*.json` 不再读，留在原处） |
+| `E/results/engine-run.json` | 代理的当前 run 信息（pid、run_id、停止结果） |
+| `/root/pm-system/data/console/ledger.sqlite3`、`snapshot.json`、`heartbeat.json`、`selection.json` | 控制台的账本投影 |
+| `/root/pm-system/data/console/replica/dashboard-<run_id>.jsonl` | 运行记录的逐字节副本 |
+| `/root/pm-system/data/console/selection-run.json` | 控制台显示的 run（跟着代理的当前 run） |
+| `E/results/dashboard/ledger.sqlite3`、`E/results/dashboard-state.json` | 拆分前的旧账本和旧状态，拆分时只复制不删，留作回滚 |
 | `E/results/account-history/<钱包>.json` | 账户读取器记住的订单详情 |
 | `/root/pm-system/data/dashboard/deployment.lock` | 部署与启动共用的 flock |
 | `/root/pm-releases/<rev7>-<UTC>/`（东京 `/root/pm-relay-releases/`） | 每次部署的发布目录，`before/` 里是被替换的旧文件 |
 
 行情录制（不再运行，格式供本机回测读旧数据）：每行一个盘口事件：`t` 接收时间、`a` 币、`m` marketId、`r` roundId、`q` 序号、`ue`/`de` 两边交易所时间、`ub`/`ua`/`db`/`da` 两边买一卖一、`ubl`/`ual`/`dbl`/`dal` 五档 `[价, 量]`。同一文件里还有成交行（feed 的 `last_trade_price`）：`{t,a,m,r,k:"t",tok:"u"|"d",p 价,s 量,side 吃单方向 BUY|SELL}`，盘口行没有 `k`。`zcat` 可读，正在写的当天文件末尾报 unexpected end of file 属正常。
 
-秘密只在服务器：爱尔兰 `E/.env`（钱包、签名私钥、Relayer/Builder 凭据、RPC）、`/root/.config/pm-system/console.env`（实盘解锁、转发端口等，不含密钥值）、`/root/.config/pm-system/relay.key`（转发 HMAC 密钥，东京同一份）、nginx 口令 `/etc/nginx/pm-console.htpasswd`；东京 `/root/.config/pm-system/relay.env`、`relay.key`。全部 600 权限，不进源码、日志、文档、浏览器。
+秘密只在交易机：`E/.env` 和 `/root/.config/pm-system/account.json`（钱包、签名私钥、Relayer/Builder 凭据、RPC），只有代理和引擎读；`/root/.config/pm-system/agent.env`（`PM_BOX_ID`、实盘解锁、账户 RPC、转发端口，不含密钥值）；控制台的 `/root/.config/pm-system/console.env` 只有 `PM_TRUST_ACCOUNT_PROXY`、`PM_AGENT_URL`、`PM_AGENT_BOX`、`PM_ACCOUNT_WALLET`（公开地址）；`/root/.config/pm-system/relay.key`（转发 HMAC 密钥，东京同一份）、nginx 口令 `/etc/nginx/pm-console.htpasswd`；东京 `/root/.config/pm-system/relay.env`、`relay.key`。全部 600 权限，不进源码、日志、文档、浏览器。
 
 ## 部署与回滚
 
 `python scripts/deploy.py [ireland|tokyo|all]`：
 
 1. 工作区里 `backend/engine`、`frontend/console`、`scripts`、`config` 有未提交改动就拒绝。本地用 `git archive HEAD` 在 `.deploy/<rev7>-build` 构建 `dist`，按目标打包（测试目录 `regress/` 和 `src/` 不上线），经 `ssh <别名> tar xzf -` 解到发布目录，再把脚本本身用 `ssh <别名> python3 - apply` 送过去执行。
-2. 爱尔兰（`pm-ire`）：拿 `data/dashboard/deployment.lock`；有活动的 `pm-engine-*`、`dist/cli/platform.js` 进程或控制面 `processRunning` 不是 false 就拒绝。发布目录 `/root/pm-releases/<rev7>-<UTC>/`。
+2. 爱尔兰（`pm-ire`）：拿 `data/dashboard/deployment.lock`；有活动的 `pm-engine-*`、`dist/cli/platform.js` 进程或控制台 `processRunning` 不是 false 就拒绝。装 `pm-agent` 和 `pm-console` 两个单元，先停控制台再停代理，起的时候先代理后控制台；第一次部署时跑 `migrate_console_data.py`（只复制）。发布目录 `/root/pm-releases/<rev7>-<UTC>/`。
 3. 东京（`pm-tokyo`）：只发 `dist` 和 package 文件到 `/root/pm-relay`，发布目录 `/root/pm-relay-releases/<rev7>-<UTC>/`，单元 `config/pm-relay.service`，用 `/usr/local/bin/node`（Node 24）。
-4. 两边相同：被覆盖或删除的文件先复制到发布目录的 `before/`；只删发布范围内不再发布的文件，`results/`、`node_modules/`、`.env`、`data/` 永不触碰；`package-lock.json` 变了才 `npm ci --omit=dev`；装单元（爱尔兰在 nginx、证书、口令都在时装站点并 `nginx -t` 后重载），重启后检查（控制面 30 秒内三个地址 200；中继 active 且无 `relay_error`，`--wait-status` 等 70 秒内 `sent` > 0），失败就从 `before/` 回滚并非零退出。
+4. 两边相同：被覆盖或删除的文件先复制到发布目录的 `before/`；只删发布范围内不再发布的文件，`results/`、`node_modules/`、`.env`、`data/` 永不触碰；`package-lock.json` 变了才 `npm ci --omit=dev`；装单元（爱尔兰在 nginx、证书、口令都在时装站点并 `nginx -t` 后重载），重启后检查（30 秒内代理 `/state` 能读、说没在跑，控制台三个地址 200；中继 active 且无 `relay_error`，`--wait-status` 等 70 秒内 `sent` > 0），失败就从 `before/` 回滚并非零退出。
 
 一次性准备（Node 24、中继密钥、env 文件、nginx/certbot、防火墙）由 `python scripts/deploy.py setup-ireland` / `setup-tokyo` 打印，运维手动执行。
 

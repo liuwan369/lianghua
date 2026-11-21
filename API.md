@@ -1,6 +1,6 @@
 # 控制面 HTTP API
 
-`scripts/system-dashboard-server.py`，只监听 `127.0.0.1:18766`，外部经 nginx（`config/pm-console-nginx.conf`）访问。路由在 `make_handler` 的 `_get` / `do_POST`。
+`scripts/system-dashboard-server.py`，只监听 `127.0.0.1:18766`，外部经 nginx（`config/pm-console-nginx.conf`）访问。路由在 `make_handler` 的 `_get` / `do_POST`。引擎进程、账户和策略参数在交易机的引擎代理（`scripts/engine_agent.py`）上，控制台每秒缓存它的 `/state`，写操作转给它（见 ARCHITECTURE.md「进程」）。引擎机连不上时写操作返回 503，`processRunning` 为 null。
 
 ## 通用
 
@@ -15,7 +15,7 @@
 - 登录只有一道：nginx 对整个站点做 HTTPS + Basic Auth（`/etc/nginx/pm-console.htpasswd`），转发时覆盖 `X-PM-Authenticated: $remote_user` 和 `X-Forwarded-Proto: $scheme`。没有控制密码，也没有会话 cookie。
 - GET 没有应用层鉴权（依赖 nginx）。
 - 写操作（`POST /api/runtime/commands`、`/api/strategy/drafts`、`/api/strategy/activate`、`/api/ledger/reset`）全部要满足：`Content-Type: application/json`（否则 415）；`Origin` 存在、是 `https` 且 host 等于 `Host`（否则 403）；服务器 `PM_TRUST_ACCOUNT_PROXY=1` 且带 `X-PM-Authenticated`、`X-Forwarded-Proto: https`（否则 401）。本机直连没有这些头，写操作一律拒绝；测试自己带上这些头。
-- 账户在控制台只读：账户文件（`PM_ACCOUNT_PROFILE`，默认 `/root/.config/pm-system/account.json`，权限 600）由运维在服务器上写，控制台只读它给引擎和账户读取器用。
+- 账户在控制台只读：账户文件（`PM_ACCOUNT_PROFILE`，默认 `/root/.config/pm-system/account.json`，权限 600）由运维在交易机上写，只有代理读它给引擎和账户读取器用，控制台不读。
 - 启动还要满足业务条件：UUID `requestId`、当前已保存的配置版本、服务器 `PM_TRADING_LIVE_UNLOCK=1`、15 分钟内的账户检查通过（后台每 10 分钟刷新一次）。
 
 ## GET
@@ -43,7 +43,7 @@
 
 ### `/api/runtime/status`
 
-`status`/`state`（starting/running/paused/stopped/failed）、`serviceState`、`commandStatus`（executing/confirmed/failed）、`processRunning`、`remoteOrdersState`、`stopResult`（`{confirmed, process_stopped, remote_orders_state, reason, message}` 或 null）、`runId`、`strategyId`（`binance-lead`）、`assetId`（`btc`）、`configRevision`、`startedAt`、`paused`、`risk`、`funds`（`availableUsd/occupiedUsd/reservedUsd/positionCostUsd/...`，未知为 null）、`currentRound`（策略当前场：`marketId/roundId/startsAt/endsAt/status/reason/attempted/stages[0..1]/latest/config/upShares/downShares/netIfUpUsd/netIfDownUsd`）、`markets`（引擎正在看的场：`marketId/roundId/name/startsAt/endsAt/instruments`）、`projection`。
+`status`/`state`（starting/running/paused/stopped/failed）、`serviceState`（多一个 `unknown`：连不上引擎机）、`commandStatus`（executing/confirmed/failed）、`processRunning`（null = 连不上引擎机或接错了机器，不是停了）、`remoteOrdersState`、`stopResult`（`{confirmed, process_stopped, remote_orders_state, reason, message}` 或 null）、`runId`、`strategyId`（`binance-lead`）、`assetId`（`btc`）、`configRevision`、`startedAt`、`paused`、`risk`、`funds`（`availableUsd/occupiedUsd/reservedUsd/positionCostUsd/...`，未知为 null）、`currentRound`（策略当前场：`marketId/roundId/startsAt/endsAt/status/reason/attempted/stages[0..1]/latest/config/upShares/downShares/netIfUpUsd/netIfDownUsd`）、`markets`（引擎正在看的场：`marketId/roundId/name/startsAt/endsAt/instruments`）、`projection`。
 
 领先行情：`leadFeedHealthy`（某个交易所某条线路 10 s 内有当前成交，null=未知）、`leadVenues`（引擎启动时的交易所，如 `["bybit","binance","okx"]`）、`leadRelay`（是否接东京中继）、`leadDirect`（开了爱尔兰直连的交易所；null = 旧引擎，按全部直连）、`leadLines`（`{venues: {<venue>: {direct|tokyo: {frames, trades, delivered, lastAt, leadSumMs, leadCount, leadMeanMs}}}, relay: {listening, port, error, messages, accepted, badSource, badFormat, badMac, tcpClients}}`）、`leadSignals[]`（最近 20 个信号，最新在前：`trade_id/venue/line/direction/move_bp/received_at/market_id/round_id/outcome`（`order_submitted`/`skipped`/`no_round`/`stopping`）`/reason/limit_price/ask_at_signal/order_shares`）。
 
@@ -72,6 +72,7 @@
 
 ```
 {status: "ok"|"degraded", nodeLabel, error: "问题1; 问题2" | null,
+ engineBox: {box, reachable, mismatch, clockSkewSeconds},
  services: {engine: {running, pid, state, runId, runtimeStale, runtimeAsOf, process},
             accountBridge: {available, stale, error, cacheAgeSeconds, process},
             projection: {state, stale, age_seconds, worker_alive, ..., process},
@@ -79,10 +80,11 @@
  leadFeed: {running, healthy, venues, relayConfigured, asOf,
             lines: {<venue>: {direct|tokyo: {frames, trades, delivered, lastAt, leadMeanMs, lastTradeAgeSeconds, ...}}},
             relayListener: {listening, port, error, messages, accepted, badSource, badFormat, badMac, tcpClients} | null},
- resources: {cpu: {percent, cores}, load, memory: {used_bytes, total_bytes, percent}, disk: {...}, services: {...}}}
+ resources: {cpu: {percent, steal_percent, cores}, load, memory: {used_bytes, total_bytes, percent}, disk: {...}, services: {...}},   // 引擎机
+ consoleResources: {...}}                                                                                                             // 控制台机
 ```
 
-`process` 是 `{state, pid, rss_bytes, uptime_seconds}`。问题代码：`trading_runtime_unavailable`、`ledger_projection_unavailable`、`resource_snapshot_stale`、`lead_feed_unhealthy`、`relay_listener_down`、`account_bridge_unavailable`。
+`process` 是 `{state, pid, rss_bytes, uptime_seconds}`。问题代码：`engine_box_unreachable`、`engine_box_mismatch`、`clock_skew`（两台机器差 1 s 以上）、`trading_runtime_unavailable`、`ledger_projection_unavailable`、`resource_snapshot_stale`、`lead_feed_unhealthy`、`relay_listener_down`、`account_bridge_unavailable`。
 
 ### `/api/stats/lead`
 
@@ -140,7 +142,7 @@
 | `POST /api/runtime/commands` | `{action: start\|pause\|resume\|stop, requestId, revision\|expectedRevision, startPaused?}`。`startPaused: true` 让引擎从暂停开始（只收行情、出信号、记跳过原因，按「继续」前不下单）。启动不选市场：引擎自己发现当前场次，中途启动就等下一场。同一 `requestId` 再发返回已有运行。返回 `accepted`、`status`、`commandStatus`、`serviceState`、`remoteOrdersState`。最终状态看 `/api/runtime/status` |
 | `POST /api/strategy/drafts` | `{strategyId:"binance-lead", config, expectedRevision}` 保存草稿；`config` 必须恰好是上面的字段，范围同引擎 `normalizeBinanceLeadConfig`（份额 (0,10000]、阈值 (0,1000] bp、窗口 (0,60000] ms、加价 [0,1)、0 ≤ fromSec < toSec ≤ 300、卖价上限 (0,1)、`leadVenues` 非空不重复、`tokyoRelay` 布尔、开盘价范围 [0,1000]、`openLine` ∈ {tick, mean60}、`restAfterMissSec` ∈ [0, 30]、`restShadow` 布尔、`entryOrder` ∈ {fak, gtc}（gtc 要 `restAfterMissSec` > 0）、两个盘口门 > 0、预算和日亏损为空或 > 0），不合法 400；版本冲突 409 |
 | `POST /api/strategy/activate` | `{expectedRevision, draftId}` 发布草稿，对之后尚未冻结的场次生效；`effectiveRoundId` 非空返回 501 |
-| `POST /api/ledger/reset` | `{confirm:"RESET"}`，引擎在跑或无法确认已停时 409。删 journal、引擎状态和投影，保留结算记录和配置 |
+| `POST /api/ledger/reset` | `{confirm:"RESET"}`，引擎在跑或无法确认已停时 409，连不上引擎机 503。先让代理删交易机上的 journal、引擎状态，再删控制台的账本和副本；保留结算记录和配置 |
 
 ## 推送 `/api/stream`
 
@@ -156,4 +158,4 @@
 | `/api/rounds`、`/api/events`、`/api/diagnostics/health` | 5 |
 | `/api/metrics/summary`、`/api/stats/lead` | 10 |
 
-`/api/runtime/book` 在 `ledger.sqlite3`/WAL/`snapshot.json` 变了就重渲染（每条状态行都会变）。其余账本类路径（`/api/rounds`、`/api/fills`、`/api/settlements`、`/api/events`、`/api/metrics/*`、`/api/stats/lead`、`/api/orders/lead`）看账本的 `data_version`（每次信号、订单、成交、结算等业务写入加一，状态行不加）和投影状态，没变就不重渲染；`/api/stats/lead`、`/api/orders/lead`、`/api/rounds`、`/api/events`、`/api/fills` 的账本部分也按它缓存在内存里，`asOf`/`stale` 每次现取。账户快照看读取器刷新时间。推送断开时 `shared/stream.js` 让页面退回普通轮询。
+`/api/runtime/book` 在 `ledger.sqlite3`/WAL/`snapshot.json` 变了就重渲染（每条状态行都会变）。其余账本类路径（`/api/rounds`、`/api/fills`、`/api/settlements`、`/api/events`、`/api/metrics/*`、`/api/stats/lead`、`/api/orders/lead`）看账本的 `data_version`（每次信号、订单、成交、结算等业务写入加一，状态行不加）和投影状态，没变就不重渲染；`/api/stats/lead`、`/api/orders/lead`、`/api/rounds`、`/api/events`、`/api/fills` 的账本部分也按它缓存在内存里，`asOf`/`stale` 每次现取。账户快照看控制台从代理拿到的快照有没有换新。推送断开时 `shared/stream.js` 让页面退回普通轮询。

@@ -1,4 +1,4 @@
-"""P2-7, control-plane half: a failed run's stop message now carries the
+"""P2-7, engine-agent half: a failed run's stop message now carries the
 engine's own cause instead of only "交易进程异常退出".
 
 Uses the console-log shape of the real failed start on 2026-09-30
@@ -15,7 +15,7 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
-spec = importlib.util.spec_from_file_location("dashboard_server", SCRIPTS / "system-dashboard-server.py")
+spec = importlib.util.spec_from_file_location("engine_agent", SCRIPTS / "engine_agent.py")
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 

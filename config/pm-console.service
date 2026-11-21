@@ -2,7 +2,7 @@
 # Stop restarting after 20 failures in 5 minutes (a broken release looped forever).
 StartLimitIntervalSec=300
 StartLimitBurst=20
-Description=Polymarket binance-lead console (Ireland, local only; nginx in front)
+Description=Polymarket binance-lead console (local only; nginx in front; the engine runs behind its agent)
 After=network-online.target
 Wants=network-online.target
 
@@ -12,28 +12,25 @@ User=root
 WorkingDirectory=/root/pm-system
 Environment=PYTHONUNBUFFERED=1
 Environment=PM_NODE_LABEL=爱尔兰
-Environment=PM_ACCOUNT_PROFILE=/root/.config/pm-system/account.json
-# Operator file, never in git: PM_TRADING_LIVE_UNLOCK, PM_TRUST_ACCOUNT_PROXY=1,
-# PM_ACCOUNT_PUBLIC_ORIGIN, PM_ACCOUNT_RPC_URL(_FALLBACK_URL) and the engine's
-# PM_RELAY_* (key file path, port, allowed source). The engine inherits them.
+Environment=PM_CONSOLE_DATA=/root/pm-system/data/console
+# Operator file, never in git: PM_TRUST_ACCOUNT_PROXY=1, PM_AGENT_URL (the
+# engine box's agent, through the tunnel), PM_AGENT_BOX and PM_ACCOUNT_WALLET
+# (what this console expects at that end). No keys and no live unlock here.
 EnvironmentFile=/root/.config/pm-system/console.env
 ExecStart=/usr/bin/python3 /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
 Restart=always
 RestartSec=3
-# The console (HTTP, push, account bridge, projection worker) yields to the
-# engine on a 2-vCPU box. The engine is not under these settings: it runs in
-# its own transient scope (pm-engine-<run_id>, system.slice) with CPUWeight=200
-# and Nice -5 (scripts/system-dashboard-server.py _engine_scope_args), so
-# neither these limits nor a restart or OOM kill of this unit reach it (BUGS O2).
+# The console (HTTP, push, projection worker, replication) yields to an engine
+# on the same box. The engine runs under pm-agent in its own scope
+# (pm-engine-<run_id>, CPUWeight=200, Nice -5), so neither these limits nor a
+# restart or OOM kill of this unit reach it (BUGS O2).
 Nice=10
 CPUWeight=20
-# IOWeight is a cgroup setting, so the engine's scope does not get it; a
-# per-process IOSchedulingClass would be inherited by the engine, so none is set.
 IOWeight=20
-# 2026-11-13: 350M OOM-killed the unit (account reader ~190 MB, server ~90 MB,
-# projection ~20 MB, plus peaks). The box has ~1.2 GB free beside the engine.
-MemoryHigh=500M
-MemoryMax=600M
+# The account reader moved to pm-agent; the server (~90 MB) and the
+# projection (~20 MB) remain, plus peaks.
+MemoryHigh=400M
+MemoryMax=500M
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

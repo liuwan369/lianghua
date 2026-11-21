@@ -151,11 +151,14 @@
         lines.push(html`<dt>${VENUES[venue]} · ${LINES[line]}</dt><dd><span class="dot ${age !== null && age < 10 ? "ok" : "bad"}"></span> ${age === null ? "没有成交" : `${fmt.seconds(age)}前`} · 先到 ${fmt.int(c.delivered)} 笔</dd>`);
       }
     }
+    const box = h.engineBox || {};
+    const skew = num(box.clockSkewSeconds);
     return html`<p class="${h.status === "ok" ? "up" : "warn"}">${h.status === "ok" ? "一切正常" : `有问题：${P.label(h.error)}`}${h.nodeLabel ? ` · 节点 ${h.nodeLabel}` : ""}</p>
     <dl class="kv">
-      <dt>CPU</dt><dd>${num(r.cpu?.percent) === null ? "--" : `${r.cpu.percent.toFixed(0)}%`} · ${fmt.int(r.cpu?.cores)} 核</dd>
-      <dt>内存</dt><dd>${gb(r.memory?.used_bytes)} / ${gb(r.memory?.total_bytes)}${num(r.memory?.percent) === null ? "" : ` · ${r.memory.percent.toFixed(0)}%`}</dd>
-      <dt>硬盘</dt><dd>${gb(r.disk?.used_bytes)} / ${gb(r.disk?.total_bytes)}${num(r.disk?.percent) === null ? "" : ` · ${r.disk.percent.toFixed(0)}%`}</dd>
+      <dt>引擎机</dt><dd>${box.reachable === false ? html`<span class="bad">连不上</span>` : box.mismatch ? html`<span class="bad">${box.mismatch}</span>` : html`<span class="up">已连接</span>`}${box.box ? ` · ${box.box}` : ""}${skew === null ? "" : ` · 时钟差 ${(skew * 1000).toFixed(0)} ms`}</dd>
+      <dt>引擎机 CPU</dt><dd>${num(r.cpu?.percent) === null ? "--" : `${r.cpu.percent.toFixed(0)}%`} · ${fmt.int(r.cpu?.cores)} 核${num(r.cpu?.steal_percent) === null ? "" : ` · 被抢 ${r.cpu.steal_percent.toFixed(1)}%`}</dd>
+      <dt>引擎机内存</dt><dd>${gb(r.memory?.used_bytes)} / ${gb(r.memory?.total_bytes)}${num(r.memory?.percent) === null ? "" : ` · ${r.memory.percent.toFixed(0)}%`}</dd>
+      <dt>引擎机硬盘</dt><dd>${gb(r.disk?.used_bytes)} / ${gb(r.disk?.total_bytes)}${num(r.disk?.percent) === null ? "" : ` · ${r.disk.percent.toFixed(0)}%`}</dd>
       <dt>引擎进程</dt><dd>${s.engine?.running ? html`<span class="up">运行中</span>` : "没在运行"} · ${proc(s.engine?.process)}${s.engine?.running && s.engine?.runtimeStale ? html` · <span class="warn">运行快照过期</span>` : ""}</dd>
       <dt>账户读取</dt><dd>${s.accountBridge?.stale ? html`<span class="warn">过期</span>` : html`<span class="up">正常</span>`}${s.accountBridge?.error ? ` · ${P.label(s.accountBridge.error)}` : ""} · ${proc(s.accountBridge?.process)}</dd>
       <dt>统计计算</dt><dd>${s.projection?.state === "ready" && !s.projection?.stale ? html`<span class="up">已追上</span>` : html`<span class="warn">${s.projection?.state || "--"}</span>`} · ${proc(s.projection?.process)}</dd>

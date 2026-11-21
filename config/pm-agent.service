@@ -1,0 +1,40 @@
+[Unit]
+# Stop restarting after 20 failures in 5 minutes (a broken release looped forever).
+StartLimitIntervalSec=300
+StartLimitBurst=20
+Description=Polymarket engine agent (engine box; loopback only, the console reaches it over an SSH tunnel)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pm-system
+Environment=PYTHONUNBUFFERED=1
+Environment=PM_ACCOUNT_PROFILE=/root/.config/pm-system/account.json
+# Operator file, never in git: PM_BOX_ID (this box's name, the console checks
+# it), PM_TRADING_LIVE_UNLOCK, PM_ACCOUNT_RPC_URL(_FALLBACK_URL) and the
+# engine's PM_RELAY_* (key file path, port, allowed source). The engine inherits them.
+EnvironmentFile=/root/.config/pm-system/agent.env
+ExecStart=/usr/bin/python3 /root/pm-system/scripts/engine_agent.py --host 127.0.0.1 --port 18767
+Restart=always
+RestartSec=3
+# The agent (HTTP, account reader, account check) yields to the engine. The
+# engine is not under these settings: it runs in its own transient scope
+# (pm-engine-<run_id>, system.slice) with CPUWeight=200 and Nice -5
+# (engine_agent.py _engine_scope_args), so neither these limits nor a restart
+# or OOM kill of this unit reach it (BUGS O2).
+Nice=10
+CPUWeight=20
+IOWeight=20
+# The account reader is capped at a 160 MB heap; the agent itself is small.
+MemoryHigh=350M
+MemoryMax=450M
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/root/pm-system
+ReadWritePaths=-/root/.config/pm-system
+
+[Install]
+WantedBy=multi-user.target

@@ -29,7 +29,7 @@ class SystemMetrics:
         return {
             "schemaVersion": 1,
             "asOf": None,
-            "cpu": {"percent": None, "cores": os.cpu_count()},
+            "cpu": {"percent": None, "steal_percent": None, "cores": os.cpu_count()},
             "load": {"one": None, "five": None, "fifteen": None},
             "memory": {"used_bytes": None, "total_bytes": None, "percent": None},
             "disk": {"used_bytes": None, "total_bytes": None, "free_bytes": None, "percent": None},
@@ -39,7 +39,9 @@ class SystemMetrics:
         }
 
     @staticmethod
-    def _cpu_times() -> tuple[int, int] | None:
+    def _cpu_times() -> tuple[int, int, int] | None:
+        """(total, idle, steal) jiffies. Steal is the hypervisor taking the
+        CPU back: on a burstable box it climbs once the credits run out."""
         try:
             values = [int(value) for value in Path("/proc/stat").read_text(encoding="ascii").splitlines()[0].split()[1:]]
         except (OSError, ValueError, IndexError):
@@ -47,7 +49,8 @@ class SystemMetrics:
         if len(values) < 4:
             return None
         idle = values[3] + (values[4] if len(values) > 4 else 0)
-        return sum(values), idle
+        # guest/guest_nice (8, 9) are already counted in user/nice.
+        return sum(values[:8]), idle, values[7] if len(values) > 7 else 0
 
     @staticmethod
     def _memory() -> dict:
@@ -89,7 +92,9 @@ class SystemMetrics:
         if current is not None and self._previous_cpu is not None:
             total = current[0] - self._previous_cpu[0]
             idle = current[1] - self._previous_cpu[1]
-            value["cpu"]["percent"] = max(0., min(100., (total - idle) * 100 / total)) if total > 0 else None
+            steal = current[2] - self._previous_cpu[2]
+            value["cpu"]["percent"] = max(0., min(100., (total - idle - steal) * 100 / total)) if total > 0 else None
+            value["cpu"]["steal_percent"] = max(0., min(100., steal * 100 / total)) if total > 0 else None
         self._previous_cpu = current
         try:
             one, five, fifteen = os.getloadavg()

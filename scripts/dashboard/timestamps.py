@@ -1,6 +1,7 @@
 """ISO-8601 timestamps written by the Node side ("2026-10-10T15:38:11.843Z")."""
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 
@@ -11,3 +12,16 @@ def parse_iso(value: str) -> float:
     if isinstance(value, str) and value.endswith("Z"):
         value = value[:-1] + "+00:00"
     return datetime.fromisoformat(value).timestamp()
+
+
+def epoch(value):
+    """Unix seconds of a finite number or a timezone-aware ISO-8601 string; None otherwise."""
+    if type(value) in (int, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, str):
+        try:
+            stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return stamp.timestamp() if stamp.tzinfo else None
+        except (ValueError, OverflowError, OSError):
+            pass
+    return None

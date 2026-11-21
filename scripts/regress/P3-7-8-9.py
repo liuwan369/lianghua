@@ -1,4 +1,4 @@
-"""P3-7, P3-8, P3-9: the stop path, on the real control-plane module.
+"""P3-7, P3-8, P3-9: the stop path, on the real engine agent (scripts/engine_agent.py).
 
 P3-8: stop_trading waited up to 8 s for the child inside _trading_lock, so
       every status read blocked and the console's requests timed out.
@@ -23,7 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 
 def load():
-    spec = importlib.util.spec_from_file_location("dashboard_server", SCRIPTS / "system-dashboard-server.py")
+    spec = importlib.util.spec_from_file_location("engine_agent", SCRIPTS / "engine_agent.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -62,7 +62,6 @@ class Stop(unittest.TestCase):
         s._trading_state_loaded = True
         s._remote_orders_empty_from_fresh_snapshot = lambda: False
         s.account_config_status = lambda: {"live_start_ready": True}
-        s.trade_log_stats = lambda selection: {"runtime": None, "projection": {"state": "ready", "stale": False}}
         s._trading_mode, s._trading_engine = "live", "platform"
         s._trading_log, s._trading_console_log = self.tmp / "run.jsonl", self.console
         s._trading_stop_result = None
@@ -74,7 +73,7 @@ class Stop(unittest.TestCase):
         stopper.start()
         time.sleep(0.3)
         started = time.monotonic()
-        s.trading_status(include_stats=False)
+        s.trading_status()
         self.assertLess(time.monotonic() - started, 1.0, "a status read during a stop returns at once")
         stopper.join()
 
@@ -88,7 +87,7 @@ class Stop(unittest.TestCase):
                                             "message": "cancel failed"}) + "\n"
                                 + json.dumps({"kind": "platform_status", "status": "failed"}) + "\n", encoding="utf-8")
         time.sleep(max(0, child.ends - time.monotonic()) + 0.1)
-        status = s.trading_status(include_stats=False)
+        status = s.trading_status()
         self.assertEqual(s._trading_stop_result.get("reason"), "process_failed", "the real exit outcome replaces 'still stopping'")
         self.assertIn("cancel failed", s._trading_stop_result.get("message", ""))
         self.assertFalse(status["running"])
@@ -98,7 +97,7 @@ class Stop(unittest.TestCase):
         s._trading_state_loaded = False
         s._process_matches = lambda pid, log: False      # the engine died with the control plane
         s._trading_log.write_text("{}", encoding="utf-8")  # its journal survives (no data reset)
-        (self.tmp / "results" / "dashboard-state.json").write_text(json.dumps({
+        (self.tmp / "results" / "engine-run.json").write_text(json.dumps({
             "pid": 4242, "log": str(s._trading_log), "console_log": str(self.console), "mode": "live",
             "engine": "platform", "run_id": "r1", "stop_result": None}), encoding="utf-8")
         s._restore_trading_state()
@@ -112,7 +111,7 @@ class Stop(unittest.TestCase):
         s._trading_log.write_text("{}", encoding="utf-8")
         self.console.write_text(json.dumps({"kind": "platform_status", "status": "stopped", "reason": "round_limit_reached"}) + chr(10),
                                 encoding="utf-8")
-        (self.tmp / "results" / "dashboard-state.json").write_text(json.dumps({
+        (self.tmp / "results" / "engine-run.json").write_text(json.dumps({
             "pid": 4242, "log": str(s._trading_log), "console_log": str(self.console), "mode": "live",
             "engine": "platform", "run_id": "r1", "stop_result": None}), encoding="utf-8")
         s._restore_trading_state()

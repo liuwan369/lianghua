@@ -39,6 +39,11 @@ for (const [status, state, buttons] of cases) {
   assert.deepEqual({ ...L.allowed(state) }, buttons, state);
 }
 assert.equal(L.runState({ processRunning: true, status: "running" }, true), "stopping", "a stop in flight reads 停止中");
+// The engine box is out of reach (processRunning null): unknown, never 已停止, and no button is offered.
+const unreachable = { processRunning: null, status: "stopped", agent: { reachable: false, error: "连不上引擎机" } };
+assert.equal(L.runState(unreachable), "unreachable", "an engine box nobody can see is not stopped");
+assert.deepEqual({ ...L.allowed("unreachable") }, { start: false, pause: false, resume: false, stop: false });
+assert.ok(L.STATES.unreachable.text.includes("连不上"), L.STATES.unreachable.text);
 assert.equal(L.STATES.stopping.text, "停止中");
 assert.equal(L.STATES.starting.text, "启动中");
 assert.deepEqual({ ...L.allowed("stopping") }, { start: false, pause: false, resume: false, stop: false });
