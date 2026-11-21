@@ -21,6 +21,7 @@ Polymarket 加密货币 5 分钟涨跌盘的**币安领先策略（binance-lead�
 ## 3. 服务器与操作
 
 - 爱尔兰：`ssh pm-ire`（AWS Lightsail 3.254.138.119，2 核可突发 CPU、保底每核 20%，2 GB），控制台（`pm-console`）+ 引擎代理（`pm-agent`）+ 引擎，目录 `/root/pm-system`。11-21 起控制台和引擎拆开：控制台只看数据、发命令（数据在 `data/console/`），代理管引擎、私钥、参数（`backend/engine/results/`）；之后代理搬到每个账户的交易机 `pm-a`（63.35.183.205）、`pm-b`（54.217.184.66），`pm-ire` 只留控制台。2026-11-21 从 Baxet 迁回（Baxet 断网 1 个多小时）。CPU 积分用光会被限速、直连行情卡住，所以只开 Bybit 直连（`directVenues`）、账户 60 秒读一次。控制面 systemd `pm-console`，引擎由控制面按需启动在 scope `pm-engine-<run_id>`。公网 `https://3-254-138-119.sslip.io/console/`（nginx basic auth，证书自动续）。
+- 交易机 `ssh pm-a`（63.35.183.205）、`ssh pm-b`（54.217.184.66）：Lightsail eu-west-1a、Debian 12、和 pm-ire 不是同一个 AWS 账户（没有内网）、没有静态 IP（面板上「停止」再「启动」IP 会变，改 pm-ire 的 `/root/.ssh/tunnels.config` 里 `HostName` 和东京 relay.env）。已装 `pm-agent`（还没有账户、实盘开关关着）、nftables（只开 22 和东京的 47001）。pm-ire 上 `pm-tunnel@pm-a/pm-b` 把 18777/18787 转到它们的代理。部署 `python scripts/deploy.py engine-a|engine-b`。
 - Baxet 都柏林 `ssh pm-baxet-retired`（194.87.245.135）：11-21 退役，pm-console 已 stop + disable；`deploy.py` 拒绝往它部署。别再在上面启动任何东西。
 - 东京 AWS ap-northeast-1：`ssh pm-tokyo`，只跑 `pm-relay`（`/root/pm-relay`）：收 Bybit/币安/OKX 成交，HMAC 签名后 UDP×2 + TCP 发爱尔兰 47001 端口（目标在 `/root/.config/pm-system/relay.env` 的 `PM_RELAY_TARGET_HOST`，可以逗号分隔填多台引擎机；11-21 起 3.254.138.119）。
 - 伦敦 AWS eu-west-2：`ssh pm-rec`（16.60.186.91，t3.micro 945 MB + 2 GB swap），只跑录制 `pm-rec`（`/root/rec/rec.mjs`，数据 `/root/rec/data/<UTC 日>/<源>-<启动秒>.jsonl.gz`，留 10 天）。本机 `bash backend/engine/scripts/recorder/pull-rec.sh` 拉到 `E:/pm-backup/rec-london/`。别在上面跑分析。

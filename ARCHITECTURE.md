@@ -42,6 +42,8 @@
 
 **连不上 ≠ 停了**：控制台 5 s 内没拿到 `/state`，`processRunning` 为 null，页面显示「连不上引擎机」，启动、发布参数、清空数据一律拒绝（503）；引擎照常交易，风控在引擎里。代理报的 `box` 或钱包和控制台设的 `PM_AGENT_BOX`/`PM_ACCOUNT_WALLET` 不一致时同样拒绝所有写操作。
 
+**交易机**（2026-11-22 起备好，还没有账户）：`pm-a`（63.35.183.205）、`pm-b`（54.217.184.66），每台只跑 `pm-agent` 和引擎（`deploy.py engine-a|engine-b`，按 `/root/.config/pm-system/box-id` 认机器，发错就拒绝）。控制台机经 `pm-tunnel@pm-a`、`pm-tunnel@pm-b`（`ssh -N -F /root/.ssh/tunnels.config`）把本机 18777、18787 转到各自代理的 18767；这把隧道钥匙在交易机上只准转发 18767（`restrict,permitopen,command=/bin/false`），不能登录也不能执行命令；`HostKeyAlias` 让换 IP 时只改 `HostName` 一行。交易机防火墙（nftables）：只开 22（SSH，钥匙登录）和来自东京的 47001（TCP+UDP）。
+
 **运行记录复制**（`dashboard/replica.py`）：只追加写（不改名，账本对新 inode 会判成重写），最后一行没传完整没关系（账本只读到最后一个换行）。副本落后时投影标 `stale`、`replication_behind`；上一次运行没复制完不准启动下一次，否则那段尾巴会丢。
 
 行情采集与录制（`cli/market-snapshot.ts`、`cli/market-recorder.ts`、`dashboard/market-projection.ts`）现在不在任何机器上跑：2026-11-12 停了都柏林的录制，爱尔兰不装这个服务；旧录制在本机 `E:/pm-backup/market-history/`（到 11-13）。
