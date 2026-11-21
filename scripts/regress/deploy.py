@@ -132,7 +132,7 @@ class Arguments(unittest.TestCase):
     def test_setup_prints_no_secret_values(self):
         text = deploy.SETUP["setup-ireland"] + deploy.SETUP["setup-tokyo"]
         self.assertIn("openssl rand -hex 32 > /root/.config/pm-system/relay.key", text)
-        self.assertIn("scp -3 pm-ire2:/root/.config/pm-system/relay.key pm-tokyo:/root/.config/pm-system/relay.key", text)
+        self.assertIn("scp -3 pm-ire:/root/.config/pm-system/relay.key pm-tokyo:/root/.config/pm-system/relay.key", text)
         self.assertIn("SHASUMS256.txt | sha256sum -c -", text)
         self.assertNotIn("cat /root/.config/pm-system/relay.key", text)
 

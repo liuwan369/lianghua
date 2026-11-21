@@ -1,4 +1,4 @@
-"""Deploy the committed HEAD: the console to Ireland (pm-ire2, 194.87.245.135), the lead relay to Tokyo (pm-tokyo).
+"""Deploy the committed HEAD: the console to Ireland (pm-ire, AWS 3.254.138.119), the lead relay to Tokyo (pm-tokyo).
 
   python scripts/deploy.py [ireland|tokyo|all] [--dry-run] [--wait-status]
   python scripts/deploy.py setup-ireland | setup-tokyo    # print the one-time operator commands
@@ -15,12 +15,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent   # remote: __file__ is "<stdin>", ROOT unused
 E = "backend/engine/"
-SITE, IRELAND_IP, TOKYO_IP, NODE = "194-87-245-135.sslip.io", "194.87.245.135", "52.195.223.179", "v24.22.3"
-# The retired AWS Lightsail Ireland box's private address (public 3.254.138.119): never deploy there.
-RETIRED_IRELAND_PRIVATE = "172.26.1.100"
+SITE, IRELAND_IP, TOKYO_IP, NODE = "3-254-138-119.sslip.io", "3.254.138.119", "52.195.223.179", "v24.13.0"
+# The Ireland box sees only its private address (AWS Lightsail NAT). The Baxet
+# Dublin box (2026-11-20/21, went dark) must never get a release again.
+IRELAND_PRIVATE = "172.26.1.100"
+RETIRED_IRELAND_PRIVATE = "194.87.245.135"
 DEPLOYED_PATHS = ("backend/engine", "frontend/console", "scripts", "config")
 TARGETS = {
-    "ireland": {"host": "pm-ire2", "root": "/root/pm-system", "releases": "/root/pm-releases",
+    "ireland": {"host": "pm-ire", "root": "/root/pm-system", "releases": "/root/pm-releases",
                 "unit": "pm-console.service", "env": "/root/.config/pm-system/console.env",
                 "lock": "/root/pm-system/data/dashboard/deployment.lock",   # the console's start lock too
                 "sweep": (E + "dist/", E + "scripts/", "frontend/console/", "scripts/", "config/"),
@@ -302,8 +304,8 @@ def apply(target, release, wait_status):
     if target == "ireland":
         # The retired Lightsail box (3.254.138.119) must never get a release again (user 2026-11-20).
         here = sh("hostname", "-I", check=False).split() + [sh("hostname", check=False).strip()]
-        if RETIRED_IRELAND_PRIVATE in " ".join(here) or not any(ip == IRELAND_IP for ip in here):
-            raise SystemExit("refusing: this is not the Ireland box %s (got %s); the old Lightsail box is retired" % (IRELAND_IP, " ".join(here)))
+        if RETIRED_IRELAND_PRIVATE in here or not any(ip in (IRELAND_IP, IRELAND_PRIVATE) for ip in here):
+            raise SystemExit("refusing: this is not the Ireland box %s (got %s); the Baxet box is retired" % (IRELAND_IP, " ".join(here)))
         why = engine_running(sh("systemctl", "list-units", "--type=scope,service", "--state=active", "--no-legend", "pm-engine-*"),
                              sh("pgrep", "-f", "dist/cli/platform.js", check=False), console_status())
         if why:
@@ -385,19 +387,19 @@ def rollback(root, before, state, unit):
 
 
 SETUP = {"setup-ireland": """
-# One-time Ireland setup (pm-ire2). Run these yourself; nothing below prints a secret.
+# One-time Ireland setup (pm-ire). Run these yourself; nothing below prints a secret.
 # 1. Firewall on pm-ire2 (ufw; keep SSH 22 as it is):
 #      HTTPS 443/tcp   any IP           console
 #      HTTP   80/tcp   any IP           certificate issue/renewal, redirects to 443
 #      Custom 47001/tcp + 47001/udp     restricted to %(tokyo)s/32 only (Tokyo relay)
 # 2. Packages, nginx password, certificate (port 80 must already be open):
-ssh pm-ire2 'apt-get update && apt-get install -y nginx certbot python3-certbot-nginx apache2-utils'
-ssh -t pm-ire2 'htpasswd -B -c /etc/nginx/pm-console.htpasswd <user> && chown root:www-data /etc/nginx/pm-console.htpasswd && chmod 640 /etc/nginx/pm-console.htpasswd'
-ssh -t pm-ire2 'certbot certonly --nginx -d %(site)s'
+ssh pm-ire 'apt-get update && apt-get install -y nginx certbot python3-certbot-nginx apache2-utils'
+ssh -t pm-ire 'htpasswd -B -c /etc/nginx/pm-console.htpasswd <user> && chown root:www-data /etc/nginx/pm-console.htpasswd && chmod 640 /etc/nginx/pm-console.htpasswd'
+ssh -t pm-ire 'certbot certonly --nginx -d %(site)s'
 # 3. Relay key (32 random bytes as hex, mode 600; it never leaves the two servers):
-ssh pm-ire2 'install -d -m 700 /root/.config/pm-system && (umask 077; openssl rand -hex 32 > /root/.config/pm-system/relay.key) && chmod 600 /root/.config/pm-system/relay.key'
+ssh pm-ire 'install -d -m 700 /root/.config/pm-system && (umask 077; openssl rand -hex 32 > /root/.config/pm-system/relay.key) && chmod 600 /root/.config/pm-system/relay.key'
 # 4. Console environment: write /root/.config/pm-system/console.env (mode 600) with an editor:
-ssh -t pm-ire2 'f=/root/.config/pm-system/console.env; [ -e $f ] || install -m 600 /dev/null $f; ${EDITOR:-nano} $f'
+ssh -t pm-ire 'f=/root/.config/pm-system/console.env; [ -e $f ] || install -m 600 /dev/null $f; ${EDITOR:-nano} $f'
 #      PM_TRADING_LIVE_UNLOCK=<1 to allow live starts, else 0>
 #      PM_TRUST_ACCOUNT_PROXY=1
 #      PM_ACCOUNT_PUBLIC_ORIGIN=https://%(site)s
@@ -415,7 +417,7 @@ python scripts/deploy.py ireland
 ssh pm-tokyo 'set -e; cd /tmp; curl -fsSLO https://nodejs.org/dist/%(node)s/node-%(node)s-linux-x64.tar.xz; curl -fsSLO https://nodejs.org/dist/%(node)s/SHASUMS256.txt; grep " node-%(node)s-linux-x64.tar.xz$" SHASUMS256.txt | sha256sum -c -; tar -xJf node-%(node)s-linux-x64.tar.xz -C /usr/local --strip-components=1 --no-same-owner --exclude="*/CHANGELOG.md" --exclude="*/LICENSE" --exclude="*/README.md"; rm node-%(node)s-linux-x64.tar.xz SHASUMS256.txt; /usr/local/bin/node --version'
 # 2. Relay key, copied Ireland -> Tokyo through this machine (never printed):
 ssh pm-tokyo 'install -d -m 700 /root/.config/pm-system'
-scp -3 pm-ire2:/root/.config/pm-system/relay.key pm-tokyo:/root/.config/pm-system/relay.key
+scp -3 pm-ire:/root/.config/pm-system/relay.key pm-tokyo:/root/.config/pm-system/relay.key
 ssh pm-tokyo 'chmod 600 /root/.config/pm-system/relay.key'
 # 3. Relay environment (no secret in it: the key stays in its file):
 ssh pm-tokyo 'umask 077; printf "%%s\\n" PM_RELAY_TARGET_HOST=%(ireland)s PM_RELAY_PORT=47001 PM_RELAY_KEY_FILE=/root/.config/pm-system/relay.key > /root/.config/pm-system/relay.env'
