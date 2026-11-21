@@ -107,7 +107,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `dashboard/projection_worker.py` | 投影子进程，不读账户配置 |
 | `dashboard/read_model.py` | 拉起并读取投影快照 |
 | `dashboard/official_pnl.py` | 从 Data API 结果按场次算官方盈亏 |
-| `dashboard/account_data.py` | 管理 account-data 子进程，缓存快照 |
+| `dashboard/account_data.py` | 管理 account-data 子进程，缓存快照（控制面每 60 秒读一次，有新成交立即读） |
 | `dashboard/strategy_config.py` | binance-lead 配置与草稿持久化（默认值、校验范围同引擎）、支持的币种 |
 | `dashboard/config.py` | 配置文件锁与错误类型 |
 | `dashboard/market_snapshot.py` | 校验采集器快照 |
@@ -150,10 +150,10 @@ Bybit ×2 / 币安 / OKX 直连 + 东京转发 ─> lead-trades 每家去重 ─
 
 ## 策略 `binance-lead`
 
-默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`leadVenues [bybit, binance, okx]`、`tokyoRelay true`、`openBandBp 0`、`openLine tick`、`restAfterMissSec 0`、`restShadow true`、`entryOrder fak`、`regimePause false`、`edgeSizing false`、`exitOnReverse false`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。实盘配置在控制台设置页，见 [STRATEGY.md](STRATEGY.md)。
+默认值（`BINANCE_LEAD_DEFAULTS`）：`shares 5`、`thresholdBp 2`、`windowMs 250`、`limitPremium 0.03`、`fromSec 15`、`toSec 265`、`maxAsk 0.80`、`leadVenues [bybit, binance, okx]`、`tokyoRelay true`、`directVenues [bybit, binance, okx]`、`openBandBp 0`、`openLine tick`、`restAfterMissSec 0`、`restShadow true`、`entryOrder fak`、`regimePause false`、`edgeSizing false`、`exitOnReverse false`、`maxQuoteAgeSeconds 2`、`maxQuoteSkewSeconds 1.5`。可选 `roundBudgetUsd`、`totalBudgetUsd`、`dailyLossUsd`。实盘配置在控制台设置页，见 [STRATEGY.md](STRATEGY.md)。
 
 - 开盘线（`openBandBp`、`openLine`）：`LeadSignalDetector` 按成交时间记下每场开盘价（`openPrice`，本场开始时刻或之前最后一笔成交）和开盘前 60 秒均价（`openMean60`，每整秒最后一笔成交的均价，和官方目标价的 Chainlink 60 s TWAP 同一窗口）。策略只在信号离开盘线 −openBandBp ≤ d < openBandBp 时下单（d 按信号方向取正负，单位 bp），`openLine` 选用哪条线。
-- 信号源（`leadVenues`、`tokyoRelay`，引擎启动时生效）：每家交易所一个检测器，窗口里只有那一家的价格；同一笔成交从直连和东京两条线来，谁先到用谁（`line` 记 `direct`/`tokyo`）。
+- 信号源（`leadVenues`、`tokyoRelay`、`directVenues`，引擎启动时生效）：每家交易所一个检测器，窗口里只有那一家的价格；同一笔成交从直连和东京两条线来，谁先到用谁（`line` 记 `direct`/`tokyo`）。不在 `directVenues` 里的交易所不开爱尔兰直连，只走东京；东京转发没开（或没有中继密钥）时三家都直连。实际开了直连的交易所在运行快照 `lead_direct`。
 - 按优势定股（`edgeSizing`）：`leadFairValue()` 用信号的 `price`/`openMean60`/`vol300Bp` 和剩余秒数算公允价，`decide` 算优势 = 公允价 − 限价 − 吃单费，`edgeShares()` 挑 5 / `shares` / 15；stage 记 `fair`/`edge`/`edgeShares`，开关关着时下单仍用 `shares`。`presignPrices` 返回每个限价的 `sizes`，`clob/client.ts presign` 每种股数各签一张。restore 时第一张 stage 的股数必须是三种之一。
 - 反向信号卖出（`exitOnReverse`）：`decideExit` 每场一次；记 `round.exitFirst`（时间、买一、股数、`sent`、`skip`），开着时发 FAK SELL，订单记在 `round.exit`（不是 stage，不进预算），`exitsByClient` 按 client id 索引，`recordExit` 收订单更新、认回只有核心有的 `:exit` 单。核心的 SELL 走现有路径（日亏到线时只放行 SELL）。`createLeadOrderLog` 用 `exitFor` 把卖单写成 `stage: exit` 的 `lead_order`（`proceeds_usd` = 成交额 − 手续费），`lead_exit_shadow` 在收盘后每场一行，带 `first_*` 和 `exit_*`；`first_lead_bp`（`exitFirst.leadBp`）= 反向信号时 BTC 离本场开盘前 60 秒均价多少 bp，持仓那边为正，只记录，账本 `_exit_by_lead` 按它比"都卖"和"领先 ≥3 / 5 bp 不卖"。`live-settlement.ts receiptIsTrade`：带交易所 `OrderFilled` 的回执是撮合不是赎回，`externalPayout` 不算它。账本：`_apply_exit` 把卖出收回并进这场买单行的盈亏，`stage exit` 行不进漏斗；没有持仓可赎回的已结算场按成交算盈亏（`_trade_net`）。
 - 行情太乱（`regimePause`）：每个信号带 `signals300`（这家检测器信号前 300 s 的信号数）和 `vol300Bp`（前 300 个整秒的每秒对数收益标准差）；`regimePause()` 判 > 12 或 > 0.89。开关开着时 `decide` 跳过这个信号，本场等下一个；关着时只在 `lead_order` 记 `regime_pause`。重启后前 300 s 没有这两个数，照常下单。

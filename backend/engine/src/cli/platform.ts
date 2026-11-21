@@ -116,7 +116,8 @@ export function statusRuntime(input: {
   status: "starting" | "running" | "stopped" | "failed"; mode: TradingMode; startedAt: number;
   strategyId: string | null; state: CoreState | undefined; strategyStatus: StrategyStatus | undefined;
   markets: MarketInfo[]; snapshots: MarketBookSnapshot[]; now: number; needsWork: (marketId: string) => boolean;
-  leadFeedHealthy: boolean | null; leadVenues: string[] | null; leadRelay: boolean | null; leadLines: unknown;
+  leadFeedHealthy: boolean | null; leadVenues: string[] | null; leadRelay: boolean | null; leadDirect?: string[] | null;
+  leadLines: unknown;
 }) {
   const { state, strategyStatus, now } = input;
   const currentMarket = currentMarketAt(input.markets, now);
@@ -170,7 +171,7 @@ export function statusRuntime(input: {
     } : null,
     lead_feed_healthy: input.leadFeedHealthy,
     // The running feed's venues and lines (fixed at start; the saved config can differ).
-    lead_venues: input.leadVenues, lead_relay: input.leadRelay, lead_lines: input.leadLines,
+    lead_venues: input.leadVenues, lead_relay: input.leadRelay, lead_direct: input.leadDirect ?? null, lead_lines: input.leadLines,
     markets: view.markets.map(market => ({ id: market.id, assetId: market.assetId, roundId: market.roundId,
       name: market.name, startsAt: market.startsAt, endsAt: market.endsAt,
       instruments: market.instruments.map(({ tokenId, outcome }) => ({ tokenId, outcome })) })),
@@ -667,15 +668,20 @@ export function relayListenerFromEnv(env: NodeJS.ProcessEnv = process.env): Rela
 
 /** The lead trades for the run (chosen once, at start; a hot reload that
  * changes the venues or the relay acts on the next run): one detector per
- * venue, each venue on its direct lines and, when given, the relay line. */
-export function leadFeedFor(config: Pick<BinanceLeadConfig, "leadVenues" | "tokyoRelay">, params: LeadSignalParams,
-  assetId: AssetId, relay: RelayListenerOptions | undefined) {
+ * venue, each venue on its direct lines and, when given, the relay line.
+ * `direct` = the venues given a direct line: directVenues, but only while the
+ * relay line runs (without it every venue keeps its direct line). */
+export function leadFeedFor(config: Pick<BinanceLeadConfig, "leadVenues" | "tokyoRelay"> & Partial<Pick<BinanceLeadConfig, "directVenues">>,
+  params: LeadSignalParams, assetId: AssetId, relay: RelayListenerOptions | undefined) {
   const detectors: Partial<Record<LeadVenue, LeadSignalDetector>> = {};
   for (const venue of config.leadVenues) detectors[venue] = new LeadSignalDetector(params);
   const products = leadPerpProducts(assetId);
   const relayLine = config.tokyoRelay ? relay : undefined;
-  return { detectors, products, relay: relayLine !== undefined,
-    ...leadSignalFeed(detectors, { venues: config.leadVenues, products, ...(relayLine ? { relay: relayLine } : {}) }) };
+  const chosen = config.directVenues;
+  const direct = relayLine && chosen ? config.leadVenues.filter(venue => chosen.includes(venue)) : [...config.leadVenues];
+  return { detectors, products, relay: relayLine !== undefined, direct,
+    ...leadSignalFeed(detectors, { venues: config.leadVenues, directVenues: direct, products,
+      ...(relayLine ? { relay: relayLine } : {}) }) };
 }
 
 export const leadSignalParams = (config: Pick<BinanceLeadConfig, "windowMs" | "thresholdBp" | "fromSec" | "toSec">): LeadSignalParams =>
@@ -1133,7 +1139,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
       now, needsWork: marketId => workMarkets.has(marketId),
       leadFeedHealthy: connection?.leadFeedHealthy() ?? null,
       leadVenues: leadFeed ? Object.keys(leadFeed.detectors) : null,
-      leadRelay: leadFeed ? leadFeed.relay : null, leadLines: leadFeed?.stats() ?? null });
+      leadRelay: leadFeed ? leadFeed.relay : null, leadDirect: leadFeed ? leadFeed.direct : null,
+      leadLines: leadFeed?.stats() ?? null });
     journal?.write("platform_status", { runtime });
     const reason = signalReason ?? null, printedAtMs = Date.now();
     if (!statusStdoutDue(lastStdoutStatus, status, reason, printedAtMs)) return;

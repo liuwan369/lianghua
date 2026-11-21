@@ -27,7 +27,7 @@ def default_config() -> dict:
     # the control plane's run settings, which reach the engine as flags.
     return {"assetId": ASSET_ID, "shares": 5, "thresholdBp": 2, "windowMs": 250, "limitPremium": 0.03,
             "fromSec": 15, "toSec": 265, "maxAsk": 0.8, "leadVenues": list(LEAD_VENUES), "tokyoRelay": True,
-            "openBandBp": 0, "openLine": "tick", "restAfterMissSec": 0, "restShadow": True, "entryOrder": "fak", "regimePause": False,
+            "directVenues": list(LEAD_VENUES), "openBandBp": 0, "openLine": "tick", "restAfterMissSec": 0, "restShadow": True, "entryOrder": "fak", "regimePause": False,
             "edgeSizing": False, "exitOnReverse": False, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
@@ -40,7 +40,7 @@ ENTRY_ORDERS = ("fak", "gtc")
 # A published file may predate these fields; it gets their defaults, as the
 # engine's normalizeBinanceLeadConfig does. Any other missing field is damage.
 ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-                "edgeSizing", "exitOnReverse")
+                "edgeSizing", "exitOnReverse", "directVenues")
 # Settings the engine dropped (73fd2fd, d2bfb59). The engine ignores them in a
 # saved file, so a stored config carrying them loads without them; a submitted
 # draft with them is still rejected.
@@ -104,6 +104,10 @@ def validate_config(config: dict) -> dict:
         raise ConfigValidationError("信号交易所必须是 bybit、binance、okx 中不重复的至少一个")
     if not isinstance(result["tokyoRelay"], bool):
         raise ConfigValidationError("东京中继必须是开或关")
+    direct = result["directVenues"]
+    if (not isinstance(direct, list) or len(set(map(str, direct))) != len(direct)
+            or any(venue not in LEAD_VENUES for venue in direct)):
+        raise ConfigValidationError("爱尔兰直连交易所必须是 bybit、binance、okx 中不重复的（可以一个都不选）")
     within("openBandBp", "开盘价范围bp", 0, 1000, low_open=False)
     if result["openLine"] not in OPEN_LINES:
         raise ConfigValidationError("开盘线只能是开盘价或开盘前 60 秒均价")

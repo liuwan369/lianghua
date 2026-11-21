@@ -553,6 +553,8 @@ export function createRelaySender(options: { host: string; port: number; key: Ke
 
 export interface LeadTradesOptions {
   venues: readonly LeadVenue[];
+  /** The venues that also get their direct lines; absent = every venue. */
+  directVenues?: readonly LeadVenue[];
   products: LeadPerpProducts;
   /** The Tokyo relay line; absent = direct lines only. */
   relay?: RelayListenerOptions;
@@ -572,14 +574,16 @@ export interface LeadTradesControl {
   ready: Promise<void>;
 }
 
-/** Every configured venue's direct lines plus the relay line, each venue
- * deduplicated on its own; onTrade gets every venue's trades once. */
+/** Every configured venue's direct lines (those in directVenues) plus the
+ * relay line, each venue deduplicated on its own; onTrade gets every venue's
+ * trades once. */
 export function runLeadTrades(options: LeadTradesOptions, onTrade: (trade: AggTrade, source: LeadTrade) => void): LeadTradesControl {
   const controller = new AbortController();
   const sockets = new Set<WebSocket>();
   const ingests: Partial<Record<LeadVenue, VenueIngest>> = {};
   for (const venue of options.venues) {
     const ingest = ingests[venue] = new VenueIngest(venue, options.products[venue], onTrade);
+    if (options.directVenues && !options.directVenues.includes(venue)) continue;
     for (const line of directLines(venue, options.products, options.urls?.[venue])) {
       void lineLoop(line, ingest, controller.signal, sockets);
     }

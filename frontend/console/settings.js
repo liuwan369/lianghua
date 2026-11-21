@@ -41,10 +41,10 @@
   ];
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
-    "tokyoRelay", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
+    "tokyoRelay", "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
     "dailyLossUsd", "durationMinutes", "maxRounds", "mode"];
 
-  // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues: string[]} -> {config, errors}
+  // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues/directVenues: string[]} -> {config, errors}
   const buildConfig = (inputs, published = {}) => {
     const errors = {};
     const config = { assetId: "btc", durationMinutes: num(published.durationMinutes) ?? 0, mode: "live" };
@@ -75,6 +75,7 @@
     if (!venues.length) errors.leadVenues = "至少选一家交易所";
     config.leadVenues = venues;
     config.tokyoRelay = inputs.tokyoRelay === true;
+    config.directVenues = ALL_VENUES.filter((venue) => (inputs.directVenues || []).includes(venue));
     config.openLine = inputs.openLine === "mean60" ? "mean60" : "tick";
     config.restShadow = inputs.restShadow !== false;
     config.regimePause = inputs.regimePause === true;
@@ -95,6 +96,7 @@
     for (const [key] of [...FIELDS, ...ADVANCED]) inputs[key] = config?.[key] === null || config?.[key] === undefined ? "" : String(config[key]);
     inputs.leadVenues = Array.isArray(config?.leadVenues) ? config.leadVenues : [...ALL_VENUES];
     inputs.tokyoRelay = config?.tokyoRelay !== false;
+    inputs.directVenues = Array.isArray(config?.directVenues) ? config.directVenues : [...ALL_VENUES];
     inputs.openLine = config?.openLine === "mean60" ? "mean60" : "tick";
     inputs.restShadow = config?.restShadow !== false;
     inputs.entryOrder = config?.entryOrder === "gtc" ? "gtc" : "fak";
@@ -143,7 +145,8 @@
     for (const venue of ALL_VENUES) {
       for (const line of ["direct", "tokyo"]) {
         const c = feed.lines?.[venue]?.[line];
-        if (!c) continue;
+        // A direct line this run did not open (feed.direct) is not a fault.
+        if (!c || (line === "direct" && Array.isArray(feed.direct) && !feed.direct.includes(venue))) continue;
         const age = num(c.lastTradeAgeSeconds);
         lines.push(html`<dt>${VENUES[venue]} · ${LINES[line]}</dt><dd><span class="dot ${age !== null && age < 10 ? "ok" : "bad"}"></span> ${age === null ? "没有成交" : `${fmt.seconds(age)}前`} · 先到 ${fmt.int(c.delivered)} 笔</dd>`);
       }
@@ -210,6 +213,7 @@
       ${group("信号", html`
         <div class="field"><span>信号交易所</span><div class="checks">${ALL_VENUES.map((venue) => html`<label><input type="checkbox" data-venue="${venue}"> ${VENUES[venue]}</label>`)}</div><small data-note="leadVenues">哪几家的合约成交算信号；至少一家</small></div>
         <div class="field"><span>东京转发</span><div class="checks"><label><input type="checkbox" data-field="tokyoRelay"> 开启</label></div><small>同时接东京转发的成交，谁先到用谁</small></div>
+        <div class="field"><span>爱尔兰直连</span><div class="checks">${ALL_VENUES.map((venue) => html`<label><input type="checkbox" data-direct="${venue}"> ${VENUES[venue]}</label>`)}</div><small>不勾的只走东京转发（省 CPU）；东京转发关着时全部直连</small></div>
         ${SIGNAL.map(field)}`, "交易所和东京转发下次启动才生效")}
       ${group("什么时候买", html`${WHEN.map(field)}
         <label class="field"><span>开盘线</span><select data-field="openLine"><option value="tick">开盘那一笔</option><option value="mean60">开盘前 60 秒均价</option></select><small>开盘线范围从哪条线量</small></label>`)}
@@ -246,6 +250,7 @@
     inputs.edgeSizing = $('[data-field="edgeSizing"]').checked;
     inputs.exitOnReverse = $('[data-field="exitOnReverse"]').checked;
     inputs.leadVenues = ALL_VENUES.filter((venue) => $(`[data-venue="${venue}"]`).checked);
+    inputs.directVenues = ALL_VENUES.filter((venue) => $(`[data-direct="${venue}"]`).checked);
     return inputs;
   };
   const fill = (config) => {
@@ -259,6 +264,7 @@
     $('[data-field="edgeSizing"]').checked = inputs.edgeSizing;
     $('[data-field="exitOnReverse"]').checked = inputs.exitOnReverse;
     for (const venue of ALL_VENUES) $(`[data-venue="${venue}"]`).checked = inputs.leadVenues.includes(venue);
+    for (const venue of ALL_VENUES) $(`[data-direct="${venue}"]`).checked = inputs.directVenues.includes(venue);
     state.dirty = false;
     showErrors({});
   };

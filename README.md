@@ -4,7 +4,7 @@
 
 ## 控制台
 
-https://194-87-245-135.sslip.io/console/ （nginx basic auth）。四个页面，都在 `frontend/console/`：
+https://3-254-138-119.sslip.io/console/ （nginx basic auth）。四个页面，都在 `frontend/console/`：
 
 - 实盘 `auto-trade.html`（首页，`index.html` 跳转到这里）：启动/暂停/继续/停止、今日盈亏与止损余量、信号源（三家交易所 × 爱尔兰直连/东京转发）、当前场盘口、本场信号与下单。
 - 统计 `stats.html`：漏斗、没买到的单、挂单与限价单、模拟记录（反向信号卖出、行情太乱就暂停）、晚了多少毫秒、速度分解、按信号源、跳过原因、按小时。
@@ -13,7 +13,7 @@ https://194-87-245-135.sslip.io/console/ （nginx basic auth）。四个页面�
 
 ## 服务器
 
-- 爱尔兰（`ssh pm-ire2`，194.87.245.135，Baxet 都柏林 4 核独占 3.9 GB，2026-11-20 起）：控制台和交易引擎，运行目录 `/root/pm-system`。nginx 443 做 basic auth，反代到只监听 `127.0.0.1:18766` 的控制面。交易引擎只能在控制台由人启动。账户秘密只在这台机器上。
+- 爱尔兰（`ssh pm-ire`，AWS Lightsail 3.254.138.119，2 核可突发、保底 20%，2026-11-21 从 Baxet 迁回）：控制台和交易引擎，运行目录 `/root/pm-system`。nginx 443 做 basic auth，反代到只监听 `127.0.0.1:18766` 的控制面。交易引擎只能在控制台由人启动。账户秘密只在这台机器上。
 - 东京 AWS ap-northeast-1（`ssh pm-tokyo`）：只跑转发 `pm-relay`，把三家交易所的成交签名后发给爱尔兰。
 - 都柏林旧机器（`ssh pm-new`）：不交易，只做研究下载（predict.fun 历史）。
 

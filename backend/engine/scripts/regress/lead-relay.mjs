@@ -7,6 +7,8 @@
 // 2) end to end on loopback: the real sender -> the real listener -> the
 //    venue ingest, once per trade (UDP twice + TCP = one delivery); a forged
 //    message and a wrong source are ignored.
+// 3) a venue left out of directVenues opens no direct socket and still
+//    arrives over Tokyo.
 // Run after `npm run build`:  node scripts/regress/lead-relay.mjs
 import assert from "node:assert/strict";
 import dgram from "node:dgram";
@@ -15,6 +17,7 @@ import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WebSocketServer } from "ws";
 import { createRelaySender, decodeRelay, encodeRelay, readRelayKey, runLeadTrades, startRelayListener,
   RELAY_BAD_FORMAT, RELAY_BAD_MAC } from "../../dist/live/feeds/lead-trades.js";
 import { leadPerpProducts } from "../../dist/live/feeds/btc.js";
@@ -136,6 +139,30 @@ try {
     assert.equal(s.sent, 4); assert.equal(s.udpErrors, 0); assert.equal(s.tcpDrops, 0);
     noKey(JSON.stringify(feed.stats()) + JSON.stringify(s), "feed and sender stats");
     forged.destroy(); sender.close(); feed.stop();
+  }
+
+  // --- 3b. a venue with its direct line off (directVenues, 2026-11-21 CPU): no direct
+  // socket is opened for it, and its Tokyo trades still arrive and are delivered once ---
+  {
+    const okxWs = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    await new Promise(r => okxWs.on("listening", r));
+    let okxConnections = 0;
+    okxWs.on("connection", () => { okxConnections += 1; });
+    const delivered = [];
+    const feed = runLeadTrades({ venues: ["okx", "bybit"], directVenues: ["bybit"], products: leadPerpProducts("btc"),
+      urls: { okx: [`ws://127.0.0.1:${okxWs.address().port}/okx`], bybit: [] },
+      relay: { port: 0, host: "127.0.0.1", key, allowedIp: "127.0.0.1" } }, t => delivered.push(t));
+    await feed.ready;
+    await sleep(300);
+    assert.equal(okxConnections, 0, "okx is not a direct venue: its direct url is never opened");
+    const sender = createRelaySender({ host: "127.0.0.1", port: feed.stats().relay.port, key });
+    assert.ok(await until(() => sender.stats().tcpConnected));
+    const now = Date.now();
+    sender.send({ venue: "okx", id: 200, price: 80000, tradeTimeMs: now - 40 }, now - 10);
+    assert.ok(await until(() => delivered.length === 1), "okx still arrives over Tokyo");
+    assert.deepEqual(delivered.map(t => [t.venue, t.id, t.line]), [["okx", 200, "tokyo"]]);
+    assert.equal(feed.stats().venues.okx.direct.frames, 0, "no direct frames for okx");
+    sender.close(); feed.stop(); okxWs.close();
   }
 } finally { rmSync(dir, { recursive: true, force: true }); }
 console.log("lead-relay OK");

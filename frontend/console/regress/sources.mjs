@@ -63,6 +63,14 @@ assert.ok(text(offBybit).includes("东京转发 未开启"), text(offBybit));
 assert.ok(!text(offBybit).includes("东京先到"), "no Tokyo share when the relay is off");
 assert.ok(text(off).includes("东京转发：本次运行没有开启"));
 
+// --- direct line off for a venue (leadDirect, 2026-11-21): 未开启, not a red dot ---
+const tokyoOnly = String(L.renderSources({ ...status, leadDirect: ["bybit"] }, NOW)).split('<div class="source">').slice(1);
+assert.ok(text(tokyoOnly[1]).includes("爱尔兰直连 未开启"), text(tokyoOnly[1]));
+assert.deepEqual(dots(tokyoOnly[1]), ["", "bad"], "binance: direct off (grey), Tokyo still checked");
+assert.ok(!text(tokyoOnly[1]).includes("东京先到"), "no Tokyo share without a direct line to race");
+assert.deepEqual(dots(tokyoOnly[0]), ["ok", "ok"], "bybit keeps both lines");
+assert.ok(text(L.renderSources({ ...status, leadDirect: null }, NOW)).includes("爱尔兰直连 15 秒前"), "an older engine: all direct");
+
 // --- relay listener down and engine stopped ---
 const down = text(L.renderSources({ ...status, leadLines: { ...status.leadLines, relay: { listening: false, port: 9555, messages: 0, accepted: 0 } } }, NOW));
 assert.ok(down.includes("没有监听"), down);

@@ -62,6 +62,8 @@
     if (!running && !lines) return html`<p class="empty">引擎没在运行，没有信号源数据</p>`;
     const venues = Array.isArray(status?.leadVenues) ? status.leadVenues : ALL_VENUES;
     const relayOn = status?.leadRelay !== false;
+    // The venues with a direct line this run; an older engine sends none = all.
+    const directOn = (venue) => !Array.isArray(status?.leadDirect) || status.leadDirect.includes(venue);
     const cards = ALL_VENUES.map((venue) => {
       if (!venues.includes(venue)) return html`<div class="source"><h3>${VENUES[venue]}</h3><p class="muted">本次运行没有启用</p></div>`;
       const byLine = lines?.venues?.[venue] || {};
@@ -76,9 +78,9 @@
         return html`<div class="line"><span class="dot ${tone}"></span><b>${LINES[line]}</b><span>${when}</span><small>先到 ${fmt.int(counters?.delivered ?? null)} 笔</small></div>`;
       };
       const total = (direct?.delivered || 0) + (tokyo?.delivered || 0);
-      const lead = relayOn && total > 0
+      const lead = relayOn && directOn(venue) && total > 0
         ? html`<p>东京先到 ${fmt.pct((tokyo?.delivered || 0) / total)} · 平均早 ${fmt.ms(tokyo?.leadMeanMs)}</p>` : "";
-      return html`<div class="source"><h3>${VENUES[venue]}</h3>${row("direct", direct, true)}${row("tokyo", tokyo, relayOn)}${lead}</div>`;
+      return html`<div class="source"><h3>${VENUES[venue]}</h3>${row("direct", direct, directOn(venue))}${row("tokyo", tokyo, relayOn)}${lead}</div>`;
     });
     const relay = lines?.relay;
     const relayLine = !relayOn ? "东京转发：本次运行没有开启"

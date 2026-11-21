@@ -29,6 +29,12 @@ export interface BinanceLeadConfig {
   /** Also take each venue's trades relayed from Tokyo (first copy wins).
    * Read when the engine starts; needs PM_RELAY_KEY_FILE there. */
   tokyoRelay: boolean;
+  /** The venues that also get an Ireland direct line (distinct, may be empty);
+   * the rest come over Tokyo only. Read when the engine starts, and only with
+   * the Tokyo line running: without it every venue keeps its direct line.
+   * User 2026-11-21: Bybit only (OKX/Binance direct almost never arrive first),
+   * to keep the burstable AWS box under its CPU baseline. */
+  directVenues: LeadVenue[];
   /** Trade only a signal whose lead price is within this many bp of the round's
    * opening lead price, signed by the signal (+ = its side already ahead):
    * -openBandBp <= d < openBandBp. 0 = no filter. User 2026-11-01: 5 (backtest
@@ -215,7 +221,7 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadVenues: [...LEAD_VENUES], tokyoRelay: true,
-  openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  directVenues: [...LEAD_VENUES], openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
 const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"];
@@ -381,6 +387,10 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
     throw new Error(`leadVenues must be a non-empty list of distinct venues from ${LEAD_VENUES.join(", ")}`);
   }
   if (typeof config.tokyoRelay !== "boolean") throw new Error("tokyoRelay must be true or false");
+  if (!Array.isArray(config.directVenues)
+    || config.directVenues.some((venue, k) => !LEAD_VENUES.includes(venue) || config.directVenues.indexOf(venue) !== k)) {
+    throw new Error(`directVenues must be a list of distinct venues from ${LEAD_VENUES.join(", ")}`);
+  }
   if (!finite(config.openBandBp) || config.openBandBp < 0 || config.openBandBp > 1000) {
     throw new Error("openBandBp must be in [0, 1000]");
   }

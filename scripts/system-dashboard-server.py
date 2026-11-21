@@ -82,6 +82,11 @@ _modern_response_cache: OrderedDict = OrderedDict()
 # Account checks are read-only RPC probes. Refresh before the 15-minute
 # readiness window expires so a long-running dashboard does not become stale.
 _ACCOUNT_CHECK_REFRESH_SECONDS = 10 * 60
+# The account reader's regular refresh. Each read costs ~1.6 s of CPU; at 15 s
+# it took ~11% of a core, half the AWS box's 20% baseline (2026-11-21). A fill
+# still refreshes at once (_note_fill_watermark), and 60 s stays well inside
+# the 180 s a snapshot counts as fresh for confirming a stop.
+_ACCOUNT_READ_SECONDS = 60
 
 
 @contextmanager
@@ -123,7 +128,7 @@ def account_data() -> AccountData:
     global _account_data
     with _account_data_lock:
         if _account_data is None:
-            _account_data = AccountData(TRADING_ROOT, _account_values)
+            _account_data = AccountData(TRADING_ROOT, _account_values, interval=_ACCOUNT_READ_SECONDS)
         return _account_data
 
 
@@ -969,6 +974,7 @@ def _lead_feed_view(runtime: dict | None, running: bool) -> dict:
                                    "lastTradeAgeSeconds": round((now_ms - last) / 1000, 3) if last else None}
     return {"running": running, "healthy": runtime.get("lead_feed_healthy") if running else None,
             "venues": runtime.get("lead_venues"), "relayConfigured": runtime.get("lead_relay"),
+            "direct": runtime.get("lead_direct"),
             "lines": venues, "relayListener": lines.get("relay"), "asOf": runtime.get("source_at")}
 
 
@@ -1502,6 +1508,7 @@ def _modern_runtime(status: dict) -> dict:
             # The running feed's venues and lines, fixed when the engine started.
             "leadVenues": runtime.get("lead_venues"),
             "leadRelay": runtime.get("lead_relay"),
+            "leadDirect": runtime.get("lead_direct"),
             "leadLines": runtime.get("lead_lines"),
             # The strategy's verdict on the latest signals (lead_signal, newest first).
             "leadSignals": runtime.get("lead_signals") if isinstance(runtime.get("lead_signals"), list) else [],

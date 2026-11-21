@@ -31,10 +31,10 @@ const S = window.PolySettings;
 
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
-  "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
-  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false,
+  leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, directVenues: ["bybit", "binance", "okx"], openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false,
   edgeSizing: false, exitOnReverse: false, maxQuoteAgeSeconds: 2,
   maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, durationMinutes: 0, maxRounds: 12, mode: "live" };
 
@@ -56,6 +56,13 @@ assert.deepEqual({ ...edited.errors }, {});
 assert.equal(edited.config.shares, 10);
 assert.deepEqual([...edited.config.leadVenues], ["bybit", "okx"], "venues as an array in the fixed order");
 assert.equal(edited.config.tokyoRelay, false);
+// Ireland direct lines: a venue list in the fixed order, none allowed (Tokyo only).
+assert.deepEqual([...S.inputsFrom(published).directVenues], ["bybit", "binance", "okx"]);
+assert.deepEqual([...S.inputsFrom({ regimePause: true }).directVenues], ["bybit", "binance", "okx"], "an older config: all direct");
+assert.deepEqual([...S.buildConfig({ ...inputs, directVenues: ["okx", "bybit"] }, published).config.directVenues], ["bybit", "okx"]);
+const tokyoOnly = S.buildConfig({ ...inputs, directVenues: [] }, published);
+assert.deepEqual({ ...tokyoOnly.errors }, {});
+assert.deepEqual([...tokyoOnly.config.directVenues], []);
 assert.equal(edited.config.openLine, "tick");
 assert.equal(edited.config.dailyLossUsd, null, "empty = null");
 assert.equal(edited.config.maxRounds, 3);

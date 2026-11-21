@@ -130,6 +130,8 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
   assert.equal(page.node('[data-field="openLine"]').value, "mean60");
   assert.equal(page.node('[data-field="roundBudgetUsd"]').value, "", "null budget is empty");
   assert.equal(page.node('[data-venue="okx"]').checked, true);
+  assert.equal(page.node('[data-direct="bybit"]').checked, true, "a config without directVenues: every direct line");
+  assert.equal(page.node('[data-direct="okx"]').checked, true);
   const shown = text(page.html());
   for (const piece of ["0x1234…5678", "检查通过", "已授权", "可赎回", "账户密钥只在服务器上配置，网页不输入、不显示", "一切正常", "监听中", "盘口暂时不可用", "已发布 r4"]) {
     assert.ok(shown.includes(piece), `设置 shows ${piece}`);

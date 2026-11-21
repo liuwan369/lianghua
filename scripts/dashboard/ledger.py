@@ -421,6 +421,8 @@ def _strategy_projection(value):
         venues = source.get("leadVenues")
         result["leadVenues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
         result["tokyoRelay"] = source.get("tokyoRelay") if isinstance(source.get("tokyoRelay"), bool) else None
+        direct = source.get("directVenues")
+        result["directVenues"] = [v for v in direct if v in LEAD_VENUES] if isinstance(direct, list) else None
         result["openLine"] = source.get("openLine") if source.get("openLine") in ("tick", "mean60") else None
         result["entryOrder"] = source.get("entryOrder") if source.get("entryOrder") in ("fak", "gtc") else None
         for flag in ("regimePause", "edgeSizing", "exitOnReverse"):
@@ -522,6 +524,8 @@ def _runtime_projection(value, mode):
     venues = value.get("lead_venues")
     result["lead_venues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
     result["lead_relay"] = value.get("lead_relay") if isinstance(value.get("lead_relay"), bool) else None
+    direct = value.get("lead_direct")
+    result["lead_direct"] = [v for v in direct if v in LEAD_VENUES] if isinstance(direct, list) else None
     result["lead_lines"] = _lead_lines(value.get("lead_lines"))
     snapshots = value.get("snapshots") if isinstance(value.get("snapshots"), list) else []
     # Keep the accepted paired snapshot lossless enough for the read-only

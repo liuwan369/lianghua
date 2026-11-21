@@ -86,6 +86,7 @@ CASES += [("maxAsk", v) for v in (0, -0.1, 0.01, 0.8, 0.99, 1, 1.5, "0.8", None)
 CASES += [("leadVenues", v) for v in (["bybit"], ["okx", "binance"], ["bybit", "binance", "okx"], [], ["bybit", "bybit"],
                                       ["kraken"], "bybit", None)]
 CASES += [("tokyoRelay", v) for v in (True, False, 1, "true", None)]
+CASES += [("directVenues", v) for v in (["bybit"], [], ["bybit", "binance", "okx"], ["bybit", "bybit"], ["kraken"], "bybit", None)]
 CASES += [("openBandBp", v) for v in (0, 5, 1000, -1, 1001, "5", None)]
 CASES += [("openLine", v) for v in ("tick", "mean60", "close", None)]
 CASES += [(("fromSec", "toSec"), v) for v in ((0, 300), (-1, 265), (265, 265), (270, 265), (15, 301), (0, 0.5), (299, 300))]
@@ -115,6 +116,7 @@ for (key, value), mine, theirs in zip(CASES, python_ok, engine_ok):
 assert python_ok.count(False) >= 25 and python_ok.count(True) >= 20, "both sides of every boundary are exercised"
 assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "leadVenues"] == [True, True, True, False, False, False, False, False]
 assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "tokyoRelay"] == [True, True, False, False, False]
+assert [ok for (key, _), ok in zip(CASES, python_ok) if key == "directVenues"] == [True, True, True, False, False, False, False]
 
 # Values JSON cannot carry, and the control plane's own run settings.
 for key, value in (("shares", float("nan")), ("thresholdBp", float("inf")), ("durationMinutes", -1),
@@ -128,7 +130,7 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
 ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-         "edgeSizing", "exitOnReverse")
+         "edgeSizing", "exitOnReverse", "directVenues")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
@@ -150,6 +152,7 @@ for field in ("edgeSizing", "exitOnReverse"):
     assert rejected({**defaults, field: 1}), field
 assert (old["maxAsk"], old["openBandBp"], old["openLine"], old["leadVenues"], old["tokyoRelay"]) == \
     (0.8, 0, "tick", ["bybit", "binance", "okx"], True)
+assert old["directVenues"] == ["bybit", "binance", "okx"], "an older config keeps every direct line"
 
 REVERSAL = {"assetId": "btc", "triggerPrice": .67, "confirmationPrice": .70, "maxBuyPrice": .70,
             "stageShares": [5], "maxStages": 1, "roundBudgetUsd": 5, "totalBudgetUsd": 10, "dailyLossUsd": 10,
@@ -170,7 +173,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert store.get_draft() is None
     # --- save -> the engine reads exactly what was saved ---
     chosen = {**defaults, "shares": 7, "thresholdBp": 2.5, "windowMs": 300, "limitPremium": 0.02, "fromSec": 20,
-              "toSec": 260, "maxAsk": 0.75, "leadVenues": ["okx", "bybit"], "tokyoRelay": False, "openBandBp": 5,
+              "toSec": 260, "maxAsk": 0.75, "leadVenues": ["okx", "bybit"], "tokyoRelay": False, "directVenues": ["bybit"], "openBandBp": 5,
               "openLine": "mean60", "roundBudgetUsd": 5, "totalBudgetUsd": 50, "dailyLossUsd": 10, "maxRounds": 3}
     draft = store.save_draft(chosen, 0)
     saved = store.activate_draft(0, draft["draftId"])
@@ -187,9 +190,11 @@ with tempfile.TemporaryDirectory() as tmp:
                "highEdge": 0.13, "highShares": 0, "reverseMaxAsk": 0, "reverseToSec": 285}
     retired.pop("leadVenues")
     retired.pop("tokyoRelay")
+    retired.pop("directVenues")
     store.path.write_text(json.dumps(document(retired)), encoding="utf-8")
     loaded = StrategyConfigStore(store.path).get()
-    assert loaded["config"] == {**chosen, "leadVenues": ["bybit", "binance", "okx"], "tokyoRelay": True}, loaded["config"]
+    assert loaded["config"] == {**chosen, "leadVenues": ["bybit", "binance", "okx"], "tokyoRelay": True,
+                                "directVenues": ["bybit", "binance", "okx"]}, loaded["config"]
     read = engine("const { readStrategyConfig } = await load('cli/platform.js');\n"
                   "console.log(JSON.stringify(readStrategyConfig(payload)));", str(store.path))
     assert read["config"]["leadVenues"] == loaded["config"]["leadVenues"] and read["config"]["tokyoRelay"] is True

@@ -49,6 +49,14 @@ try {
   assert.equal(feed.relay, false, "no relay key: direct lines only");
   assert.equal(typeof feed.feed, "function");
   assert.equal(feed.stats(), null, "no stats before the feed runs");
+  assert.deepEqual(feed.direct, ["bybit", "binance", "okx"], "every venue's direct line by default");
+  // Direct lines off for some venues (directVenues) only while the Tokyo line runs:
+  // with no relay every venue keeps its direct line, so none is left without a line.
+  const some = { leadVenues: ["bybit", "binance", "okx"], directVenues: ["bybit"], tokyoRelay: true };
+  assert.deepEqual(leadFeedFor(some, params, "btc", { port: 0, key: {} }).direct, ["bybit"]);
+  assert.deepEqual(leadFeedFor(some, params, "btc", undefined).direct, ["bybit", "binance", "okx"], "no relay key: all direct");
+  assert.deepEqual(leadFeedFor({ ...some, tokyoRelay: false }, params, "btc", { port: 0, key: {} }).direct,
+    ["bybit", "binance", "okx"], "relay off: all direct");
   assert.equal(leadFeedFor({ leadVenues: ["okx"], tokyoRelay: true }, params, "btc", { port: 0, key: {} }).relay, true);
   assert.equal(leadFeedFor({ leadVenues: ["okx"], tokyoRelay: false }, params, "btc", { port: 0, key: {} }).relay, false,
     "tokyoRelay false: no relay line even with a key");

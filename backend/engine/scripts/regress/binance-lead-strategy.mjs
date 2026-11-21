@@ -470,6 +470,13 @@ const orderRecord = (o, status, filledShares, orderId = "0xorder", at = START + 
     assert.throws(() => normalizeBinanceLeadConfig({ leadVenues: bad }), /leadVenues/, JSON.stringify(bad));
   }
   assert.throws(() => normalizeBinanceLeadConfig({ tokyoRelay: "yes" }), /tokyoRelay/);
+  // Direct lines: all three by default; any distinct subset, empty = Tokyo only.
+  assert.deepEqual(BINANCE_LEAD_DEFAULTS.directVenues, ["bybit", "binance", "okx"]);
+  assert.deepEqual(normalizeBinanceLeadConfig({ directVenues: ["bybit"] }).directVenues, ["bybit"]);
+  assert.deepEqual(normalizeBinanceLeadConfig({ directVenues: [] }).directVenues, []);
+  for (const bad of [["kraken"], ["bybit", "bybit"], "bybit", null]) {
+    assert.throws(() => normalizeBinanceLeadConfig({ directVenues: bad }), /directVenues/, JSON.stringify(bad));
+  }
   // The array is the config's own: a caller mutating its input or output does not reach the other.
   const input = { leadVenues: ["bybit", "okx"] };
   const normalized = normalizeBinanceLeadConfig(input);
