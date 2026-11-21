@@ -54,6 +54,15 @@ class JournalReplica:
             raise ValueError("invalid run id")
         return self.directory / f"dashboard-{run_id}.jsonl"
 
+    def ensure(self, run_id: str) -> Path:
+        """The run's replica, created empty if no byte has arrived yet. A run is
+        selected before its first chunk is copied; without the file the
+        projection worker reads the selection as a removed run and drops it."""
+        path = self.path(run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.open("ab").close()
+        return path
+
     def pull_request(self, run_id: str) -> dict:
         path = self.path(run_id)
         try:

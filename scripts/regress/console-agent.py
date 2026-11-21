@@ -175,6 +175,27 @@ class ConsoleAgent(unittest.TestCase):
         self.client.replicate()
         self.assertEqual(replica.read_bytes(), self.journal.read_bytes())
 
+    def test_bug_new_run_selected_before_its_replica_exists(self):
+        """2026-11-21 live: the console selected a new run one poll before its
+        replica's first bytes arrived; the projection worker took the missing
+        file for a deleted run and dropped selection.json, and nothing wrote it
+        again, so the new run never projected. A selected run's replica exists
+        (empty is fine) the moment it is selected."""
+        from dashboard.read_model import ReadModel
+        fresh = "20261121-155557-6600a3146462"
+        model = ReadModel(self.tmp / "console")
+        try:
+            path = self.client.replica.ensure(fresh)
+            self.assertTrue(path.is_file(), "the replica exists before any byte is copied")
+            model.select(fresh, "live", WALLET, path, 1)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and model.snapshot(fresh).get("state") != "ready":
+                time.sleep(0.2)
+            self.assertTrue((self.tmp / "console" / "selection.json").exists(), "the worker keeps the selection")
+            self.assertEqual(model.snapshot(fresh)["state"], "ready", "an empty new run projects")
+        finally:
+            model.close()
+
     def test_start_waits_for_the_previous_replica(self):
         self.client.poll()
         with self.assertRaisesRegex(AgentUnavailable, "运行记录"):

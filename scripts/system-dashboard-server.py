@@ -191,6 +191,9 @@ def _sync_selection() -> None:
     wanted = {"run_id": run_id, "account_id": status.get("account_id"),
               "config_revision": status.get("config_revision"), "mode": "live"}
     if {key: current.get(key) for key in wanted} != wanted:
+        # The replica must exist before the run is selected (the projection
+        # worker reads a missing journal as a removed run and drops it).
+        agent().replica.ensure(run_id)
         with _trading_lock:
             _save_selection(wanted)
             _modern_response_cache.clear()
