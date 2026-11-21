@@ -34,7 +34,22 @@ TARGETS = {
                 "sweep": (E + "dist/", E + "scripts/", "frontend/console/", "scripts/", "config/"),
                 "system": {"/etc/systemd/system/pm-console@.service": "config/pm-console@.service",
                            "/etc/systemd/system/pm-agent.service": "config/pm-agent.service",
+                           "/etc/systemd/system/pm-tunnel@.service": "config/pm-tunnel@.service",
                            "/etc/nginx/sites-available/pm-console": "config/pm-console-nginx.conf"}},
+    # One engine box per account: the engine agent and the engine, no console.
+    # The box says who it is in BOX_ID_FILE; a release for another box is refused.
+    "engine-a": {"host": "pm-a", "box": "pm-a", "root": "/root/pm-system", "releases": "/root/pm-releases",
+                 "unit": "pm-agent.service", "units": ("pm-agent.service",),
+                 "env": "/root/.config/pm-system/agent.env", "envs": ("/root/.config/pm-system/agent.env",),
+                 "lock": "/root/pm-system/data/dashboard/deployment.lock",
+                 "sweep": (E + "dist/", "scripts/", "config/"),
+                 "system": {"/etc/systemd/system/pm-agent.service": "config/pm-agent.service"}},
+    "engine-b": {"host": "pm-b", "box": "pm-b", "root": "/root/pm-system", "releases": "/root/pm-releases",
+                 "unit": "pm-agent.service", "units": ("pm-agent.service",),
+                 "env": "/root/.config/pm-system/agent.env", "envs": ("/root/.config/pm-system/agent.env",),
+                 "lock": "/root/pm-system/data/dashboard/deployment.lock",
+                 "sweep": (E + "dist/", "scripts/", "config/"),
+                 "system": {"/etc/systemd/system/pm-agent.service": "config/pm-agent.service"}},
     "tokyo": {"host": "pm-tokyo", "root": "/root/pm-relay", "releases": "/root/pm-relay-releases",
               "unit": "pm-relay.service", "units": ("pm-relay.service",), "env": "/root/.config/pm-system/relay.env",
               "envs": ("/root/.config/pm-system/relay.env",),
@@ -42,6 +57,16 @@ TARGETS = {
               "system": {"/etc/systemd/system/pm-relay.service": "config/pm-relay.service"}},
 }
 PROTECTED_DIRS = {"results", "node_modules", "data", "__pycache__"}
+# `all` is the console box and the relay; an engine box is always named on purpose.
+ALL_TARGETS = ("ireland", "tokyo")
+ENGINE_TARGETS = ("engine-a", "engine-b")
+BOX_ID_FILE = "/root/.config/pm-system/box-id"
+AGENT_PORT = 18767
+# What an engine box runs: the agent and its modules, the engine, the unit.
+ENGINE_BOX_SCRIPTS = ("scripts/engine_agent.py", "scripts/dashboard_account.py", "scripts/dashboard/__init__.py",
+                      "scripts/dashboard/account_data.py", "scripts/dashboard/config.py", "scripts/dashboard/replica.py",
+                      "scripts/dashboard/strategy_config.py", "scripts/dashboard/system_metrics.py",
+                      "scripts/dashboard/timestamps.py", "scripts/deploy.py", "config/pm-agent.service")
 NGINX_SITE, NGINX_AUTH = "/etc/nginx/sites-available/pm-console", "/etc/nginx/pm-console.htpasswd"
 NGINX_LINKS = ("/etc/nginx/sites-enabled/pm-console", "/etc/nginx/sites-enabled/default")
 CERT = "/etc/letsencrypt/live/%s/fullchain.pem" % SITE
@@ -58,6 +83,8 @@ def ships(name, target):
         return False
     if name in (E + "package.json", E + "package-lock.json", E + ".release") or name.startswith(E + "dist/"):
         return True
+    if target in ENGINE_TARGETS:
+        return name in ENGINE_BOX_SCRIPTS or name == E + ".env.example"
     return target == "ireland" and (name == E + ".env.example" or name.startswith(
         (E + "scripts/", "frontend/console/", "scripts/", "config/")))
 
@@ -101,7 +128,8 @@ def engine_running(units, pids, status):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog="deploy.py", description="Deploy the committed HEAD: console to Ireland, relay to Tokyo.")
-    parser.add_argument("target", nargs="?", default="all", choices=["ireland", "tokyo", "all", "setup-ireland", "setup-tokyo"],
+    parser.add_argument("target", nargs="?", default="all",
+                        choices=["ireland", "tokyo", *ENGINE_TARGETS, "all", "setup-ireland", "setup-tokyo", "setup-engine"],
                         help="where to deploy (default all); setup-* only prints the one-time operator commands")
     parser.add_argument("--dry-run", action="store_true", help="build locally and print the remote steps; contact no server")
     parser.add_argument("--wait-status", action="store_true", help="tokyo: wait up to 70 s for a relay_status line with trades sent")
@@ -176,7 +204,7 @@ def main(argv):
     rev = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     build = build_tree(rev)
-    for target in (["ireland", "tokyo"] if args.target == "all" else [args.target]):
+    for target in (list(ALL_TARGETS) if args.target == "all" else [args.target]):
         t = TARGETS[target]
         release, tarball = "%s/%s-%s" % (t["releases"], rev[:7], stamp), ROOT / ".deploy" / ("%s-%s.tar.gz" % (rev[:7], target))
         files = bundle(build, rev, target, tarball)
@@ -196,7 +224,13 @@ def main(argv):
     return 0
 
 
-STEPS = {"ireland": [
+STEPS = {**{name: [
+    "need /usr/local/bin/node and {env}; this box's id in " + BOX_ID_FILE + " must be {box}; take flock {lock}",
+    "refuse if a pm-engine-* scope/service is active, a dist/cli/platform.js process exists, or the agent says running",
+    "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
+    "stop pm-agent; write the agent, its modules and dist; delete unshipped files under {sweep}; npm ci --omit=dev if the lock changed or node_modules is missing",
+    "install pm-agent.service; daemon-reload, enable + restart; expect /state with box {box} and running false within 30 s, else restore before/ and exit 1"]
+    for name in ENGINE_TARGETS}, "ireland": [
     "need /usr/local/bin/node and {env}; take flock {lock}",
     "refuse if a pm-engine-* scope/service is active, a dist/cli/platform.js process exists, or the console's /api/runtime/status says processRunning != false",
     "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
@@ -227,6 +261,18 @@ def fetch(path):
         return response.status, response.read()
 
 
+def agent_status():
+    """The engine box's agent, shaped like the console's status for engine_running()."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(AGENT + "/state", timeout=5) as response:
+            return {"processRunning": json.loads(response.read())["status"]["running"]}
+    except Exception as error:
+        if isinstance(getattr(error, "reason", error), ConnectionRefusedError):
+            return None   # agent down (first deploy): the unit and process checks still apply
+        return {"processRunning": "unreadable (%s)" % type(error).__name__}
+
+
 def console_status():
     try:
         return json.loads(fetch("/api/runtime/status")[1])
@@ -234,6 +280,35 @@ def console_status():
         if isinstance(getattr(error, "reason", error), ConnectionRefusedError):
             return None   # console down (first deploy): the unit and process checks still apply
         return {"processRunning": "unreadable (%s)" % type(error).__name__}
+
+
+def check_box(box, marker=BOX_ID_FILE):
+    """Refuse a release whose target box is not this box (the marker it was set up with)."""
+    try:
+        here = Path(marker).read_text(encoding="utf-8").strip()
+    except OSError:
+        raise SystemExit("refusing: no box id at %s; run the one-time `python scripts/deploy.py setup-engine` steps" % marker)
+    if here != box:
+        raise SystemExit("refusing: this is %s, the release is for %s" % (here, box))
+
+
+def tunnel_authorized_key(public_key):
+    """The console box's tunnel key on an engine box: it can only forward the agent's port."""
+    return 'restrict,port-forwarding,permitopen="127.0.0.1:%d",command="/bin/false" %s' % (AGENT_PORT, public_key.strip())
+
+
+def tunnel_config(boxes):
+    """~/.ssh/tunnels.config on the console box. boxes: name -> (local port, public IP).
+    HostKeyAlias keeps the host key valid when an IP changes (edit HostName only)."""
+    blocks = []
+    for name, (port, ip) in sorted(boxes.items()):
+        blocks.append("\n".join((
+            "Host %s" % name, "  HostName %s" % ip, "  User root", "  HostKeyAlias %s" % name,
+            "  IdentityFile /root/.ssh/tunnel_ed25519", "  IdentitiesOnly yes",
+            "  LocalForward 127.0.0.1:%d 127.0.0.1:%d" % (port, AGENT_PORT),
+            "  ServerAliveInterval 10", "  ServerAliveCountMax 3", "  ExitOnForwardFailure yes",
+            "  StrictHostKeyChecking yes", "  BatchMode yes")))
+    return "\n\n".join(blocks) + "\n"
 
 
 def put(source, dest):
@@ -284,6 +359,25 @@ def check_console():
     raise RuntimeError("console not healthy within 30 s: %s" % last)
 
 
+def check_agent(box):
+    deadline, last = time.time() + 30, None
+    while time.time() < deadline:
+        time.sleep(1)
+        try:
+            import urllib.request
+            with urllib.request.urlopen(AGENT + "/state", timeout=5) as response:
+                state = json.loads(response.read())
+        except Exception as error:
+            last = error
+            continue
+        if state.get("box") != box:
+            raise RuntimeError("agent says box=%s, expected %s" % (state.get("box"), box))
+        if state["status"]["running"] is not False:
+            raise RuntimeError("agent says running=%s after restart" % state["status"]["running"])
+        return "pm-agent answers on %s, box %s, not running" % (AGENT, box)
+    raise RuntimeError("agent not answering within 30 s: %s" % last)
+
+
 def check_relay(since, wait_status):
     limit = 70 if wait_status else 8
     while True:
@@ -326,6 +420,12 @@ def apply(target, release, wait_status):
         if why:
             raise SystemExit("refusing: engine may be running (%s); stop trading in the console first "
                              "(a broken console with no engine: systemctl stop pm-console@1, then deploy)" % why)
+    if target in ENGINE_TARGETS:
+        check_box(t["box"])
+        why = engine_running(sh("systemctl", "list-units", "--type=scope,service", "--state=active", "--no-legend", "pm-engine-*"),
+                             sh("pgrep", "-f", "dist/cli/platform.js", check=False), agent_status())
+        if why:
+            raise SystemExit("refusing: engine may be running on %s (%s); stop trading in the console first" % (t["box"], why))
     existing = installed(root, manifest["files"], t["sweep"])
     write, delete = plan(manifest["files"], existing, t["sweep"])
     lockfile = E + "package-lock.json"
@@ -376,7 +476,8 @@ def apply(target, release, wait_status):
         for name in units:
             sh("systemctl", "enable", name)
             sh("systemctl", "restart", name)
-        result = check_console() if target == "ireland" else check_relay(started, wait_status)
+        result = (check_console() if target == "ireland" else check_agent(t["box"]) if target in ENGINE_TARGETS
+                  else check_relay(started, wait_status))
     except Exception as error:
         print("FAILED: %s; rolling back" % error, flush=True)
         rollback(root, before, state, unit, units, t.get("retired_units", ()))
@@ -470,6 +571,31 @@ ssh pm-tokyo 'umask 077; printf "%%s\\n" PM_RELAY_TARGET_HOST=%(ireland)s PM_REL
 # 5. Deploy and wait for the first status line with trades sent:
 python scripts/deploy.py tokyo --wait-status
 """}
+SETUP["setup-engine"] = """
+# One-time setup of an engine box (pm-a / pm-b; Debian 12, Node %(node)s, chrony, BBR already done).
+# <box> = pm-a or pm-b. Nothing below prints a secret.
+# 1. Who this box is (deploy.py refuses a release meant for another box):
+ssh <box> 'install -d -m 700 /root/.config/pm-system && echo <box> > /root/.config/pm-system/box-id'
+# 2. The relay key, copied from the console box through this machine (never printed):
+scp -3 pm-ire:/root/.config/pm-system/relay.key <box>:/root/.config/pm-system/relay.key
+ssh <box> 'chmod 600 /root/.config/pm-system/relay.key'
+# 3. The agent's environment (mode 600; no key values in it):
+ssh -t <box> 'f=/root/.config/pm-system/agent.env; [ -e $f ] || install -m 600 /dev/null $f; ${EDITOR:-nano} $f'
+#      PM_BOX_ID=<box>
+#      PM_TRADING_LIVE_UNLOCK=0          (1 only when this box may trade)
+#      PM_ACCOUNT_RPC_URL=<polygon rpc url>
+#      PM_ACCOUNT_RPC_FALLBACK_URL=<second polygon rpc url>
+#      PM_RELAY_KEY_FILE=/root/.config/pm-system/relay.key
+#      PM_RELAY_PORT=47001
+#      PM_RELAY_ALLOW_IP=%(tokyo)s
+# 4. Firewall (Lightsail panel, Networking): 47001 TCP + UDP from %(tokyo)s/32 only; SSH 22 stays as it is.
+# 5. The console box's tunnel key (made once on pm-ire), allowed only to forward the agent port:
+ssh pm-ire '[ -f /root/.ssh/tunnel_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -C pm-ire-tunnel -f /root/.ssh/tunnel_ed25519'
+#    then append deploy.tunnel_authorized_key(<pm-ire:/root/.ssh/tunnel_ed25519.pub>) to <box>:/root/.ssh/authorized_keys
+#    and write pm-ire:/root/.ssh/tunnels.config from deploy.tunnel_config({...}); start pm-tunnel@<box>.
+# 6. Deploy the agent (no engine runs until an account and the unlock are set):
+python scripts/deploy.py engine-a      # or engine-b
+"""
 SETUP = {name: text % {"site": SITE, "tokyo": TOKYO_IP, "ireland": IRELAND_IP, "node": NODE} for name, text in SETUP.items()}
 
 

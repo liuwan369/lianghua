@@ -1,0 +1,20 @@
+[Unit]
+# The console box's SSH tunnel to one engine box's agent (%i = the box's Host
+# entry in /root/.ssh/tunnels.config: HostName, HostKeyAlias, LocalForward).
+# The key it uses can only forward the agent's port on that box
+# (deploy.py tunnel_authorized_key). An IP change is one HostName edit.
+Description=SSH tunnel to the engine agent on %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/ssh -N -F /root/.ssh/tunnels.config %i
+# A dropped link (ServerAliveInterval 10 x 3) or a box restart: reconnect.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

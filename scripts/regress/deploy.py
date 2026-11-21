@@ -130,11 +130,58 @@ class Arguments(unittest.TestCase):
             deploy.parse_args(["pm-new"])
 
     def test_setup_prints_no_secret_values(self):
-        text = deploy.SETUP["setup-ireland"] + deploy.SETUP["setup-tokyo"]
+        text = deploy.SETUP["setup-ireland"] + deploy.SETUP["setup-tokyo"] + deploy.SETUP["setup-engine"]
         self.assertIn("openssl rand -hex 32 > /root/.config/pm-system/relay.key", text)
         self.assertIn("scp -3 pm-ire:/root/.config/pm-system/relay.key pm-tokyo:/root/.config/pm-system/relay.key", text)
         self.assertIn("SHASUMS256.txt | sha256sum -c -", text)
         self.assertNotIn("cat /root/.config/pm-system/relay.key", text)
+
+
+class EngineBoxes(unittest.TestCase):
+    """One engine box per account (pm-a, pm-b): the agent and the engine only."""
+
+    def test_targets(self):
+        for name, host in (("engine-a", "pm-a"), ("engine-b", "pm-b")):
+            t = deploy.TARGETS[name]
+            self.assertEqual((t["host"], t["root"], t["box"]), (host, "/root/pm-system", host))
+            self.assertEqual(t["units"], ("pm-agent.service",), "an engine box runs no console")
+            self.assertEqual(set(t["system"]), {"/etc/systemd/system/pm-agent.service"})
+            self.assertEqual(deploy.parse_args([name]).target, name)
+        self.assertNotIn("engine-a", deploy.ALL_TARGETS, "an engine box is never part of `all` by accident")
+
+    def test_ships_the_agent_and_engine_but_no_console(self):
+        for name in (E + "dist/cli/platform.js", E + "dist/cli/account-data.js", "scripts/engine_agent.py",
+                     "scripts/dashboard/account_data.py", "scripts/dashboard/strategy_config.py",
+                     "scripts/dashboard_account.py", "config/pm-agent.service"):
+            self.assertTrue(deploy.ships(name, "engine-a"), name)
+        for name in ("frontend/console/live.js", "scripts/system-dashboard-server.py", "config/pm-console-nginx.conf",
+                     "config/pm-console@.service", "config/accounts.json", "scripts/dashboard/ledger.py"):
+            self.assertFalse(deploy.ships(name, "engine-a"), name)
+
+    def test_box_guard(self):
+        """A release names its box; the box says who it is in /root/.config/pm-system/box-id."""
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "box-id"
+            with self.assertRaisesRegex(SystemExit, "no box id"):
+                deploy.check_box("pm-a", marker)
+            marker.write_text("pm-b\n")
+            with self.assertRaisesRegex(SystemExit, "pm-b"):
+                deploy.check_box("pm-a", marker)
+            marker.write_text("pm-a\n")
+            deploy.check_box("pm-a", marker)
+
+    def test_tunnel(self):
+        """pm-ire reaches each engine box's agent through ssh -L; the key can only forward that port."""
+        unit = (REPO / "config" / "pm-tunnel@.service").read_text(encoding="utf-8")
+        self.assertIn("ExecStart=/usr/bin/ssh -N -F /root/.ssh/tunnels.config %i", unit)
+        self.assertIn("Restart=always", unit)
+        for account, (host, port) in {"a": ("pm-a", 18777), "b": ("pm-b", 18787)}.items():
+            line = deploy.tunnel_authorized_key("ssh-ed25519 AAAAkey pm-ire-tunnel")
+            self.assertTrue(line.startswith('restrict,port-forwarding,permitopen="127.0.0.1:18767",command="/bin/false" '), line)
+            config = deploy.tunnel_config({host: (port, "1.2.3.4")})
+            self.assertIn(f"LocalForward 127.0.0.1:{port} 127.0.0.1:18767", config)
+            self.assertIn("ExitOnForwardFailure yes", config)
+            self.assertIn(f"HostKeyAlias {host}", config, "an IP change does not break the host key")
 
 
 class RelayUnit(unittest.TestCase):
