@@ -22,18 +22,18 @@ IRELAND_PRIVATE = "172.26.1.100"
 RETIRED_IRELAND_PRIVATE = "194.87.245.135"
 DEPLOYED_PATHS = ("backend/engine", "frontend/console", "scripts", "config")
 TARGETS = {
-    # One console instance per account (pm-console@<id>, config/accounts.json)
-    # and, until the engine boxes take over, account 1's engine agent
-    # (pm-agent) on the same box. Accounts without an agent yet get no instance.
+    # The console box: one console instance per account (pm-console@<id>,
+    # config/accounts.json) and the tunnels to the engine boxes. Since
+    # 2026-11-22 every engine runs on its own box (pm-a, pm-b), so this box runs
+    # no agent and a console deploy never waits for an engine to stop.
     "ireland": {"host": "pm-ire", "root": "/root/pm-system", "releases": "/root/pm-releases",
-                "unit": "pm-console@1.service", "units": ("pm-agent.service", "pm-console@1.service"),
-                "retired_units": ("pm-console.service",),
+                "unit": "pm-console@1.service", "units": ("pm-console@1.service", "pm-console@2.service"),
+                "retired_units": ("pm-console.service", "pm-agent.service"),
                 "env": "/root/.config/pm-system/console-1.env",
-                "envs": ("/root/.config/pm-system/console-1.env", "/root/.config/pm-system/agent.env"),
+                "envs": ("/root/.config/pm-system/console-1.env", "/root/.config/pm-system/console-2.env"),
                 "lock": "/root/pm-system/data/dashboard/deployment.lock",   # the agent's start lock too
                 "sweep": (E + "dist/", E + "scripts/", "frontend/console/", "scripts/", "config/"),
                 "system": {"/etc/systemd/system/pm-console@.service": "config/pm-console@.service",
-                           "/etc/systemd/system/pm-agent.service": "config/pm-agent.service",
                            "/etc/systemd/system/pm-tunnel@.service": "config/pm-tunnel@.service",
                            "/etc/nginx/sites-available/pm-console": "config/pm-console-nginx.conf"}},
     # One engine box per account: the engine agent and the engine, no console.
@@ -62,6 +62,8 @@ ALL_TARGETS = ("ireland", "tokyo")
 ENGINE_TARGETS = ("engine-a", "engine-b")
 BOX_ID_FILE = "/root/.config/pm-system/box-id"
 AGENT_PORT = 18767
+# The console box reaches each engine box's agent on this local port (pm-tunnel@<box>).
+TUNNEL_PORTS = {"pm-a": 18777, "pm-b": 18787}
 # What an engine box runs: the agent and its modules, the engine, the unit.
 ENGINE_BOX_SCRIPTS = ("scripts/engine_agent.py", "scripts/dashboard_account.py", "scripts/dashboard/__init__.py",
                       "scripts/dashboard/account_data.py", "scripts/dashboard/config.py", "scripts/dashboard/replica.py",
@@ -232,12 +234,12 @@ STEPS = {**{name: [
     "install pm-agent.service; daemon-reload, enable + restart; expect /state with box {box} and running false within 30 s, else restore before/ and exit 1"]
     for name in ENGINE_TARGETS}, "ireland": [
     "need /usr/local/bin/node and {env}; take flock {lock}",
-    "refuse if a pm-engine-* scope/service is active, a dist/cli/platform.js process exists, or the console's /api/runtime/status says processRunning != false",
+    "refuse if a pm-engine-* scope/service or a dist/cli/platform.js process is on this box (engines on pm-a/pm-b keep trading)",
     "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
-    "stop pm-console@1 (and the retired single pm-console unit, disabled and removed); write changed files; delete unshipped files under {sweep} (never results/, node_modules/, data/, .env)",
-    "npm ci --omit=dev only if package-lock.json changed; install pm-agent.service + pm-console@.service; nginx site + link, drop default link, nginx -t, reload (only when nginx, certificate and htpasswd exist)",
+    "stop pm-console@1/@2 (the retired pm-console and local pm-agent units: disabled, unit files removed); write changed files; delete unshipped files under {sweep} (never results/, node_modules/, data/, .env)",
+    "npm ci --omit=dev only if package-lock.json changed; install pm-console@.service + pm-tunnel@.service; nginx site + link, drop default link, nginx -t, reload (only when nginx, certificate and htpasswd exist)",
     "move the console data once (scripts/migrate_console_data.py: copies, never deletes)",
-    "daemon-reload, enable + restart pm-agent then pm-console@1; expect the agent's /state and 200 from " + ", ".join(HEALTH_PATHS) + " within 30 s, else restore before/ and exit 1"],
+    "daemon-reload, enable + restart pm-console@1 and @2; expect 200 from " + ", ".join(HEALTH_PATHS) + " on both within 30 s, else restore before/ and exit 1"],
   "tokyo": [
     "need /usr/local/bin/node (Node 24) and {env}; take flock {lock}",
     "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
@@ -336,27 +338,31 @@ def nginx_ready():
     return not missing
 
 
+def console_healthy(codes):
+    return bool(codes) and all(code == 200 for code in codes)
+
+
 def check_console():
+    """Every account's console answers its pages. What its engine (on its own
+    box) is doing is not this deploy's business."""
     deadline, last = time.time() + 30, None
+    ports = [18766, 18776]
     while time.time() < deadline:
         time.sleep(1)
         try:
             import urllib.request
-            with urllib.request.urlopen(AGENT + "/state", timeout=5) as response:
-                agent_running = json.loads(response.read())["status"]["running"]
-            if agent_running is not False:
-                raise RuntimeError("agent says running=%s after restart" % agent_running)
-            codes = [fetch(path)[0] for path in HEALTH_PATHS]
-            running = json.loads(fetch("/api/runtime/status")[1]).get("processRunning")
+            codes = []
+            for port in ports:
+                for path in HEALTH_PATHS:
+                    with urllib.request.urlopen("http://127.0.0.1:%d%s" % (port, path), timeout=5) as response:
+                        codes.append(response.status)
         except Exception as error:
             last = error
             continue
-        if running is not False:
-            raise RuntimeError("processRunning=%s after restart" % running)
-        if codes == [200] * len(codes):
-            return "console 200 on " + ", ".join(HEALTH_PATHS)
+        if console_healthy(codes):
+            return "consoles %s answer 200 on %s" % (", ".join(map(str, ports)), ", ".join(HEALTH_PATHS))
         last = codes
-    raise RuntimeError("console not healthy within 30 s: %s" % last)
+    raise RuntimeError("consoles not healthy within 30 s: %s" % last)
 
 
 def check_agent(box):
@@ -415,11 +421,12 @@ def apply(target, release, wait_status):
         here = sh("hostname", "-I", check=False).split() + [sh("hostname", check=False).strip()]
         if RETIRED_IRELAND_PRIVATE in here or not any(ip in (IRELAND_IP, IRELAND_PRIVATE) for ip in here):
             raise SystemExit("refusing: this is not the Ireland box %s (got %s); the Baxet box is retired" % (IRELAND_IP, " ".join(here)))
+        # Only an engine on THIS box blocks a console deploy (one left from
+        # before the move); the engines on pm-a/pm-b trade on regardless.
         why = engine_running(sh("systemctl", "list-units", "--type=scope,service", "--state=active", "--no-legend", "pm-engine-*"),
-                             sh("pgrep", "-f", "dist/cli/platform.js", check=False), console_status())
+                             sh("pgrep", "-f", "dist/cli/platform.js", check=False), None)
         if why:
-            raise SystemExit("refusing: engine may be running (%s); stop trading in the console first "
-                             "(a broken console with no engine: systemctl stop pm-console@1, then deploy)" % why)
+            raise SystemExit("refusing: an engine is running on the console box (%s); stop it first" % why)
     if target in ENGINE_TARGETS:
         check_box(t["box"])
         why = engine_running(sh("systemctl", "list-units", "--type=scope,service", "--state=active", "--no-legend", "pm-engine-*"),

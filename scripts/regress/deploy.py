@@ -184,6 +184,28 @@ class EngineBoxes(unittest.TestCase):
             self.assertIn(f"HostKeyAlias {host}", config, "an IP change does not break the host key")
 
 
+class ConsoleBox(unittest.TestCase):
+    """Once the engines run on their own boxes, pm-ire is the console only: its
+    deploy ships the consoles and tunnels, never restarts an agent there, and
+    does not wait for an engine on another box to stop."""
+
+    def test_ireland_runs_consoles_and_tunnels_only(self):
+        t = deploy.TARGETS["ireland"]
+        self.assertNotIn("pm-agent.service", t["units"], "no agent on the console box")
+        self.assertIn("pm-agent.service", t["retired_units"], "the old local agent stays off")
+        self.assertEqual(set(t["units"]), {"pm-console@1.service", "pm-console@2.service"})
+        self.assertNotIn("/etc/systemd/system/pm-agent.service", t["system"])
+        self.assertIn("/etc/systemd/system/pm-tunnel@.service", t["system"])
+        self.assertFalse(t.get("engine_local", False), "a console deploy does not refuse for a remote engine")
+        for name in ("scripts/engine_agent.py", E + "dist/cli/platform.js"):
+            self.assertTrue(deploy.ships(name, "ireland"), name)
+
+    def test_console_health_ignores_remote_engines(self):
+        """The check is that each console answers, whatever its engine is doing."""
+        self.assertTrue(deploy.console_healthy([200, 200, 200]))
+        self.assertFalse(deploy.console_healthy([200, 502, 200]))
+
+
 class RelayUnit(unittest.TestCase):
     def test_unit_text(self):
         text = (REPO / "config/pm-relay.service").read_text(encoding="utf-8")

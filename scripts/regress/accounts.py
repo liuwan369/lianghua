@@ -44,6 +44,15 @@ class File(unittest.TestCase):
             self.assertRegex(account["id"], r"^[a-z0-9]{1,16}$")
             self.assertRegex(account["color"], r"^#[0-9a-f]{6}$")
             self.assertTrue(account["agentUrl"].startswith("http://127.0.0.1:"), "agents are reached on loopback (tunnel)")
+        # An engine box is reached through its tunnel: the account's agent URL
+        # is that tunnel's local port (scripts/deploy.py TUNNEL_PORTS).
+        spec = importlib.util.spec_from_file_location("deploy", SCRIPTS / "deploy.py")
+        deploy = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deploy)
+        for account in ACCOUNTS:
+            if account["box"] in deploy.TUNNEL_PORTS:
+                self.assertEqual(account["agentUrl"], f"http://127.0.0.1:{deploy.TUNNEL_PORTS[account['box']]}",
+                                 f"account {account['id']} reaches {account['box']} through its tunnel")
         raw = (ROOT / "config" / "accounts.json").read_text(encoding="utf-8")
         self.assertIsNone(re.search(r"0x[0-9a-fA-F]{40}", raw), "no wallet address in the repo file")
         self.assertNotRegex(raw.lower(), r"key|secret|passphrase")
