@@ -268,10 +268,12 @@ def trading_status(include_stats: bool = True) -> dict:
             status["service_state"] = "running"
         else:
             status["service_state"] = "starting"
-        pending = (status.get("params") or {}).get("pendingControl") or {}
+        params = status.get("params") or {}
+        pending = params.get("pendingControl") or {}
         source_at = _epoch(runtime.get("source_at")) if isinstance(runtime, dict) else None
         expires_at = _epoch(runtime.get("expires_at")) if isinstance(runtime, dict) else None
-        expected_paused = pending.get("action") == "pause"
+        # The last pause/resume decides; before any, how the run was started.
+        expected_paused = pending.get("action") == "pause" if pending else params.get("startPaused") is True
         projection_ready = (isinstance(projection, dict)
                             and projection.get("state") == "ready"
                             and projection.get("stale") is False)

@@ -54,6 +54,24 @@ class P2_11(unittest.TestCase):
                                                     "projection": {"state": "ready", "stale": False}}
         self.assertEqual(server.trading_status()["service_state"], "running")
 
+    def test_paused_start_confirms_as_paused(self):
+        """A start with startPaused set no pendingControl, so the expected state
+        was "not paused" and commandStatus stayed executing for the whole
+        paused run (live 2026-11-21). The start's own paused flag decides."""
+        now = time.time()
+        server.trade_log_stats = lambda selection: {"runtime": {"status": "running", "stale": False,
+                                                                "source_at": now, "expires_at": now + 5,
+                                                                "strategy_runtime": {"paused": True}},
+                                                    "projection": {"state": "ready", "stale": False}}
+        saved = Agent.view
+        Agent.view = lambda self: {**saved(self), "state": {**saved(self)["state"], "status": {
+            **saved(self)["state"]["status"], "params": {"startPaused": True}}}}
+        try:
+            status = server.trading_status()
+        finally:
+            Agent.view = saved
+        self.assertEqual((status["service_state"], status["command_status"]), ("paused", "confirmed"))
+
 
 if __name__ == "__main__":
     unittest.main()

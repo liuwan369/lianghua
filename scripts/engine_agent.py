@@ -751,7 +751,9 @@ def _start_trading(payload: dict, *, config_revision: int | None = None, request
         if strategy_config:
             _trading_params = {"strategy_id": STRATEGY_ID, "mode": mode,
                                "duration_min": duration_min, "assetId": strategy_config["config"].get("assetId", "btc"),
-                               "config": strategy_config["config"]}
+                               "config": strategy_config["config"],
+                               # A paused start's confirmation expects a paused engine.
+                               "startPaused": payload.get("start_paused") is True}
         _trading_exit_code = None
         _trading_stop_result = None
         _persist_trading_state()
