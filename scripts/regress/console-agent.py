@@ -109,7 +109,12 @@ class ConsoleAgent(unittest.TestCase):
         self.assertTrue(view["reachable"])
         self.assertEqual((view["state"]["box"], view["state"]["status"]["running"]), ("pm-a", False))
         self.assertIsNone(view["mismatch"])
-        self.assertLess(abs(view["clockSkewSeconds"]), 1)
+        self.assertLess(abs(view["clockSkewSeconds"]), 0.2)
+        # The skew is measured when the answer arrives, not against the clock
+        # at read time: a cache read a second later must not drift by that second.
+        first = view["clockSkewSeconds"]
+        time.sleep(1.2)
+        self.assertEqual(self.client.view()["clockSkewSeconds"], first, "the skew does not age with the cache")
 
     def test_unreachable_is_unknown_and_refuses_writes(self):
         self.client.poll()

@@ -53,6 +53,7 @@ class AgentClient:
         self._state: dict | None = None
         self._polled_at = 0.0           # monotonic time of the last good poll
         self._error: str | None = None
+        self._skew: float | None = None   # agent clock - ours, at the moment its answer arrived
         self._snapshot: dict | None = None
         self._snapshot_version = None
         self._replicated: dict[str, int] = {}   # run -> bytes copied
@@ -78,7 +79,9 @@ class AgentClient:
     # --- the cached state ---
     def poll(self) -> None:
         try:
+            sent = time.time()
             state = self._request("GET", "/state")
+            arrived = time.time()
             version = (state.get("accountSnapshot") or {}).get("version")
             snapshot = None
             if version != self._snapshot_version:
@@ -89,6 +92,9 @@ class AgentClient:
             return
         with self._lock:
             self._state, self._polled_at, self._error = state, time.monotonic(), None
+            now = state.get("now")
+            # The agent stamped `now` somewhere between our send and the answer.
+            self._skew = now - (sent + arrived) / 2 if isinstance(now, (int, float)) else None
             if snapshot is not None:
                 self._snapshot, self._snapshot_version = snapshot, version
 
@@ -121,10 +127,10 @@ class AgentClient:
             state = self._state
             error = self._error
             age = time.monotonic() - self._polled_at if self._polled_at else None
+            skew = self._skew
         reachable = state is not None and error is None and age is not None and age <= STALE_AFTER
-        skew = (state.get("now") - time.time()) if reachable and isinstance((state or {}).get("now"), (int, float)) else None
         return {"reachable": reachable, "error": error if not reachable else None, "ageSeconds": age,
-                "mismatch": self._mismatch(state), "clockSkewSeconds": skew, "state": state}
+                "mismatch": self._mismatch(state), "clockSkewSeconds": skew if reachable else None, "state": state}
 
     def process_running(self) -> bool | None:
         view = self.view()
