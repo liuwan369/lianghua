@@ -22,15 +22,17 @@ IRELAND_PRIVATE = "172.26.1.100"
 RETIRED_IRELAND_PRIVATE = "194.87.245.135"
 DEPLOYED_PATHS = ("backend/engine", "frontend/console", "scripts", "config")
 TARGETS = {
-    # The console (pm-console) and, until the engine boxes take over, the
-    # engine agent (pm-agent) on the same box.
+    # One console instance per account (pm-console@<id>, config/accounts.json)
+    # and, until the engine boxes take over, account 1's engine agent
+    # (pm-agent) on the same box. Accounts without an agent yet get no instance.
     "ireland": {"host": "pm-ire", "root": "/root/pm-system", "releases": "/root/pm-releases",
-                "unit": "pm-console.service", "units": ("pm-agent.service", "pm-console.service"),
-                "env": "/root/.config/pm-system/console.env",
-                "envs": ("/root/.config/pm-system/console.env", "/root/.config/pm-system/agent.env"),
+                "unit": "pm-console@1.service", "units": ("pm-agent.service", "pm-console@1.service"),
+                "retired_units": ("pm-console.service",),
+                "env": "/root/.config/pm-system/console-1.env",
+                "envs": ("/root/.config/pm-system/console-1.env", "/root/.config/pm-system/agent.env"),
                 "lock": "/root/pm-system/data/dashboard/deployment.lock",   # the agent's start lock too
                 "sweep": (E + "dist/", E + "scripts/", "frontend/console/", "scripts/", "config/"),
-                "system": {"/etc/systemd/system/pm-console.service": "config/pm-console.service",
+                "system": {"/etc/systemd/system/pm-console@.service": "config/pm-console@.service",
                            "/etc/systemd/system/pm-agent.service": "config/pm-agent.service",
                            "/etc/nginx/sites-available/pm-console": "config/pm-console-nginx.conf"}},
     "tokyo": {"host": "pm-tokyo", "root": "/root/pm-relay", "releases": "/root/pm-relay-releases",
@@ -198,10 +200,10 @@ STEPS = {"ireland": [
     "need /usr/local/bin/node and {env}; take flock {lock}",
     "refuse if a pm-engine-* scope/service is active, a dist/cli/platform.js process exists, or the console's /api/runtime/status says processRunning != false",
     "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
-    "stop pm-console; write changed files; delete unshipped files under {sweep} (never results/, node_modules/, data/, .env)",
-    "npm ci --omit=dev only if package-lock.json changed; install pm-agent.service + pm-console.service; nginx site + link, drop default link, nginx -t, reload (only when nginx, certificate and htpasswd exist)",
+    "stop pm-console@1 (and the retired single pm-console unit, disabled and removed); write changed files; delete unshipped files under {sweep} (never results/, node_modules/, data/, .env)",
+    "npm ci --omit=dev only if package-lock.json changed; install pm-agent.service + pm-console@.service; nginx site + link, drop default link, nginx -t, reload (only when nginx, certificate and htpasswd exist)",
     "move the console data once (scripts/migrate_console_data.py: copies, never deletes)",
-    "daemon-reload, enable + restart pm-agent then pm-console; expect the agent's /state and 200 from " + ", ".join(HEALTH_PATHS) + " within 30 s, else restore before/ and exit 1"],
+    "daemon-reload, enable + restart pm-agent then pm-console@1; expect the agent's /state and 200 from " + ", ".join(HEALTH_PATHS) + " within 30 s, else restore before/ and exit 1"],
   "tokyo": [
     "need /usr/local/bin/node (Node 24) and {env}; take flock {lock}",
     "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
@@ -323,7 +325,7 @@ def apply(target, release, wait_status):
                              sh("pgrep", "-f", "dist/cli/platform.js", check=False), console_status())
         if why:
             raise SystemExit("refusing: engine may be running (%s); stop trading in the console first "
-                             "(a broken console with no engine: systemctl stop pm-console, then deploy)" % why)
+                             "(a broken console with no engine: systemctl stop pm-console@1, then deploy)" % why)
     existing = installed(root, manifest["files"], t["sweep"])
     write, delete = plan(manifest["files"], existing, t["sweep"])
     lockfile = E + "package-lock.json"
@@ -346,6 +348,13 @@ def apply(target, release, wait_status):
     try:
         for name in reversed(units):
             sh("systemctl", "stop", name, check=False)
+        for name in t.get("retired_units", ()):
+            # Replaced by the per-account template: stop, disable, remove the unit file.
+            sh("systemctl", "disable", "--now", name, check=False)
+            old = Path("/etc/systemd/system") / name
+            if old.is_file():
+                put(old, before / "_system" / name)
+                old.unlink()
         for name in write:
             put(release / name, root / name)
         for name in delete:
@@ -370,7 +379,7 @@ def apply(target, release, wait_status):
         result = check_console() if target == "ireland" else check_relay(started, wait_status)
     except Exception as error:
         print("FAILED: %s; rolling back" % error, flush=True)
-        rollback(root, before, state, unit, units)
+        rollback(root, before, state, unit, units, t.get("retired_units", ()))
         raise SystemExit("%s: rolled back to the previous program files" % target)
     (release / "result.json").write_text(json.dumps({"rev": manifest["rev"], "written": write, "deleted": delete,
                                                       "npm": npm, "nginx": bool(links), "check": result}, indent=1))
@@ -379,7 +388,7 @@ def apply(target, release, wait_status):
         "reloaded" if links else "untouched", result), flush=True)
 
 
-def rollback(root, before, state, unit, units=()):
+def rollback(root, before, state, unit, units=(), retired=()):
     for name in reversed(units or (unit,)):
         sh("systemctl", "stop", name, check=False)
         if not state["system"].get("/etc/systemd/system/" + name):
@@ -399,7 +408,15 @@ def rollback(root, before, state, unit, units=()):
             Path(link).symlink_to(old)
     if state["links"] and not subprocess.run(["nginx", "-t"], capture_output=True).returncode:
         sh("systemctl", "reload-or-restart", "nginx", check=False)
+    for name in retired:
+        # A retired unit this deploy removed comes back, and runs again below.
+        saved = before / "_system" / name
+        if saved.is_file():
+            put(saved, Path("/etc/systemd/system") / name)
     sh("systemctl", "daemon-reload", check=False)
+    for name in retired:
+        if (before / "_system" / name).is_file():
+            sh("systemctl", "enable", "--now", name, check=False)
     if state["was_active"]:
         for name in units or (unit,):
             if state["system"].get("/etc/systemd/system/" + name):
@@ -420,11 +437,12 @@ ssh -t pm-ire 'certbot certonly --nginx -d %(site)s'
 # 3. Relay key (32 random bytes as hex, mode 600; it never leaves the two servers):
 ssh pm-ire 'install -d -m 700 /root/.config/pm-system && (umask 077; openssl rand -hex 32 > /root/.config/pm-system/relay.key) && chmod 600 /root/.config/pm-system/relay.key'
 # 4. Two environment files (mode 600), written with an editor:
-ssh -t pm-ire 'f=/root/.config/pm-system/console.env; [ -e $f ] || install -m 600 /dev/null $f; ${EDITOR:-nano} $f'
-#    console.env (the console; no account values, no unlock):
+ssh -t pm-ire 'f=/root/.config/pm-system/console-1.env; [ -e $f ] || install -m 600 /dev/null $f; ${EDITOR:-nano} $f'
+#    console-<id>.env, one per account in config/accounts.json (no keys, no unlock):
 #      PM_TRUST_ACCOUNT_PROXY=1
-#      PM_AGENT_URL=http://127.0.0.1:18767
-#      PM_AGENT_BOX=pm-ire
+#      PM_CONSOLE_PORT=<the account's port in config/accounts.json>
+#      PM_AGENT_URL=<the account's agentUrl in config/accounts.json>
+#      PM_AGENT_BOX=<the engine box's PM_BOX_ID>
 #      PM_ACCOUNT_WALLET=<the account's wallet address, lower case>
 ssh -t pm-ire 'f=/root/.config/pm-system/agent.env; [ -e $f ] || install -m 600 /dev/null $f; ${EDITOR:-nano} $f'
 #    agent.env (the engine box's agent; the engine inherits it):
@@ -436,7 +454,7 @@ ssh -t pm-ire 'f=/root/.config/pm-system/agent.env; [ -e $f ] || install -m 600 
 #      PM_RELAY_PORT=47001
 #      PM_RELAY_ALLOW_IP=%(tokyo)s
 #    The account profile stays /root/.config/pm-system/account.json (mode 600), read by the agent only.
-# 5. Deploy: installs pm-console and the nginx site, removes the default site link.
+# 5. Deploy: installs pm-agent, pm-console@.service (pm-console@1 runs) and the nginx site, removes the default site link.
 python scripts/deploy.py ireland
 """, "setup-tokyo": """
 # One-time Tokyo setup (pm-tokyo). Needs setup-ireland step 3 (the relay key) first.

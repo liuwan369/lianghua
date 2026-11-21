@@ -40,6 +40,8 @@ const requests = [];
 const window = { location: { search: "", href: "http://x/history.html" }, setTimeout, clearTimeout, setInterval, clearInterval,
   URLSearchParams, URL, AbortController, console, document: { hidden: false, addEventListener() {}, querySelector: (s) => node(s) } };
 window.fetch = async (url) => {
+  // The shell asks for the account list; this test counts the page's own requests.
+  if (String(url).startsWith("/api/accounts")) return { ok: true, status: 200, json: async () => ({ accounts: [] }) };
   requests.push(String(url));
   const body = String(url).includes("before=") ? page2 : page1;
   return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(body)) };

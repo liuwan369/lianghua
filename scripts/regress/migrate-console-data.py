@@ -70,6 +70,28 @@ class Migrate(unittest.TestCase):
         again = migrate.migrate(root)
         self.assertEqual((again["ledger"], again["replicas"], again["selection"], again["engine_run"]), (False, [], None, False))
 
+    def test_single_console_becomes_account_1(self):
+        """The first split left one data/console; per-account consoles keep
+        data/console-<id>. Account 1 takes the existing dir over (renamed, the
+        ledger's replica paths rewritten), once."""
+        root = Path(tempfile.mkdtemp())
+        console = root / "data" / "console"
+        (console / "replica").mkdir(parents=True)
+        journal = console / "replica" / f"dashboard-{RUN}.jsonl"
+        journal.write_bytes(b'{"event":"lead_order","recv_ts":1,"client_order_id":"c1","market_id":"0xm","round_start":1800000000}\n')
+        ledger = Ledger(console / "ledger.sqlite3")
+        ledger.register_run(RUN, "live", "0xacct", journal, 35)
+        ledger.ingest(RUN)
+        report = migrate.migrate_account_one(root)
+        self.assertTrue(report["moved"])
+        moved = root / "data" / "console-1"
+        self.assertFalse(console.exists())
+        with Ledger(moved / "ledger.sqlite3")._connect() as db:
+            path = db.execute("SELECT path FROM runs WHERE run_id=?", (RUN,)).fetchone()[0]
+        self.assertEqual(path, str((moved / "replica" / journal.name).resolve()))
+        self.assertIsNone(Ledger(moved / "ledger.sqlite3").ingest(RUN)["error"], "the moved ledger still reads its replica")
+        self.assertFalse(migrate.migrate_account_one(root)["moved"], "once")
+
 
 if __name__ == "__main__":
     unittest.main()

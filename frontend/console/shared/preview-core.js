@@ -57,6 +57,7 @@
     // Older pages are read once, not subscribed to the push stream.
     ordersLead: ({ range, limit, before } = {}) => request(`/api/orders/lead${query({ range, limit, before })}`, { noPush: before != null }),
     events: (limit = 200) => request(`/api/events${query({ limit })}`),
+    accounts: () => request("/api/accounts", { noPush: true }),
     ledgerReset: () => post("/api/ledger/reset", { confirm: "RESET" }, 30000),
   };
 
@@ -178,20 +179,38 @@
 
   // --- page shell ---
   const NAV = [
+    { key: "overview", icon: "◫", label: "总览", href: "overview.html" },
     { key: "live", icon: "↗", label: "实盘", href: "auto-trade.html" },
     { key: "stats", icon: "▤", label: "统计", href: "stats.html" },
     { key: "history", icon: "☰", label: "历史", href: "history.html" },
     { key: "settings", icon: "⚙", label: "设置", href: "settings.html" },
   ];
-  const shell = (active, title, subtitle, body) => html`
+  // Several accounts, one console (config/accounts.json via /api/accounts):
+  // the sidebar switches account and keeps the page; the header names the
+  // account on every page, so nothing is read or pressed for the wrong one.
+  const pageFile = () => String(window.location?.pathname || "").split("/").pop() || "auto-trade.html";
+  const color = (value) => /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : "#5d7389";
+  const currentAccount = (accounts) => (accounts?.accounts || []).find((a) => a.id === (accounts.current || config.account)) || null;
+  const switcher = (accounts) => {
+    const list = accounts?.accounts || [];
+    if (list.length < 2) return "";
+    const page = pageFile();
+    return html`<div class="accounts" data-accounts><small>账户</small>${list.map((a) => html`<a class="account${a.id === (accounts.current || config.account) ? " current" : ""}" href="/acct/${encodeURIComponent(a.id)}/console/${page}"><i style="background:${color(a.color)}"></i><span>${a.label}</span><small>${a.box || ""}</small></a>`)}</div>`;
+  };
+  const badge = (accounts) => {
+    const a = currentAccount(accounts);
+    return a ? html`<span class="account-badge" data-account-badge style="border-color:${color(a.color)}"><i style="background:${color(a.color)}"></i>${a.label} · ${a.box || "--"}</span>` : "";
+  };
+  const shell = (active, title, subtitle, body, accounts = null) => html`
     <div class="layout">
       <aside class="sidebar">
         <div class="brand"><span class="brand-mark">P</span><div><strong>POLYMARKET</strong><small>BTC 五分钟领先</small></div></div>
         <nav>${NAV.map((item) => html`<a class="nav-item${item.key === active ? " active" : ""}" href="${item.href}"${item.key === active ? html` aria-current="page"` : ""}><span>${item.icon}</span>${item.label}</a>`)}</nav>
+        <div data-account-switcher>${switcher(accounts)}</div>
         <div class="sidebar-status"><i data-push-dot></i><span data-push-state>连接中</span></div>
       </aside>
       <main class="main">
-        <header class="page-header"><div><p class="eyebrow">BTC 五分钟 · binance-lead · 实盘</p><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-side" data-header-side></div></header>
+        <header class="page-header"><div><p class="eyebrow">BTC 五分钟 · binance-lead · 实盘</p><h1><span data-account-title>${badge(accounts)}</span>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-side" data-header-side></div></header>
         ${body}
       </main>
     </div>`;
@@ -199,6 +218,12 @@
     const root = window.document.querySelector("#app");
     if (!root) return null;
     put(root, shell(active, title, subtitle, body));
+    // The account list comes after the first paint; only a multi-account box has one.
+    api.accounts().then((accounts) => {
+      state.accounts = accounts;
+      put(root.querySelector("[data-account-switcher]"), switcher(accounts));
+      put(root.querySelector("[data-account-title]"), badge(accounts));
+    }).catch(() => {});
     window.setInterval(() => {
       const connected = window.PolyPreviewStream?.connected === true;
       const state = root.querySelector("[data-push-state]");
@@ -208,6 +233,9 @@
     return root;
   };
 
-  window.PolyPreview = Object.freeze({ config, request, api, html, esc, put, fmt, num, label, every, mount, shell,
+  // The current account's label ("账户 2"), for confirm dialogs; null on a one-account box.
+  const state = { accounts: null };
+  const accountLabel = () => currentAccount(state.accounts)?.label || null;
+  window.PolyPreview = Object.freeze({ config, request, api, html, esc, put, fmt, num, label, every, mount, shell, NAV, accountLabel,
     VENUES, LINES, DIRECTIONS, ORDER_STATUS, Raw });
 })();

@@ -75,11 +75,32 @@ def migrate(root: Path) -> dict:
     return report
 
 
+def migrate_account_one(root: Path) -> dict:
+    """Per-account consoles keep data/console-<id>. The single console of the
+    first split (data/console) becomes account 1: renamed in place (same disk,
+    so the replicas keep their bytes) and the ledger's run paths rewritten."""
+    old, new = root / "data" / "console", root / "data" / "console-1"
+    if not old.is_dir() or new.exists():
+        return {"moved": False, "rewritten": 0}
+    old.rename(new)
+    rewritten = 0
+    ledger = new / "ledger.sqlite3"
+    if ledger.exists():
+        with sqlite3.connect(ledger) as db:
+            for run_id, path in db.execute("SELECT run_id, path FROM runs").fetchall():
+                target = new / "replica" / Path(path).name
+                if Path(path).parent.resolve() == (old / "replica").resolve():
+                    db.execute("UPDATE runs SET path=? WHERE run_id=?", (str(target.resolve()), run_id))
+                    rewritten += 1
+    return {"moved": True, "rewritten": rewritten}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
     args = parser.parse_args()
-    print(json.dumps(migrate(Path(args.root).resolve()), ensure_ascii=False))
+    root = Path(args.root).resolve()
+    print(json.dumps({"split": migrate(root), "account_one": migrate_account_one(root)}, ensure_ascii=False))
     return 0
 
 

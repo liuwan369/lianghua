@@ -2,7 +2,7 @@
 # Stop restarting after 20 failures in 5 minutes (a broken release looped forever).
 StartLimitIntervalSec=300
 StartLimitBurst=20
-Description=Polymarket binance-lead console (local only; nginx in front; the engine runs behind its agent)
+Description=Polymarket binance-lead console, account %i (local only; nginx in front; the engine runs behind its agent)
 After=network-online.target
 Wants=network-online.target
 
@@ -12,12 +12,16 @@ User=root
 WorkingDirectory=/root/pm-system
 Environment=PYTHONUNBUFFERED=1
 Environment=PM_NODE_LABEL=爱尔兰
-Environment=PM_CONSOLE_DATA=/root/pm-system/data/console
-# Operator file, never in git: PM_TRUST_ACCOUNT_PROXY=1, PM_AGENT_URL (the
-# engine box's agent, through the tunnel), PM_AGENT_BOX and PM_ACCOUNT_WALLET
-# (what this console expects at that end). No keys and no live unlock here.
-EnvironmentFile=/root/.config/pm-system/console.env
-ExecStart=/usr/bin/python3 /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port 18766 --root /root/pm-system
+# One instance per account in config/accounts.json (%i = its id): its own
+# data dir, port and agent. Operator file, never in git, one per account:
+# /root/.config/pm-system/console-%i.env with PM_TRUST_ACCOUNT_PROXY=1,
+# PM_CONSOLE_PORT, PM_AGENT_URL (the engine box's agent, through the tunnel),
+# PM_AGENT_BOX and PM_ACCOUNT_WALLET (what this console expects at that end).
+# No keys and no live unlock here.
+Environment=PM_ACCOUNT_ID=%i
+Environment=PM_CONSOLE_DATA=/root/pm-system/data/console-%i
+EnvironmentFile=/root/.config/pm-system/console-%i.env
+ExecStart=/bin/sh -c 'exec /usr/bin/python3 /root/pm-system/scripts/system-dashboard-server.py --host 127.0.0.1 --port "$PM_CONSOLE_PORT" --root /root/pm-system'
 Restart=always
 RestartSec=3
 # The console (HTTP, push, projection worker, replication) yields to an engine

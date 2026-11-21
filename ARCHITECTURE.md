@@ -114,7 +114,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `engine_agent.py` | 引擎代理（交易机）：启停引擎、暂停/继续、账户检查与账户读取、策略参数、运行记录按字节提供、清空本机运行数据 |
 | `dashboard/agent.py` | 控制台调代理的客户端：每秒缓存 `/state`，连不上/接错时拒绝写操作，驱动运行记录复制 |
 | `dashboard/replica.py` | 运行记录按字节复制（控制台副本 + 代理那头读取），对不上就停 |
-| `migrate_console_data.py` | 一次性：把控制台的账本和运行选择从 `backend/engine/results` 复制到 `data/console`（只复制、不删） |
+| `migrate_console_data.py` | 一次性：把控制台的账本和运行选择从 `backend/engine/results` 复制到 `data/console`（只复制、不删）；多账户后 `data/console` 改名成账户 1 的 `data/console-1` |
 | `dashboard/push.py` | `PushHub`：SSE 推送，按路径节奏重渲染 |
 | `dashboard/ledger.py` | 账本：journal 解析与查询（场次、订单、成交、结算、统计）；`_strategy_projection` 投影 binance-lead 的 getStatus，`platform_status` 只覆盖 `platform_runtime`（每个 run 一行，不进事件表）；`lead_signal` 进事件表，同时把 outcome 和跳过原因分类存进 `lead_signals`，最近 20 条随运行快照给控制台；`data_version` 每次业务写入加一，控制面按它缓存统计 |
 | `dashboard/projection_worker.py` | 投影子进程，不读账户配置 |
@@ -133,12 +133,13 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 
 | 文件 | 职责 |
 |---|---|
+| `overview.html` + `overview.js` | 总览：每个账户一张卡片（状态、今日、余额、行情、引擎机 CPU 和被抢），参数对比（不同的行标黄），结果对比（买到率、胜率、每股盈亏带样本数，结算不到 20 场标黄）；每 5 s 轮询各账户自己的 `/acct/<id>/api/...` |
 | `auto-trade.html` + `live.js` | 实盘：启停命令、今日数字、信号源、当前场盘口、本场信号与下单 |
 | `stats.html` + `stats.js` | 统计：`/api/stats/lead` 的漏斗、两个开关哪个好（都不开 / 只开一个 / 两个都开）、反向信号就卖出、按优势定股数、没买到、挂单/限价单、行情太乱就暂停（模拟）、晚了多少、速度、按来源、跳过、按小时 |
 | `history.html` + `history.js` | 历史：`/api/orders/lead` 分页，按 `market_id` 合成一场一行（买单、挂单补单、反向卖单），点一行展开看每张单 |
 | `settings.html` + `settings.js` | 设置：策略参数（草稿→发布；分组：开关〔行情太乱就暂停、按优势定股数、反向信号就卖出〕、信号、什么时候买、怎么买、风控、高级）、账户只读、系统健康、运行日志、清空统计 |
 | `console.css` | 全站唯一样式表 |
-| `shared/preview-core.js` | 请求、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏 |
+| `shared/preview-core.js` | 请求（都带本账户前缀 `apiBase` = `/acct/<id>`）、转义模板 `html```、格式化（北京时间）、轮询（标签页隐藏时暂停）、侧栏（账户切换，切过去停在同一页）、每页顶部的账户标记 |
 | `shared/stream.js` | 推送客户端：登记页面的 GET，用一条 EventSource 订阅 |
 
 ## 数据流

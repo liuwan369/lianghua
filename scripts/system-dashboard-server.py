@@ -36,6 +36,10 @@ DATA_DIR = Path(os.environ.get("PM_CONSOLE_DATA", str(CONSOLE_ROOT / "data" / "c
 AGENT_URL = os.environ.get("PM_AGENT_URL", "http://127.0.0.1:18767")
 EXPECTED_BOX = os.environ.get("PM_AGENT_BOX", "")
 EXPECTED_WALLET = os.environ.get("PM_ACCOUNT_WALLET", "")
+# Which account this instance serves (config/accounts.json); every page it
+# serves lives under /acct/<id>/ behind nginx. Empty = the bare paths.
+ACCOUNT_ID = os.environ.get("PM_ACCOUNT_ID", "")
+ACCOUNTS_FILE = CONSOLE_ROOT / "config" / "accounts.json"
 _trading_lock = threading.RLock()
 _official_cache: tuple = (None, None)   # (account snapshot, round results)
 _official_last_good: tuple | None = None   # (round results, time) of the last complete venue read
@@ -538,6 +542,23 @@ def strategy_config_status() -> dict:
     return {**saved, "assetId": saved["config"].get("assetId", "btc"), "activeRevision": active,
             "nextRoundRevision": saved["savedRevision"] if status.get("running") and active != saved["savedRevision"] else None,
             "stale": not view["reachable"]}
+
+
+def accounts_view() -> dict:
+    """GET /api/accounts: every account on this console box, for the switcher.
+    Labels, colours and box names only; ports and agent URLs stay here."""
+    try:
+        accounts = json.loads(ACCOUNTS_FILE.read_text(encoding="utf-8")).get("accounts") or []
+    except (OSError, ValueError):
+        accounts = []
+    return {"schemaVersion": 1, "source": "control-plane", "asOf": time.time(), "stale": False, "error": None,
+            "current": ACCOUNT_ID or None,
+            "accounts": [{key: item.get(key) for key in ("id", "label", "color", "box")}
+                         for item in accounts if isinstance(item, dict) and item.get("id")]}
+
+
+def _prefix() -> str:
+    return f"/acct/{ACCOUNT_ID}" if ACCOUNT_ID else ""
 
 
 def strategy_draft() -> dict | None:
@@ -1229,9 +1250,12 @@ def make_handler(root: Path):
                                  "roundId": round_id}
                 self._send_json(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
+            if path == "/api/accounts":
+                self._send_json(json.dumps(accounts_view(), ensure_ascii=False).encode("utf-8"))
+                return
             if path == "/":
                 self.send_response(302)
-                self.send_header("Location", "/console/")
+                self.send_header("Location", f"{_prefix()}/console/")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
@@ -1252,7 +1276,8 @@ def make_handler(root: Path):
             content_type = _static_content_type(candidate)
             is_html = candidate.suffix == ".html"
             if is_html:
-                config = b'<script>window.__POLY_PREVIEW_CONFIG__={mode:"backend",demo:false,apiBase:"",apiFlavor:"contract"};</script>'
+                config = ('<script>window.__POLY_PREVIEW_CONFIG__={mode:"backend",demo:false,'
+                          f'apiBase:{json.dumps(_prefix())},account:{json.dumps(ACCOUNT_ID)},apiFlavor:"contract"}};</script>').encode("utf-8")
                 body = body.replace(b"<head>", b"<head>" + config, 1)
             # HTML stays uncached (it carries injected config and must reflect a
             # deploy immediately). JS/CSS/assets are revalidated with an ETag over

@@ -207,6 +207,9 @@ class LeadStats(unittest.TestCase):
         self.assertAlmostEqual(funnel["pnl_usd"], (5 - 2.75 - 0.07) + (-3 - 0.05), places=6)
         self.assertEqual(funnel["pnl_source"], "ledger")
         self.assertAlmostEqual(funnel["fees_usd"], 0.18, places=6)
+        # The account comparison's per-share PnL: settled shares and PnL over them.
+        self.assertAlmostEqual(funnel["settled_shares"], 10, places=6, msg="5 + 5 settled shares")
+        self.assertAlmostEqual(funnel["pnl_per_share"], funnel["pnl_usd"] / 10, places=6)
         official = self.ledger.lead_stats("run-b", range="all", now=R1 + 5000,
                                           official={("btc", str(R1)): {"pnl": 2.0}})["funnel"]
         self.assertAlmostEqual(official["pnl_usd"], 2.0 - 3.05, places=6, msg="the venue's PnL wins where it exists")

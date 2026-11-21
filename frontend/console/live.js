@@ -39,9 +39,13 @@
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   };
   const commandPayload = (action, revision) => ({ action, requestId: uuid(), revision });
-  const confirmText = (action, revision, config) => action === "start"
-    ? `确认启动实盘交易？\n\n这是真钱。引擎会按已发布的参数 r${revision} 自动下单：每场最多一笔，每笔 ${config?.shares ?? "?"} 股。中途启动会等下一场开始。`
-    : action === "stop" ? "确认停止实盘交易？\n\n这是真钱账户。停止后不再下新单；已经买到的持仓不会卖出，等市场结算。" : null;
+  // Several accounts share the console: the dialog names the one being started or stopped.
+  const confirmText = (action, revision, config, account = P.accountLabel()) => {
+    const who = account ? ` ${account} ` : "";
+    return action === "start"
+      ? `确认启动${who}实盘交易？\n\n这是真钱。引擎会按已发布的参数 r${revision} 自动下单：每场最多一笔，每笔 ${config?.shares ?? "?"} 股。中途启动会等下一场开始。`
+      : action === "stop" ? `确认停止${who}实盘交易？\n\n这是真钱账户。停止后不再下新单；已经买到的持仓不会卖出，等市场结算。` : null;
+  };
   // Sends one command. start and stop need the operator's confirmation;
   // returns null when nothing was sent.
   const command = async (action, revision, config, ask = (text) => window.confirm(text)) => {

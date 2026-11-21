@@ -49,6 +49,11 @@ assert.equal(L.STATES.starting.text, "启动中");
 assert.deepEqual({ ...L.allowed("stopping") }, { start: false, pause: false, resume: false, stop: false });
 
 // --- payload shapes ---
+// --- the confirmation names the account (several accounts, one console) ---
+assert.match(L.confirmText("start", 7, { shares: 5 }, "账户 2"), /账户 2/, "start says which account");
+assert.match(L.confirmText("stop", 7, { shares: 5 }, "账户 2"), /账户 2/, "stop says which account");
+assert.doesNotMatch(L.confirmText("start", 7, { shares: 5 }), /undefined/);
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const config = { shares: 5 };
 const asked = [];

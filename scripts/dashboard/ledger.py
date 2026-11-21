@@ -3120,6 +3120,10 @@ class Ledger:
                   "pnl_source": "official" if sources == {"official"} else "ledger" if sources == {"ledger"}
                   else "mixed" if sources else None,
                   "fees_usd": _sum(o.get("fee_usd") for o in filled)}
+        # PnL per settled share: accounts with different share sizes compare on it.
+        funnel["settled_shares"] = _sum(o.get("filled_shares") for o in settled)
+        funnel["pnl_per_share"] = (round(funnel["pnl_usd"] / funnel["settled_shares"], 6)
+                                   if funnel["pnl_usd"] is not None and funnel["settled_shares"] else None)
 
         missed = [o for o in orders if not (o.get("filled_shares") or 0) > EPS_SHARES
                   and o.get("status") in MISSED_STATUSES]
