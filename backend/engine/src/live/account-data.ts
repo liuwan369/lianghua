@@ -1,7 +1,7 @@
 /** Read-only account data: GET and receipt RPC; no credential creation or order methods. */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { AccountFinanceReader, balanceOccupancy } from './account-finance.js';
+import { dirname } from 'node:path';
+import { balanceOccupancy } from './account-finance.js';
 import { createL1Headers, createL2Headers, type ApiKeyCreds } from "@polymarket/clob-client-v2";
 import { createWalletClient, http, type WalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -338,45 +338,7 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
   };
   // Data API v2 (v1 retired 2026-11-02, 410), with a User-Agent and a 429 retry.
   const publicGet: Getter = (path, params) => publicJson("https://data-api.polymarket.com", path, params);
-  const historyReader = new OrderHistoryReader(wallet, 2000, 8,
-    join(process.env.PM_ACCOUNT_HISTORY_DIR || 'results/account-history', `${wallet.toLowerCase()}.json`));
-  const financeReader = new AccountFinanceReader(wallet);
-  const rpcUrls = [...new Set([
-    process.env.POLYGON_RPC?.trim(),
-    process.env.PM_ACCOUNT_RPC_FALLBACK_URL?.trim(),
-    'https://polygon.drpc.org',
-  ].filter((value): value is string => !!value))];
-  const receiptRpc = async (method: string, params: unknown[]) => {
-    let lastError: Error = new Error('rpc_unavailable');
-    for (const url of rpcUrls) {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const response = await fetch(url, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), signal: AbortSignal.timeout(8000),
-          });
-          if (response.status === 429) {
-            await new Promise<void>(resolve => setTimeout(resolve, 500 * (attempt + 1)));
-            lastError = new Error('rpc_rate_limited');
-            continue;
-          }
-          if (!response.ok) throw new Error('rpc_failed');
-          const data = await response.json() as Row;
-          if (data.error || data.result == null) throw new Error(typeof data.error === 'object' && data.error && 'message' in data.error ? String((data.error as Row).message) : 'rpc_result_invalid');
-          return data.result;
-        } catch (error) {
-          lastError = error instanceof Error ? error : new Error('rpc_failed');
-          if (attempt < 2) await new Promise<void>(resolve => setTimeout(resolve, 250 * (attempt + 1)));
-        }
-      }
-    }
-    throw lastError;
-  };
-  // /v2/positions without a status lists every held position, redeemable ones
-  // included, as v1 /positions did (our wallet 2026-11-04: 82 rows, the same 82
-  // under OPEN/REDEEMABLE). Execution needs at most two 500-row pages; a larger
-  // account is reported incomplete instead of silently dropping positions.
-  const currentPositions = (): Promise<Section> => v2Pages(publicGet, "/v2/positions", "positions", wallet, {}, 500, 2);
+  const history = new PositionHistory(wallet);
   return async () => {
     const began = Date.now();
     const balance = (async (): Promise<Section> => {
@@ -390,37 +352,85 @@ export async function connectAccountReader(options: AccountReaderOptions = {}) {
         return { ...output, available: true, complete: true, value, pages: 1, checked_at: new Date().toISOString() };
       } catch { return { ...output, error_code: "balance_fetch_failed" }; }
     })();
-    const [collateral, open_orders, positions] = await Promise.all([
-      balance, cursorPages(get, "/data/orders", "orders", wallet), options.realtime ? currentPositions() : v2Pages(publicGet, "/v2/positions", "positions", wallet, {}),
+    // The engine reads the positions it can act on; the console's reader keeps
+    // the whole history (official PnL) but re-reads only its recent part.
+    const [collateral, open_orders, held] = await Promise.all([
+      balance, cursorPages(get, "/data/orders", "orders", wallet),
+      options.realtime ? heldPositions(publicGet, wallet) : history.read(publicGet),
     ]);
-    if (options.realtime) {
-      const empty = (source: string): Section => ({ source, available: false, complete: false, items: [], pages: 0,
-        checked_at: new Date().toISOString(), error_code: "background_section_skipped" });
-      return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began,
-        collateral, open_orders, trades: empty("background"), positions, closed_positions: empty("background"), activity: empty("background"),
-        order_history: { ...empty("background"), coverage: "observed_order_ids" as const, historical_complete: false,
-          persistence: "reader_session" as const, known_order_count: 0, pending_order_count: 0, unavailable_order_count: 0, truncated: false },
-        pagination_atomic: false, occupancy: balanceOccupancy(collateral, open_orders, positions),
-        fees: { available: false, complete: false, items: [], reason: "background_section_skipped" },
-        rewards: { available: false, complete: false, items: [], reason: "background_section_skipped" },
-        reconciliation: { available: false, complete: false, items: [], reason: "background_section_skipped" } };
-    }
-    const [trades, closed_positions, activity] = await Promise.all([
-      cursorPages(get, "/data/trades", "trades", wallet), v2Pages(publicGet, "/v2/positions", "closed_positions", wallet, { status: "CLOSED" }),
-      // v2 drops DEPOSIT/WITHDRAWAL by default (v1 listed them): keep them.
-      v2Pages(publicGet, "/v2/activity", "activity", wallet, { exclude_deposits_withdrawals: "false" }),
-    ]);
-    // Both enrichments consume the same immutable account sections. Running
-    // them together keeps slow order-detail or receipt RPC work off the
-    // critical path of the other without changing either result.
-    const [order_history, finance] = await Promise.all([
-      historyReader.read(get, open_orders, trades),
-      financeReader.read(receiptRpc, trades, activity),
-    ]);
-    return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began, collateral, open_orders, trades, positions, closed_positions, activity, order_history,
-      pagination_atomic: false,
-      occupancy: balanceOccupancy(collateral, open_orders, positions), ...finance };
+    const empty = (source: string): Section => ({ source, available: false, complete: false, items: [], pages: 0,
+      checked_at: new Date().toISOString(), error_code: "background_section_skipped" });
+    const positions = "positions" in held ? held.positions : held;
+    const closed_positions = "closed_positions" in held ? held.closed_positions : empty("background");
+    // Trades, activity, order details and receipts are not read: nobody used
+    // them (the agent dropped them before the console), and they grow with
+    // every round (account 1: 3100 activity rows, 2026-11-22).
+    return { schemaVersion: 1, wallet, checked_at: new Date().toISOString(), read_only: true, duration_ms: Date.now()-began,
+      collateral, open_orders, trades: empty("background"), positions, closed_positions, activity: empty("background"),
+      order_history: { ...empty("background"), coverage: "observed_order_ids" as const, historical_complete: false,
+        persistence: "reader_session" as const, known_order_count: 0, pending_order_count: 0, unavailable_order_count: 0, truncated: false },
+      pagination_atomic: false, occupancy: balanceOccupancy(collateral, open_orders, positions),
+      fees: { available: false, complete: false, items: [], reason: "background_section_skipped" },
+      rewards: { available: false, complete: false, items: [], reason: "background_section_skipped" },
+      reconciliation: { available: false, complete: false, items: [], reason: "background_section_skipped" } };
   };
+}
+
+const positionKey = (item: Row) => JSON.stringify([item.asset, item.conditionId]);
+const keyed = (items: Row[]) => new Map(items.map(item => [positionKey(item), item]));
+const failedSection = (section: Section, error_code: string): Section => ({ ...section, complete: false, error_code });
+
+/** Held positions execution can act on: every row worth something, plus every
+ * row with an event in the last 2 hours (a position just bought, or a round
+ * that just lost). A settled loser older than that is worth 0 and never acted
+ * on (accountSnapshot drops it). The whole held list grows by a row per lost
+ * round for good: 680 rows for account 1 on 2026-11-22, and the old 2 x 500
+ * cap would have failed every account recovery past 1000. */
+export async function heldPositions(get: Getter, wallet: string, now = Date.now()): Promise<Section> {
+  const [valued, recent] = await Promise.all([
+    v2Pages(get, "/v2/positions", "positions", wallet, { filter_type: "CASH", filter_amount: "0.000001" }),
+    v2Pages(get, "/v2/positions", "positions", wallet, { start: String(Math.floor(now / 1000) - 7200) }),
+  ]);
+  const items = keyed(recent.items);
+  for (const item of valued.items) items.set(positionKey(item), item);
+  const merged: Section = { ...valued, available: valued.available && recent.available, items: [...items.values()],
+    pages: valued.pages + recent.pages, checked_at: new Date().toISOString() };
+  const failed = [valued, recent].find(section => !section.complete);
+  return failed ? failedSection(merged, failed.error_code ?? "fetch_or_pagination_failed") : merged;
+}
+
+/** Held and closed positions for official PnL, which needs every settled round.
+ * Read in full once an hour; in between only rows with an event in the last 3
+ * hours, merged into the last full read (a redeemed or sold row moves from held
+ * to closed). A 5-minute round settles within minutes, so its rows are recent
+ * whenever they change. Either list failing returns both incomplete and merges
+ * nothing, so the next read starts from the same history. */
+export class PositionHistory {
+  private held = new Map<string, Row>();
+  private closed = new Map<string, Row>();
+  private fullAt?: number;
+  constructor(private readonly wallet: string, private readonly fullEveryMs = 3_600_000, private readonly windowMs = 3 * 3_600_000) {}
+
+  async read(get: Getter, now = Date.now()): Promise<{ positions: Section; closed_positions: Section }> {
+    const full = this.fullAt === undefined || now - this.fullAt >= this.fullEveryMs;
+    const window: Record<string, string> = full ? {} : { start: String(Math.floor((now - this.windowMs) / 1000)) };
+    const [held, closed] = await Promise.all([
+      v2Pages(get, "/v2/positions", "positions", this.wallet, window),
+      v2Pages(get, "/v2/positions", "closed_positions", this.wallet, { status: "CLOSED", ...window }),
+    ]);
+    const failed = [held, closed].find(section => !section.complete);
+    if (failed) {
+      const code = failed.error_code ?? "fetch_or_pagination_failed";
+      return { positions: failedSection(held, code), closed_positions: failedSection(closed, code) };
+    }
+    if (full) {
+      this.held = keyed(held.items); this.closed = keyed(closed.items); this.fullAt = now;
+    } else {
+      for (const item of closed.items) { this.closed.set(positionKey(item), item); this.held.delete(positionKey(item)); }
+      for (const item of held.items) this.held.set(positionKey(item), item);
+    }
+    return { positions: { ...held, items: [...this.held.values()] }, closed_positions: { ...closed, items: [...this.closed.values()] } };
+  }
 }
 
 type AtomicCut = Row;
