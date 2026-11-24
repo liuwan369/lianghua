@@ -87,6 +87,12 @@ export interface BinanceLeadConfig {
    * (round.exitFirst). 29-day backtest with the limit order and the regime
    * pause: +64 (t 0.74); live 390 orders: +36. */
   exitOnReverse: boolean;
+  /** Skip a low-edge signal (user 2026-11-24, null = off): the round's order
+   * is not sent when its edge (the one edgeSizing reads) is below this; the
+   * round waits for a later signal. A signal without a fair value trades.
+   * Live 1105 orders 11-14..11-23: the 229 under -0.02 made -0.067 a share
+   * (t -2.41); E:/pm-backup/research-1123/live_filters.py. */
+  minEdge: number | null;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -221,7 +227,7 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadVenues: [...LEAD_VENUES], tokyoRelay: true,
-  directVenues: [...LEAD_VENUES], openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  directVenues: [...LEAD_VENUES], openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, minEdge: null, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
 const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"];
@@ -403,6 +409,9 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (typeof config.regimePause !== "boolean") throw new Error("regimePause must be true or false");
   if (typeof config.edgeSizing !== "boolean") throw new Error("edgeSizing must be true or false");
   if (typeof config.exitOnReverse !== "boolean") throw new Error("exitOnReverse must be true or false");
+  if (config.minEdge !== null && !(finite(config.minEdge) && config.minEdge >= -1 && config.minEdge <= 1)) {
+    throw new Error("minEdge must be null or in [-1, 1]");
+  }
   // The GTC's remainder is cancelled after restAfterMissSec: 0 would rest it to the close.
   if (config.entryOrder === "gtc" && !(config.restAfterMissSec > 0)) throw new Error("entryOrder gtc needs restAfterMissSec > 0");
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
@@ -750,6 +759,9 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
     const fair = leadFairValue(event, round.endsAt - event.receivedAtUnix);
     const edge = fair === undefined ? undefined : fair - price - TAKER_FEE_RATE * price * (1 - price);
+    if (config.minEdge !== null && edge !== undefined && edge < config.minEdge) {
+      round.reason = `优势 ${edge.toFixed(2)} 低于 ${config.minEdge}，等下一个信号`; return undefined;
+    }
     const sized = edgeShares(edge, config.shares);
     const shares = leadShares(config.edgeSizing ? sized : config.shares, price);
     if (!this.validSizeAndPrice(instrument, shares, price)) {

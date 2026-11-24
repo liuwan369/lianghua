@@ -15,6 +15,7 @@
     ["fromSec", "开盘后起始秒", "开盘后第几秒开始接信号", "1", "number"],
     ["toSec", "开盘后截止秒", "第几秒以后不再下单（≤ 300）", "1", "number"],
     ["openBandBp", "开盘线范围 ±bp", "离开盘线超过这么多就不买；0 = 不限", "0.5", "number"],
+    ["minEdge", "优势下限", "优势低于这个数就不买、等下一个信号（实盘建议 −0.02）；空 = 不限", "0.01", "optional"],
   ];
   const HOW = [
     ["shares", "每场股数", "第一单买多少股；按优势定股数开着时是中间那档", "1", "number"],
@@ -41,7 +42,7 @@
   ];
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
-    "tokyoRelay", "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
+    "tokyoRelay", "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
     "dailyLossUsd", "durationMinutes", "maxRounds", "mode"];
 
   // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues/directVenues: string[]} -> {config, errors}
@@ -67,6 +68,7 @@
     if (!errors.fromSec && !errors.toSec && !(config.fromSec < config.toSec)) errors.toSec = "截止秒要大于起始秒";
     for (const key of ["maxQuoteAgeSeconds", "maxQuoteSkewSeconds"]) check(key, (v) => v > 0, "要大于 0");
     for (const key of ["roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"]) check(key, (v) => v === null || v > 0, "空或大于 0");
+    check("minEdge", (v) => v === null || (v >= -1 && v <= 1), "空或 −1 到 1 之间");
     check("maxRounds", (v) => Number.isInteger(v) && v >= 0 && v <= 10000, "0–10000 的整数");
     check("restAfterMissSec", (v) => v >= 0 && v <= 30, "0–30 秒");
     config.entryOrder = inputs.entryOrder === "gtc" ? "gtc" : "fak";

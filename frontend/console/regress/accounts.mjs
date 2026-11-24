@@ -71,6 +71,9 @@ const boot = (files, apiBase, replies) => {
   assert.deepEqual([...shares.values], ["5", "10"]);
   const table = String(O.renderConfig(rows, ACCOUNTS.accounts));
   assert.match(table, /class="differs"[\s\S]*?每场股数/, "the differing row is highlighted");
+  const edge = O.compareConfig([{ account: ACCOUNTS.accounts[0], config: { config: { minEdge: -0.02 } } },
+                               { account: ACCOUNTS.accounts[1], config: { config: { minEdge: null } } }]).find((row) => row.key === "minEdge");
+  assert.deepEqual([...edge.values], ["≥ −0.02", "不限"], "the edge minimum is compared");
   const results = String(O.renderResults([{ account: ACCOUNTS.accounts[0], stats: funnel(40, 30, 28, 17, 6.5, 140) },
                                           { account: ACCOUNTS.accounts[1], stats: funnel(8, 5, 5, 3, 1.2, 50) }], ACCOUNTS.accounts));
   const plain = text(results);

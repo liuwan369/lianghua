@@ -166,7 +166,8 @@
     if (!c) return "策略参数还没读到。";
     const venues = (c.leadVenues || ALL_VENUES).map((v) => VENUES[v] || v).join("/");
     const band = c.openBandBp > 0 ? `价格离${c.openLine === "mean60" ? "开盘前 60 秒均价" : "开盘那一笔"} ±${c.openBandBp} bp 以内、` : "";
-    return `策略：${venues} 任一家 ${c.windowMs} ms 内涨跌 ≥ ${c.thresholdBp} bp（${c.tokyoRelay ? "爱尔兰直连或东京转发，谁先到用谁" : "只用爱尔兰直连"}），在开盘后第 ${c.fromSec}–${c.toSec} 秒、${band}信号那边卖价 ≤ ${fmt.price(c.maxAsk)} 时，按卖价 + ${fmt.price(c.limitPremium)} 限价${c.entryOrder === "gtc" ? "单" : " FAK"} 买 ${c.edgeSizing ? `按优势 5/${c.shares}/15` : c.shares} 股；一场最多一笔${c.regimePause ? "，行情太乱就暂停" : ""}；${c.exitOnReverse ? "买到后第一个反向信号就卖出，否则持有到结算" : "持有到结算"}。`;
+    const edge = typeof c.minEdge === "number" ? `优势 ≥ ${String(c.minEdge).replace("-", "−")}、` : "";
+    return `策略：${venues} 任一家 ${c.windowMs} ms 内涨跌 ≥ ${c.thresholdBp} bp（${c.tokyoRelay ? "爱尔兰直连或东京转发，谁先到用谁" : "只用爱尔兰直连"}），在开盘后第 ${c.fromSec}–${c.toSec} 秒、${band}${edge}信号那边卖价 ≤ ${fmt.price(c.maxAsk)} 时，按卖价 + ${fmt.price(c.limitPremium)} 限价${c.entryOrder === "gtc" ? "单" : " FAK"} 买 ${c.edgeSizing ? `按优势 5/${c.shares}/15` : c.shares} 股；一场最多一笔${c.regimePause ? "，行情太乱就暂停" : ""}；${c.exitOnReverse ? "买到后第一个反向信号就卖出，否则持有到结算" : "持有到结算"}。`;
   };
   // 本次第几场: rounds that started at or after the run started (countsTowardRoundLimit).
   const roundNumber = (startedAt, roundStart) => {

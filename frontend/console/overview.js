@@ -18,6 +18,7 @@
     ["entryOrder", "第一单方式", (v) => (v === "gtc" ? "限价单" : v === "fak" ? "吃单 + 补单" : "--")],
     ["restAfterMissSec", "挂单秒数", (v) => (num(v) === null ? "--" : `${v} 秒`)],
     ["openBandBp", "开盘线范围", (v) => (num(v) === null ? "--" : `±${v} bp`)],
+    ["minEdge", "优势下限", (v) => (num(v) === null ? "不限" : `≥ ${String(v).replace("-", "−")}`)],
     ["openLine", "开盘线", (v) => (v === "mean60" ? "开盘前 60 秒均价" : v === "tick" ? "开盘那一笔" : "--")],
     ["regimePause", "行情太乱就暂停", (v) => (v === true ? "开" : v === false ? "关" : "--")],
     ["edgeSizing", "按优势定股数", (v) => (v === true ? "开" : v === false ? "关" : "--")],

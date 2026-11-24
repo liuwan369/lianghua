@@ -31,11 +31,11 @@ const S = window.PolySettings;
 
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
-  "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
   leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, directVenues: ["bybit", "binance", "okx"], openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false,
-  edgeSizing: false, exitOnReverse: false, maxQuoteAgeSeconds: 2,
+  edgeSizing: false, exitOnReverse: false, minEdge: null, maxQuoteAgeSeconds: 2,
   maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, durationMinutes: 0, maxRounds: 12, mode: "live" };
 
 // --- the published config round-trips unchanged ---
@@ -96,6 +96,15 @@ for (const key of ["edgeSizing", "exitOnReverse"]) {
   assert.equal(S.buildConfig({ ...inputs, [key]: true }, published).config[key], true, key);
   assert.equal(S.buildConfig({ ...inputs, [key]: "yes" }, published).config[key], false, `${key}: only true turns it on`);
 }
+
+// Skip a low-edge signal (2026-11-24): empty = off (null), else a number in [-1, 1].
+assert.equal(S.inputsFrom(published).minEdge, "", "null shows as empty (不限)");
+assert.equal(S.inputsFrom({ ...published, minEdge: -0.02 }).minEdge, "-0.02");
+const low = S.buildConfig({ ...inputs, minEdge: "-0.02" }, published);
+assert.deepEqual({ ...low.errors }, {});
+assert.equal(low.config.minEdge, -0.02);
+assert.equal(S.buildConfig({ ...inputs, minEdge: "" }, published).config.minEdge, null, "empty = off");
+for (const bad of ["-1.5", "2", "x"]) assert.ok("minEdge" in S.buildConfig({ ...inputs, minEdge: bad }, published).errors, `minEdge ${bad}`);
 
 // --- validation ---
 const errorsOf = (patch) => Object.keys(S.buildConfig({ ...inputs, ...patch }, published).errors).sort();

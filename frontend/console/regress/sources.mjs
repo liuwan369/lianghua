@@ -99,6 +99,9 @@ const all = L.strategyNote({ ...base, entryOrder: "gtc", edgeSizing: true, regim
 for (const piece of ["限价单 买 按优势 5/10/15 股", "行情太乱就暂停", "买到后第一个反向信号就卖出，否则持有到结算"]) {
   assert.ok(all.includes(piece), `note has ${piece}: ${all}`);
 }
+// The edge minimum (2026-11-24): named when set, absent when null.
+assert.ok(!plain.includes("优势"), plain);
+assert.ok(L.strategyNote({ ...base, minEdge: -0.02 }).includes("优势 ≥ −0.02"), "the edge minimum shows");
 
 console.log("sources OK");
 process.exit(0);
