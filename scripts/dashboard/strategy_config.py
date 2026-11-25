@@ -46,7 +46,9 @@ ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", 
 # saved file, so a stored config carrying them loads without them; a submitted
 # draft with them is still rejected.
 RETIRED_FIELDS = ("makerHoldSec", "leadSource", "midEdge", "midShares", "highEdge", "highShares",
-                  "reverseMaxAsk", "reverseToSec")
+                  "reverseMaxAsk", "reverseToSec",
+                  # The 80/40 trailing stop, live 2026-11-25 for ~1 h, replaced by the ratchet.
+                  "profitTrailFromUsd", "profitTrailGivebackUsd")
 
 
 def _stored(config):

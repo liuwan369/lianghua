@@ -204,7 +204,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert read["config"] == {**expected, "instanceId": "binance-lead", "revision": "1"}, read["config"]
     # --- the server's published file still carries retired settings: both sides drop them ---
     retired = {**chosen, "makerHoldSec": 0, "leadSource": "bybit-perp", "midEdge": 0.08, "midShares": 0,
-               "highEdge": 0.13, "highShares": 0, "reverseMaxAsk": 0, "reverseToSec": 285}
+               "highEdge": 0.13, "highShares": 0, "reverseMaxAsk": 0, "reverseToSec": 285,
+               # A file published during the hour the 80/40 trailing stop was live.
+               "profitTrailFromUsd": 80, "profitTrailGivebackUsd": 40}
     retired.pop("leadVenues")
     retired.pop("tokyoRelay")
     retired.pop("directVenues")
