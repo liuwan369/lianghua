@@ -7,9 +7,10 @@ import { privateKeyToAccount } from "viem/accounts";
 import { polygon } from "viem/chains";
 import { loadAccountConfig } from "../live/account.js";
 import { checkSettlementCredentials, envWalletOverrides, inspectWalletAddress, resolveWallet } from "../live/clob/wallet.js";
-import { CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD } from "../live/contracts.js";
+import { CTF, CTF_EXCHANGE, EXCHANGE_V3, NEG_RISK_CTF_EXCHANGE, PUSD } from "../live/contracts.js";
 import type { AssetId, PlatformAdapters, SettlementRequest, SettlementResult } from "./contracts.js";
-import { COLLATERAL_ADAPTER, redemptionPlan, type RedemptionTransaction } from "./settlement.js";
+import type { MarketVersion } from "../live/discovery.js";
+import { COLLATERAL_ADAPTER, POSITION_MANAGER, redemptionPlan, redemptionPlanV2, ROUTER, type RedemptionTransaction } from "./settlement.js";
 
 const ctfAbi = parseAbi([
   "function payoutDenominator(bytes32) view returns (uint256)",
@@ -18,6 +19,15 @@ const ctfAbi = parseAbi([
   "function isApprovedForAll(address,address) view returns (bool)",
   "function setApprovalForAll(address operator,bool approved)",
 ]);
+/** PositionManager (V2 positions): an ERC-1155 ledger plus the payout of a resolved position. */
+const positionManagerAbi = parseAbi([
+  "function balanceOf(address,uint256) view returns (uint256)",
+  "function isApprovedForAll(address,address) view returns (bool)",
+  "function setApprovalForAll(address operator,bool approved)",
+  "function getPayout(uint256 positionId, uint256 amount) view returns (uint256)",
+]);
+/** Base units of one share: getPayout of it is the share's payout (1e6 won, 0 lost). */
+const ONE_SHARE = 1_000_000n;
 const cashAbi = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 const transferAbi = parseAbi(["event Transfer(address indexed from,address indexed to,uint256 value)"]);
 const singleBurn = parseAbiItem("event TransferSingle(address indexed operator,address indexed from,address indexed to,uint256 id,uint256 value)");
@@ -33,7 +43,8 @@ const LOG_CHUNK_BLOCKS = 500n;
 const LOG_ATTEMPTS = 4;
 /** Exchange V2 OrderFilled (live/account-finance.ts FILLED): a match, never a redemption. */
 const ORDER_FILLED = "0xd543adfd945773f1a62f74f0ee55a5e3b9b1a28262980ba90b1a89f2ea84d8ee";
-const EXCHANGES = new Set([CTF_EXCHANGE.toLowerCase(), NEG_RISK_CTF_EXCHANGE.toLowerCase()]);
+/** ExchangeV3 trades Polymarket Protocol V2 markets with the same order struct (and OrderFilled). */
+const EXCHANGES = new Set([CTF_EXCHANGE.toLowerCase(), NEG_RISK_CTF_EXCHANGE.toLowerCase(), EXCHANGE_V3.toLowerCase()]);
 /** A receipt with an exchange OrderFilled is a match (a sale of the tokens pays
  * pUSD in and moves them out, like a redemption), never a payout. */
 export function receiptIsTrade(logs: readonly { address: string; topics: readonly (string | null | undefined)[] }[]): boolean {
@@ -69,6 +80,8 @@ export interface LiveSettlementRecord {
   payoutProof?: "zero_payout";
   /** The token the payout vector pays in full, when it was read (absent on a 50/50 or unread vector). */
   winningTokenId?: string;
+  /** v2: a Polymarket Protocol V2 round (PositionManager / Router). Absent = v1 CTF. */
+  version?: MarketVersion;
 }
 export interface LiveSettlementState {
   schemaVersion: 1;
@@ -76,7 +89,9 @@ export interface LiveSettlementState {
   records: Record<string, LiveSettlementRecord>;
 }
 interface BalanceView { balances: bigint[]; cash: bigint; block: bigint }
-interface MarketResolution { tokenIds: string[]; denominator: bigint; numerators: bigint[]; negRisk: boolean }
+interface MarketResolution { tokenIds: string[]; denominator: bigint; numerators: bigint[]; negRisk: boolean;
+  /** Position system (Gamma `version`); absent = v1 CTF, as every market before Polymarket Protocol V2. */
+  version?: MarketVersion }
 export interface SettlementReceipt {
   transactionHash: Hex;
   status: "success" | "reverted";
@@ -89,8 +104,11 @@ export interface SettlementReceipt {
 export interface LiveSettlementBackend {
   wallet: Address;
   market(request: SettlementRequest): Promise<MarketResolution>;
-  balances(tokenIds: string[], block?: bigint): Promise<BalanceView>;
-  approved(): Promise<boolean>;
+  /** Balances of these tokens on the ledger of their position system: CTF for
+   * v1 (the default), PositionManager for v2. */
+  balances(tokenIds: string[], block?: bigint, version?: MarketVersion): Promise<BalanceView>;
+  /** The redeem route is approved: v1 CTF -> collateral adapter, v2 PositionManager -> Router. */
+  approved(version?: MarketVersion): Promise<boolean>;
   prepare(call: RedemptionTransaction): Promise<PreparedSettlementTransaction>;
   submit(tx: PreparedSettlementTransaction): Promise<{ transactionHash?: Hex; relayerId?: string }>;
   receipt(record: LiveSettlementRecord): Promise<SettlementReceipt | undefined>;
@@ -289,12 +307,12 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
         return result(request, "unsupported", record.reason, record);
       }
       if (record.operation === "approval") {
-        if (!await backend.approved()) return result(request, "pending", "等待授权生效", record);
+        if (!await backend.approved(record.version)) return result(request, "pending", "等待授权生效", record);
         delete state.records[key];
         await save();
         record = undefined;
       } else {
-        const after = await backend.balances(record.tokenIds, receipt.block);
+        const after = await backend.balances(record.tokenIds, receipt.block, record.version);
         const expected = BigInt(record.expectedPayout);
         let credited = receipt.creditedPusd;
         if (after.balances.every(amount => amount === 0n) && credited < expected) {
@@ -327,8 +345,10 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       // stop requeueing it every 15 s (BUGS P2-19). If any token is still held,
       // keep failing so the funds are never silently dropped. request.tokenIds
       // are already validated as this round's pair by the platform wrapper.
+      // Its version is unknown once delisted: both ledgers must be empty.
       const held = await backend.balances(request.tokenIds);
-      if (held.balances.some(amount => amount !== 0n)) throw error;
+      const heldV2 = await backend.balances(request.tokenIds, held.block, "v2");
+      if ([...held.balances, ...heldV2.balances].some(amount => amount !== 0n)) throw error;
       const settled: LiveSettlementRecord = {
         marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
         tokenIds: request.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" },
@@ -340,11 +360,13 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       try { await save(); } catch (saveError) { delete state.records[key]; throw saveError; }
       return result(request, "confirmed", "场次已下架，链上已无该场持仓，无需赎回", settled);
     }
-    if (market.negRisk) return result(request, "unsupported", "neg_risk_redemption_not_supported_by_this_sender");
+    const version = market.version ?? "v1";
+    const v2 = version === "v2" ? { version } : {};
+    if (market.negRisk && version === "v1") return result(request, "unsupported", "neg_risk_redemption_not_supported_by_this_sender");
     if (market.denominator === 0n) return result(request, "pending", "等待官方结算结果");
     const winnerIndex = market.numerators.length === 2 ? market.numerators.findIndex(value => value === market.denominator) : -1;
     const winner = winnerIndex >= 0 && market.tokenIds[winnerIndex] ? { winningTokenId: market.tokenIds[winnerIndex]! } : {};
-    const before = await backend.balances(market.tokenIds);
+    const before = await backend.balances(market.tokenIds, undefined, version);
     if (before.balances.every(amount => amount === 0n)) {
       // Empty by the time we look: either we never held these, or the venue's
       // auto-redeem relayer already cashed them out. Search a bounded window for
@@ -352,7 +374,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       const lookback = before.block > REDEMPTION_LOOKBACK_BLOCKS ? before.block - REDEMPTION_LOOKBACK_BLOCKS : 0n;
       const scan: LiveSettlementRecord = {
         marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
-        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", ...winner,
+        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", ...winner, ...v2,
         prepared: { kind: "eoa" }, fromBlock: lookback.toString(),
         balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(), expectedPayout: "0",
       };
@@ -385,7 +407,7 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       const lookback = before.block > REDEMPTION_LOOKBACK_BLOCKS ? before.block - REDEMPTION_LOOKBACK_BLOCKS : 0n;
       const held: LiveSettlementRecord = {
         marketId: request.marketId, roundId: request.roundId, assetId: request.assetId,
-        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" }, ...winner,
+        tokenIds: market.tokenIds, status: "confirmed", operation: "redeem", prepared: { kind: "eoa" }, ...winner, ...v2,
         fromBlock: lookback.toString(), balancesBefore: before.balances.map(String),
         cashBefore: before.cash.toString(), expectedPayout: "0", creditedPusd: "0", cashAfter: before.cash.toString(),
       };
@@ -403,14 +425,24 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       || item.marketId !== request.marketId || item.roundId !== request.roundId)
       && (item.status === "prepared" || item.status === "submitted"));
     if (otherPending) return result(request, "pending", "等待钱包上一笔结算交易确认");
-    const approved = await backend.approved();
-    const call = approved ? redemptionPlan(request) : {
-      to: CTF, value: 0n,
-      data: encodeFunctionData({ abi: ctfAbi, functionName: "setApprovalForAll", args: [COLLATERAL_ADAPTER, true] }),
-    };
+    const approved = await backend.approved(version);
+    let call: RedemptionTransaction;
+    if (version === "v2") {
+      // Router redeems one outcome per call: the winner, the amount held of it.
+      if (winnerIndex < 0) return result(request, "unsupported", "settlement_v2_split_payout_not_supported");
+      call = approved ? redemptionPlanV2(request.marketId, winnerIndex, before.balances[winnerIndex]!) : {
+        to: POSITION_MANAGER, value: 0n,
+        data: encodeFunctionData({ abi: positionManagerAbi, functionName: "setApprovalForAll", args: [ROUTER, true] }),
+      };
+    } else {
+      call = approved ? redemptionPlan(request) : {
+        to: CTF, value: 0n,
+        data: encodeFunctionData({ abi: ctfAbi, functionName: "setApprovalForAll", args: [COLLATERAL_ADAPTER, true] }),
+      };
+    }
     const prepared = await backend.prepare(call);
     record = {
-      marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval", ...winner,
+      marketId: request.marketId, roundId: request.roundId, assetId: request.assetId, tokenIds: market.tokenIds, status: "prepared", operation: approved ? "redeem" : "approval", ...winner, ...v2,
       prepared, fromBlock: before.block.toString(), balancesBefore: before.balances.map(String), cashBefore: before.cash.toString(),
       expectedPayout: expectedPayout.toString(), transactionHash: prepared.transactionHash,
     };
@@ -523,6 +555,19 @@ async function createBackend(): Promise<LiveSettlementBackend> {
     async market(request) {
       const row = await gammaMarketRow(request.marketId);
       if (!row) throw new UnsupportedSettlement("settlement_market_not_found");
+      if (row.version === "v2") {
+        // V2: position IDs, and the payout of one share of each outcome from
+        // PositionManager (reverts while unresolved; 0 is a valid loser).
+        const ids = row.positionIds;
+        if (!Array.isArray(ids) || ids.length !== 2 || ids.some(id => typeof id !== "string" || !request.tokenIds.includes(id))) {
+          throw new UnsupportedSettlement("settlement_market_token_mismatch_or_unsupported_protocol");
+        }
+        if (row.resolutionStatus !== "resolved") return { tokenIds: ids as string[], negRisk: false, version: "v2", denominator: 0n, numerators: [0n, 0n] };
+        const payouts = await Promise.all((ids as string[]).map(id =>
+          client.readContract({ address: POSITION_MANAGER, abi: positionManagerAbi, functionName: "getPayout", args: [BigInt(id), ONE_SHARE] })));
+        return { tokenIds: ids as string[], negRisk: false, version: "v2", denominator: ONE_SHARE, numerators: payouts };
+      }
+      if (row.version != null && row.version !== "v1") throw new UnsupportedSettlement("settlement_market_unsupported_version");
       const ids: unknown = typeof row.clobTokenIds === "string" ? JSON.parse(row.clobTokenIds) : row.clobTokenIds;
       if (!Array.isArray(ids) || ids.length !== 2 || ids.some(id => typeof id !== "string" || !request.tokenIds.includes(id))) {
         throw new UnsupportedSettlement("settlement_market_token_mismatch_or_unsupported_protocol");
@@ -536,15 +581,18 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       ]);
       return { tokenIds: ids as string[], negRisk: row.negRisk, denominator, numerators: [first, second] };
     },
-    async balances(tokenIds, atBlock) {
+    async balances(tokenIds, atBlock, version) {
       const block = atBlock ?? await client.getBlockNumber();
+      const ledger = version === "v2" ? POSITION_MANAGER : CTF;
       const [cash, ...balances] = await Promise.all([
         client.readContract({ address: PUSD, abi: cashAbi, functionName: "balanceOf", args: [wallet], blockNumber: block }),
-        ...tokenIds.map(id => client.readContract({ address: CTF, abi: ctfAbi, functionName: "balanceOf", args: [wallet, BigInt(id)], blockNumber: block })),
+        ...tokenIds.map(id => client.readContract({ address: ledger, abi: ctfAbi, functionName: "balanceOf", args: [wallet, BigInt(id)], blockNumber: block })),
       ]);
       return { balances, cash: cash!, block };
     },
-    approved: () => client.readContract({ address: CTF, abi: ctfAbi, functionName: "isApprovedForAll", args: [wallet, COLLATERAL_ADAPTER] }),
+    approved: version => version === "v2"
+      ? client.readContract({ address: POSITION_MANAGER, abi: positionManagerAbi, functionName: "isApprovedForAll", args: [wallet, ROUTER] })
+      : client.readContract({ address: CTF, abi: ctfAbi, functionName: "isApprovedForAll", args: [wallet, COLLATERAL_ADAPTER] }),
     async prepare(call) {
       if (!deposit) {
         const request = await signer.prepareTransactionRequest({ to: call.to, data: call.data, value: call.value });
@@ -587,16 +635,21 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       // apply the SAME receipt/cash checks as normal.
       if (record.operation === "approval") {
         const event = parseAbiItem("event ApprovalForAll(address indexed account,address indexed operator,bool approved)");
-        const logs = await client.getLogs({ address: CTF, event, args: { account: wallet, operator: COLLATERAL_ADAPTER }, fromBlock: BigInt(record.fromBlock), toBlock: "latest" });
+        const v2Record = record.version === "v2";
+        const logs = await client.getLogs({ address: v2Record ? POSITION_MANAGER : CTF, event,
+          args: { account: wallet, operator: v2Record ? ROUTER : COLLATERAL_ADAPTER }, fromBlock: BigInt(record.fromBlock), toBlock: "latest" });
         const hit = logs.find(log => log.args.approved && log.transactionHash);
         return hit?.transactionHash ? receiptFor(hit.transactionHash) : undefined;
       }
       const fromBlock = BigInt(record.fromBlock);
+      const ledger = record.version === "v2" ? POSITION_MANAGER : CTF;
       const [single, batch] = await Promise.all([
-        client.getLogs({ address: CTF, event: singleBurn, args: { from: wallet }, fromBlock, toBlock: "latest" }),
-        client.getLogs({ address: CTF, event: batchBurn, args: { from: wallet }, fromBlock, toBlock: "latest" }),
+        client.getLogs({ address: ledger, event: singleBurn, args: { from: wallet }, fromBlock, toBlock: "latest" }),
+        client.getLogs({ address: ledger, event: batchBurn, args: { from: wallet }, fromBlock, toBlock: "latest" }),
       ]);
-      const isRedemptionTarget = (to?: Address) => to?.toLowerCase() === zero || to?.toLowerCase() === COLLATERAL_ADAPTER.toLowerCase();
+      // V2: Router pulls the positions and burns them (to its address or zero).
+      const isRedemptionTarget = (to?: Address) => to?.toLowerCase() === zero
+        || to?.toLowerCase() === (record.version === "v2" ? ROUTER : COLLATERAL_ADAPTER).toLowerCase();
       const hit = single.find(log => isRedemptionTarget(log.args.to) && record.tokenIds.includes(String(log.args.id)))
         ?? batch.find(log => isRedemptionTarget(log.args.to) && log.args.ids?.some(id => record.tokenIds.includes(String(id))));
       return hit?.transactionHash ? receiptFor(hit.transactionHash) : undefined;
@@ -624,10 +677,11 @@ async function createBackend(): Promise<LiveSettlementBackend> {
         }
         return found;
       };
+      const ledger = record.version === "v2" ? POSITION_MANAGER : CTF;
       const single = await chunked((from, to) =>
-        client.getLogs({ address: CTF, event: singleBurn, args: { from: wallet }, fromBlock: from, toBlock: to }));
+        client.getLogs({ address: ledger, event: singleBurn, args: { from: wallet }, fromBlock: from, toBlock: to }));
       const batch = await chunked((from, to) =>
-        client.getLogs({ address: CTF, event: batchBurn, args: { from: wallet }, fromBlock: from, toBlock: to }));
+        client.getLogs({ address: ledger, event: batchBurn, args: { from: wallet }, fromBlock: from, toBlock: to }));
       const moved = (hash?: Hex, ids?: readonly bigint[], values?: readonly bigint[]): Hex | undefined =>
         hash && hash !== record.transactionHash
           && ids?.some((id, i) => held.has(String(id)) && (values?.[i] ?? 0n) > 0n) ? hash : undefined;

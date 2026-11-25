@@ -25,3 +25,14 @@ export const CTF_EXCHANGE =
 /** Neg-risk CTF Exchange V2. */
 export const NEG_RISK_CTF_EXCHANGE =
   "0xe2222d279d744050d28e00520010520000310F59" as Address;
+
+/** Polymarket Protocol V2 (2026-11, docs migrate/polymarket-v2): its own
+ * position ledger, exchange (EIP-712 domain "3") and position router. */
+export const POSITION_MANAGER =
+  "0x006F54F7f9A22e0000CC2AB60031000000ae9fEF" as Address;
+
+export const EXCHANGE_V3 =
+  "0xe3333700cA9d93003F00f0F71f8515005F6c00Aa" as Address;
+
+export const ROUTER =
+  "0x12121212006e4CD160D18e3f00711DA5c3372600" as Address;

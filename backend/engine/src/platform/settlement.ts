@@ -1,5 +1,5 @@
 import { encodeFunctionData, parseAbi, type Address, type Hex } from "viem";
-import { PUSD } from "../live/contracts.js";
+import { POSITION_MANAGER, PUSD, ROUTER } from "../live/contracts.js";
 import type { SettlementRequest } from "./contracts.js";
 
 const abi = parseAbi(["function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external"]);
@@ -7,6 +7,22 @@ export interface RedemptionTransaction { to: Address; data: Hex; value: bigint }
 /** Official @polymarket/client 0.9.0 production deployment; these SDK fields are internal. */
 export const COLLATERAL_ADAPTER = "0xAdA100Db00Ca00073811820692005400218FcE1f" as Address;
 export const NEG_RISK_COLLATERAL_ADAPTER = "0xadA2005600Dec949baf300f4C6120000bDB6eAab" as Address;
+
+/** Polymarket Protocol V2: positions live in PositionManager; Router redeems them. */
+export { POSITION_MANAGER, ROUTER };
+const routerAbi = parseAbi(["function redeem(bytes31 conditionId, uint256 outcomeIndex, uint256 amount)"]);
+
+/** A V2 round's redemption: Router.redeem of `amount` (6-decimal base units)
+ * of outcome `outcomeIndex` (0 YES/Up, 1 NO/Down). The condition is bytes31;
+ * Gamma gives it right-padded to bytes32, so its final byte must be zero
+ * (docs migrate/polymarket-v2/contract-integrations). */
+export function redemptionPlanV2(conditionId: string, outcomeIndex: number, amount: bigint): RedemptionTransaction {
+  if (!/^0x[0-9a-fA-F]{62}00$/.test(conditionId)) throw new Error("invalid V2 condition ID: not a zero-padded bytes31");
+  if (outcomeIndex !== 0 && outcomeIndex !== 1) throw new Error("invalid V2 outcome index");
+  if (!(amount > 0n)) throw new Error("invalid V2 redemption amount");
+  return { to: ROUTER, value: 0n, data: encodeFunctionData({ abi: routerAbi, functionName: "redeem",
+    args: [conditionId.slice(0, 64) as Hex, BigInt(outcomeIndex), amount] }) };
+}
 
 /** The wallet-specific signer/relayer consumes the same transaction plan. */
 export function redemptionPlan(request: SettlementRequest, options: { negRisk?: boolean } = {}): RedemptionTransaction {

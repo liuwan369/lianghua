@@ -61,6 +61,9 @@ export interface PreflightReport {
   missingErc20Approvals: number;
   missingErc1155Approvals: number;
   approvalsError: string | null;
+  /** Polymarket Protocol V2 approvals: their own line, never part of `ready`. */
+  v2ApprovalsReady: boolean | null;
+  v2ApprovalsMissing: string[];
   settlementCredentialsReady: boolean;
   otherApprovalsMissing?: number;
   configErrors: string[];
@@ -194,6 +197,8 @@ export async function preflightReport(
     missingErc20Approvals: publicCheck.missingErc20Approvals,
     missingErc1155Approvals: publicCheck.missingErc1155Approvals,
     approvalsError: publicCheck.approvalsError ?? null,
+    v2ApprovalsReady: publicCheck.v2ApprovalsReady,
+    v2ApprovalsMissing: publicCheck.v2ApprovalsMissing,
     settlementCredentialsReady: publicCheck.settlementCredentialsReady,
     otherApprovalsMissing: publicCheck.otherApprovalsMissing,
     configErrors: accountConfig.errors,

@@ -125,7 +125,8 @@ def contains_secret(value, values: dict) -> bool:
 
 def _public_check_report(report: dict, values: dict) -> dict:
     allowed = {"wallet", "owner", "signer_matches", "compromised", "balance", "approvals_ready", "account_ready", "checks", "checked_at", "read_only",
-               "wallet_kind", "signature_type", "settlement_credentials_ready", "settlement_reason", "clob_balance", "clob_balance_status"}
+               "wallet_kind", "signature_type", "settlement_credentials_ready", "settlement_reason", "clob_balance", "clob_balance_status",
+               "v2_approvals_ready", "v2_approvals_missing"}
     if (not isinstance(report, dict) or set(report) - allowed or contains_secret(report, values)
             or report.get("read_only") is not True or not isinstance(report.get("checks"), list)):
         raise AccountCheckError("account_response_invalid")
@@ -147,10 +148,18 @@ def _public_check_report(report: dict, values: dict) -> dict:
     for name in ("checked_at", "wallet_kind", "signature_type", "settlement_reason", "clob_balance_status"):
         if report.get(name) is not None and (not isinstance(report[name], (str, int)) or isinstance(report[name], bool)):
             raise AccountCheckError("account_response_invalid")
+    # Polymarket Protocol V2 approvals (engine live/account.ts V2_APPROVALS): reported, never gating.
+    if report.get("v2_approvals_ready") is not None and not isinstance(report["v2_approvals_ready"], bool):
+        raise AccountCheckError("account_response_invalid")
+    missing = report.get("v2_approvals_missing")
+    if missing is not None and (not isinstance(missing, list)
+                                or any(key not in ("pusd_exchange_v3", "positions_exchange_v3", "positions_router") for key in missing)):
+        raise AccountCheckError("account_response_invalid")
     for item in report["checks"]:
-        if (not isinstance(item, dict) or set(item) - {"name", "ok", "detail"}
+        if (not isinstance(item, dict) or set(item) - {"name", "ok", "detail", "informational"}
                 or not isinstance(item.get("name"), str) or not isinstance(item.get("ok"), bool)
-                or not isinstance(item.get("detail"), str)):
+                or not isinstance(item.get("detail"), str)
+                or ("informational" in item and not isinstance(item["informational"], bool))):
             raise AccountCheckError("account_response_invalid")
     return report
 

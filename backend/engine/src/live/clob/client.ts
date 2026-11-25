@@ -147,8 +147,21 @@ export interface SubmitOrderArgs {
   onPostSent?: () => void;
 }
 
-/** Mirrors the installed v2 SDK's ExchangeOrderBuilderV2 typed-data hash. */
-export function signedV2OrderHash(order: SignedOrder, negRisk: boolean): string {
+/** /clob-markets "v": "v2" is a Polymarket Protocol V2 market (ExchangeV3);
+ * "v1" or absent a CTF market. */
+export function marketExchange(version: unknown): 2 | 3 { return version === "v2" ? 3 : 2; }
+
+/** The SDK signs for ExchangeV3 when given a positionID, for the CTF exchange
+ * when given a tokenID (clob-client-v2 >= 1.3, resolveOrderRouting). */
+function orderAsset(tokenId: string, exchange: 2 | 3): { tokenID: string } | { positionID: string } {
+  return exchange === 3 ? { positionID: tokenId } : { tokenID: tokenId };
+}
+
+/** Mirrors the installed SDK's typed-data hash of a signed order. exchange 2:
+ * a CTF (V1) market's order, domain "2" on CTF Exchange V2 (neg risk or not);
+ * exchange 3: a Polymarket Protocol V2 market's, domain "3" on ExchangeV3 (no
+ * neg-risk variant). Same order struct for both (docs migrate/polymarket-v2). */
+export function signedV2OrderHash(order: SignedOrder, negRisk: boolean, exchange: 2 | 3 = 2): string {
   if (!isV2Order(order)) throw new Error("durable order identity requires v2 order");
   const config = getContractConfig(137);
   const fields = [
@@ -156,8 +169,9 @@ export function signedV2OrderHash(order: SignedOrder, negRisk: boolean): string 
     ["makerAmount", "uint256"], ["takerAmount", "uint256"], ["side", "uint8"], ["signatureType", "uint8"],
     ["timestamp", "uint256"], ["metadata", "bytes32"], ["builder", "bytes32"],
   ].map(([name, type]) => ({ name, type }));
-  return hashTypedData({ domain: { name: "Polymarket CTF Exchange", version: "2", chainId: 137,
-    verifyingContract: (negRisk ? config.negRiskExchangeV2 : config.exchangeV2) as Address },
+  const verifyingContract = exchange === 3 ? config.exchangeV3 : negRisk ? config.negRiskExchangeV2 : config.exchangeV2;
+  return hashTypedData({ domain: { name: "Polymarket CTF Exchange", version: String(exchange), chainId: 137,
+    verifyingContract: verifyingContract as Address },
     primaryType: "Order", types: { Order: fields }, message: { ...order, side: order.side === ClobSide.BUY ? 0 : 1 } });
 }
 
@@ -335,6 +349,10 @@ export class ClobWrapper {
   private orderVersion: 2 = 2;
   private requestTimeoutMs = DEFAULT_ORDER_TIMEOUT_MS;
   private negRiskByToken = new Map<string, boolean>();
+  /** Exchange a token's orders are signed for, from /clob-markets "v": 2 a CTF
+   * (V1) market (CTF Exchange V2), 3 a Polymarket Protocol V2 market
+   * (ExchangeV3, the token is a position ID). Unknown = 2, as before V2. */
+  private exchangeByToken = new Map<string, 2 | 3>();
   /** Local clock minus venue clock, in seconds. Undefined until measured. */
   private venueClockOffsetSeconds?: number;
   private feeRulesByToken = new Map<string, { rate: number; exponent: number; takerDelayMs: number }>();
@@ -742,8 +760,10 @@ export class ClobWrapper {
             // metadata request on the hot path; if that request waits for its
             // timeout, it is added directly to the order round trip.
             const negRisk = market.nr === true;
+            // The SDK type has no `v` yet; the API sends it ("v1"/"v2", 2026-11).
+            const exchange = marketExchange((market as { v?: unknown }).v);
             for (const token of market.t) {
-              if (token?.t) this.negRiskByToken.set(token.t, negRisk);
+              if (token?.t) { this.negRiskByToken.set(token.t, negRisk); this.exchangeByToken.set(token.t, exchange); }
             }
             // Run the exact pre-POST work of submitOrder on a throwaway order,
             // several times: sign, derive the durable identity hash, serialise,
@@ -753,10 +773,10 @@ export class ClobWrapper {
             // Nothing here is sent; the signed payloads are discarded.
             for (let warm = 0; warm < SIGNING_WARM_ITERATIONS; warm += 1) {
               const order = await this.client.createOrder(
-                { tokenID: tokenId, price: 0.5, size: minOrderSize, side: ClobSide.BUY },
+                { ...orderAsset(tokenId, exchange), price: 0.5, size: minOrderSize, side: ClobSide.BUY },
                 { tickSize, negRisk, version },
               );
-              signedV2OrderHash(order, negRisk);
+              signedV2OrderHash(order, negRisk, exchange);
               const payload = isV2Order(order)
                 ? orderToJsonV2(order, this.creds.key, OrderType.GTC, false, deferExec())
                 : orderToJsonV1(order, this.creds.key, OrderType.GTC, false, deferExec());
@@ -786,6 +806,9 @@ export class ClobWrapper {
     return rule && { ...rule };
   }
 
+  /** The exchange this token's orders are signed for (see exchangeByToken). */
+  exchange(tokenId: string): 2 | 3 { return this.exchangeByToken.get(tokenId) ?? 2; }
+
   private async negRisk(tokenId: string): Promise<boolean> {
     const cached = this.negRiskByToken.get(tokenId);
     if (cached != null) return cached;
@@ -813,10 +836,11 @@ export class ClobWrapper {
           const slot = presignKey(tokenId, "BUY", price, size, "FAK", false);
           if (this.presigned.has(slot)) continue;
           const version = this.orderVersion;
-          const order = await this.client.createOrder({ tokenID: tokenId, price, size, side: ClobSide.BUY },
+          const exchange = this.exchange(tokenId);
+          const order = await this.client.createOrder({ ...orderAsset(tokenId, exchange), price, size, side: ClobSide.BUY },
             { tickSize: sdkTickSize(tickSize), negRisk, version });
-          if (version === this.orderVersion) {
-            this.presigned.set(slot, { order, hash: signedV2OrderHash(order, negRisk), negRisk, version });
+          if (version === this.orderVersion && exchange === this.exchange(tokenId)) {
+            this.presigned.set(slot, { order, hash: signedV2OrderHash(order, negRisk, exchange), negRisk, version });
           }
           await new Promise<void>(resolve => setImmediate(resolve));
         }
@@ -874,9 +898,10 @@ export class ClobWrapper {
         // a retry after a version mismatch always signs anew.
         const ready = attempt === 0 ? this.takePresigned(args.tokenId, args.direction ?? "BUY", args.price, args.size,
           args.timeInForce ?? "GTC", args.postOnly ?? false, negRisk) : undefined;
+        const exchange = this.exchange(args.tokenId);
         const order = ready?.order ?? await withTimeout(this.client.createOrder(
           {
-            tokenID: args.tokenId,
+            ...orderAsset(args.tokenId, exchange),
             price: args.price,
             size: args.size,
             side: args.direction === "SELL" ? ClobSide.SELL : ClobSide.BUY,
@@ -891,7 +916,7 @@ export class ClobWrapper {
         presignedUsed ||= ready !== undefined;
 
         if (args.onPrepared) {
-          args.onPrepared({ orderHash: ready?.hash ?? signedV2OrderHash(order, negRisk), signedPayload: order, preparedAt: Date.now() / 1000 });
+          args.onPrepared({ orderHash: ready?.hash ?? signedV2OrderHash(order, negRisk, exchange), signedPayload: order, preparedAt: Date.now() / 1000 });
         }
 
         let ackStarted: number | undefined;

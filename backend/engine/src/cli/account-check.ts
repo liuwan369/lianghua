@@ -1,6 +1,6 @@
 /** Machine-readable, read-only bridge. Never log an exception or credential. */
 import { preflightReport } from "../live/onchain.js";
-import { loadAccountConfig } from "../live/account.js";
+import { loadAccountConfig, V2_APPROVALS } from "../live/account.js";
 
 let errorCode: "invalid_account_config" | "account_rpc_failed" = "invalid_account_config";
 try {
@@ -23,6 +23,12 @@ try {
       detail: report.approvalsFullyReady === null ? "查询失败或协议版本不兼容，请重试" : report.approvalsFullyReady
         ? `当前 CLOB V2 交易授权齐全；其他产品授权缺项 ${report.otherApprovalsMissing ?? 0}，不用于本策略`
         : `当前 CLOB V2 缺资金授权 ${report.missingErc20Approvals} 项、持仓授权 ${report.missingErc1155Approvals} 项` },
+    // V2 is informational: BTC trades CTF (V1) markets; it does not gate start.
+    { name: "V2 市场授权", ok: report.v2ApprovalsReady !== false, informational: true,
+      detail: report.v2ApprovalsReady === null ? "查询失败，稍后重试（不影响当前 BTC 交易）"
+        : report.v2ApprovalsReady ? "V2 市场买入、卖出、赎回授权齐全"
+        : "缺 " + report.v2ApprovalsMissing.map(key => V2_APPROVALS.find(a => a.key === key)?.label ?? key).join("、")
+          + "（BTC 切到 V2 前要补）" },
     { name: "结算凭据", ok: report.settlementCredentialsReady === true,
       detail: report.settlementCredentialsReady
         ? "结算所需 Owner 与 Builder/Relayer 凭据已就绪"
@@ -31,6 +37,7 @@ try {
   console.log(JSON.stringify({ wallet: report.collateralWallet, owner: report.walletOwner ?? config.ownerSigner ?? null,
     signer_matches: report.ownerMatchesSigner === true, compromised,
     balance: report.pusdOnChain, approvals_ready: report.approvalsFullyReady,
+    v2_approvals_ready: report.v2ApprovalsReady, v2_approvals_missing: report.v2ApprovalsMissing,
     settlement_credentials_ready: report.settlementCredentialsReady,
     account_ready: report.ready && !compromised, checks,
     checked_at: new Date().toISOString(), read_only: true }));

@@ -2,12 +2,47 @@ import {
   createPublicClient as createPolymarketPublicClient,
   forkEnvironmentConfig,
 } from "@polymarket/client";
-import { getAddress, type Address, type Hex } from "viem";
+import { createPublicClient, getAddress, http, parseAbi, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import { polygon } from "viem/chains";
 import { checkSettlementCredentials, inspectWalletAddress } from "./clob/wallet.js";
-import { CTF, CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE, PUSD } from "./contracts.js";
+import { CTF, CTF_EXCHANGE, EXCHANGE_V3, NEG_RISK_CTF_EXCHANGE, POSITION_MANAGER, PUSD, ROUTER } from "./contracts.js";
 
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/** Polymarket Protocol V2 approvals (docs migrate/polymarket-v2): BUY, SELL,
+ * and the Router our settlement redeems V2 rounds through. CTF approvals do
+ * not carry over. */
+export const V2_APPROVALS = [
+  { key: "pusd_exchange_v3", label: "pUSD → ExchangeV3（买入）" },
+  { key: "positions_exchange_v3", label: "PositionManager → ExchangeV3（卖出）" },
+  { key: "positions_router", label: "PositionManager → Router（赎回）" },
+] as const;
+export type V2ApprovalKey = typeof V2_APPROVALS[number]["key"];
+
+/** Ready when every V2 approval is present; null when any read failed. */
+export function v2ApprovalStatus(found: Record<V2ApprovalKey, boolean | null>): { ready: boolean | null; missing: V2ApprovalKey[] } {
+  const values = V2_APPROVALS.map(a => found[a.key]);
+  if (values.some(value => value === null)) return { ready: null, missing: [] };
+  const missing = V2_APPROVALS.filter(a => found[a.key] !== true).map(a => a.key);
+  return { ready: missing.length === 0, missing };
+}
+
+const approvalAbi = parseAbi([
+  "function allowance(address,address) view returns (uint256)",
+  "function isApprovedForAll(address,address) view returns (bool)",
+]);
+/** Read-only view calls; a failed read is null, never "missing". */
+async function readV2Approvals(client: { readContract: (args: any) => Promise<unknown> }, wallet: Address)
+  : Promise<Record<V2ApprovalKey, boolean | null>> {
+  const read = (p: Promise<unknown>, ok: (v: unknown) => boolean) => p.then(ok, () => null);
+  const [pusd, sell, redeem] = await Promise.all([
+    read(client.readContract({ address: PUSD, abi: approvalAbi, functionName: "allowance", args: [wallet, EXCHANGE_V3] }), v => (v as bigint) > 0n),
+    read(client.readContract({ address: POSITION_MANAGER, abi: approvalAbi, functionName: "isApprovedForAll", args: [wallet, EXCHANGE_V3] }), v => v === true),
+    read(client.readContract({ address: POSITION_MANAGER, abi: approvalAbi, functionName: "isApprovedForAll", args: [wallet, ROUTER] }), v => v === true),
+  ]);
+  return { pusd_exchange_v3: pusd, positions_exchange_v3: sell, positions_router: redeem };
+}
 const PRIVATE_KEY_RE = /^(?:0x)?[0-9a-fA-F]{64}$/;
 
 function rawValue(name: string): string | undefined {
@@ -109,6 +144,9 @@ export interface PublicAccountCheck {
   missingErc20Approvals: number;
   missingErc1155Approvals: number;
   approvalsError?: string;
+  /** Polymarket Protocol V2 trading + redeem approvals (V2_APPROVALS); null = unread. */
+  v2ApprovalsReady: boolean | null;
+  v2ApprovalsMissing: string[];
   /** True only when the wallet can submit the eventual settlement route. */
   settlementCredentialsReady: boolean;
   /** SDK requirements for other products, outside this engine's CLOB V2 route. */
@@ -177,6 +215,10 @@ export async function checkPublicAccount(wallet: Address): Promise<PublicAccount
     relayerCredentialsPresent: config.relayerCredentialsPresent,
   }).ready;
 
+  // V2: read straight from chain, reported apart from the CTF verdict above.
+  const rpc = process.env.POLYGON_RPC?.trim() || "https://polygon-bor-rpc.publicnode.com";
+  const v2 = v2ApprovalStatus(await readV2Approvals(createPublicClient({ chain: polygon, transport: http(rpc) }), wallet));
+
   return {
     wallet,
     walletKind: inspected.walletKind,
@@ -186,6 +228,8 @@ export async function checkPublicAccount(wallet: Address): Promise<PublicAccount
     missingErc20Approvals,
     missingErc1155Approvals,
     approvalsError,
+    v2ApprovalsReady: v2.ready,
+    v2ApprovalsMissing: v2.missing,
     settlementCredentialsReady,
     otherApprovalsMissing,
   };

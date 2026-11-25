@@ -30,7 +30,12 @@ export interface Market {
   downToken: string;
   start: number;
   end: number;
+  /** "v1" CTF market, "v2" Polymarket Protocol V2 (ExchangeV3, position IDs). */
+  version: MarketVersion;
 }
+
+/** Gamma market `version` (docs migrate/polymarket-v2/api-integrations). */
+export type MarketVersion = "v1" | "v2";
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -51,6 +56,7 @@ export interface Candidate {
   upToken: string;
   downToken: string;
   conditionId: string;
+  version: MarketVersion;
 }
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
@@ -97,10 +103,16 @@ export function parseMarket(m: Record<string, JsonValue> | null | undefined, ass
   if (!/^\d+$/.test(roundRaw)) return undefined;
   if (m.closed === true) return undefined;
 
-  const toks =
-    jsonOrStrArray(m.clobTokenIds) ?? jsonOrStrArray(m.clob_token_ids);
+  // The trading ID follows the market's version, even when both fields are
+  // present: v2 positionIds (an array), v1 clobTokenIds (JSON text). Before
+  // Gamma carried a version every market was CTF. Anything else is refused.
+  const version = m.version == null ? "v1" : m.version;
+  if (version !== "v1" && version !== "v2") return undefined;
+  const toks = version === "v2" ? jsonOrStrArray(m.positionIds)
+    : jsonOrStrArray(m.clobTokenIds) ?? jsonOrStrArray(m.clob_token_ids);
   const tokenValues = toks?.map(value => value.trim());
-  if (!tokenValues || tokenValues.length !== 2 || !tokenValues[0] || !tokenValues[1] || tokenValues[0] === tokenValues[1]) return undefined;
+  if (!tokenValues || tokenValues.length !== 2 || !tokenValues[0] || !tokenValues[1] || tokenValues[0] === tokenValues[1]
+    || !tokenValues.every(value => /^\d+$/.test(value))) return undefined;
 
   const outs = jsonOrStrArray(m.outcomes) ?? [];
   const labels = outs.map(value => value.trim().toLowerCase());
@@ -121,6 +133,7 @@ export function parseMarket(m: Record<string, JsonValue> | null | undefined, ass
     upToken: tokenValues[upI]!,
     downToken: tokenValues[1 - upI]!,
     conditionId,
+    version,
   };
 }
 
@@ -160,6 +173,7 @@ function marketFrom(c: Candidate): Market {
     downToken: c.downToken,
     start: c.slugStart,
     end: c.slugStart + 300,
+    version: c.version,
   };
 }
 
