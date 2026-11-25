@@ -102,6 +102,23 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
     "全部买到", "如果涨 +$2.23", "一场最多一笔"]) {
     assert.ok(shown.includes(piece), `实盘 shows ${piece}: ${shown.slice(0, 600)}`);
   }
+  assert.ok(!shown.includes("盈利保护"), "no trailing stop set: not mentioned");
+}
+// The trailing profit stop (2026-11-25): before it starts, the rule; after, the line it stops at.
+{
+  const saved = JSON.parse(JSON.stringify(REPLIES));
+  REPLIES["/api/strategy/config"].config = { ...config, profitTrailFromUsd: 100, profitTrailGivebackUsd: 60 };
+  REPLIES["/api/runtime/status"].risk = { dailyPnlUsd: 40, dailyPeakPnlUsd: 70 };
+  const page = boot("live.js");
+  await wait(50);
+  let shown = text(page.html());
+  assert.ok(shown.includes("盈利保护：当天赚到 $100.00 后，回吐 $60.00 就停"), shown.slice(0, 800));
+  REPLIES["/api/runtime/status"].risk = { dailyPnlUsd: 120, dailyPeakPnlUsd: 150 };
+  const after = boot("live.js");
+  await wait(50);
+  shown = text(after.html());
+  assert.ok(shown.includes("盈利保护：今天最高 +$150.00，跌到 +$90.00 就停"), shown.slice(0, 800));
+  Object.assign(REPLIES, saved);
   // The round's orders: the buy first, then the reverse-signal sell, each named;
   // the average comes from the fills; a rejected sell says it sold nothing.
   const buyAt = shown.indexOf("买入 全部成交 5 / 5 股 · 限价 0.56 · 均价 0.54 · 手续费 $0.08");

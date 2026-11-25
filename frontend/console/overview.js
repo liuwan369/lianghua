@@ -25,6 +25,7 @@
     ["exitOnReverse", "反向信号就卖出", (v) => (v === true ? "开" : v === false ? "关" : "--")],
     ["directVenues", "爱尔兰直连", (v) => (Array.isArray(v) ? (v.length ? v.map((x) => P.VENUES[x] || x).join("/") : "无") : "--")],
     ["dailyLossUsd", "每日亏损上限", (v) => (num(v) === null ? "不限" : fmt.usd(v))],
+    ["profitTrailGivebackUsd", "盈利保护回吐", (v) => (num(v) === null ? "不用" : fmt.usd(v))],
   ];
   const compareConfig = (items) => CONFIG_ROWS.map(([key, label, show]) => {
     const raw = items.map((item) => item.config?.config?.[key]);

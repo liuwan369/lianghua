@@ -98,6 +98,11 @@ export interface BinanceLeadConfig {
   roundBudgetUsd?: number;
   totalBudgetUsd?: number;
   dailyLossUsd?: number | null;
+  /** Trailing profit stop (user 2026-11-25, off unless both set): once the
+   * day's PnL has reached profitTrailFromUsd, stop new orders when it falls
+   * profitTrailGivebackUsd below the day's peak (platform core, HardLimits). */
+  profitTrailFromUsd?: number | null;
+  profitTrailGivebackUsd?: number | null;
 }
 export type EntryOrder = "fak" | "gtc";
 export const ENTRY_ORDERS: readonly EntryOrder[] = ["fak", "gtc"];
@@ -230,7 +235,8 @@ export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze(
   directVenues: [...LEAD_VENUES], openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, minEdge: null, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
-const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"];
+const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "profitTrailFromUsd", "profitTrailGivebackUsd"];
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
 const CONFIG_FREEZE_SEC = 10;
@@ -421,6 +427,9 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
     throw new Error("dailyLossUsd must be positive or null");
   }
   if (!positive(config.maxQuoteAgeSeconds) || !positive(config.maxQuoteSkewSeconds)) throw new Error("invalid quote freshness limits");
+  for (const key of ["profitTrailFromUsd", "profitTrailGivebackUsd"] as const) {
+    if (config[key] != null && !positive(config[key])) throw new Error(`${key} must be positive or null`);
+  }
   return config;
 }
 

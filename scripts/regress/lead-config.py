@@ -72,7 +72,8 @@ strategy_fields = {k: v for k, v in defaults.items() if k not in RUN_SETTINGS}
 for key in ("instanceId", "revision", "assetId"):
     engine_defaults.pop(key)
 assert {k: v for k, v in strategy_fields.items() if v is not None or k in engine_defaults} == engine_defaults, (strategy_fields, engine_defaults)
-assert {k for k, v in strategy_fields.items() if v is None} == {"roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd", "minEdge"}
+assert {k for k, v in strategy_fields.items() if v is None} == {"roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd", "minEdge",
+                                                                "profitTrailFromUsd", "profitTrailGivebackUsd"}
 assert defaults["assetId"] == "btc" and defaults["mode"] == "live"
 assert defaults["durationMinutes"] == 0 and defaults["maxRounds"] == 0
 validate_config(defaults)
@@ -130,7 +131,7 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
 ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-         "edgeSizing", "exitOnReverse", "directVenues", "minEdge")
+         "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "profitTrailFromUsd", "profitTrailGivebackUsd")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
@@ -155,6 +156,13 @@ assert old["minEdge"] is None, "an older config buys whatever the edge"
 assert validate_config({**defaults, "minEdge": -0.02})["minEdge"] == -0.02
 for bad in ("-0.02", 2, -1.5, True, float("nan")):
     assert rejected({**defaults, "minEdge": bad}), f"minEdge={bad!r}"
+# Trailing profit stop (2026-11-25): each null or positive; off unless both set (the engine decides).
+assert old["profitTrailFromUsd"] is None and old["profitTrailGivebackUsd"] is None
+ok = validate_config({**defaults, "profitTrailFromUsd": 100, "profitTrailGivebackUsd": 60})
+assert (ok["profitTrailFromUsd"], ok["profitTrailGivebackUsd"]) == (100, 60)
+for key in ("profitTrailFromUsd", "profitTrailGivebackUsd"):
+    for bad in (0, -5, "60", True):
+        assert rejected({**defaults, key: bad}), f"{key}={bad!r}"
 assert (old["maxAsk"], old["openBandBp"], old["openLine"], old["leadVenues"], old["tokyoRelay"]) == \
     (0.8, 0, "tick", ["bybit", "binance", "okx"], True)
 assert old["directVenues"] == ["bybit", "binance", "okx"], "an older config keeps every direct line"

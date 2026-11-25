@@ -102,6 +102,7 @@ export class TradingCore {
     }
     this.state.risk.baselineAccountAt ??= this.state.risk.baselineAt;
     if (!finite(this.state.risk.baselineAccountAt) || this.state.risk.baselineAccountAt < 0) throw new Error("invalid persisted cash baseline time");
+    if (this.state.risk.dailyPeakPnlUsd !== undefined && !finite(this.state.risk.dailyPeakPnlUsd)) throw new Error("invalid persisted daily peak");
     this.state.cashFlowTracking ??= { baselineAt: options.restored ? this.state.risk.baselineAt : initial.cashAt ?? initial.at, complete: false,
       reason: "external_cash_flow_coverage_unavailable", appliedFlows: [] };
     if (this.state.risk.reason === "platform stopped") {
@@ -118,7 +119,8 @@ export class TradingCore {
       const risk = this.state.risk;
       risk.day = dayOf(this.clock()); risk.baselineAt = this.clock(); risk.baselineEquityUsd = equity;
       risk.baselineAccountAt = initial.cashAt ?? initial.at;
-      if (risk.reason === "daily loss limit") { risk.halted = false; delete risk.reason; }
+      risk.dailyPeakPnlUsd = 0;
+      if (risk.reason === "daily loss limit" || risk.reason === "daily profit trail") { risk.halted = false; delete risk.reason; }
     }
     this.state.fills.forEach((fill, index) => {
       if (!fill.tradeId || !fill.orderId) throw new Error("invalid persisted fill identity");
@@ -837,10 +839,12 @@ export class TradingCore {
     if (risk.day !== day) {
       risk.day = day; risk.baselineAt = this.clock(); risk.baselineEquityUsd = equity;
       risk.baselineAccountAt = this.state.cashAt ?? this.state.accountAt ?? risk.baselineAt;
-      if (risk.reason === "daily loss limit") { risk.halted = false; delete risk.reason; }
+      risk.dailyPeakPnlUsd = 0;
+      if (risk.reason === "daily loss limit" || risk.reason === "daily profit trail") { risk.halted = false; delete risk.reason; }
     }
     risk.equityUsd = equity;
     risk.dailyPnlUsd = equity - risk.baselineEquityUsd;
+    risk.dailyPeakPnlUsd = Math.max(risk.dailyPeakPnlUsd ?? 0, risk.dailyPnlUsd);
     const flowTracking = this.state.cashFlowTracking;
     risk.cashFlowComplete = flowTracking?.complete === true;
     risk.cashFlowReason = flowTracking?.reason;
@@ -874,6 +878,19 @@ export class TradingCore {
       // during the run).
       risk.halted = false; delete risk.reason;
     }
+    // Trailing profit stop. The same day's recovery does not restart it (the
+    // peak only rises); it lifts when the trail is turned off or a new day starts.
+    const trail = this.profitTrail();
+    if (trail && (risk.dailyPeakPnlUsd ?? 0) >= trail.from - EPS
+      && risk.dailyPnlUsd <= (risk.dailyPeakPnlUsd ?? 0) - trail.giveback + EPS && !risk.halted) {
+      risk.halted = true; risk.reason = "daily profit trail";
+    } else if (risk.reason === "daily profit trail" && !trail) {
+      risk.halted = false; delete risk.reason;
+    }
+  }
+  private profitTrail(): { from: number; giveback: number } | undefined {
+    const { profitTrailFromUsd: from, profitTrailGivebackUsd: giveback } = this.options.limits;
+    return from != null && giveback != null ? { from, giveback } : undefined;
   }
   updateLimits(limits: Partial<CoreOptions["limits"]>): void {
     const next = { ...this.options.limits, ...limits };
@@ -883,6 +900,9 @@ export class TradingCore {
     if (!Number.isInteger(next.maxOpenOrders)) throw new Error("maxOpenOrders must be an integer");
     Object.assign(this.options.limits, next);
     if (next.dailyLossUsd == null && this.state.risk.reason === "daily loss limit") {
+      this.state.risk.halted = false; delete this.state.risk.reason;
+    }
+    if ((next.profitTrailFromUsd == null || next.profitTrailGivebackUsd == null) && this.state.risk.reason === "daily profit trail") {
       this.state.risk.halted = false; delete this.state.risk.reason;
     }
     this.updateRisk(); this.persist(true);

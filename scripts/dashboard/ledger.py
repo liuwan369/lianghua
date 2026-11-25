@@ -417,7 +417,8 @@ def _strategy_projection(value):
             return None
         result = {key: _number(source.get(key)) for key in (
             "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "openBandBp",
-            "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd")}
+            "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+            "profitTrailFromUsd", "profitTrailGivebackUsd")}
         venues = source.get("leadVenues")
         result["leadVenues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
         result["tokyoRelay"] = source.get("tokyoRelay") if isinstance(source.get("tokyoRelay"), bool) else None
@@ -550,7 +551,7 @@ def _runtime_projection(value, mode):
     result["risk"] = None
     if isinstance(risk, dict):
         result["risk"] = {key: _number(risk.get(key)) for key in (
-            "baselineAt", "baselineEquityUsd", "equityUsd", "dailyPnlUsd", "occupiedUsd", "availableUsd",
+            "baselineAt", "baselineEquityUsd", "equityUsd", "dailyPnlUsd", "dailyPeakPnlUsd", "occupiedUsd", "availableUsd",
             "cashFlowCoverageFrom", "cashFlowCoverageUntil", "netExternalFlowUsd", "unresolvedOrderCount")}
         result["risk"].update(halted=risk.get("halted") if isinstance(risk.get("halted"), bool) else None,
                               reconciliationRequired=risk.get("reconciliationRequired") if isinstance(risk.get("reconciliationRequired"), bool) else None,
@@ -561,7 +562,7 @@ def _runtime_projection(value, mode):
                               dailyLossStatus=risk.get("dailyLossStatus") if risk.get("dailyLossStatus") in ("disabled", "active", "estimated") else None)
     limits = value.get("limits")
     result["limits"] = {key: _number(limits.get(key)) for key in (
-        "capitalUsd", "dailyLossUsd", "maxOrderUsd", "maxOpenOrders")} if isinstance(limits, dict) else None
+        "capitalUsd", "dailyLossUsd", "profitTrailFromUsd", "profitTrailGivebackUsd", "maxOrderUsd", "maxOpenOrders")} if isinstance(limits, dict) else None
     markets = value.get("markets") if isinstance(value.get("markets"), list) else []
     books = value.get("books") if isinstance(value.get("books"), list) else []
     result.update(markets=[], books=[], truncated=len(markets) > 8 or len(books) > 16)

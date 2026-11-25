@@ -27,6 +27,8 @@
     ["roundBudgetUsd", "单场预算 $", "一场最多花多少；15 股最多 13.2；空 = 不限", "1", "optional"],
     ["totalBudgetUsd", "总预算 $", "本次运行最多占用多少；空 = 不限", "1", "optional"],
     ["dailyLossUsd", "每日亏损上限 $", "北京时间当天亏到这个数就不下新单；空 = 不限", "1", "optional"],
+    ["profitTrailFromUsd", "盈利保护：当天赚到 $", "当天盈利到过这个数以后，开始保护利润；两个都填才生效，空 = 不用", "1", "optional"],
+    ["profitTrailGivebackUsd", "盈利保护：从最高回吐 $", "开始保护后，从当天最高点回吐这么多就不下新单，第二天恢复", "1", "optional"],
     ["maxRounds", "每次运行场数", "跑满这么多场自动停；0 = 一直跑", "1", "int"],
   ];
   const FIELDS = [...SIGNAL, ...WHEN, ...HOW, ...RISK];
@@ -43,7 +45,7 @@
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
     "tokyoRelay", "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
-    "dailyLossUsd", "durationMinutes", "maxRounds", "mode"];
+    "dailyLossUsd", "profitTrailFromUsd", "profitTrailGivebackUsd", "durationMinutes", "maxRounds", "mode"];
 
   // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues/directVenues: string[]} -> {config, errors}
   const buildConfig = (inputs, published = {}) => {
@@ -67,7 +69,10 @@
     check("toSec", (v) => v > 0 && v <= 300, "截止秒在 0–300 之间");
     if (!errors.fromSec && !errors.toSec && !(config.fromSec < config.toSec)) errors.toSec = "截止秒要大于起始秒";
     for (const key of ["maxQuoteAgeSeconds", "maxQuoteSkewSeconds"]) check(key, (v) => v > 0, "要大于 0");
-    for (const key of ["roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd"]) check(key, (v) => v === null || v > 0, "空或大于 0");
+    for (const key of ["roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd", "profitTrailFromUsd", "profitTrailGivebackUsd"]) check(key, (v) => v === null || v > 0, "空或大于 0");
+    if (!errors.profitTrailFromUsd && !errors.profitTrailGivebackUsd && (config.profitTrailFromUsd === null) !== (config.profitTrailGivebackUsd === null)) {
+      errors[config.profitTrailFromUsd === null ? "profitTrailFromUsd" : "profitTrailGivebackUsd"] = "盈利保护两个数要一起填，或者都空着";
+    }
     check("minEdge", (v) => v === null || (v >= -1 && v <= 1), "空或 −1 到 1 之间");
     check("maxRounds", (v) => Number.isInteger(v) && v >= 0 && v <= 10000, "0–10000 的整数");
     check("restAfterMissSec", (v) => v >= 0 && v <= 30, "0–30 秒");

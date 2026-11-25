@@ -142,6 +142,7 @@
     // The engine's stop reasons (core.ts risk.reason); a skipped signal or a
     // round shows them as they are.
     "daily loss limit": "已达每日亏损上限，今天不再下单",
+    "daily profit trail": "当天盈利从最高点回吐到保护线，今天不再下单",
     "platform stopped": "引擎已停止",
     "unknown order requires reconciliation": "有订单状态待确认，等待对账",
     "restored orders require reconciliation": "重启后有未完成订单，等待对账",

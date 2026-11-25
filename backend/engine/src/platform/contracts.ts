@@ -267,6 +267,11 @@ export interface HardLimits {
   capitalUsd: number;
   /** Unset disables only the optional daily loss stop; cash checks remain active. */
   dailyLossUsd?: number | null;
+  /** Trailing profit stop (2026-11-25): once the day's PnL has reached
+   * profitTrailFromUsd, halt new orders when it falls profitTrailGivebackUsd
+   * below the day's peak. Off unless both are set. */
+  profitTrailFromUsd?: number | null;
+  profitTrailGivebackUsd?: number | null;
   maxOrderUsd: number;
   maxOpenOrders: number;
 }
@@ -286,6 +291,8 @@ export interface RiskView {
   baselineEquityUsd: number;
   equityUsd: number;
   dailyPnlUsd: number;
+  /** The day's highest dailyPnlUsd so far (reset at the day boundary). */
+  dailyPeakPnlUsd?: number;
   occupiedUsd: number;
   availableUsd: number;
   cashFlowComplete?: boolean;

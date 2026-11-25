@@ -78,7 +78,15 @@ try {
   assert.equal(read.dailyLossUsd, 10);
   for (const key of ["durationMinutes", "maxRounds", "mode", "roundBudgetUsd"]) assert.equal(key in read.config, false, `${key} stripped`);
   assert.deepEqual(resolveStrategyLimits({ capitalUsd: 100, dailyLossUsd: 20, maxOrderUsd: 100, maxOpenOrders: 5 }, read.config),
-    { capitalUsd: 50, dailyLossUsd: 10, maxOrderUsd: 50, maxOpenOrders: 5 }, "a config can only tighten the run's ceilings");
+    { capitalUsd: 50, dailyLossUsd: 10, profitTrailFromUsd: null, profitTrailGivebackUsd: null, maxOrderUsd: 50, maxOpenOrders: 5 },
+    "a config can only tighten the run's ceilings");
+  // Trailing profit stop (2026-11-25): the config's pair reaches the limits as is.
+  const trail = resolveStrategyLimits({ capitalUsd: 100, dailyLossUsd: null, maxOrderUsd: 100, maxOpenOrders: 5 },
+    { ...read.config, profitTrailFromUsd: 100, profitTrailGivebackUsd: 60 });
+  assert.deepEqual([trail.profitTrailFromUsd, trail.profitTrailGivebackUsd], [100, 60]);
+  const trailed = readStrategyConfig(file("trail.json", saved({ dailyLossUsd: 40, profitTrailFromUsd: 100, profitTrailGivebackUsd: 60 })));
+  assert.deepEqual([trailed.config.profitTrailFromUsd, trailed.config.profitTrailGivebackUsd], [100, 60]);
+  assert.throws(() => readStrategyConfig(file("trailbad.json", saved({ profitTrailFromUsd: -5 }))), /profitTrail/);
   assert.throws(() => readStrategyConfig(file("old.json", saved({ assetId: "btc" }, { strategyId: "btc-reversal" }))),
     /strategy configuration needs strategyId binance-lead and config/);
   assert.throws(() => readStrategyConfig(file("noconfig.json", { strategyId: "binance-lead" })), /needs strategyId binance-lead and config/);

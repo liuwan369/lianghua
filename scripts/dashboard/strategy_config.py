@@ -30,6 +30,7 @@ def default_config() -> dict:
             "directVenues": list(LEAD_VENUES), "openBandBp": 0, "openLine": "tick", "restAfterMissSec": 0, "restShadow": True, "entryOrder": "fak", "regimePause": False,
             "edgeSizing": False, "exitOnReverse": False, "minEdge": None, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
+            "profitTrailFromUsd": None, "profitTrailGivebackUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
@@ -40,7 +41,7 @@ ENTRY_ORDERS = ("fak", "gtc")
 # A published file may predate these fields; it gets their defaults, as the
 # engine's normalizeBinanceLeadConfig does. Any other missing field is damage.
 ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-                "edgeSizing", "exitOnReverse", "directVenues", "minEdge")
+                "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "profitTrailFromUsd", "profitTrailGivebackUsd")
 # Settings the engine dropped (73fd2fd, d2bfb59). The engine ignores them in a
 # saved file, so a stored config carrying them loads without them; a submitted
 # draft with them is still rejected.
@@ -129,7 +130,8 @@ def validate_config(config: dict) -> dict:
     for key, label in (("maxQuoteAgeSeconds", "盘口最大年龄"), ("maxQuoteSkewSeconds", "盘口两边时间差")):
         if number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须是正数")
-    for key, label in (("roundBudgetUsd", "单场预算"), ("totalBudgetUsd", "总预算"), ("dailyLossUsd", "每日亏损上限")):
+    for key, label in (("roundBudgetUsd", "单场预算"), ("totalBudgetUsd", "总预算"), ("dailyLossUsd", "每日亏损上限"),
+                       ("profitTrailFromUsd", "当天赚到多少后开始保护"), ("profitTrailGivebackUsd", "从最高回吐多少就停")):
         if result[key] is not None and number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须为空或正数")
     duration = number("durationMinutes", "运行分钟数")
