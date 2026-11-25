@@ -73,7 +73,7 @@ for key in ("instanceId", "revision", "assetId"):
     engine_defaults.pop(key)
 assert {k: v for k, v in strategy_fields.items() if v is not None or k in engine_defaults} == engine_defaults, (strategy_fields, engine_defaults)
 assert {k for k, v in strategy_fields.items() if v is None} == {"roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd", "minEdge",
-                                                                "profitTrailFromUsd", "profitTrailGivebackUsd"}
+                                                                "ratchetStepUsd", "ratchetLiftUsd"}
 assert defaults["assetId"] == "btc" and defaults["mode"] == "live"
 assert defaults["durationMinutes"] == 0 and defaults["maxRounds"] == 0
 validate_config(defaults)
@@ -94,6 +94,7 @@ CASES += [(("fromSec", "toSec"), v) for v in ((0, 300), (-1, 265), (265, 265), (
 CASES += [("maxQuoteAgeSeconds", v) for v in (0, 0.1, 2, -1)]
 CASES += [("maxQuoteSkewSeconds", v) for v in (0, 1.5, -1)]
 CASES += [(key, v) for key in ("roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd") for v in (None, 0, -5, 5)]
+CASES += [(("ratchetStepUsd", "ratchetLiftUsd"), v) for v in ((None, None), (20, 10), (20, 20), (20, 30), (20, None), (None, 10), (10, 0))]
 configs, python_ok = [], []
 for key, value in CASES:
     config = dict(defaults)
@@ -131,7 +132,7 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
 ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-         "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "profitTrailFromUsd", "profitTrailGivebackUsd")
+         "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "ratchetStepUsd", "ratchetLiftUsd")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
@@ -156,13 +157,16 @@ assert old["minEdge"] is None, "an older config buys whatever the edge"
 assert validate_config({**defaults, "minEdge": -0.02})["minEdge"] == -0.02
 for bad in ("-0.02", 2, -1.5, True, float("nan")):
     assert rejected({**defaults, "minEdge": bad}), f"minEdge={bad!r}"
-# Trailing profit stop (2026-11-25): each null or positive; off unless both set (the engine decides).
-assert old["profitTrailFromUsd"] is None and old["profitTrailGivebackUsd"] is None
-ok = validate_config({**defaults, "profitTrailFromUsd": 100, "profitTrailGivebackUsd": 60})
-assert (ok["profitTrailFromUsd"], ok["profitTrailGivebackUsd"]) == (100, 60)
-for key in ("profitTrailFromUsd", "profitTrailGivebackUsd"):
-    for bad in (0, -5, "60", True):
-        assert rejected({**defaults, key: bad}), f"{key}={bad!r}"
+# Profit ratchet (2026-11-25): both or neither, each positive, lift below step.
+assert old["ratchetStepUsd"] is None and old["ratchetLiftUsd"] is None
+ok = validate_config({**defaults, "ratchetStepUsd": 20, "ratchetLiftUsd": 10})
+assert (ok["ratchetStepUsd"], ok["ratchetLiftUsd"]) == (20, 10)
+for key in ("ratchetStepUsd", "ratchetLiftUsd"):
+    for bad in (0, -5, "10", True):
+        assert rejected({**defaults, key: bad, **({"ratchetLiftUsd": 10} if key == "ratchetStepUsd" else {"ratchetStepUsd": 20})}), f"{key}={bad!r}"
+assert rejected({**defaults, "ratchetStepUsd": 20}), "step without lift"
+assert rejected({**defaults, "ratchetLiftUsd": 10}), "lift without step"
+assert rejected({**defaults, "ratchetStepUsd": 20, "ratchetLiftUsd": 20}), "lift must stay below step"
 assert (old["maxAsk"], old["openBandBp"], old["openLine"], old["leadVenues"], old["tokyoRelay"]) == \
     (0.8, 0, "tick", ["bybit", "binance", "okx"], True)
 assert old["directVenues"] == ["bybit", "binance", "okx"], "an older config keeps every direct line"

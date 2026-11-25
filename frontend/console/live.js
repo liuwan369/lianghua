@@ -314,19 +314,22 @@
     const loss = state.config?.config?.dailyLossUsd;
     const dayPnl = state.status?.processRunning ? num(risk?.dailyPnlUsd) : null;
     // The engine stops new orders once the day's equity change reaches -loss (core.ts).
-    const left = num(loss) === null || dayPnl === null ? null : Math.max(0, loss + dayPnl);
-    // The trailing profit stop (core.ts): once the day's peak reached `from`, it stops at peak − giveback.
-    const from = num(state.config?.config?.profitTrailFromUsd), giveback = num(state.config?.config?.profitTrailGivebackUsd);
+    // The profit ratchet (core.ts stopLine): every whole `step` of the day's peak
+    // gain lifts the stop line `lift`; the line sits dailyLossUsd under that.
+    const step = num(state.config?.config?.ratchetStepUsd), lift = num(state.config?.config?.ratchetLiftUsd);
     const peak = state.status?.processRunning ? num(risk?.dailyPeakPnlUsd) : null;
-    const trail = from === null || giveback === null ? ""
-      : peak !== null && peak >= from ? html`<br><small>盈利保护：今天最高 ${fmt.money(peak)}，跌到 ${fmt.money(peak - giveback)} 就停</small>`
-      : html`<br><small>盈利保护：当天赚到 ${fmt.usd(from)} 后，回吐 ${fmt.usd(giveback)} 就停</small>`;
+    const line = num(loss) === null ? null
+      : step === null || lift === null || peak === null ? -loss : Math.floor(Math.max(peak, 0) / step) * lift - loss;
+    const left = line === null || dayPnl === null ? null : Math.max(0, dayPnl - line);
+    const ratchet = step === null || lift === null || num(loss) === null ? ""
+      : peak === null ? html`<br><small>盈利保护：每赚 ${fmt.usd(step)} 止损线抬 ${fmt.usd(lift)}（引擎运行时显示当前止损线）</small>`
+      : html`<br><small>盈利保护：今天最高 ${fmt.money(peak)}，现在跌到 ${fmt.money(line)} 就停（每赚 ${fmt.usd(step)} 抬 ${fmt.usd(lift)}）</small>`;
     const today = state.today?.funnel;
     const run = state.run?.funnel;
     const snapshot = state.account;
     P.put($("[data-cards]"), html`
       <div class="card"><span>今日盈亏（北京时间）</span><strong class="${fmt.tone(today?.pnl_usd)}">${fmt.money(today?.pnl_usd)}</strong><small>已结算 ${fmt.int(today?.settled)} 单 · 赢 ${fmt.int(today?.won)}</small></div>
-      <div class="card"><span>离每日止损还剩</span><strong>${num(loss) === null ? "未设置" : left === null ? "--" : fmt.usd(left)}</strong><small>${num(loss) === null ? "设置页可设每日亏损上限" : `上限 ${fmt.usd(loss)}${dayPnl === null ? " · 引擎运行时才有当日权益变化" : ` · 引擎当日 ${fmt.money(dayPnl)}`}`}</small>${trail}</div>
+      <div class="card"><span>离每日止损还剩</span><strong>${num(loss) === null ? "未设置" : left === null ? "--" : fmt.usd(left)}</strong><small>${num(loss) === null ? "设置页可设每日亏损上限" : `上限 ${fmt.usd(loss)}${dayPnl === null ? " · 引擎运行时才有当日权益变化" : ` · 引擎当日 ${fmt.money(dayPnl)}`}`}</small>${ratchet}</div>
       <div class="card"><span>可用余额</span><strong>${fmt.usd(availableUsd(snapshot))}</strong><small>${snapshot?.stale ? "账户数据过期" : `账户读取 ${fmt.time(snapshot?.asOf)}`}</small></div>
       <div class="card"><span>本次运行 买到 / 下单</span><strong>${fmt.int(run?.filled)} / ${fmt.int(run?.orders)}</strong><small>买到率 ${fmt.pct(run?.fill_rate)} · 盈亏 ${fmt.money(run?.pnl_usd)}</small></div>`);
   };

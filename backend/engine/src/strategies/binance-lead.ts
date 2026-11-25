@@ -98,11 +98,11 @@ export interface BinanceLeadConfig {
   roundBudgetUsd?: number;
   totalBudgetUsd?: number;
   dailyLossUsd?: number | null;
-  /** Trailing profit stop (user 2026-11-25, off unless both set): once the
-   * day's PnL has reached profitTrailFromUsd, stop new orders when it falls
-   * profitTrailGivebackUsd below the day's peak (platform core, HardLimits). */
-  profitTrailFromUsd?: number | null;
-  profitTrailGivebackUsd?: number | null;
+  /** Profit ratchet (user 2026-11-25, needs dailyLossUsd, off unless both set):
+   * every ratchetStepUsd the day's peak PnL gains lifts the stop line
+   * ratchetLiftUsd (platform core, HardLimits). */
+  ratchetStepUsd?: number | null;
+  ratchetLiftUsd?: number | null;
 }
 export type EntryOrder = "fak" | "gtc";
 export const ENTRY_ORDERS: readonly EntryOrder[] = ["fak", "gtc"];
@@ -236,7 +236,7 @@ export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze(
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
 const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
-  "profitTrailFromUsd", "profitTrailGivebackUsd"];
+  "ratchetStepUsd", "ratchetLiftUsd"];
 const EPS = 1e-8;
 /** A round keeps its config from this many seconds before it starts. */
 const CONFIG_FREEZE_SEC = 10;
@@ -427,9 +427,11 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
     throw new Error("dailyLossUsd must be positive or null");
   }
   if (!positive(config.maxQuoteAgeSeconds) || !positive(config.maxQuoteSkewSeconds)) throw new Error("invalid quote freshness limits");
-  for (const key of ["profitTrailFromUsd", "profitTrailGivebackUsd"] as const) {
+  for (const key of ["ratchetStepUsd", "ratchetLiftUsd"] as const) {
     if (config[key] != null && !positive(config[key])) throw new Error(`${key} must be positive or null`);
   }
+  if ((config.ratchetStepUsd == null) !== (config.ratchetLiftUsd == null)) throw new Error("ratchetStepUsd and ratchetLiftUsd go together");
+  if (config.ratchetStepUsd != null && config.ratchetLiftUsd! >= config.ratchetStepUsd) throw new Error("ratchetLiftUsd must be below ratchetStepUsd");
   return config;
 }
 

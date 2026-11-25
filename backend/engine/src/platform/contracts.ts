@@ -267,11 +267,13 @@ export interface HardLimits {
   capitalUsd: number;
   /** Unset disables only the optional daily loss stop; cash checks remain active. */
   dailyLossUsd?: number | null;
-  /** Trailing profit stop (2026-11-25): once the day's PnL has reached
-   * profitTrailFromUsd, halt new orders when it falls profitTrailGivebackUsd
-   * below the day's peak. Off unless both are set. */
-  profitTrailFromUsd?: number | null;
-  profitTrailGivebackUsd?: number | null;
+  /** Profit ratchet (2026-11-25, needs dailyLossUsd, off unless both set):
+   * every ratchetStepUsd the day's peak PnL gains lifts the stop line
+   * ratchetLiftUsd, and the stop stays dailyLossUsd under that line:
+   *   line = floor(max(peak, 0) / step) * lift - dailyLossUsd
+   * The line only rises, so a recovery the same day does not lower it. */
+  ratchetStepUsd?: number | null;
+  ratchetLiftUsd?: number | null;
   maxOrderUsd: number;
   maxOpenOrders: number;
 }

@@ -622,14 +622,14 @@ export interface StrategyConfigFile {
 
 /** Strategy revisions may tighten a run's operator ceilings, but never raise them. */
 export function resolveStrategyLimits(operator: Readonly<HardLimits>,
-  config: Pick<BinanceLeadConfig, "totalBudgetUsd" | "dailyLossUsd" | "profitTrailFromUsd" | "profitTrailGivebackUsd">): HardLimits {
+  config: Pick<BinanceLeadConfig, "totalBudgetUsd" | "dailyLossUsd" | "ratchetStepUsd" | "ratchetLiftUsd">): HardLimits {
   const capitalUsd = Math.min(operator.capitalUsd, config.totalBudgetUsd ?? Number.MAX_SAFE_INTEGER);
   const configuredLoss = config.dailyLossUsd ?? null;
   const dailyLossUsd = operator.dailyLossUsd == null ? configuredLoss
     : configuredLoss == null ? operator.dailyLossUsd : Math.min(operator.dailyLossUsd, configuredLoss);
-  // The trailing profit stop is the config's own (no operator ceiling): it only stops trading.
+  // The profit ratchet is the config's own (no operator ceiling): it only tightens the stop.
   return { ...operator, capitalUsd, maxOrderUsd: Math.min(operator.maxOrderUsd, capitalUsd), dailyLossUsd,
-    profitTrailFromUsd: config.profitTrailFromUsd ?? null, profitTrailGivebackUsd: config.profitTrailGivebackUsd ?? null };
+    ratchetStepUsd: config.ratchetStepUsd ?? null, ratchetLiftUsd: config.ratchetLiftUsd ?? null };
 }
 
 /** The control plane's saved strategy file. Its config also carries the run
@@ -1244,8 +1244,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         syncDetector!(config);
         const limits = resolveStrategyLimits(operatorLimits, config);
         if (connection && (options.limits.dailyLossUsd !== limits.dailyLossUsd || options.limits.capitalUsd !== limits.capitalUsd
-          || options.limits.maxOrderUsd !== limits.maxOrderUsd || options.limits.profitTrailFromUsd !== limits.profitTrailFromUsd
-          || options.limits.profitTrailGivebackUsd !== limits.profitTrailGivebackUsd)) {
+          || options.limits.maxOrderUsd !== limits.maxOrderUsd || options.limits.ratchetStepUsd !== limits.ratchetStepUsd
+          || options.limits.ratchetLiftUsd !== limits.ratchetLiftUsd)) {
           connection.platform.core.updateLimits(limits);
           Object.assign(options.limits, limits);
         }

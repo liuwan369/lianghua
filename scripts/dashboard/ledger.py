@@ -418,7 +418,7 @@ def _strategy_projection(value):
         result = {key: _number(source.get(key)) for key in (
             "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "openBandBp",
             "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
-            "profitTrailFromUsd", "profitTrailGivebackUsd")}
+            "ratchetStepUsd", "ratchetLiftUsd")}
         venues = source.get("leadVenues")
         result["leadVenues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
         result["tokyoRelay"] = source.get("tokyoRelay") if isinstance(source.get("tokyoRelay"), bool) else None
@@ -562,7 +562,7 @@ def _runtime_projection(value, mode):
                               dailyLossStatus=risk.get("dailyLossStatus") if risk.get("dailyLossStatus") in ("disabled", "active", "estimated") else None)
     limits = value.get("limits")
     result["limits"] = {key: _number(limits.get(key)) for key in (
-        "capitalUsd", "dailyLossUsd", "profitTrailFromUsd", "profitTrailGivebackUsd", "maxOrderUsd", "maxOpenOrders")} if isinstance(limits, dict) else None
+        "capitalUsd", "dailyLossUsd", "ratchetStepUsd", "ratchetLiftUsd", "maxOrderUsd", "maxOpenOrders")} if isinstance(limits, dict) else None
     markets = value.get("markets") if isinstance(value.get("markets"), list) else []
     books = value.get("books") if isinstance(value.get("books"), list) else []
     result.update(markets=[], books=[], truncated=len(markets) > 8 or len(books) > 16)

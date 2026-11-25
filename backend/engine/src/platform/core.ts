@@ -120,7 +120,7 @@ export class TradingCore {
       risk.day = dayOf(this.clock()); risk.baselineAt = this.clock(); risk.baselineEquityUsd = equity;
       risk.baselineAccountAt = initial.cashAt ?? initial.at;
       risk.dailyPeakPnlUsd = 0;
-      if (risk.reason === "daily loss limit" || risk.reason === "daily profit trail") { risk.halted = false; delete risk.reason; }
+      if (this.isStopLineReason(risk.reason)) { risk.halted = false; delete risk.reason; }
     }
     this.state.fills.forEach((fill, index) => {
       if (!fill.tradeId || !fill.orderId) throw new Error("invalid persisted fill identity");
@@ -840,7 +840,7 @@ export class TradingCore {
       risk.day = day; risk.baselineAt = this.clock(); risk.baselineEquityUsd = equity;
       risk.baselineAccountAt = this.state.cashAt ?? this.state.accountAt ?? risk.baselineAt;
       risk.dailyPeakPnlUsd = 0;
-      if (risk.reason === "daily loss limit" || risk.reason === "daily profit trail") { risk.halted = false; delete risk.reason; }
+      if (this.isStopLineReason(risk.reason)) { risk.halted = false; delete risk.reason; }
     }
     risk.equityUsd = equity;
     risk.dailyPnlUsd = equity - risk.baselineEquityUsd;
@@ -868,41 +868,44 @@ export class TradingCore {
       risk.halted = false;
       delete risk.reason;
     }
-    if (this.options.limits.dailyLossUsd != null && risk.dailyPnlUsd <= -this.options.limits.dailyLossUsd + EPS && (!risk.halted || risk.reason === "daily loss limit")) {
-      risk.halted = true; risk.reason = "daily loss limit";
-    } else if (risk.reason === "daily loss limit"
-      && (this.options.limits.dailyLossUsd == null || risk.dailyPnlUsd > -this.options.limits.dailyLossUsd + EPS)) {
+    // The stop line: -dailyLossUsd, lifted by the profit ratchet once the day's
+    // peak has gained whole steps. Only the ratchet's own lift names it so.
+    const line = this.stopLine();
+    const reason = line !== undefined && line > -this.options.limits.dailyLossUsd! + EPS ? "daily profit ratchet" : "daily loss limit";
+    if (line !== undefined && risk.dailyPnlUsd <= line + EPS && (!risk.halted || this.isStopLineReason(risk.reason))) {
+      risk.halted = true; risk.reason = reason;
+    } else if (this.isStopLineReason(risk.reason)
+      && (line === undefined || risk.dailyPnlUsd > line + EPS)) {
       // The stop no longer holds: the limit was removed or raised, including a
       // restart with a new limit (2026-11-15: a state halted at the 40 limit,
       // restarted with no limit, stayed halted; updateLimits only saw changes
       // during the run).
       risk.halted = false; delete risk.reason;
     }
-    // Trailing profit stop. The same day's recovery does not restart it (the
-    // peak only rises); it lifts when the trail is turned off or a new day starts.
-    const trail = this.profitTrail();
-    if (trail && (risk.dailyPeakPnlUsd ?? 0) >= trail.from - EPS
-      && risk.dailyPnlUsd <= (risk.dailyPeakPnlUsd ?? 0) - trail.giveback + EPS && !risk.halted) {
-      risk.halted = true; risk.reason = "daily profit trail";
-    } else if (risk.reason === "daily profit trail" && !trail) {
-      risk.halted = false; delete risk.reason;
-    }
   }
-  private profitTrail(): { from: number; giveback: number } | undefined {
-    const { profitTrailFromUsd: from, profitTrailGivebackUsd: giveback } = this.options.limits;
-    return from != null && giveback != null ? { from, giveback } : undefined;
+  /** Where new orders stop today, or undefined with no daily loss limit. */
+  private stopLine(): number | undefined {
+    const { dailyLossUsd, ratchetStepUsd: step, ratchetLiftUsd: lift } = this.options.limits;
+    if (dailyLossUsd == null) return undefined;
+    if (step == null || lift == null) return -dailyLossUsd;
+    const peak = Math.max(this.state.risk.dailyPeakPnlUsd ?? 0, 0);
+    return Math.floor(peak / step) * lift - dailyLossUsd;
+  }
+  private isStopLineReason(reason: string | undefined): boolean {
+    return reason === "daily loss limit" || reason === "daily profit ratchet";
   }
   updateLimits(limits: Partial<CoreOptions["limits"]>): void {
+    // A retired field (the 2026-11-25 profitTrail*, replaced by the ratchet) must not pass as a no-op.
+    for (const key of Object.keys(limits)) {
+      if (!(key in this.options.limits)) throw new Error(`unknown hard limit: ${key}`);
+    }
     const next = { ...this.options.limits, ...limits };
     for (const value of Object.values(next)) {
       if (value != null && (!finite(value) || value <= 0)) throw new Error("hard limits must be positive and finite");
     }
     if (!Number.isInteger(next.maxOpenOrders)) throw new Error("maxOpenOrders must be an integer");
     Object.assign(this.options.limits, next);
-    if (next.dailyLossUsd == null && this.state.risk.reason === "daily loss limit") {
-      this.state.risk.halted = false; delete this.state.risk.reason;
-    }
-    if ((next.profitTrailFromUsd == null || next.profitTrailGivebackUsd == null) && this.state.risk.reason === "daily profit trail") {
+    if (next.dailyLossUsd == null && this.isStopLineReason(this.state.risk.reason)) {
       this.state.risk.halted = false; delete this.state.risk.reason;
     }
     this.updateRisk(); this.persist(true);

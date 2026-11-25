@@ -32,11 +32,11 @@ const S = window.PolySettings;
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
   "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
-  "profitTrailFromUsd", "profitTrailGivebackUsd", "durationMinutes", "maxRounds", "mode"].sort();
+  "ratchetStepUsd", "ratchetLiftUsd", "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
   leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, directVenues: ["bybit", "binance", "okx"], openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false,
   edgeSizing: false, exitOnReverse: false, minEdge: null, maxQuoteAgeSeconds: 2,
-  maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, profitTrailFromUsd: null, profitTrailGivebackUsd: null,
+  maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, ratchetStepUsd: null, ratchetLiftUsd: null,
   durationMinutes: 0, maxRounds: 12, mode: "live" };
 
 // --- the published config round-trips unchanged ---
@@ -107,15 +107,19 @@ assert.equal(low.config.minEdge, -0.02);
 assert.equal(S.buildConfig({ ...inputs, minEdge: "" }, published).config.minEdge, null, "empty = off");
 for (const bad of ["-1.5", "2", "x"]) assert.ok("minEdge" in S.buildConfig({ ...inputs, minEdge: bad }, published).errors, `minEdge ${bad}`);
 
-// Trailing profit stop (2026-11-25): two optional amounts, empty = off.
+// Profit ratchet (2026-11-25): step + lift, both or neither, empty = off.
 {
-  const on = S.buildConfig({ ...inputs, profitTrailFromUsd: "100", profitTrailGivebackUsd: "60" }, published);
+  const on = S.buildConfig({ ...inputs, ratchetStepUsd: "20", ratchetLiftUsd: "10" }, published);
   assert.deepEqual({ ...on.errors }, {});
-  assert.deepEqual([on.config.profitTrailFromUsd, on.config.profitTrailGivebackUsd], [100, 60]);
-  assert.equal(S.inputsFrom(published).profitTrailFromUsd, "", "null shows empty");
-  for (const bad of ["0", "-5"]) assert.ok("profitTrailGivebackUsd" in S.buildConfig({ ...inputs, profitTrailGivebackUsd: bad }, published).errors, bad);
-  const half = S.buildConfig({ ...inputs, profitTrailFromUsd: "100", profitTrailGivebackUsd: "" }, published);
-  assert.ok("profitTrailGivebackUsd" in half.errors, "one without the other is an error, not a silent off");
+  assert.deepEqual([on.config.ratchetStepUsd, on.config.ratchetLiftUsd], [20, 10]);
+  assert.equal(S.inputsFrom(published).ratchetStepUsd, "", "null shows empty");
+  for (const bad of ["0", "-5"]) assert.ok("ratchetLiftUsd" in S.buildConfig({ ...inputs, ratchetLiftUsd: bad }, published).errors, bad);
+  const half = S.buildConfig({ ...inputs, ratchetStepUsd: "20", ratchetLiftUsd: "" }, published);
+  assert.ok("ratchetLiftUsd" in half.errors, "one without the other is an error, not a silent off");
+  // The lift must stay under the step, or a good day ratchets the line above the
+  // day's own profit and stops at once.
+  const steep = S.buildConfig({ ...inputs, ratchetStepUsd: "20", ratchetLiftUsd: "20" }, published);
+  assert.ok("ratchetLiftUsd" in steep.errors, "lift >= step is rejected");
 }
 
 // --- validation ---

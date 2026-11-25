@@ -30,7 +30,7 @@ def default_config() -> dict:
             "directVenues": list(LEAD_VENUES), "openBandBp": 0, "openLine": "tick", "restAfterMissSec": 0, "restShadow": True, "entryOrder": "fak", "regimePause": False,
             "edgeSizing": False, "exitOnReverse": False, "minEdge": None, "maxQuoteAgeSeconds": 2, "maxQuoteSkewSeconds": 1.5,
             "roundBudgetUsd": None, "totalBudgetUsd": None, "dailyLossUsd": None,
-            "profitTrailFromUsd": None, "profitTrailGivebackUsd": None,
+            "ratchetStepUsd": None, "ratchetLiftUsd": None,
             "durationMinutes": 0, "maxRounds": 0, "mode": "live"}
 
 
@@ -41,7 +41,7 @@ ENTRY_ORDERS = ("fak", "gtc")
 # A published file may predate these fields; it gets their defaults, as the
 # engine's normalizeBinanceLeadConfig does. Any other missing field is damage.
 ADDED_FIELDS = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-                "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "profitTrailFromUsd", "profitTrailGivebackUsd")
+                "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "ratchetStepUsd", "ratchetLiftUsd")
 # Settings the engine dropped (73fd2fd, d2bfb59). The engine ignores them in a
 # saved file, so a stored config carrying them loads without them; a submitted
 # draft with them is still rejected.
@@ -131,9 +131,16 @@ def validate_config(config: dict) -> dict:
         if number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须是正数")
     for key, label in (("roundBudgetUsd", "单场预算"), ("totalBudgetUsd", "总预算"), ("dailyLossUsd", "每日亏损上限"),
-                       ("profitTrailFromUsd", "当天赚到多少后开始保护"), ("profitTrailGivebackUsd", "从最高回吐多少就停")):
+                       ("ratchetStepUsd", "盈利保护每赚多少"), ("ratchetLiftUsd", "盈利保护抬高多少")):
         if result[key] is not None and number(key, label) <= 0:
             raise ConfigValidationError(f"{label}必须为空或正数")
+    # Profit ratchet: both or neither, and the lift must stay under the step, or
+    # the stop line climbs faster than the day's profit (engine stopLine).
+    step, lift = result["ratchetStepUsd"], result["ratchetLiftUsd"]
+    if (step is None) != (lift is None):
+        raise ConfigValidationError("盈利保护的两个数要一起填，或者都留空")
+    if step is not None and lift >= step:
+        raise ConfigValidationError("盈利保护抬高的数必须小于每赚的数")
     duration = number("durationMinutes", "运行分钟数")
     if duration < 0 or duration * 60_000 > 2_147_483_647:
         raise ConfigValidationError("运行分钟数必须是非负数；持续运行请填0")
