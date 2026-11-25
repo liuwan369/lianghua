@@ -138,10 +138,10 @@ class Arguments(unittest.TestCase):
 
 
 class EngineBoxes(unittest.TestCase):
-    """One engine box per account (pm-a, pm-b): the agent and the engine only."""
+    """One engine box per account (pm-a, pm-b, pm-c): the agent and the engine only."""
 
     def test_targets(self):
-        for name, host in (("engine-a", "pm-a"), ("engine-b", "pm-b")):
+        for name, host in (("engine-a", "pm-a"), ("engine-b", "pm-b"), ("engine-c", "pm-c")):
             t = deploy.TARGETS[name]
             self.assertEqual((t["host"], t["root"], t["box"]), (host, "/root/pm-system", host))
             self.assertEqual(t["units"], ("pm-agent.service",), "an engine box runs no console")
@@ -175,7 +175,7 @@ class EngineBoxes(unittest.TestCase):
         unit = (REPO / "config" / "pm-tunnel@.service").read_text(encoding="utf-8")
         self.assertIn("ExecStart=/usr/bin/ssh -N -F /root/.ssh/tunnels.config %i", unit)
         self.assertIn("Restart=always", unit)
-        for account, (host, port) in {"a": ("pm-a", 18777), "b": ("pm-b", 18787)}.items():
+        for account, (host, port) in {"a": ("pm-a", 18777), "b": ("pm-b", 18787), "c": ("pm-c", 18797)}.items():
             line = deploy.tunnel_authorized_key("ssh-ed25519 AAAAkey pm-ire-tunnel")
             self.assertTrue(line.startswith('restrict,port-forwarding,permitopen="127.0.0.1:18767",command="/bin/false" '), line)
             config = deploy.tunnel_config({host: (port, "1.2.3.4")})
@@ -193,7 +193,7 @@ class ConsoleBox(unittest.TestCase):
         t = deploy.TARGETS["ireland"]
         self.assertNotIn("pm-agent.service", t["units"], "no agent on the console box")
         self.assertIn("pm-agent.service", t["retired_units"], "the old local agent stays off")
-        self.assertEqual(set(t["units"]), {"pm-console@1.service", "pm-console@2.service"})
+        self.assertEqual(set(t["units"]), {"pm-console@1.service", "pm-console@2.service", "pm-console@3.service"})
         self.assertNotIn("/etc/systemd/system/pm-agent.service", t["system"])
         self.assertIn("/etc/systemd/system/pm-tunnel@.service", t["system"])
         self.assertFalse(t.get("engine_local", False), "a console deploy does not refuse for a remote engine")

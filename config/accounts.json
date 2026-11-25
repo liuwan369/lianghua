@@ -2,6 +2,7 @@
   "schemaVersion": 1,
   "accounts": [
     {"id": "1", "label": "账户 1", "color": "#3b82f6", "box": "pm-a", "port": 18766, "agentUrl": "http://127.0.0.1:18777"},
-    {"id": "2", "label": "账户 2", "color": "#f59e0b", "box": "pm-b", "port": 18776, "agentUrl": "http://127.0.0.1:18787"}
+    {"id": "2", "label": "账户 2", "color": "#f59e0b", "box": "pm-b", "port": 18776, "agentUrl": "http://127.0.0.1:18787"},
+    {"id": "3", "label": "账户 3", "color": "#10b981", "box": "pm-c", "port": 18786, "agentUrl": "http://127.0.0.1:18797"}
   ]
 }

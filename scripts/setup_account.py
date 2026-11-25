@@ -19,7 +19,7 @@ import sys
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 KEY = re.compile(r"(?:0x)?[0-9a-fA-F]{64}\Z")
 ENV = "/root/pm-system/backend/engine/.env"
-BOXES = ("pm-a", "pm-b")
+BOXES = ("pm-a", "pm-b", "pm-c")
 # The engine's account fields (dashboard_account.ACCOUNT_ENV_FIELDS), in this order.
 FIELDS = ("POLYMARKET_WALLET_ADDRESS", "POLY_FUNDER", "POLY_SIGNATURE_TYPE", "POLYMARKET_OWNER_PRIVATE_KEY",
           "RELAYER_API_KEY", "RELAYER_API_KEY_ADDRESS", "POLY_BUILDER_API_KEY", "POLY_BUILDER_SECRET",

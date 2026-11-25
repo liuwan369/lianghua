@@ -24,13 +24,14 @@ DEPLOYED_PATHS = ("backend/engine", "frontend/console", "scripts", "config")
 TARGETS = {
     # The console box: one console instance per account (pm-console@<id>,
     # config/accounts.json) and the tunnels to the engine boxes. Since
-    # 2026-11-22 every engine runs on its own box (pm-a, pm-b), so this box runs
+    # 2026-11-22 every engine runs on its own box (pm-a, pm-b, pm-c), so this box runs
     # no agent and a console deploy never waits for an engine to stop.
     "ireland": {"host": "pm-ire", "root": "/root/pm-system", "releases": "/root/pm-releases",
-                "unit": "pm-console@1.service", "units": ("pm-console@1.service", "pm-console@2.service"),
+                "unit": "pm-console@1.service", "units": ("pm-console@1.service", "pm-console@2.service", "pm-console@3.service"),
                 "retired_units": ("pm-console.service", "pm-agent.service"),
                 "env": "/root/.config/pm-system/console-1.env",
-                "envs": ("/root/.config/pm-system/console-1.env", "/root/.config/pm-system/console-2.env"),
+                "envs": ("/root/.config/pm-system/console-1.env", "/root/.config/pm-system/console-2.env",
+                         "/root/.config/pm-system/console-3.env"),
                 "lock": "/root/pm-system/data/dashboard/deployment.lock",   # the agent's start lock too
                 "sweep": (E + "dist/", E + "scripts/", "frontend/console/", "scripts/", "config/"),
                 "system": {"/etc/systemd/system/pm-console@.service": "config/pm-console@.service",
@@ -50,6 +51,12 @@ TARGETS = {
                  "lock": "/root/pm-system/data/dashboard/deployment.lock",
                  "sweep": (E + "dist/", "scripts/", "config/"),
                  "system": {"/etc/systemd/system/pm-agent.service": "config/pm-agent.service"}},
+    "engine-c": {"host": "pm-c", "box": "pm-c", "root": "/root/pm-system", "releases": "/root/pm-releases",
+                 "unit": "pm-agent.service", "units": ("pm-agent.service",),
+                 "env": "/root/.config/pm-system/agent.env", "envs": ("/root/.config/pm-system/agent.env",),
+                 "lock": "/root/pm-system/data/dashboard/deployment.lock",
+                 "sweep": (E + "dist/", "scripts/", "config/"),
+                 "system": {"/etc/systemd/system/pm-agent.service": "config/pm-agent.service"}},
     "tokyo": {"host": "pm-tokyo", "root": "/root/pm-relay", "releases": "/root/pm-relay-releases",
               "unit": "pm-relay.service", "units": ("pm-relay.service",), "env": "/root/.config/pm-system/relay.env",
               "envs": ("/root/.config/pm-system/relay.env",),
@@ -59,11 +66,11 @@ TARGETS = {
 PROTECTED_DIRS = {"results", "node_modules", "data", "__pycache__"}
 # `all` is the console box and the relay; an engine box is always named on purpose.
 ALL_TARGETS = ("ireland", "tokyo")
-ENGINE_TARGETS = ("engine-a", "engine-b")
+ENGINE_TARGETS = ("engine-a", "engine-b", "engine-c")
 BOX_ID_FILE = "/root/.config/pm-system/box-id"
 AGENT_PORT = 18767
 # The console box reaches each engine box's agent on this local port (pm-tunnel@<box>).
-TUNNEL_PORTS = {"pm-a": 18777, "pm-b": 18787}
+TUNNEL_PORTS = {"pm-a": 18777, "pm-b": 18787, "pm-c": 18797}
 # What an engine box runs: the agent and its modules, the engine, the unit.
 ENGINE_BOX_SCRIPTS = ("scripts/engine_agent.py", "scripts/dashboard_account.py", "scripts/dashboard/__init__.py",
                       "scripts/dashboard/account_data.py", "scripts/dashboard/config.py", "scripts/dashboard/replica.py",
@@ -234,7 +241,7 @@ STEPS = {**{name: [
     "install pm-agent.service; daemon-reload, enable + restart; expect /state with box {box} and running false within 30 s, else restore before/ and exit 1"]
     for name in ENGINE_TARGETS}, "ireland": [
     "need /usr/local/bin/node and {env}; take flock {lock}",
-    "refuse if a pm-engine-* scope/service or a dist/cli/platform.js process is on this box (engines on pm-a/pm-b keep trading)",
+    "refuse if a pm-engine-* scope/service or a dist/cli/platform.js process is on this box (engines on pm-a/pm-b/pm-c keep trading)",
     "diff {release} against {root}; copy replaced and deleted files to {release}/before/",
     "stop pm-console@1/@2 (the retired pm-console and local pm-agent units: disabled, unit files removed); write changed files; delete unshipped files under {sweep} (never results/, node_modules/, data/, .env)",
     "npm ci --omit=dev only if package-lock.json changed; install pm-console@.service + pm-tunnel@.service; nginx site + link, drop default link, nginx -t, reload (only when nginx, certificate and htpasswd exist)",
@@ -346,7 +353,7 @@ def check_console():
     """Every account's console answers its pages. What its engine (on its own
     box) is doing is not this deploy's business."""
     deadline, last = time.time() + 30, None
-    ports = [18766, 18776]
+    ports = [18766, 18776, 18786]
     while time.time() < deadline:
         time.sleep(1)
         try:
@@ -579,8 +586,8 @@ ssh pm-tokyo 'umask 077; printf "%%s\\n" PM_RELAY_TARGET_HOST=%(ireland)s PM_REL
 python scripts/deploy.py tokyo --wait-status
 """}
 SETUP["setup-engine"] = """
-# One-time setup of an engine box (pm-a / pm-b; Debian 12, Node %(node)s, chrony, BBR already done).
-# <box> = pm-a or pm-b. Nothing below prints a secret.
+# One-time setup of an engine box (pm-a / pm-b / pm-c; Debian 12, Node %(node)s, chrony, BBR already done).
+# <box> = pm-a, pm-b or pm-c. Nothing below prints a secret.
 # 1. Who this box is (deploy.py refuses a release meant for another box):
 ssh <box> 'install -d -m 700 /root/.config/pm-system && echo <box> > /root/.config/pm-system/box-id'
 # 2. The relay key, copied from the console box through this machine (never printed):
@@ -601,7 +608,7 @@ ssh pm-ire '[ -f /root/.ssh/tunnel_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -
 #    then append deploy.tunnel_authorized_key(<pm-ire:/root/.ssh/tunnel_ed25519.pub>) to <box>:/root/.ssh/authorized_keys
 #    and write pm-ire:/root/.ssh/tunnels.config from deploy.tunnel_config({...}); start pm-tunnel@<box>.
 # 6. Deploy the agent (no engine runs until an account and the unlock are set):
-python scripts/deploy.py engine-a      # or engine-b
+python scripts/deploy.py engine-a      # or engine-b, engine-c
 """
 SETUP = {name: text % {"site": SITE, "tokyo": TOKYO_IP, "ireland": IRELAND_IP, "node": NODE} for name, text in SETUP.items()}
 
