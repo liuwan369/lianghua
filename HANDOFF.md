@@ -20,8 +20,8 @@ Polymarket 加密货币 5 分钟涨跌盘的**币安领先策略（binance-lead�
 
 ## 3. 服务器与操作
 
-- 爱尔兰：`ssh pm-ire`（AWS Lightsail 3.254.138.119，2 核可突发 CPU、保底每核 20%，2 GB），控制台（`pm-console`）+ 引擎代理（`pm-agent`）+ 引擎，目录 `/root/pm-system`。11-21 起控制台和引擎拆开：控制台只看数据、发命令（数据在 `data/console/`），代理管引擎、私钥、参数（`backend/engine/results/`）；之后代理搬到每个账户的交易机 `pm-a`（63.35.183.205）、`pm-b`（54.217.184.66），`pm-ire` 只留控制台。2026-11-21 从 Baxet 迁回（Baxet 断网 1 个多小时）。CPU 积分用光会被限速、直连行情卡住，所以只开 Bybit 直连（`directVenues`）、账户 60 秒读一次。控制面 systemd `pm-console`，引擎由控制面按需启动在 scope `pm-engine-<run_id>`。公网 `https://3-254-138-119.sslip.io/console/`（nginx basic auth，证书自动续）。
-- 交易机 `ssh pm-a`（63.35.183.205）、`ssh pm-b`（54.217.184.66）：Lightsail eu-west-1a、Debian 12、和 pm-ire 不是同一个 AWS 账户（没有内网）、没有静态 IP（面板上「停止」再「启动」IP 会变，改 pm-ire 的 `/root/.ssh/tunnels.config` 里 `HostName` 和东京 relay.env）。已装 `pm-agent`（还没有账户、实盘开关关着）、nftables（只开 22 和东京的 47001）。pm-ire 上 `pm-tunnel@pm-a/pm-b` 把 18777/18787 转到它们的代理。部署 `python scripts/deploy.py engine-a|engine-b`。
+- 爱尔兰：`ssh pm-ire`（AWS Lightsail 3.254.138.119，2 核可突发 CPU、保底每核 20%，2 GB），**只跑控制台**（`pm-console@1`、`pm-console@2`，一个账户一个）和到两台交易机的隧道，目录 `/root/pm-system`。11-21 起控制台和引擎拆开：控制台只看数据、发命令（数据在 `data/console/`），代理管引擎、私钥、参数（`backend/engine/results/`）；之后代理搬到每个账户的交易机 `pm-a`（63.35.183.205）、`pm-b`（54.217.184.66），`pm-ire` 只留控制台。2026-11-21 从 Baxet 迁回（Baxet 断网 1 个多小时）。CPU 积分用光会被限速、直连行情卡住，所以只开 Bybit 直连（`directVenues`）、账户 60 秒读一次。控制面 systemd `pm-console`，引擎由控制面按需启动在 scope `pm-engine-<run_id>`。公网 `https://3-254-138-119.sslip.io/console/`（nginx basic auth，证书自动续）。
+- 交易机 `ssh pm-a`（63.35.183.205）、`ssh pm-b`（54.217.184.66）：Lightsail eu-west-1a、Debian 12、和 pm-ire 不是同一个 AWS 账户（没有内网）、没有静态 IP（面板上「停止」再「启动」IP 会变，改 pm-ire 的 `/root/.ssh/tunnels.config` 里 `HostName` 和东京 relay.env）。各跑 `pm-agent` 和一个引擎，账户私钥只在各自的 `backend/engine/.env`（600）；nftables 只开 22 和东京的 47001。pm-a 比 pm-b 慢约两成、被抢 CPU 多（虚拟机所在物理机忙，不是代码）。pm-ire 上 `pm-tunnel@pm-a/pm-b` 把 18777/18787 转到它们的代理。部署 `python scripts/deploy.py engine-a|engine-b`。
 - Baxet 都柏林 `ssh pm-baxet-retired`（194.87.245.135）：11-21 退役，pm-console 已 stop + disable；`deploy.py` 拒绝往它部署。别再在上面启动任何东西。
 - 东京 AWS ap-northeast-1：`ssh pm-tokyo`，只跑 `pm-relay`（`/root/pm-relay`）：收 Bybit/币安/OKX 成交，HMAC 签名后 UDP×2 + TCP 发爱尔兰 47001 端口（目标在 `/root/.config/pm-system/relay.env` 的 `PM_RELAY_TARGET_HOST`，可以逗号分隔填多台引擎机；11-21 起 3.254.138.119）。
 - 伦敦 AWS eu-west-2：`ssh pm-rec`（16.60.186.91，t3.micro 945 MB + 2 GB swap），只跑录制 `pm-rec`（`/root/rec/rec.mjs`，数据 `/root/rec/data/<UTC 日>/<源>-<启动秒>.jsonl.gz`，留 10 天）。本机 `bash backend/engine/scripts/recorder/pull-rec.sh` 拉到 `E:/pm-backup/rec-london/`。别在上面跑分析。
@@ -31,20 +31,15 @@ Polymarket 加密货币 5 分钟涨跌盘的**币安领先策略（binance-lead�
 - 推送：`git -c http.proxy=http://127.0.0.1:10808 push origin main`（直连会被重置）。
 - 在服务器上跑脚本：写成本地文件 `scp` 过去再执行，跑完删掉。长任务用 `setsid nohup ... &`，**不要用 `pkill -f <名字>`**（会连 ssh 自己一起杀掉，查 pid 再 kill）。注意 Windows 下 bash 和 python 的 `/tmp` 不是同一个目录。回测和数据分析一律在本机跑（`python` 是 3.14，带 numpy；`python3` 没有）。
 
-## 4. 当前状态（2026-11-17）
+## 4. 当前状态（2026-11-25）
 
-- 实盘：binance-lead，配置第 22 版：10 股、限价 = 卖价 + 0.08、卖价上限 0.80、开盘后 30~265 秒、离开盘前 60 秒均价 ±5 bp、三家交易所 + 东京转发、**第一单用限价单（GTC）**、剩余挂 4 秒后撤、**行情太乱就暂停：开**、单场预算 20、总预算 100、日亏不限。
-- 结论（详见记忆）：
-  - 回测天天赚、实盘接近打平：同场对照时差距几乎全在"实盘没买到、回测买到"的单上（10-30~11-12 回测 +167、实盘 +8；回测买到率 68%、实盘 48%）。信号好的单最先被别人抢走（`E:/pm-backup/research-1113/bt_vs_live.py`）。
-  - 改信号的方案都测过、都不如现行规则：往回打先观察、跳过震荡、只要多家同动、信号速度、按波动调阈值、距离按剩余时间折算（`E:/pm-backup/research-1115/`）。
-  - 限价单把买到率从约 50% 提到约 90%，挂着成交的约占两成股数、不收手续费；多买到的单整体只打平。
-  - 行情太乱就暂停：28 天回测 +48~+64 不显著；11-16 半天实盘会暂停的 20 单赢 6、−42，留下的 +3.7。用户 11-16 打开了，继续看。
-- 第 3 个反向信号就卖的模拟 11-17 删了（4 天实盘合计 +62，误卖 48%，每天正负来回跳）。
-- 两个新开关（2026-11-17 做完，默认关 = 只记录，设置页打开就生效）：
-  - 按优势定股数 `edgeSizing`：优势 ≥ 0.07 买 15 股、< −0.04 买 5 股，其余按股数；29 天回测 +181.6（t 1.96）。单场预算 20 够 15 股（最多 13.2 美元）；超预算时自动退回原股数。
-  - 反向信号就卖出 `exitOnReverse`：买到后第一个反向信号，按买一 − 0.08 吃单卖掉持仓，一场一次；限价单剩余先撤再卖；29 天回测 +63.9（t 0.74），两个一起 +254.5（t 2.18，最差一天 +3.3）。
-  - 统计页「反向信号就卖出」「按优势定股数」看模拟结果；关着时每单记公允价、优势、反向信号时的买一。
-- 等数据：predict.fun 历史（11-05 起每场结果和全部成交，按单点价结算）下载中，下完回测"同样的信号在 predict.fun 是否更有优势"（`E:/pm-backup/research-1116/`）；伦敦录制机等用户租。
+- 两个账户各一台交易机：账户 1 在 `pm-a`、账户 2 在 `pm-b`，控制台在 `pm-ire`（`/acct/1/`、`/acct/2/`，总览页对比两个账户）。
+- 账户 1：配置第 39 版（11-24 15:51 北京起）：10 股、限价 = 卖价 + 0.04、限价单剩余挂 5 秒、开盘后 30~265 秒、开盘前 60 秒均价 ±4 bp、**优势低于 −0.02 不买（`minEdge`）**、三个开关（行情太乱就暂停、按优势定股数、反向信号就卖出）全关、单场预算 20、总预算 60、日亏 40、三家交易所 + 东京转发（只开 Bybit 直连）。
+- 账户 2：还是第 3 版（5 股、开盘线 ±6、三个开关里"行情太乱就暂停"开）。
+- 11-23 全参数测试（`E:/pm-backup/research-1123/`，记忆 `params-2026-11-23`）：回测撮合延迟要按 1.2 秒才和实盘对上（旧样本中位 0.57 秒，买到率 83% vs 实盘 57%）；没买到的赢 58%、买到的 49%（好单被抢走）。实盘和回测都支持的只有"开盘线 ±4 + 优势 ≥ −0.02"：实盘 1105 单按 5 股 +26.7 → +155.8、回撤 −79 → −28。按优势定股数、只吃单、换交易所回测说好但实盘不支持；反向卖实盘约打平。
+- 连赢连输（11-24，用 Bybit 真实币价查 980 单）：赢单和输单开盘前的行情一样，事前分不出；两个账户拼在一起看像扎堆，是因为两边常买同一场（95% 同输赢），各自看不扎堆。
+- 凌晨买不到变多（11-25 03~07 点买到率约三成）：两个账户同时变差，交易所回复从几百毫秒涨到 1 秒以上，我们自己的信号速度没变；观察中。
+- Polymarket Protocol V2：见 [ARCHITECTURE.md](ARCHITECTURE.md)「结算 / Polymarket Protocol V2」。代码已写好（7bcfbb2）、**没部署**，用户说等官方公布 BTC 切换日期再说；之后先在 SOL 5 分钟盘用账户 2 小单把买、卖、结算、赎回走一遍。
 
 ## 5. 行情数据
 

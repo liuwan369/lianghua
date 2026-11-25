@@ -90,10 +90,10 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `platform/snapshot-gate.ts` | 双边盘口快照能否交易（纯函数） |
 | `platform/store.ts` | 状态文件原子落盘（`.lock`/`.next`），下单前签名意图 `.intent` |
 | `platform/journal.ts` | 异步 JSONL journal |
-| `platform/live-settlement.ts`、`settlement.ts` | 收盘后结算：Gamma 查结果、赎回、到账核对 |
+| `platform/live-settlement.ts`、`settlement.ts` | 收盘后结算：Gamma 查结果、赎回、到账核对；按市场版本走 CTF（V1）或 Polymarket Protocol V2 |
 | `platform/cash-flows.ts` | 链上充提分类，调整日内基线 |
 | `platform/contracts.ts` | 共享类型 |
-| `live/clob/client.ts` | `ClobWrapper`：签名、下单 HTTP（超时 3 s）、撤单、心跳、连接保活（undici Agent，空闲 60 s，每 30 s 触达） |
+| `live/clob/client.ts` | `ClobWrapper`：签名、下单 HTTP（超时 3 s）、撤单、心跳、连接保活（undici Agent，空闲 60 s，每 30 s 触达）；按 `/clob-markets` 的 `v` 记每个 token 走哪个交易所（V1 CTF Exchange 域 "2" / V2 ExchangeV3 域 "3"） |
 | `live/clob/wallet.ts` | 钱包、funder、签名类型 |
 | `live/feeds/polymarket.ts` | 公共行情 WS：L2 盘口、新鲜度看门狗 |
 | `live/feeds/user.ts` | 认证用户 WS：订单与成交，断线补偿 |
@@ -102,7 +102,7 @@ node dist/cli/platform.js --live --duration-sec <N> --status-sec 2 --max-rounds 
 | `live/feeds/binance-trades.ts` | `LeadSignalDetector`：每家一个，250 ms 窗口判信号；带开盘价、开盘前 60 s 均价、信号前 300 s 的信号数和每秒波动 |
 | `live/feeds/btc.ts` | 各币在交易所的代码 |
 | `live/orderbook.ts` | 本地 L2 盘口副本 |
-| `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘 |
+| `live/discovery.ts` | 通过 Gamma 发现 5 分钟盘；按 `version` 取编号（`v1` 读 `clobTokenIds`，`v2` 读 `positionIds`，其他版本拒绝） |
 | `live/account*.ts`、`live/onchain.ts`、`live/contracts.ts` | 账户只读数据、北京日（UTC+8）、链上读取、合约地址 |
 | `dashboard/market-projection.ts` | 采集器的公共盘口投影（随采集器停用） |
 | `strategies/binance-lead.ts` | 策略本体 |
@@ -206,6 +206,22 @@ Bybit ×2 / 币安 / OKX 直连 + 东京转发 ─> lead-trades 每家去重 ─
 
 引擎每 15 s 扫已收盘的市场，跳过还有挂单或成交未终结的；用 Gamma（`gamma-api.polymarket.com/markets?condition_ids=`）查判定结果，再赎回。Polymarket 自己的自动赎回常常抢先一个块，结算适配器会查到这笔外部赎回并按实际到账确认。结算状态存在 `<state>.settlements.json`，清空数据时保留（里面有未完成的赎回）。
 
+### Polymarket Protocol V2（2026-11）
+
+官方分批把新市场搬到一套新合约（[迁移指南](https://docs.polymarket.com/migrate/polymarket-v2/overview)）。11-23 起 BNB/DOGE/HYPE/SOL/XRP/ZEC 的 5/15 分钟盘是 V2；BTC 5 分钟盘只在 11-24 1:00–1:15 PM ET（北京 11-25 02:00–02:15）试过一次，正式切换日期待定。老市场（V1，CTF）照旧。引擎两种都能做（7bcfbb2，未部署）：
+
+| | V1（CTF） | V2 |
+|---|---|---|
+| 判断 | Gamma `version` `v1` 或没有 | `v2` |
+| 编号 | `clobTokenIds` | `positionIds` |
+| 下单签名 | EIP-712 域 `"2"`，CTF Exchange `0xE111…996B` | 域 `"3"`，ExchangeV3 `0xe333…00Aa`（SDK 传 `positionID` 自动选） |
+| 持仓账本 | Conditional Tokens `0x4D97…6045` | PositionManager `0x006F…9fEF` |
+| 结算结果 | CTF `payoutNumerators` | Gamma `resolutionStatus = resolved` 后 `PositionManager.getPayout(id, 1e6)` |
+| 赎回 | 抵押适配器 `redeemPositions`，先 `CTF.setApprovalForAll(adapter)` | `Router.redeem(bytes31 condition, outcome 0/1, 数量)`，先 `PositionManager.setApprovalForAll(Router)` |
+| 交易授权 | pUSD → CTF Exchange，CTF → CTF Exchange | pUSD → ExchangeV3，PositionManager → ExchangeV3 |
+
+账户检查多一行「V2 市场授权」，只显示，不挡启动（`live/account.ts` `V2_APPROVALS`）。两个账户 11-25 链上查过三项都已授权。场次下架、版本不明时两个账本都查，都空才记结清。地址常量在 `live/contracts.ts`。测试 `protocol-v2.mjs`、`settlement-v2.mjs`、`v2-approvals.mjs`、`scripts/regress/account-check-v2.py`。还没实盘验证 V2 的下单和赎回。
+
 ## 盈亏口径
 
 已结算盈亏以 Polymarket 官方 Data API 为准（`scripts/dashboard/official_pnl.py`）：已平仓（`/v2/positions?status=CLOSED`）的 `realizedPnl`，加上持仓（`/v2/positions`）里已判定未赎回的 `cashPnl + realizedPnl`（输掉的 token 永远在这里），按 slug `<币>-updown-5m-<roundId>` 对到场次。数据来自账户读取器的快照，不额外请求。
@@ -242,7 +258,7 @@ Data API v1 在 2026-11-02 停用（410），读取改走 v2（`live/account-dat
 
 ## 部署与回滚
 
-`python scripts/deploy.py [ireland|tokyo|all]`：
+`python scripts/deploy.py [ireland|engine-a|engine-b|tokyo|all]`（ireland = 控制台机 pm-ire，engine-a / engine-b = 交易机 pm-a / pm-b，各自用标记文件确认身份）：
 
 1. 工作区里 `backend/engine`、`frontend/console`、`scripts`、`config` 有未提交改动就拒绝。本地用 `git archive HEAD` 在 `.deploy/<rev7>-build` 构建 `dist`，按目标打包（测试目录 `regress/` 和 `src/` 不上线），经 `ssh <别名> tar xzf -` 解到发布目录，再把脚本本身用 `ssh <别名> python3 - apply` 送过去执行。
 2. 爱尔兰（`pm-ire`）：拿 `data/dashboard/deployment.lock`；有活动的 `pm-engine-*`、`dist/cli/platform.js` 进程或控制台 `processRunning` 不是 false 就拒绝。装 `pm-agent` 和 `pm-console` 两个单元，先停控制台再停代理，起的时候先代理后控制台；第一次部署时跑 `migrate_console_data.py`（只复制）。发布目录 `/root/pm-releases/<rev7>-<UTC>/`。
