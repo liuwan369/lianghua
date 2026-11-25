@@ -69,9 +69,14 @@
     </div>`;
   };
 
-  window.PolyOverview = Object.freeze({ compareConfig, renderConfig, renderResults, CONFIG_ROWS });
+  // One column per account, so three or four sit side by side (.cards alone is a fixed four).
+  const renderCards = (items) => (items.length
+    ? html`<div class="cards accounts" style="grid-template-columns:repeat(${items.length}, minmax(0, 1fr))">${items.map(card)}</div>`
+    : html`<p class="empty">没有读到账户列表</p>`);
+
+  window.PolyOverview = Object.freeze({ compareConfig, renderConfig, renderResults, card, renderCards, CONFIG_ROWS });
   const root = P.mount("overview", "总览", "所有账户放一起看，对比哪套设置更好。", html`
-    <section class="panel"><div class="panel-head"><h2>账户</h2><span class="panel-meta" data-asof></span></div><div class="cards" data-cards></div></section>
+    <section class="panel"><div class="panel-head"><h2>账户</h2><span class="panel-meta" data-asof></span></div><div data-cards></div></section>
     <section class="panel"><div class="panel-head"><h2>参数对比</h2></div><div data-config></div></section>
     <section class="panel"><div class="panel-head"><h2>结果对比</h2><span class="actions seg">${RANGES.map(([key, label]) => html`<button type="button" data-range="${key}">${label}</button>`)}</span></div><div data-results></div></section>`);
   if (!root) return;
@@ -93,7 +98,7 @@
         fetchJson(meta.id, "/api/account/snapshot"), fetchJson(meta.id, "/api/diagnostics/health")]);
       return { account_meta: meta, status, today, stats, config, account, health };
     }));
-    P.put($("[data-cards]"), items.length ? items.map(card) : html`<p class="empty">没有读到账户列表</p>`);
+    P.put($("[data-cards]"), renderCards(items));
     P.put($("[data-config]"), renderConfig(compareConfig(items), list));
     P.put($("[data-results]"), renderResults(items.map((item) => ({ account: item.account_meta, stats: item.stats })), list));
     $("[data-asof]").textContent = `更新于 ${fmt.time(Date.now() / 1000)}`;

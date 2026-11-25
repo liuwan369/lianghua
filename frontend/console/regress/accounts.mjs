@@ -81,6 +81,15 @@ const boot = (files, apiBase, replies) => {
   assert.ok(plain.includes("每股") && plain.includes("+0.046"), "PnL per settled share: 6.5 / 140");
   assert.match(results, /class="small-sample"/, "account 2's 5 settled rounds are flagged as a small sample");
   assert.ok(plain.includes("同一个信号") || plain.includes("抢单"), "the note says the accounts compete for the same asks");
+  // A list of cards must not be joined with commas: CSS grid makes each comma its
+  // own grid item, which pushed the third account onto a second row (2026-11-25).
+  const node = { innerHTML: "" };
+  window.PolyPreview.put(node, [1, 2, 3].map((n) => O.card({ account_meta: { id: String(n), label: `账户 ${n}`, color: "#fff", box: "pm-x" },
+    status: { processRunning: true, status: "running" } })));
+  assert.ok(!/<\/div>\s*,/.test(node.innerHTML), `no comma between cards: ${node.innerHTML.slice(0, 400)}`);
+  assert.equal(node.innerHTML.split("account-card").length - 1, 3);
+  assert.match(String(O.renderCards([1, 2, 3].map(() => ({ account_meta: { id: "1", label: "x", color: "#fff" }, status: {} })))),
+    /class="cards accounts"/, "the account cards get their own grid: as many across as there are accounts");
 }
 
 console.log("accounts OK");

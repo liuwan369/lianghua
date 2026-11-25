@@ -72,6 +72,8 @@ a { color: #8cc6f2; }
 .panel-meta, .muted { color: #7d94aa; font-size: 12px; }
 .note { margin: 10px 0 0; color: #8da3b7; font-size: 12px; line-height: 1.6; }
 .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+/* The account cards set their own column count inline (one per account). */
+.cards.accounts { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .card { min-width: 0; padding: 14px 16px; border: 1px solid #29445f; border-radius: 7px; background: #13263d; }
 .card > span { display: block; color: #8098ae; font-size: 12px; }
 .card > strong { display: block; margin: 8px 0 4px; color: #f4f8fb; font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
@@ -208,7 +210,7 @@ summary { color: #8cc6f2; font-size: 12px; cursor: pointer; }
 .log .info { color: #9cb4c9; }
 
 @media (max-width: 1120px) {
-  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cards:not(.accounts) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
@@ -227,5 +229,5 @@ summary { color: #8cc6f2; font-size: 12px; cursor: pointer; }
   .log li { grid-template-columns: 1fr; gap: 2px; }
 }
 @media (max-width: 480px) {
-  .cards { grid-template-columns: minmax(0, 1fr); }
+  .cards, .cards.accounts { grid-template-columns: minmax(0, 1fr) !important; }
 }

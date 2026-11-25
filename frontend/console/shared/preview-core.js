@@ -71,7 +71,7 @@
   // Replace an element's markup only when it changed.
   const put = (node, markup) => {
     if (!node) return;
-    const text = String(markup);
+    const text = part(markup);
     if (node.__html !== text) { node.__html = text; node.innerHTML = text; }
   };
 
