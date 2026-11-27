@@ -129,6 +129,15 @@ assert.equal(REGIME_PAUSE_SIGNALS, 12); assert.equal(REGIME_PAUSE_VOL_BP, 0.89);
   assert.equal(later.filter(a => a.kind === "submit").length, 1, "a calm signal later in the round trades");
   const vol = run({ regimePause: true }, { signals300: 2, vol300Bp: 1.2 });
   assert.match(vol.st.exportState().rounds[0].reason, /每秒波动 1.20 bp/);
-  assert.equal(run({ regimePause: true }, {}).actions.filter(a => a.kind === "submit").length, 1, "no measures (after a restart): trades");
+  // No measures (the first 5 min after a restart, user 2026-11-28): with the
+  // pause on, a signal it cannot judge is not bought (22:45 11-27: account 3,
+  // 4 min after a restart, bought a round with 383 signals in 5 min).
+  const blind = run({ regimePause: true }, {});
+  assert.equal(blind.actions.filter(a => a.kind === "submit").length, 0, "pause on, no measures: skipped");
+  assert.match(blind.st.exportState().rounds[0].reason, /行情数据不满 5 分钟/);
+  assert.equal(blind.st.exportState().rounds[0].stages.length, 0, "the round keeps its attempt");
+  const half = run({ regimePause: true }, { signals300: 3 });
+  assert.equal(half.actions.filter(a => a.kind === "submit").length, 0, "pause on, the volatility missing: skipped");
+  assert.equal(run({}, {}).actions.filter(a => a.kind === "submit").length, 1, "pause off, no measures: trades as before");
 }
 console.log("regime-shadow OK");

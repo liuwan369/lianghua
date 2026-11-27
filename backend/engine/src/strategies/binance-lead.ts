@@ -68,7 +68,8 @@ export interface BinanceLeadConfig {
   /** Regime pause (user 2026-11-16, off by default): skip a signal that came
    * in a wild market (regimePause: more than REGIME_PAUSE_SIGNALS signals or a
    * 1 s std above REGIME_PAUSE_VOL_BP in the 300 s before it); the round waits
-   * for a later signal. Off, the decision is still journalled (shadow). Live
+   * for a later signal; so does a signal without both measures (the first
+   * 300 s after a restart, user 2026-11-28). Off, the decision is still journalled (shadow). Live
    * 11-16 01:40-10:00: the 20 orders it would have skipped won 6, -41.97; the
    * 39 kept +3.71. */
   regimePause: boolean;
@@ -89,7 +90,8 @@ export interface BinanceLeadConfig {
   exitOnReverse: boolean;
   /** Skip a low-edge signal (user 2026-11-24, null = off): the round's order
    * is not sent when its edge (the one edgeSizing reads) is below this; the
-   * round waits for a later signal. A signal without a fair value trades.
+   * round waits for a later signal. A signal without a fair value (after a
+   * restart) is skipped too (user 2026-11-28).
    * Live 1105 orders 11-14..11-23: the 229 under -0.02 made -0.067 a share
    * (t -2.41); E:/pm-backup/research-1123/live_filters.py. */
   minEdge: number | null;
@@ -811,6 +813,13 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       round.reason = `卖价 ${priceText(ask)} 高于上限 ${priceText(config.maxAsk)}，等下一个信号`; return undefined;
     }
     if (config.regimePause) {
+      // Without both measures (under 300 s of history: the first 5 min after a
+      // restart) the market cannot be judged calm; the pause is on, so skip
+      // (user 2026-11-28: 11-27 22:45, account 3 4 min after a restart bought
+      // a round with 383 signals in 5 min).
+      if (!finite(event.signals300) || !finite(event.vol300Bp)) {
+        round.reason = "行情数据不满 5 分钟（刚启动），开着行情太乱就暂停，等下一个信号"; return undefined;
+      }
       const wild = regimePause(event);
       if (wild.pause) {
         round.reason = wild.reason === "signals"
@@ -828,6 +837,11 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (price < ask - EPS) { round.reason = `卖价 ${ask} 高于最高限价 ${MAX_LIMIT}，等下一个信号`; return undefined; }
     const fair = leadFairValue(event, round.endsAt - event.receivedAtUnix);
     const edge = fair === undefined ? undefined : fair - price - TAKER_FEE_RATE * price * (1 - price);
+    if (config.minEdge !== null && edge === undefined) {
+      // No fair value (no 60 s open mean or no volatility yet, e.g. after a
+      // restart): the edge cannot be checked against the minimum; skip.
+      round.reason = "算不出优势（行情数据不全，刚启动），开着优势下限，等下一个信号"; return undefined;
+    }
     if (config.minEdge !== null && edge !== undefined && edge < config.minEdge) {
       round.reason = `优势 ${edge.toFixed(2)} 低于 ${config.minEdge}，等下一个信号`; return undefined;
     }

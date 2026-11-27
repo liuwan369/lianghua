@@ -7,7 +7,8 @@
 // - on: a signal whose edge is below the minimum is skipped, with the reason;
 //   a later signal with enough edge trades;
 // - an edge at the minimum trades (>=);
-// - a signal without a fair value (no 300 s of history) trades, as the regime pause.
+// - a signal without a fair value (no 300 s of history, e.g. after a restart)
+//   is skipped while minEdge is on (user 2026-11-28); off, it trades.
 // Run after `npm run build`:  node scripts/regress/min-edge.mjs
 import assert from "node:assert/strict";
 import { createStrategy, normalizeBinanceLeadConfig, leadFairValue } from "../../dist/strategies/binance-lead.js";
@@ -53,6 +54,10 @@ assert.equal(submits(on.st.onEvent(lead(START + 40, ahead), ctx(START + 40.002))
 const exact = edgeOf(START + 21, ahead);
 assert.equal(submits(run({ minEdge: exact }, START + 21, ahead).actions), 1, "edge == minEdge trades");
 assert.equal(submits(run({ minEdge: exact + 1e-6 }, START + 21, ahead).actions), 0, "edge just under minEdge is skipped");
-// No fair value (no volatility yet, e.g. after a restart): trades.
-assert.equal(submits(run({ minEdge: -0.02 }, START + 21, behind, { vol300Bp: undefined }).actions), 1, "no fair value: trades");
+// No fair value (no volatility yet, e.g. after a restart): skipped while minEdge is on.
+const blind = run({ minEdge: -0.02 }, START + 21, ahead, { vol300Bp: undefined });
+assert.equal(submits(blind.actions), 0, "minEdge on, no fair value: skipped");
+assert.match(blind.st.exportState().rounds[0].reason, /算不出优势/);
+assert.equal(blind.st.exportState().rounds[0].stages.length, 0, "the round keeps its attempt");
+assert.equal(submits(run({}, START + 21, ahead, { vol300Bp: undefined }).actions), 1, "minEdge off, no fair value: trades as before");
 console.log("min-edge OK");
