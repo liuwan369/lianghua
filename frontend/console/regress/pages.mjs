@@ -185,5 +185,18 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
   assert.ok(!shown.includes("Lost round A"), "a $0 settled loser is not a row");
   assert.ok(shown.includes("已结算输掉的 2 场"), "they are counted in one line");
 }
+// Since 2026-11-27 the server drops the $0 rows and sends their count
+// (account 1's 830 rows were 636 KB pushed every second).
+{
+  const saved = JSON.parse(JSON.stringify(REPLIES["/api/account/snapshot"]));
+  REPLIES["/api/account/snapshot"].positions = { available: true, settled_lost: 830,
+    items: [{ title: "BTC Up or Down", outcome: "Up", size: 5, avgPrice: 0.5, curPrice: 1, currentValue: 5, redeemable: true }] };
+  const page = boot("settings.js");
+  await wait(50);
+  const shown = text(page.html());
+  assert.ok(shown.includes("持仓（1）"), shown.slice(0, 400));
+  assert.ok(shown.includes("已结算输掉的 830 场"), "the server's count is shown");
+  REPLIES["/api/account/snapshot"] = saved;
+}
 console.log("pages OK");
 process.exit(0);

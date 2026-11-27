@@ -121,6 +121,31 @@ def _note_fill_watermark(value: dict) -> None:
         return
 
 
+def account_snapshot_view(snapshot: dict) -> dict:
+    """What /api/account/snapshot sends: balance, occupancy, positions, open orders.
+
+    Trade history, on-chain activity, closed positions and fee history were
+    400 KB of a 440 KB body the browser never read. A settled losing round stays
+    in the venue's positions forever at $0, "redeemable" for nothing; account 1
+    had 830 of them, 636 KB pushed every second to each open live page, until
+    the console hit its memory ceiling (2026-11-27). The page only counts them
+    (settings.js), so the count is sent instead of the rows. official_pnl reads
+    the untrimmed snapshot, so this returns a copy and never edits its input.
+    """
+    view = {key: value for key, value in snapshot.items() if key not in _ACCOUNT_HISTORY_SECTIONS}
+    positions = view.get("positions")
+    if isinstance(positions, dict) and isinstance(positions.get("items"), list):
+        kept, lost = [], 0
+        for item in positions["items"]:
+            value = item.get("currentValue") if isinstance(item, dict) else None
+            if isinstance(item, dict) and item.get("redeemable") is True and not (isinstance(value, (int, float)) and value >= 0.005):
+                lost += 1
+            else:
+                kept.append(item)
+        view["positions"] = {**positions, "items": kept, "settled_lost": lost}
+    return view
+
+
 def _account_snapshot() -> dict:
     """The agent's last account snapshot; stale whenever the agent is unreachable."""
     view = agent().view()
@@ -1015,12 +1040,7 @@ def make_handler(root: Path):
                     "activationScope": "future_uncreated_round"}, ensure_ascii=False, allow_nan=False).encode("utf-8"))
                 return
             if path == "/api/account/snapshot":
-                snapshot = _account_snapshot()
-                # The console reads balance, occupancy, positions and open
-                # orders. Trade history, on-chain activity, closed positions and
-                # fee history were 400 KB of the 440 KB body, pushed every
-                # refresh to a browser that never read them.
-                snapshot = {key: value for key, value in snapshot.items() if key not in _ACCOUNT_HISTORY_SECTIONS}
+                snapshot = account_snapshot_view(_account_snapshot())
                 self._send_json(json.dumps({"source": "account-reader",
                     "asOf": _epoch(snapshot.get("checked_at")),
                     "error": snapshot.get("error_code"), **snapshot},
