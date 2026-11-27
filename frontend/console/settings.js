@@ -22,6 +22,7 @@
     ["limitPremium", "限价加价", "限价 = 信号时卖价 + 这个数", "0.01", "number"],
     ["maxAsk", "卖价上限", "卖价高于这个就不买", "0.01", "number"],
     ["restAfterMissSec", "挂单秒数", "没立即成交的部分挂多少秒后撤（挂单不收手续费）；吃单方式填 0 = 不挂", "1", "number"],
+    ["retryReverseBp", "反向再试：离开盘线多近（bp）", "反向信号出现前，价格离开盘线在这么多 bp 以内（还没过线）才再试；默认 3", "0.5", "number"],
   ];
   const RISK = [
     ["roundBudgetUsd", "单场预算 $", "一场最多花多少；15 股最多 13.2；空 = 不限", "1", "optional"],
@@ -36,15 +37,16 @@
     ["maxQuoteAgeSeconds", "盘口最大年龄（秒）", "盘口比这个旧就不下单", "0.1", "number"],
     ["maxQuoteSkewSeconds", "两边盘口时间差（秒）", "UP/DOWN 两边盘口时间相差超过这个就不下单", "0.1", "number"],
   ];
-  // The three switches: [key, name, what it does].
+  // The switches: [key, name, what it does].
   const SWITCHES = [
     ["regimePause", "行情太乱就暂停", "信号前 5 分钟信号数 > 12 或每秒波动 > 0.89 bp 就不下这个信号"],
     ["edgeSizing", "按优势定股数", "优势 ≥ 0.07 买 15 股，< −0.04 买 5 股，其余按每场股数"],
     ["exitOnReverse", "反向信号就卖出", "买到后第一个反方向信号就按买一价 − 0.08 卖掉，一场只卖一次"],
+    ["retryReverse", "没买到后反向再试", "第一单一股没买到、已撤，之后来了反方向信号，且信号前价格离开盘线够近，就再买一次反方向，一场最多一次"],
   ];
   // The config is exactly these keys (scripts/dashboard/strategy_config.py default_config).
   const CONFIG_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues",
-    "tokyoRelay", "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
+    "tokyoRelay", "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "retryReverse", "retryReverseBp", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd",
     "dailyLossUsd", "ratchetStepUsd", "ratchetLiftUsd", "durationMinutes", "maxRounds", "mode"];
 
   // inputs: {<field>: string, openLine, tokyoRelay: bool, leadVenues/directVenues: string[]} -> {config, errors}
@@ -81,6 +83,7 @@
     check("minEdge", (v) => v === null || (v >= -1 && v <= 1), "空或 −1 到 1 之间");
     check("maxRounds", (v) => Number.isInteger(v) && v >= 0 && v <= 10000, "0–10000 的整数");
     check("restAfterMissSec", (v) => v >= 0 && v <= 30, "0–30 秒");
+    check("retryReverseBp", (v) => v > 0 && v <= 10, "大于 0、不超过 10 bp");
     config.entryOrder = inputs.entryOrder === "gtc" ? "gtc" : "fak";
     if (config.entryOrder === "gtc" && !errors.restAfterMissSec && !(config.restAfterMissSec > 0)) errors.restAfterMissSec = "限价单要填大于 0 的秒数";
     const venues = ALL_VENUES.filter((venue) => (inputs.leadVenues || []).includes(venue));
@@ -93,6 +96,7 @@
     config.regimePause = inputs.regimePause === true;
     config.edgeSizing = inputs.edgeSizing === true;
     config.exitOnReverse = inputs.exitOnReverse === true;
+    config.retryReverse = inputs.retryReverse === true;
     const ordered = Object.fromEntries(CONFIG_KEYS.map((key) => [key, config[key]]));
     return { config: ordered, errors };
   };
@@ -115,6 +119,9 @@
     inputs.regimePause = config?.regimePause === true;
     inputs.edgeSizing = config?.edgeSizing === true;
     inputs.exitOnReverse = config?.exitOnReverse === true;
+    inputs.retryReverse = config?.retryReverse === true;
+    // An older config has no retryReverseBp: show the engine's default.
+    if (inputs.retryReverseBp === "") inputs.retryReverseBp = "3";
     return inputs;
   };
 
@@ -266,6 +273,7 @@
     inputs.regimePause = $('[data-field="regimePause"]').checked;
     inputs.edgeSizing = $('[data-field="edgeSizing"]').checked;
     inputs.exitOnReverse = $('[data-field="exitOnReverse"]').checked;
+    inputs.retryReverse = $('[data-field="retryReverse"]').checked;
     inputs.leadVenues = ALL_VENUES.filter((venue) => $(`[data-venue="${venue}"]`).checked);
     inputs.directVenues = ALL_VENUES.filter((venue) => $(`[data-direct="${venue}"]`).checked);
     return inputs;
@@ -280,6 +288,7 @@
     $('[data-field="regimePause"]').checked = inputs.regimePause;
     $('[data-field="edgeSizing"]').checked = inputs.edgeSizing;
     $('[data-field="exitOnReverse"]').checked = inputs.exitOnReverse;
+    $('[data-field="retryReverse"]').checked = inputs.retryReverse;
     for (const venue of ALL_VENUES) $(`[data-venue="${venue}"]`).checked = inputs.leadVenues.includes(venue);
     for (const venue of ALL_VENUES) $(`[data-direct="${venue}"]`).checked = inputs.directVenues.includes(venue);
     state.dirty = false;

@@ -703,5 +703,131 @@ class Auth(unittest.TestCase):
             self.assertEqual(self.get(path), 404, path)
 
 
+class RetryReverse(unittest.TestCase):
+    """Retry on a reverse signal after a miss (retryReverse, 2026-11-27).
+
+    Rounds (10 shares): R1 first UP missed, the DOWN retry filled 10 at 0.35,
+    DOWN won (+6.5). R2 first UP missed, the retry missed. R3 first UP filled
+    (no retry). R4/R5 switch off: R4's reverse signal was in range ("off",
+    DOWN ask 0.31, DOWN won), R5's too far ("too_far", UP won).
+
+    - a retry is its own stage, never counted as a round's order (the funnel
+      counts first buys, so the switch never inflates orders or fill rate);
+    - a round whose only filled row is the retry still gets the round's PnL
+      and the venue's official PnL lands on that row;
+    - retry_reverse reports live (sent, filled, won, PnL) and shadow (what an
+      in-range "off" signal would have made at ask + premium) apart;
+    - the lead_retry_shadow line is kept one per (run, market).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        dashboard = root / "backend" / "engine" / "results" / "dashboard"
+        dashboard.mkdir(parents=True)
+        base = R1 + 40 * 300
+        cls.rounds = [base + k * 300 for k in range(5)]
+
+        def first(n, start, status, filled, avg=None):
+            return {**order(n, venue="bybit", line="tokyo", direction="UP", status=status, filled=filled, avg=avg,
+                            fee=0 if filled else None, limit=0.44, round_start=start, ack=40),
+                    "shares": 10, "stage": "gtc", "rest_mode": "gtc", "taker_shares": filled, "maker_shares": 0}
+
+        def retry(n, start, status, filled, avg=None):
+            return {**order(n, venue="bybit", line="tokyo", direction="DOWN", status=status, filled=filled, avg=avg,
+                            fee=0 if filled else None, limit=0.35, round_start=start, ack=40, recv=start + 61),
+                    "client_order_id": f"c{n}r", "event_id": f"lead_order:c{n}r", "order_id": f"o{n}r",
+                    "token_id": f"D{n}", "shares": 10, "stage": "retry", "rest_mode": "gtc",
+                    "parent_client_order_id": f"c{n}", "sec_since_open": 60}
+
+        def shadow(n, start, *, sent, skip, ask, pre, status=None, filled=None):
+            return {"event": "lead_retry_shadow", "event_id": f"lead_retry_shadow:0xm{n}", "recv_ts": start + 300,
+                    "market_id": f"0xm{n}", "round_id": str(start), "round_start": start, "first_direction": "UP",
+                    "direction": "DOWN", "token_id": f"D{n}", "at_ms": (start + 60) * 1000, "sec_since_open": 60,
+                    "pre_bp": pre, "ask": ask, "sent": sent, "skip": skip, "reason": None, "retry_bp": 3,
+                    "retry_on": sent, "retry_status": status, "retry_price": 0.35 if sent else None,
+                    "retry_shares": 10 if sent else None, "retry_filled": filled, "limit_premium": 0.04, "config_shares": 10,
+                    "retry_client_order_id": f"c{n}r" if sent else None, "retry_order_id": f"o{n}r" if sent else None}
+        r = cls.rounds
+        records = [
+            {**first(51, r[0], "CANCELLED", 0), "edge": 0.01, "edge_shares": 10, "edge_sizing": False, "fair": 0.45},
+            {**retry(51, r[0], "FILLED", 10, avg=0.35), "fee_usd": 0.12},
+            shadow(51, r[0], sent=True, skip=None, ask=0.31, pre=-2.0, status="FILLED", filled=10),
+            {"event": "lead_exit_shadow", "event_id": "lead_exit_shadow:0xm51", "recv_ts": r[0] + 300, "market_id": "0xm51",
+             "round_id": str(r[0]), "round_start": r[0], "direction": "DOWN", "token_id": "D51", "held_shares": 10,
+             "first_triggered": False, "first_ms": None, "first_sec_since_open": None, "first_bid": None, "first_shares": None,
+             "first_sent": None, "first_skip": None, "first_lead_bp": None, "exit_status": None, "exit_price": None,
+             "exit_shares": None, "exit_filled": None, "exit_client_order_id": None, "exit_order_id": None},
+            first(52, r[1], "CANCELLED", 0), retry(52, r[1], "CANCELLED", 0),
+            shadow(52, r[1], sent=True, skip=None, ask=0.31, pre=-1.0, status="CANCELLED", filled=0),
+            first(53, r[2], "FILLED", 10, avg=0.44),
+            first(54, r[3], "CANCELLED", 0), shadow(54, r[3], sent=False, skip="off", ask=0.31, pre=-2.0),
+            shadow(54, r[3], sent=False, skip="off", ask=0.31, pre=-2.0),   # a restart's rewrite: one row
+            first(55, r[4], "CANCELLED", 0), shadow(55, r[4], sent=False, skip="too_far", ask=0.12, pre=-5.0),
+            settlement(51, "D51", base + 1800), settlement(52, "U52", base + 1801), settlement(53, "U53", base + 1802),
+            settlement(54, "D54", base + 1803), settlement(55, "U55", base + 1804)]
+        write(root / "r.jsonl", records)
+        cls.ledger = Ledger(dashboard / "ledger.sqlite3")
+        cls.ledger.register_run("run-r", "live", ACCOUNT, str(root / "r.jsonl"))
+        cls.ledger.ingest("run-r", max_bytes=8 << 20, max_records=10000)
+        cls.stats = cls.ledger.lead_stats("run-r", range="all", now=base + 3000)
+        cls.page = cls.ledger.lead_orders_page("run-r", range="all", now=base + 3000)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_retry_is_not_a_round_order(self):
+        f = self.stats["funnel"]
+        self.assertEqual(f["orders"], 5, "five rounds, five first buys; the two retries are not orders")
+        self.assertEqual(f["filled"], 1, "only R3's first buy filled")
+
+    def test_retry_row(self):
+        rows = {item["client_order_id"]: item for item in self.page["items"]}
+        self.assertEqual((rows["c51r"]["stage"], rows["c51r"]["order_side"]), ("retry", "BUY"))
+        self.assertEqual(rows["c51r"]["outcome"], "won")
+        self.assertAlmostEqual(rows["c51r"]["pnl"], 10 - 3.5 - 0.12, places=6)
+        self.assertEqual(rows["c51r"]["parent_client_order_id"], "c51")
+        # The venue's round PnL goes on the round's one filled row: the retry.
+        official = {("btc", str(self.rounds[0])): {"pnl": 6.4}}
+        page = self.ledger.lead_orders_page("run-r", range="all", now=self.rounds[0] + 3000, official=official)
+        got = {item["client_order_id"]: item for item in page["items"]}
+        self.assertEqual((got["c51r"]["pnl"], got["c51r"]["pnl_source"]), (6.4, "official"))
+        self.assertNotEqual(got["c51"].get("pnl_source"), "official", "the missed first buy carries no round PnL")
+
+    def test_report(self):
+        rr = self.stats["retry_reverse"]
+        self.assertEqual(rr["judged"], 4, "rounds with a judged reverse signal (R1, R2, R4, R5)")
+        self.assertEqual(rr["skips"], {"off": 1, "too_far": 1})
+        live = rr["live"]
+        self.assertEqual((live["sent"], live["filled"], live["settled"], live["won"]), (2, 1, 1, 1))
+        self.assertAlmostEqual(live["pnl_usd"], 6.5 - 0.12, places=6)
+        shadow = rr["shadow"]
+        self.assertEqual((shadow["rounds"], shadow["won"]), (1, 1), "only the in-range 'off' signal (R4)")
+        # R4: 10 shares at the ask 0.31 + premium 0.04 = 0.35, DOWN won.
+        self.assertAlmostEqual(shadow["pnl_if_filled_usd"], 10 * (1 - 0.35), places=6)
+        self.assertEqual(rr["out_of_range"]["too_far"]["rounds"], 1)
+        self.assertEqual(rr["out_of_range"]["too_far"]["won"], 0, "R5's reverse side (DOWN) lost")
+
+    def test_switches_skip_retry_rounds(self):
+        """The switches comparison judges a round on its first buy's side; a
+        round where a retry bought holds the other side, so it is left out."""
+        s = self.stats["switches"]
+        # R1's first buy has an edge record and its round an exit shadow, so
+        # without the skip it would be compared on UP (lost) while DOWN was held.
+        self.assertEqual(s["rounds"], 0, "R1 (its retry bought) is not one of the compared rounds")
+
+    def test_total_pnl_counts_the_retry(self):
+        """The round's PnL (funnel) is what the account made: R1's retry (+6.5)
+        and R3's first buy (UP won at 0.44: +5.6)."""
+        self.assertAlmostEqual(self.stats["funnel"]["pnl_usd"] or 0, 6.5 - 0.12 + 5.6, places=6)
+        # Per share over the same rounds: R1's retry 10 shares + R3's first buy 10.
+        self.assertAlmostEqual(self.stats["funnel"]["settled_shares"], 20, places=6)
+        self.assertAlmostEqual(self.stats["funnel"]["pnl_per_share"], (6.5 - 0.12 + 5.6) / 20, places=6)
+        # The fees shown with that PnL include the retry's.
+        self.assertAlmostEqual(self.stats["funnel"]["fees_usd"], 0.12, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

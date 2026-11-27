@@ -44,28 +44,34 @@
       ...(num(o.exit_shares) !== null ? [["反向信号卖出", `卖了 ${fmt.shares(o.exit_shares)} 股 · 收回 ${fmt.usd(o.exit_proceeds_usd)}（已算进盈亏）`]] : []),
       ...(num(o.edge) !== null ? [["按优势定股", `公允价 ${fmt.price(o.fair)} · 优势 ${o.edge >= 0 ? "+" : ""}${o.edge.toFixed(3)} · ${o.edge_sizing ? "已按" : "会按"} ${fmt.shares(o.edge_shares)} 股`]] : []),
       ...(o.stage === "gtc" ? [["限价单", `立即成交 ${fmt.shares(o.taker_shares)} 股 · 挂着成交 ${fmt.shares(o.maker_shares)} 股`]] : []),
-      ["挂单补单", o.stage === "gtc" ? "--" : o.stage === "rest" ? `是 · 跟在 ${o.parent_client_order_id || "--"} 后面` : o.rest_mode === "shadow" ? (num(o.rest_shadow_fill_ms) === null ? "模拟：5 秒内不会成交" : `模拟：${stamp(o.rest_shadow_fill_ms)} 会成交`) : o.rest_mode === "live" ? "已开启" : "--"],
+      ...(o.stage === "retry" ? [["反向再试", `是 · 第一单没买到，跟在 ${o.parent_client_order_id || "--"} 后面`]] : []),
+      ["挂单补单", o.stage === "gtc" || o.stage === "retry" ? "--" : o.stage === "rest" ? `是 · 跟在 ${o.parent_client_order_id || "--"} 后面` : o.rest_mode === "shadow" ? (num(o.rest_shadow_fill_ms) === null ? "模拟：5 秒内不会成交" : `模拟：${stamp(o.rest_shadow_fill_ms)} 会成交`) : o.rest_mode === "live" ? "已开启" : "--"],
     ];
     return html`<div class="detail-grid">${items.map(([k, v]) => html`<div><span>${k}</span> <b>${v}</b></div>`)}</div>${o.error ? html`<p class="error-line">错误：${o.error}</p>` : ""}`;
   };
   // One row per round (user 2026-11-19): the round's buy (gtc / fak, plus a
-  // rest order after a miss) and its reverse-signal sell (stage exit) side by
-  // side; the buy row's PnL already counts what the sale got back.
+  // rest order after a miss, or a retry on a reverse signal after a 0-share
+  // miss) and its reverse-signal sell (stage exit) side by side; the buy row's
+  // PnL already counts what the sale got back.
   const roundKey = (o) => String(o.market_id ?? o.round_id ?? o.client_order_id ?? o.recv_ts);
   const groupRounds = (items) => {
     const byRound = new Map();
     for (const o of items) {
       const key = roundKey(o);
-      const r = byRound.get(key) ?? byRound.set(key, { key, buy: null, rest: null, sell: null, at: o.recv_ts }).get(key);
+      const r = byRound.get(key) ?? byRound.set(key, { key, buy: null, rest: null, retry: null, sell: null, at: o.recv_ts }).get(key);
       if (o.stage === "exit") r.sell = o;
       else if (o.stage === "rest") r.rest = o;
+      else if (o.stage === "retry") r.retry = o;
       else r.buy = o;
       r.at = Math.max(num(r.at) ?? 0, num(o.recv_ts) ?? 0);
     }
-    return [...byRound.values()].filter((r) => r.buy || r.rest).sort((a, b) => b.at - a.at);
+    return [...byRound.values()].filter((r) => r.buy || r.rest || r.retry).sort((a, b) => b.at - a.at);
   };
-  const roundResult = ({ buy, rest, sell }) => {
-    const main = buy && filled(buy) ? buy : rest && filled(rest) ? rest : buy ?? rest;
+  // The order a round's row shows: the one that bought, else the last one tried
+  // (a retry after the first buy missed).
+  const mainOf = ({ buy, rest, retry }) => [buy, rest, retry].find(filled) ?? retry ?? buy ?? rest;
+  const roundResult = ({ buy, rest, retry, sell }) => {
+    const main = mainOf({ buy, rest, retry });
     if (!filled(main)) return result(main).text.startsWith("未成交") ? { ...result(main), text: result(main).text.replace("未成交", "没买到") } : result(main);
     if (sell && filled(sell)) {
       // What the sale did against holding: the held side lost = the sale saved
@@ -85,21 +91,23 @@
   const renderRows = (rounds, open = new Set()) => {
     if (!rounds.length) return html`<tr><td colspan="12" class="empty">这个范围没有下单</td></tr>`;
     return html`${rounds.map((r) => {
-      const main = r.buy && filled(r.buy) ? r.buy : r.rest && filled(r.rest) ? r.rest : r.buy ?? r.rest;
-      const got = (num(r.buy?.filled_shares) ?? 0) + (num(r.rest?.filled_shares) ?? 0);
-      const pnl = [r.buy, r.rest].reduce((sum, o) => (num(o?.pnl) === null ? sum : (sum ?? 0) + o.pnl), null);
+      const main = mainOf(r);
+      // A retry buys the other side: its shares are not added to the first buy's.
+      const got = r.retry ? num(main.filled_shares) ?? 0 : (num(r.buy?.filled_shares) ?? 0) + (num(r.rest?.filled_shares) ?? 0);
+      const pnl = [r.buy, r.rest, r.retry].reduce((sum, o) => (num(o?.pnl) === null ? sum : (sum ?? 0) + o.pnl), null);
       const res = roundResult(r);
-      const tag = main.stage === "gtc" ? html`<span class="tag">限价单</span> ` : r.rest ? html`<span class="tag">吃单 + 挂单补单</span> ` : "";
+      const tag = r.retry ? html`<span class="tag">反向再试</span> ` : main.stage === "gtc" ? html`<span class="tag">限价单</span> `
+        : r.rest ? html`<span class="tag">吃单 + 挂单补单</span> ` : "";
       return html`<tr class="row-click" data-key="${r.key}"><td class="num">${fmt.dateTime(main.recv_ts)}</td><td class="num">${fmt.hm(main.round_start)}</td>
         <td class="l">${tag}${VENUES[main.venue] || main.venue || "--"} · ${LINES[main.line] || main.line || "--"}</td>
         <td class="l ${main.direction === "UP" ? "up" : "down"}">${DIRECTIONS[main.direction] || main.direction || "--"}</td>
         <td class="num">${fmt.price(main.ask_at_signal)}</td><td class="num">${fmt.price(main.limit_price)}</td>
-        <td class="num">${fmt.shares(got)} / ${fmt.shares(main.shares)}</td><td class="l">${sellCell(r.sell)}</td>
+        <td class="num">${fmt.shares(got)} / ${fmt.shares(main.shares)}${r.retry && filled(r.retry) && filled(r.buy) ? html`<br><small class="warn">两边都有：${DIRECTIONS[r.buy.direction]?.split(" ")[0] || ""} ${fmt.shares(r.buy.filled_shares)} 股</small>` : ""}</td><td class="l">${sellCell(r.sell)}</td>
         <td class="l ${res.tone}">${res.text}</td><td class="num ${fmt.tone(pnl)}">${fmt.money(pnl)}</td>
         <td class="num">${ms(main.t_total_ms)}</td><td class="num">${ms(main.late_by_ms)}</td></tr>${open.has(r.key) ? html`<tr class="detail"><td colspan="12">${roundDetail(r)}</td></tr>` : ""}`;
     })}`;
   };
-  const roundDetail = (r) => html`${[["买入", r.buy], ["挂单补单", r.rest], ["反向信号卖出", r.sell]].filter(([, o]) => o)
+  const roundDetail = (r) => html`${[["买入", r.buy], ["挂单补单", r.rest], ["反向再试", r.retry], ["反向信号卖出", r.sell]].filter(([, o]) => o)
     .map(([title, o]) => html`<h4 class="muted" style="margin:6px 0 2px">${title}</h4>${detail(o)}`)}`;
   window.PolyHistory = Object.freeze({ renderRows, result, detail, groupRounds, roundResult, roundKey });
 

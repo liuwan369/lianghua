@@ -146,6 +146,28 @@
       ${card("如果开了暂停", fmt.money(g.net_if_paused_usd), "正 = 少亏，负 = 少赚", fmt.tone(g.net_if_paused_usd))}
     </div><p class="note">只记录不暂停：每单记下信号前 5 分钟的信号数和波动，太乱的单"如果开了暂停就不下"。</p>`;
   };
+  // Retry on a reverse signal after a 0-share miss (retryReverse). Live: what
+  // the retries made. Shadow: the in-range reverse signals with the switch off,
+  // bought at ask + premium and held (fill assumed): an upper bound. Out of
+  // range: the same for the signals the window left out, to check the window.
+  const renderRetry = (r) => {
+    if (!r) return html`<p class="empty">没有数据</p>`;
+    if (!r.judged) return html`<p class="empty">还没有记录（新版本部署后，第一单没买到、又来反方向信号时开始记录）</p>`;
+    const live = r.live || {}, shadow = r.shadow || {}, out = r.out_of_range || {};
+    const paper = (label, g, note) => card(label, `${fmt.int(g?.rounds)} 场`,
+      `胜率 ${fmt.pct(g?.win_rate)} · 买到的话 ${fmt.money(g?.pnl_if_filled_usd)}${note ? ` · ${note}` : ""}`, fmt.tone(g?.pnl_if_filled_usd));
+    return html`<div class="cards">
+      ${card("开关打开时", `再试过 ${fmt.int(live.sent)} 单`, `买到 ${fmt.int(live.filled)} 单 · ${fmt.pct(live.fill_rate)}`)}
+      ${card("再试的结果", `赢 ${fmt.int(live.won)} / ${fmt.int(live.settled)} 场`, `胜率 ${fmt.pct(live.win_rate)} · 盈亏 ${fmt.money(live.pnl_usd)}`, fmt.tone(live.pnl_usd))}
+      ${paper(`符合条件 ${fmt.int(shadow.rounds)} 场`, shadow, "开关关着，只记录")}
+    </div>
+    <div class="cards">
+      ${paper(`离开盘线太远 ${fmt.int(out.too_far?.rounds)} 场`, out.too_far, "不会再试")}
+      ${paper(`已过开盘线 ${fmt.int(out.past_line?.rounds)} 场`, out.past_line, "不会再试")}
+      ${paper(`被别的规则挡掉 ${fmt.int(out.gate?.rounds)} 场`, out.gate, "卖价上限、优势下限等")}
+    </div>
+    <p class="note">第一单一股没买到、已撤，之后来了反方向信号：信号前价格离开盘线够近（还没过线）才再试一次。"买到的话"按信号时卖价 + 限价加价、持有到结算算，假设全部买到，是上限；实际买到率和价格会差一些。下面一行用来检查"离开盘线多近"设得对不对。</p>`;
+  };
   const renderLate = (late) => {
     if (!late) return html`<p class="empty">没有数据</p>`;
     const histogram = late.histogram || {};
@@ -190,10 +212,10 @@
       </tbody></table></div>`;
   };
   const renderAll = (data) => ({
-    funnel: renderFunnel(data?.funnel), switches: renderSwitches(data?.switches), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exitFirst: renderExitFirst(data?.exit_first), edge: renderEdge(data?.edge_sizing), regime: renderRegime(data?.regime), late: renderLate(data?.late_by_ms),
+    funnel: renderFunnel(data?.funnel), switches: renderSwitches(data?.switches), misses: renderMisses(data?.misses), rest: renderRest(data?.rest, data?.gtc), exitFirst: renderExitFirst(data?.exit_first), edge: renderEdge(data?.edge_sizing), regime: renderRegime(data?.regime), retry: renderRetry(data?.retry_reverse), late: renderLate(data?.late_by_ms),
     latency: renderLatency(data?.latency), sources: renderBySource(data?.by_source), skips: renderSkips(data?.skips), hours: renderHours(data?.by_hour),
   });
-  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderSwitches, renderMisses, renderRest, renderExitFirst, renderEdge, renderRegime, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
+  window.PolyStats = Object.freeze({ renderAll, renderFunnel, renderSwitches, renderMisses, renderRest, renderExitFirst, renderEdge, renderRegime, renderRetry, renderLate, renderLatency, renderBySource, renderSkips, renderHours });
 
   const section = (key, title, meta = "") => html`<section class="panel"><div class="panel-head"><h2>${title}</h2><span class="panel-meta">${meta}</span></div><div data-part="${key}"></div></section>`;
   const root = P.mount("stats", "统计", "领先策略的漏斗、没买到的单、速度和按来源的结果，全部从账本算。", html`
@@ -203,6 +225,7 @@
     <div class="grid2">${section("exitFirst", "反向信号就卖出", "买到后第一个反向信号就卖")}${section("edge", "按优势定股数", "优势大多买，优势小少买")}</div>
     ${section("misses", "没买到的单")}
     ${section("rest", "没买到后挂单")}
+    ${section("retry", "没买到后反向再试", "第一单没买到，反方向信号把价格拉回开盘线附近时再买一次")}
     ${section("regime", "行情太乱就暂停（模拟）", "信号前 5 分钟太乱就不下，只记录")}
     <div class="grid2">${section("late", "晚了多少毫秒")}${section("latency", "速度分解", "每笔单从交易所成交到收到回复")}</div>
     ${section("sources", "按信号源")}

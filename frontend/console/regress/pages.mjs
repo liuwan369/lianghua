@@ -164,7 +164,7 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
     "<summary>高级"].map((t) => app.indexOf(t));
   assert.ok(order.every((at, i) => at >= 0 && (i === 0 || at > order[i - 1])), `groups in order: ${order}`);
   for (const key of ["shares", "thresholdBp", "windowMs", "limitPremium", "maxAsk", "fromSec", "toSec", "openBandBp", "openLine", "tokyoRelay",
-    "entryOrder", "restAfterMissSec", "regimePause", "edgeSizing", "exitOnReverse", "restShadow", "roundBudgetUsd", "totalBudgetUsd",
+    "entryOrder", "restAfterMissSec", "regimePause", "edgeSizing", "exitOnReverse", "retryReverse", "retryReverseBp", "restShadow", "roundBudgetUsd", "totalBudgetUsd",
     "dailyLossUsd", "maxRounds", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds"]) {
     assert.equal(app.split(`data-field="${key}"`).length - 1, 1, `one input for ${key}`);
   }

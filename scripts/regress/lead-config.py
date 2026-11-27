@@ -92,6 +92,8 @@ CASES += [("openBandBp", v) for v in (0, 5, 1000, -1, 1001, "5", None)]
 CASES += [("openLine", v) for v in ("tick", "mean60", "close", None)]
 CASES += [(("fromSec", "toSec"), v) for v in ((0, 300), (-1, 265), (265, 265), (270, 265), (15, 301), (0, 0.5), (299, 300))]
 CASES += [("maxQuoteAgeSeconds", v) for v in (0, 0.1, 2, -1)]
+CASES += [("retryReverse", v) for v in (True, False, 1, "on", None)]
+CASES += [("retryReverseBp", v) for v in (0, 0.5, 3, 10, 10.5, -1, "3", None)]
 CASES += [("maxQuoteSkewSeconds", v) for v in (0, 1.5, -1)]
 CASES += [(key, v) for key in ("roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd") for v in (None, 0, -5, 5)]
 CASES += [(("ratchetStepUsd", "ratchetLiftUsd"), v) for v in ((None, None), (20, 10), (20, 20), (20, 30), (20, None), (None, 10), (10, 0))]
@@ -132,7 +134,8 @@ assert validate_config({**defaults, "maxRounds": 3.0})["maxRounds"] == 3
 for extra in ("triggerPrice", "stageShares", "firstTriggerFromSec", "confirmationPrice", *RETIRED_FIELDS):
     assert rejected({**defaults, extra: 0}), f"{extra} is not a binance-lead field"
 ADDED = ("maxAsk", "openBandBp", "openLine", "leadVenues", "tokyoRelay", "restAfterMissSec", "restShadow", "entryOrder", "regimePause",
-         "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "ratchetStepUsd", "ratchetLiftUsd")
+         "edgeSizing", "exitOnReverse", "directVenues", "minEdge", "ratchetStepUsd", "ratchetLiftUsd",
+         "retryReverse", "retryReverseBp")
 for missing in defaults:
     if missing in ADDED:
         continue                     # added after a revision was published: backfilled, below
@@ -157,6 +160,8 @@ assert old["minEdge"] is None, "an older config buys whatever the edge"
 assert validate_config({**defaults, "minEdge": -0.02})["minEdge"] == -0.02
 for bad in ("-0.02", 2, -1.5, True, float("nan")):
     assert rejected({**defaults, "minEdge": bad}), f"minEdge={bad!r}"
+# Retry on a reverse signal (2026-11-27): off in an older config, 3 bp.
+assert old["retryReverse"] is False and old["retryReverseBp"] == 3, "an older config never retries"
 # Profit ratchet (2026-11-25): both or neither, each positive, lift below step.
 assert old["ratchetStepUsd"] is None and old["ratchetLiftUsd"] is None
 ok = validate_config({**defaults, "ratchetStepUsd": 20, "ratchetLiftUsd": 10})

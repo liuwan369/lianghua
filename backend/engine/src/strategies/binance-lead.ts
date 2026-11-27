@@ -93,6 +93,18 @@ export interface BinanceLeadConfig {
    * Live 1105 orders 11-14..11-23: the 229 under -0.02 made -0.067 a share
    * (t -2.41); E:/pm-backup/research-1123/live_filters.py. */
   minEdge: number | null;
+  /** Retry on a reverse signal after a miss (user 2026-11-27, off by default):
+   * once the round's buy ended with 0 shares and nothing of it works, a later
+   * signal the other way whose pre-move price (refPrice) was within
+   * retryReverseBp of the open line, still on the first buy's side of it (so
+   * its move pulls the price back to the line), gets one more buy (client id
+   * :retry). Every gate of the first buy applies; a gate-blocked or too-far
+   * reverse signal does not use the retry up. Off, the first reverse signal it
+   * would act on is only recorded (round.retryShadow). Replay 11-19..11-26
+   * (E:/pm-backup/live/day-1126b/retry_rules.py): pre-move 0-3 bp, 33 rounds,
+   * won 67%, +0.24 a share; 4+ bp away 21.9%. */
+  retryReverse: boolean;
+  retryReverseBp: number;
   maxQuoteAgeSeconds: number;
   maxQuoteSkewSeconds: number;
   roundBudgetUsd?: number;
@@ -111,8 +123,9 @@ export type LeadSignalRecord = Omit<LeadEvent, "kind" | "assetId">;
 export interface LeadStage {
   /** "fak" the round's FAK (client id :1); "rest" the post-only BUY after it
    * missed (client id :rest); "gtc" the round's one GTC (client id :1,
-   * entryOrder gtc). Absent in older state: "fak". */
-  kind?: "fak" | "rest" | "gtc";
+   * entryOrder gtc); "retry" the buy on a reverse signal after the first
+   * missed (client id :retry, retryReverse). Absent in older state: "fak". */
+  kind?: "fak" | "rest" | "gtc" | "retry";
   direction: LeadDirection;
   tokenId: string;
   clientOrderId: string;
@@ -175,6 +188,26 @@ export interface LeadExitFirst {
    * not significant). Absent without an open line, or on an older record. */
   leadBp?: number;
 }
+/** Retry on a reverse signal (retryReverse): the round's first reverse signal
+ * after a 0-share miss that was judged, recorded whether or not a retry was
+ * sent. A later one replaces it until one is sent (the record of a sent retry
+ * is final). */
+export interface LeadRetryShadow {
+  /** Receive time (s) and direction of the reverse signal. */
+  at: number;
+  direction: LeadDirection;
+  /** Its pre-move price against the open line, bp, in its own sense: < 0 still
+   * on the first buy's side (the retry window is -retryReverseBp..0), >= 0
+   * already past the line. */
+  preBp: number;
+  /** That side's ask then (null without one). */
+  ask: number | null;
+  sent: boolean;
+  /** Why not: "off" (the switch), "too_far", "past_line", "gate" (a first-buy
+   * rule declined it; `reason` says which). */
+  skip?: "off" | "too_far" | "past_line" | "gate";
+  reason?: string;
+}
 /** The exit sell (exitOnReverse): one FAK SELL of what the round held, client
  * id <instance>:<market>:exit. Never in `stages` (those are the round's buys). */
 export interface LeadExitOrder {
@@ -210,8 +243,11 @@ export interface LeadRound {
   config: BinanceLeadConfig;
   status: "waiting_start" | "waiting_next_round" | "running" | "ended";
   reason: string;
-  /** The round's FAK once placed, then at most its rest order. */
+  /** The round's first buy, then at most its rest order (after a FAK) or its
+   * retry (retryReverse). Never both: the rest follows a FAK short of its
+   * shares, the retry only a 0-share miss with no rest. */
   stages: LeadStage[];
+  retryShadow?: LeadRetryShadow;
   exitFirst?: LeadExitFirst;
   exit?: LeadExitOrder;
   latest?: LeadQuote;
@@ -232,7 +268,8 @@ export interface BinanceLeadOptions {
 export const BINANCE_LEAD_DEFAULTS: Readonly<BinanceLeadConfig> = Object.freeze({
   instanceId: "binance-lead", assetId: "btc", revision: "1", shares: 5, thresholdBp: 2, windowMs: 250,
   limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8, leadVenues: [...LEAD_VENUES], tokyoRelay: true,
-  directVenues: [...LEAD_VENUES], openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, minEdge: null, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
+  directVenues: [...LEAD_VENUES], openBandBp: 0, openLine: "tick", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false, edgeSizing: false, exitOnReverse: false, minEdge: null,
+  retryReverse: false, retryReverseBp: 3, maxQuoteAgeSeconds: 2, maxQuoteSkewSeconds: 1.5,
 });
 /** Every config field; anything else in a saved config (retired settings) is dropped. */
 const CONFIG_KEYS = [...Object.keys(BINANCE_LEAD_DEFAULTS), "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
@@ -308,6 +345,13 @@ export function leadFairValue(signal: Pick<LeadSignalRecord, "price" | "openMean
   const sd = sigma * Math.sqrt(Math.max(1, secondsLeft - TWAP_DISCOUNT_SEC));
   const up = normalCdf(Math.log(signal.price / signal.openMean60) / sd);
   return signal.direction === "UP" ? up : 1 - up;
+}
+/** The round's buy that holds its position: a retry once it bought (the first
+ * buy then got nothing, by the retry's rule), else the first buy. The exit
+ * judges reverse signals against this side and sells this token. */
+export function heldBuy(round: Pick<LeadRound, "stages">): LeadStage | undefined {
+  const retry = round.stages.find(stage => stage.kind === "retry");
+  return retry && retry.filledShares > EPS ? retry : round.stages[0];
 }
 /** The shares the edge picks (undefined edge: the configured shares). */
 export function edgeShares(edge: number | undefined, configured: number): number {
@@ -418,6 +462,8 @@ export function normalizeBinanceLeadConfig(input: Partial<BinanceLeadConfig> = {
   if (config.minEdge !== null && !(finite(config.minEdge) && config.minEdge >= -1 && config.minEdge <= 1)) {
     throw new Error("minEdge must be null or in [-1, 1]");
   }
+  if (typeof config.retryReverse !== "boolean") throw new Error("retryReverse must be true or false");
+  if (!positive(config.retryReverseBp) || config.retryReverseBp > 10) throw new Error("retryReverseBp must be in (0, 10]");
   // The GTC's remainder is cancelled after restAfterMissSec: 0 would rest it to the close.
   if (config.entryOrder === "gtc" && !(config.restAfterMissSec > 0)) throw new Error("entryOrder gtc needs restAfterMissSec > 0");
   for (const key of ["roundBudgetUsd", "totalBudgetUsd"] as const) {
@@ -624,7 +670,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     for (const round of this.workingRounds.values()) {
       // A rest order's or the GTC's hold is up: pull what still rests (the
       // ended branch below keeps retrying once the round is over).
-      const rest = round.stages[0]?.kind === "gtc" ? round.stages[0] : round.stages[1];
+      // The second stage once there is one (a rest, or a retry after the GTC ended).
+      const rest = round.stages[1] ?? (round.stages[0]?.kind === "gtc" ? round.stages[0] : undefined);
       if (rest && context.now < round.endsAt && rest.cancelAt !== undefined && context.now >= rest.cancelAt
         && hasRemainder(rest) && !context.account.quarantinedOrderIds?.includes(rest.orderId!) && cancelDue(rest, context.now)) {
         rest.cancelRequestedAt = context.now; changed = true;
@@ -698,8 +745,19 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       if (event.kind !== "lead") continue;
       const seenAt = event.receivedAtUnix;
       if (!(round.startsAt <= seenAt && seenAt < round.endsAt)) continue;
-      // One order per round, filled or not (backtest retry=False).
-      if (round.stages.length) continue;
+      // One order per round, filled or not (backtest retry=False), unless a
+      // 0-share miss is followed by a reverse signal (retryReverse).
+      if (round.stages.length) {
+        const retry = this.decideRetry(round, event, context, knownClients);
+        if (retry.changed) changed = true;
+        if (retry.decision) {
+          round.stages.push(retry.decision.stage);
+          round.reason = BinanceLeadStrategy.roundReason(round);
+          this.indexStage(round, retry.decision.stage);
+          actions.push({ kind: "submit", order: retry.decision.order });
+        }
+        continue;
+      }
       const decision = this.decide(round, event, context, knownClients);
       if (!decision) continue;
       round.stages.push(decision.stage);
@@ -714,8 +772,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   }
 
   /** Rules 4-5 for one signal; writes the skip reason when nothing is placed. */
-  private decide(round: LeadRound, event: LeadEvent, context: StrategyContext, knownClients: ReadonlySet<string>):
-    { stage: LeadStage; order: Omit<OrderRequest, "strategyId"> } | undefined {
+  private decide(round: LeadRound, event: LeadEvent, context: StrategyContext, knownClients: ReadonlySet<string>,
+    retry = false): { stage: LeadStage; order: Omit<OrderRequest, "strategyId"> } | undefined {
     const config = round.config;
     const sinceOpen = event.receivedAtUnix - round.startsAt;
     if (!(sinceOpen >= config.fromSec && sinceOpen < config.toSec)) {
@@ -779,8 +837,11 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       round.reason = "数量或限价不符合交易所规则"; return undefined;
     }
     const { kind: _kind, assetId: _assetId, ...signal } = event;
-    const stage: LeadStage = { ...(config.entryOrder === "gtc" ? { kind: "gtc" as const } : {}),
-      direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:1`,
+    // A retry is sent as the round's entry order kind (a GTC rests and is pulled
+    // after restAfterMissSec like the first buy; a FAK ends at once) under its
+    // own client id. Its kind marks it; orderIntent and the cancel path read it.
+    const stage: LeadStage = { ...(retry ? { kind: "retry" as const } : config.entryOrder === "gtc" ? { kind: "gtc" as const } : {}),
+      direction, tokenId, clientOrderId: `${this.state.instanceId}:${round.marketId}:${retry ? "retry" : "1"}`,
       price, shares, createdAt: context.now, status: "CREATED", filledShares: 0,
       signal: { ...signal }, askAtSignal: ask,
       ...(fair !== undefined && edge !== undefined ? { fair, edge, edgeShares: sized } : {}) };
@@ -805,7 +866,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
   private decideExit(round: LeadRound, event: LeadEvent, context: StrategyContext):
     { changed: boolean; order?: Omit<OrderRequest, "strategyId">; cancels?: string[] } {
     if (round.exitFirst !== undefined) return { changed: false };
-    const buy = round.stages[0];
+    const buy = heldBuy(round);
     if (!buy) return { changed: false };
     const held = round.stages.reduce((total, stage) => total + stage.filledShares, 0);
     const first = round.stages.map(stage => stage.firstFillAt).filter(finite).sort((a, b) => a - b)[0];
@@ -826,8 +887,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     // only sets cancelAt when undefined).
     const cancels: string[] = [];
     for (const stage of round.stages) {
-      if ((stage.kind !== "gtc" && stage.kind !== "rest")
-        || !(activeOrder(stage.status) && stage.filledShares < stage.shares - EPS)) continue;
+      const resting = stage.kind === "gtc" || stage.kind === "rest" || (stage.kind === "retry" && round.config.entryOrder === "gtc");
+      if (!resting || !(activeOrder(stage.status) && stage.filledShares < stage.shares - EPS)) continue;
       stage.cancelAt = Math.min(stage.cancelAt ?? context.now, context.now);
       if (!stage.orderId || context.account.quarantinedOrderIds?.includes(stage.orderId) || !cancelDue(stage, context.now)) continue;
       stage.cancelRequestedAt = context.now;
@@ -846,7 +907,7 @@ export class BinanceLeadStrategy implements StrategyPlugin {
    * venue's minimum size. */
   private sendExit(round: LeadRound, context: StrategyContext): { changed: boolean; order?: Omit<OrderRequest, "strategyId"> } {
     const record = round.exitFirst;
-    const buy = round.stages[0];
+    const buy = heldBuy(round);
     if (!record?.waiting || !buy || round.exit) return { changed: false };
     const skip = (why: string) => { delete record.waiting; record.skip = why; return { changed: true }; };
     const working = round.stages.some(stage => activeOrder(stage.status) && stage.filledShares < stage.shares - EPS);
@@ -880,6 +941,53 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (round.status === "running") round.reason = BinanceLeadStrategy.exitReason(exit);
     return { changed: true, order: { clientOrderId: exit.clientOrderId, assetId: round.assetId, marketId: round.marketId,
       roundId: round.roundId, tokenId: exit.tokenId, direction: "SELL", price: limit, shares, timeInForce: "FAK", postOnly: false } };
+  }
+
+  /** Retry on a reverse signal (retryReverse). Judged only when the round's
+   * one buy ended with no shares (CANCELLED / REJECTED / ABANDONED, nothing
+   * working), no rest order was placed, no retry yet, and nothing was sold.
+   * A reverse signal is recorded on round.retryShadow (the first judged one,
+   * replaced by later ones until a retry is sent); with retryReverse on, one
+   * whose pre-move price sits in [-retryReverseBp, 0) bp of the open line goes
+   * through decide() as the round's retry. A signal decide() declines (window,
+   * band, book, maxAsk, regime, minEdge, budget, cash) does not use it up. */
+  private decideRetry(round: LeadRound, event: LeadEvent, context: StrategyContext, knownClients: ReadonlySet<string>):
+    { changed: boolean; decision?: { stage: LeadStage; order: Omit<OrderRequest, "strategyId"> } } {
+    const first = round.stages[0];
+    const config = round.config;
+    if (!first || round.stages.length !== 1 || round.retryShadow?.sent || round.exit || round.exitFirst?.sent
+      || event.direction === first.direction) return { changed: false };
+    if (first.filledShares > EPS || !["CANCELLED", "REJECTED", "ABANDONED"].includes(first.status)) return { changed: false };
+    // A cancel the core is still reconciling can still take a fill that raced
+    // it (core.ts keeps reconciliationPending and the reservation): buying the
+    // other side then would hold both. Wait until it is settled.
+    const core = context.account.orders.find(order => order.clientOrderId === first.clientOrderId);
+    if (core && (core.reconciliationPending === true || core.reservedUsd > EPS || core.filledShares > EPS)) return { changed: false };
+    const line = config.openLine === "mean60" ? event.openMean60 : event.openPrice;
+    if (!positive(line) || !positive(event.refPrice) || Math.floor(event.tradeTimeMs / 300_000) * 300 !== round.startsAt) {
+      return { changed: false };
+    }
+    const preBp = Math.log(event.refPrice / line) * 1e4 * (event.direction === "UP" ? 1 : -1);
+    const ask = event.direction === "UP" ? round.latest?.upAsk : round.latest?.downAsk;
+    const record: LeadRetryShadow = { at: event.receivedAtUnix, direction: event.direction, preBp,
+      ask: unitPrice(ask) ? ask : null, sent: false };
+    const keep = (skip: NonNullable<LeadRetryShadow["skip"]>, reason?: string) => {
+      round.retryShadow = { ...record, skip, ...(reason ? { reason } : {}) };
+      return { changed: true };
+    };
+    if (preBp >= 0) return keep("past_line");
+    if (preBp < -config.retryReverseBp - EPS) return keep("too_far");
+    if (!config.retryReverse) return keep("off");
+    // The first buy's reason is the round's until the retry is placed.
+    const before = round.reason;
+    const decision = this.decide(round, event, context, knownClients, true);
+    if (!decision) {
+      const why = round.reason;
+      round.reason = before;
+      return keep("gate", why);
+    }
+    round.retryShadow = { ...record, sent: true };
+    return { changed: true, decision };
   }
 
   /** The rest order after a missed FAK: the round's FAK ended (cancelled or
@@ -1030,7 +1138,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     return { clientOrderId: stage.clientOrderId, assetId: round.assetId, marketId: round.marketId, roundId: round.roundId,
       tokenId: stage.tokenId, direction: "BUY", price: stage.price, shares: stage.shares,
       ...(stage.kind === "rest" ? { timeInForce: "GTC" as const, postOnly: true }
-        : stage.kind === "gtc" ? { timeInForce: "GTC" as const, postOnly: false } : { timeInForce: "FAK" as const, postOnly: false }),
+        : stage.kind === "gtc" || (stage.kind === "retry" && round.config.entryOrder === "gtc")
+          ? { timeInForce: "GTC" as const, postOnly: false } : { timeInForce: "FAK" as const, postOnly: false }),
       ...(round.config.roundBudgetUsd === undefined ? {} : { roundBudgetUsd: round.config.roundBudgetUsd }) };
   }
   private validSizeAndPrice(instrument: Instrument, shares: number, price: number): boolean {
@@ -1063,7 +1172,8 @@ export class BinanceLeadStrategy implements StrategyPlugin {
       // The miss starts the rest (or its shadow) from the venue's reply.
       stage.missedAt = finite(order.venueReplyAt) ? order.venueReplyAt : finite(order.updatedAt) ? order.updatedAt : this.lastNow;
     }
-    if ((stage.kind === "rest" || stage.kind === "gtc") && stage.cancelAt === undefined && ["OPEN", "PARTIAL"].includes(stage.status)) {
+    const timed = stage.kind === "rest" || stage.kind === "gtc" || (stage.kind === "retry" && order.timeInForce === "GTC");
+    if (timed && stage.cancelAt === undefined && ["OPEN", "PARTIAL"].includes(stage.status)) {
       // The hold runs from the venue's acceptance.
       const accepted = finite(order.httpAckAt) ? order.httpAckAt : finite(order.updatedAt) ? order.updatedAt : this.lastNow;
       stage.cancelAt = accepted + round.config.restAfterMissSec;
@@ -1077,9 +1187,10 @@ export class BinanceLeadStrategy implements StrategyPlugin {
    * before the strategy state was. The order is the round's one attempt. The
    * signal it came from is gone; its fields are zero, the ask is the limit. */
   private adoptOrder(order: OrderRecord): { round: LeadRound; stage: LeadStage } | undefined {
-    const match = /^(.+):([^:]+):(1|rest)$/.exec(order.clientOrderId);
+    const match = /^(.+):([^:]+):(1|rest|retry)$/.exec(order.clientOrderId);
     if (!match || match[1] !== this.state.instanceId) return undefined;
     const round = this.roundsByMarket.get(match[2]!);
+    if (match[3] === "retry") return this.adoptRetry(round, order);
     const rest = match[3] === "rest";
     // A :1 GTC (not post-only) is the round's one GTC (entryOrder gtc).
     const gtc = !rest && order.timeInForce === "GTC" && !order.postOnly;
@@ -1105,6 +1216,30 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     this.noteAttempt(round, stage);
     return { round, stage };
   }
+  /** A :retry order the core holds without its stage: only after the round's
+   * first buy, on the other token, as a BUY. Its signal is gone; the record
+   * says it was sent so the round never sends another. */
+  private adoptRetry(round: LeadRound | undefined, order: OrderRecord): { round: LeadRound; stage: LeadStage } | undefined {
+    const first = round?.stages[0];
+    if (!round || !first || round.stages.length !== 1 || order.direction !== "BUY") return undefined;
+    const direction = order.tokenId === round.upTokenId ? "UP" : order.tokenId === round.downTokenId ? "DOWN" : undefined;
+    if (!direction || direction === first.direction) return undefined;
+    const timed = order.timeInForce === "GTC";
+    const stage: LeadStage = { kind: "retry", ...(timed ? { cancelAt: order.createdAt + round.config.restAfterMissSec } : {}),
+      direction, tokenId: order.tokenId, clientOrderId: order.clientOrderId,
+      price: order.price, shares: order.shares, createdAt: order.createdAt, status: order.status, filledShares: order.filledShares,
+      ...(order.orderId ? { orderId: order.orderId } : {}),
+      error: "重启时反向再试的订单已在交易所记录中，策略记录丢失，按订单恢复",
+      signal: { direction, price: 0, refPrice: 0, moveBp: 0, venue: "bybit", line: "direct", tradeId: 0, tradeTimeMs: 0,
+        receivedAtUnix: order.createdAt, receivedAtMonoMs: 0 },
+      askAtSignal: order.price };
+    round.stages.push(stage);
+    round.retryShadow = { at: order.createdAt, direction, preBp: 0, ask: null, sent: true };
+    this.indexStage(round, stage);
+    if (round.status === "ended") this.workingRounds.set(round.marketId, round);
+    this.noteAttempt(round, stage);
+    return { round, stage };
+  }
   private noteAttempt(round: LeadRound, _stage: LeadStage): void {
     if (round.status !== "ended") round.reason = BinanceLeadStrategy.roundReason(round);
   }
@@ -1113,10 +1248,11 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     const stage = round.stages[0];
     if (!stage) return round.reason;
     if (round.exit) return BinanceLeadStrategy.exitReason(round.exit);
-    if (stage.kind === "gtc") return BinanceLeadStrategy.gtcReason(stage);
+    if (stage.kind === "gtc" && round.stages[1]?.kind !== "retry") return BinanceLeadStrategy.gtcReason(stage);
+    const second = round.stages[1];
+    if (second?.kind === "retry") return `第一单没买到；反向再试：${BinanceLeadStrategy.retryReason(second)}`;
     const text = BinanceLeadStrategy.fakReason(stage);
-    const rest = round.stages[1];
-    return rest ? `${text}；挂单补单：${BinanceLeadStrategy.restReason(rest)}` : text;
+    return second ? `${text}；挂单补单：${BinanceLeadStrategy.restReason(second)}` : text;
   }
   /** The exit sell on the first reverse signal, once sent. */
   private static exitReason(exit: LeadExitOrder): string {
@@ -1141,6 +1277,18 @@ export class BinanceLeadStrategy implements StrategyPlugin {
     if (stage.status === "UNKNOWN") return "状态待确认";
     if (stage.status === "ABANDONED") return "意图已放弃";
     return stage.filledShares > EPS ? `买到 ${got} 股，剩余已撤` : "没成交，已撤";
+  }
+  private static retryReason(stage: LeadStage): string {
+    const got = `${Number(stage.filledShares.toFixed(4))}/${stage.shares}`;
+    const side = stage.direction === "UP" ? "涨" : "跌";
+    if (stage.status === "CREATED" || stage.status === "SUBMITTING") return `买${side}，已下单，等待成交回报`;
+    if (stage.status === "OPEN") return `买${side}，挂在 ${priceText(stage.price)}，到时撤单`;
+    if (stage.status === "PARTIAL") return `买${side}，已买到 ${got} 股，剩余挂着，到时撤单`;
+    if (stage.status === "ABANDONED") return `买${side}，意图已放弃`;
+    if (stage.status === "REJECTED") return `买${side}，订单被拒`;
+    if (stage.status === "UNKNOWN") return `买${side}，订单状态待确认`;
+    if (stage.filledShares > EPS) return `买${side}，已买到 ${got} 股，持有到结算`;
+    return `买${side}，未成交，已撤`;
   }
   private static gtcReason(stage: LeadStage): string {
     const got = `${Number(stage.filledShares.toFixed(4))}/${stage.shares}`;
@@ -1222,7 +1370,12 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         || (round.exit !== undefined && (![round.upTokenId, round.downTokenId].includes(round.exit.tokenId)
           || round.exit.clientOrderId !== `${state.instanceId}:${round.marketId}:exit` || !unitPrice(round.exit.price)
           || !positive(round.exit.shares) || !finite(round.exit.createdAt) || !finite(round.exit.filledShares)
-          || round.exit.filledShares < 0 || !STAGE_STATUSES.includes(round.exit.status)))) throw new Error("invalid persisted binance-lead round");
+          || round.exit.filledShares < 0 || !STAGE_STATUSES.includes(round.exit.status)))
+        || (round.retryShadow !== undefined && (!finite(round.retryShadow.at) || !validDirection(round.retryShadow.direction)
+          || !finite(round.retryShadow.preBp) || (round.retryShadow.ask !== null && !unitPrice(round.retryShadow.ask))
+          || typeof round.retryShadow.sent !== "boolean"
+          || (round.retryShadow.skip !== undefined && !["off", "too_far", "past_line", "gate"].includes(round.retryShadow.skip))
+          || (round.retryShadow.reason !== undefined && typeof round.retryShadow.reason !== "string")))) throw new Error("invalid persisted binance-lead round");
       // The book seen by a previous process is not the book in force now.
       delete round.latest;
       // The 3rd-reverse-signal shadow exit an older engine kept (removed 2026-11-17).
@@ -1233,25 +1386,29 @@ export class BinanceLeadStrategy implements StrategyPlugin {
         // Fields an older engine wrote: the stage number (always 1 now) and the
         // fair-value edge are dropped.
         const legacy = stage as LeadStage & { stage?: unknown; fairEdge?: unknown };
-        const rest = index === 1;
+        const retry = index === 1 && stage.kind === "retry";
+        const rest = index === 1 && !retry;
         const fak = round.stages[0]!;
         const gtc = stage.kind === "gtc";
         if ((legacy.stage !== undefined && legacy.stage !== 1)
-          // The first stage is the FAK or the GTC; a rest only follows a FAK.
-          || (rest ? stage.kind !== "rest" || fak.kind === "gtc" : !gtc && (stage.kind ?? "fak") !== "fak")
-          || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:${rest ? "rest" : "1"}`
+          // The first stage is the FAK or the GTC; a rest only follows a FAK; a
+          // retry follows a first buy that got nothing, on the other side.
+          || (rest ? stage.kind !== "rest" || fak.kind === "gtc"
+            : retry ? stage.direction === fak.direction
+            : !gtc && (stage.kind ?? "fak") !== "fak")
+          || stage.clientOrderId !== `${state.instanceId}:${round.marketId}:${rest ? "rest" : retry ? "retry" : "1"}`
           // Only the rest and the GTC have a timed cancel; a rest follows a FAK
           // short of its shares, on its token, at its limit, for at most the remainder.
-          || (!rest && !gtc && stage.cancelAt !== undefined)
-          || (gtc && stage.cancelAt !== undefined && !finite(stage.cancelAt))
+          || (!rest && !gtc && !retry && stage.cancelAt !== undefined)
+          || ((gtc || retry) && stage.cancelAt !== undefined && !finite(stage.cancelAt))
           || (rest && ((stage.cancelAt !== undefined && !finite(stage.cancelAt)) || stage.tokenId !== fak.tokenId
             || Math.abs(stage.price - fak.price) > EPS || stage.shares > fak.shares - fak.filledShares + EPS))
           || !validDirection(stage.direction)
           || stage.tokenId !== (stage.direction === "UP" ? round.upTokenId : round.downTokenId)
           || !unitPrice(stage.price) || stage.price > MAX_LIMIT + EPS
           // The first order is the configured shares, or (edgeSizing) one of the edge tiers.
-          || (rest ? !(stage.shares > 0) : ![round.config.shares, EDGE_SHARES_LOW, EDGE_SHARES_HIGH]
-            .some(n => stage.shares === leadShares(n, stage.price)))
+          || (rest || (retry && stage.signal.tradeTimeMs === 0) ? !(stage.shares > 0)
+            : ![round.config.shares, EDGE_SHARES_LOW, EDGE_SHARES_HIGH].some(n => stage.shares === leadShares(n, stage.price)))
           || (stage.fair !== undefined && !(finite(stage.fair) && stage.fair >= 0 && stage.fair <= 1))
           || (stage.edge !== undefined && !finite(stage.edge))
           || (stage.edgeShares !== undefined && !positive(stage.edgeShares))

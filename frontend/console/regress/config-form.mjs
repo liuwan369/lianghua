@@ -31,11 +31,11 @@ const S = window.PolySettings;
 
 // strategy_config.py default_config() keys.
 const SERVER_KEYS = ["assetId", "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "leadVenues", "tokyoRelay",
-  "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
+  "directVenues", "openBandBp", "openLine", "restAfterMissSec", "restShadow", "entryOrder", "regimePause", "edgeSizing", "exitOnReverse", "minEdge", "retryReverse", "retryReverseBp", "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
   "ratchetStepUsd", "ratchetLiftUsd", "durationMinutes", "maxRounds", "mode"].sort();
 const published = { assetId: "btc", shares: 5, thresholdBp: 2, windowMs: 250, limitPremium: 0.03, fromSec: 15, toSec: 265, maxAsk: 0.8,
   leadVenues: ["bybit", "binance", "okx"], tokyoRelay: true, directVenues: ["bybit", "binance", "okx"], openBandBp: 5, openLine: "mean60", restAfterMissSec: 0, restShadow: true, entryOrder: "fak", regimePause: false,
-  edgeSizing: false, exitOnReverse: false, minEdge: null, maxQuoteAgeSeconds: 2,
+  edgeSizing: false, exitOnReverse: false, minEdge: null, retryReverse: false, retryReverseBp: 3, maxQuoteAgeSeconds: 2,
   maxQuoteSkewSeconds: 1.5, roundBudgetUsd: null, totalBudgetUsd: 200, dailyLossUsd: 50, ratchetStepUsd: null, ratchetLiftUsd: null,
   durationMinutes: 0, maxRounds: 12, mode: "live" };
 
@@ -120,6 +120,20 @@ for (const bad of ["-1.5", "2", "x"]) assert.ok("minEdge" in S.buildConfig({ ...
   // day's own profit and stops at once.
   const steep = S.buildConfig({ ...inputs, ratchetStepUsd: "20", ratchetLiftUsd: "20" }, published);
   assert.ok("ratchetLiftUsd" in steep.errors, "lift >= step is rejected");
+}
+
+// Retry on a reverse signal after a miss (2026-11-27): a switch, off; and how close (bp, (0, 10]).
+{
+  assert.equal(S.inputsFrom(published).retryReverse, false);
+  assert.equal(S.inputsFrom({ regimePause: true }).retryReverse, false, "an older config without it is off");
+  assert.equal(S.inputsFrom(published).retryReverseBp, "3");
+  assert.equal(S.inputsFrom({ regimePause: true }).retryReverseBp, "3", "an older config gets the default 3");
+  const on = S.buildConfig({ ...inputs, retryReverse: true, retryReverseBp: "2.5" }, published);
+  assert.deepEqual({ ...on.errors }, {});
+  assert.equal(on.config.retryReverse, true);
+  assert.equal(on.config.retryReverseBp, 2.5);
+  assert.equal(S.buildConfig({ ...inputs, retryReverse: "yes" }, published).config.retryReverse, false, "only true turns it on");
+  for (const bad of ["0", "-1", "11", ""]) assert.ok("retryReverseBp" in S.buildConfig({ ...inputs, retryReverseBp: bad }, published).errors, bad);
 }
 
 // --- validation ---

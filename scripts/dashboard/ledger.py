@@ -108,6 +108,13 @@ CREATE TABLE IF NOT EXISTS lead_exit_shadows (
  round_start REAL, recv_ts REAL NOT NULL, payload TEXT NOT NULL,
  PRIMARY KEY(run_id,market_id)
 );
+-- lead_retry_shadow (cli/platform.ts leadRetryShadowFields): per round with a
+-- judged reverse signal after a 0-share miss, where it stood and the retry.
+CREATE TABLE IF NOT EXISTS lead_retry_shadows (
+ run_id TEXT NOT NULL REFERENCES runs(run_id), market_id TEXT NOT NULL,
+ round_start REAL, recv_ts REAL NOT NULL, payload TEXT NOT NULL,
+ PRIMARY KEY(run_id,market_id)
+);
 CREATE INDEX IF NOT EXISTS settlement_market_id ON settlement_details(market_id);
 CREATE TABLE IF NOT EXISTS lead_signals (
  run_id TEXT NOT NULL REFERENCES runs(run_id), byte_offset INTEGER NOT NULL, received_at REAL NOT NULL,
@@ -121,7 +128,7 @@ INSERT OR IGNORE INTO data_version VALUES(1, 0);
 # latest runtime matters (platform_runtime). 34,609 status rows were 38 MB of
 # the events table after 17 h (2026-11-14).
 EVENT_KINDS = frozenset({"quote", "fill", "taker", "cancel", "resolved", "reset", "stopped", "unresolved", "error",
-                         "order", "settlement", "lead_signal", "lead_order", "lead_exit_shadow"})
+                         "order", "settlement", "lead_signal", "lead_order", "lead_exit_shadow", "lead_retry_shadow"})
 # lead_signal (cli/platform.ts leadJournalFields): what the strategy did with one lead signal.
 LEAD_OUTCOMES = frozenset({"order_submitted", "skipped", "no_round", "stopping"})
 # contracts.ts LEAD_VENUES / LeadLine.
@@ -129,6 +136,8 @@ LEAD_VENUES = ("bybit", "binance", "okx")
 LEAD_LINES = ("direct", "tokyo")
 # lead_order (cli/platform.ts leadOrderFields): one record per order.
 # Why the exit on the first reverse signal did not sell (strategies/binance-lead.ts decideExit).
+# binance-lead LeadRetryShadow.skip.
+RETRY_SKIPS = frozenset({"off", "too_far", "past_line", "gate"})
 EXIT_SKIPS = frozenset({"off", "paused", "halted", "market_blocked", "buy_working", "no_bid", "no_rules", "below_min_size",
                         "too_late", "restart"})
 LEAD_ORDER_STATUSES = frozenset({"CREATED", "SUBMITTING", "OPEN", "PARTIAL", "FILLED", "CANCELLED", "REJECTED",
@@ -418,7 +427,7 @@ def _strategy_projection(value):
         result = {key: _number(source.get(key)) for key in (
             "shares", "thresholdBp", "windowMs", "limitPremium", "fromSec", "toSec", "maxAsk", "openBandBp",
             "maxQuoteAgeSeconds", "maxQuoteSkewSeconds", "roundBudgetUsd", "totalBudgetUsd", "dailyLossUsd",
-            "ratchetStepUsd", "ratchetLiftUsd")}
+            "ratchetStepUsd", "ratchetLiftUsd", "retryReverseBp")}
         venues = source.get("leadVenues")
         result["leadVenues"] = [v for v in venues if v in LEAD_VENUES] if isinstance(venues, list) else None
         result["tokyoRelay"] = source.get("tokyoRelay") if isinstance(source.get("tokyoRelay"), bool) else None
@@ -426,7 +435,7 @@ def _strategy_projection(value):
         result["directVenues"] = [v for v in direct if v in LEAD_VENUES] if isinstance(direct, list) else None
         result["openLine"] = source.get("openLine") if source.get("openLine") in ("tick", "mean60") else None
         result["entryOrder"] = source.get("entryOrder") if source.get("entryOrder") in ("fak", "gtc") else None
-        for flag in ("regimePause", "edgeSizing", "exitOnReverse"):
+        for flag in ("regimePause", "edgeSizing", "exitOnReverse", "retryReverse"):
             result[flag] = source.get(flag) if isinstance(source.get(flag), bool) else None
         result["revision"] = _text(str(source["revision"])) if source.get("revision") is not None else None
         return result
@@ -722,6 +731,20 @@ def _projection(record):
         result["direction"] = record.get("direction") if record.get("direction") in ("UP", "DOWN") else None
         result["price"] = result["amount"] = result["pnl"] = None
         return result
+    if record["event"] == "lead_retry_shadow":
+        for field in ("market_id", "round_id", "token_id", "retry_client_order_id", "retry_order_id", "reason"):
+            result[field] = _text(record.get(field))
+        for field in ("round_start", "at_ms", "sec_since_open", "pre_bp", "ask", "retry_bp", "retry_price",
+                      "retry_shares", "retry_filled", "limit_premium", "config_shares"):
+            result[field] = _number(record.get(field))
+        for field in ("first_direction", "direction"):
+            result[field] = record.get(field) if record.get(field) in ("UP", "DOWN") else None
+        for field in ("sent", "retry_on"):
+            result[field] = record.get(field) if isinstance(record.get(field), bool) else None
+        result["skip"] = record.get("skip") if record.get("skip") in RETRY_SKIPS else None
+        result["retry_status"] = record.get("retry_status") if record.get("retry_status") in LEAD_ORDER_STATUSES else None
+        result["price"] = result["amount"] = result["pnl"] = None
+        return result
     if record["event"] == "lead_order":
         # Every field of cli/platform.ts leadOrderFields, typed; never an amount
         # (fills are their own events and carry the money).
@@ -738,7 +761,7 @@ def _projection(record):
         result["line"] = record.get("line") if record.get("line") in LEAD_LINES else None
         # The round's FAK, or the rest order placed after its miss; and what the
         # round's config did after a miss (live / shadow / off).
-        result["stage"] = record.get("stage") if record.get("stage") in ("rest", "gtc", "exit") else "fak"
+        result["stage"] = record.get("stage") if record.get("stage") in ("rest", "gtc", "exit", "retry") else "fak"
         # The exit sell is the round's one SELL; every other lead order buys.
         result["order_side"] = "SELL" if result["stage"] == "exit" else "BUY"
         result["edge_sizing"] = record.get("edge_sizing") if isinstance(record.get("edge_sizing"), bool) else None
@@ -986,6 +1009,10 @@ def _switches(every, orders, sells, exits, pnl_of, base_shares=None):
     for market, first in firsts.items():
         buys = filled_by_market.get(market, [])
         if not buys or any(b.get("outcome") not in ("won", "lost") for b in buys):
+            continue
+        # A retry (retryReverse) bought the other side: this round's outcome and
+        # shares are not the first buy's, so it is not one of the compared rounds.
+        if any(b.get("stage") == "retry" for b in buys):
             continue
         record = exit_by_market.get(market)
         values = [pnl_of(b)[0] for b in buys]
@@ -1811,7 +1838,7 @@ class Ledger:
                         candidate = record.get(key)
                         if isinstance(candidate, (str, int)) and not isinstance(candidate, bool) and str(candidate):
                             stable_id = f"{key}:{candidate}"
-                            if (kind == "fill" and key not in ("event_id", "eventId")) or kind in ("lead_order", "lead_exit_shadow"):
+                            if (kind == "fill" and key not in ("event_id", "eventId")) or kind in ("lead_order", "lead_exit_shadow", "lead_retry_shadow"):
                                 # A trade id identifies the economic fill, not
                                 # one status/fee update of it; a lead_order's
                                 # event id names the order, and a restart may
@@ -1930,6 +1957,14 @@ class Ledger:
         # A signal is not trading activity: no market row, so a round that only
         # saw signals never enters market summaries or settlement handover.
         if kind == "lead_signal":
+            return
+        if kind == "lead_retry_shadow":
+            if event.get("market_id"):
+                db.execute("""INSERT INTO lead_retry_shadows(run_id,market_id,round_start,recv_ts,payload) VALUES(?,?,?,?,?)
+                    ON CONFLICT(run_id,market_id) DO UPDATE SET round_start=excluded.round_start,recv_ts=excluded.recv_ts,
+                    payload=excluded.payload""",
+                           (run_id, event["market_id"], event.get("round_start"), event.get("time") or 0,
+                            json.dumps(event, allow_nan=False)))
             return
         if kind == "lead_exit_shadow":
             if event.get("market_id"):
@@ -3056,8 +3091,18 @@ class Ledger:
         for item in exits.values():
             win = winners.get(item.get("market_id"))
             item["won"] = None if win is None or not item.get("token_id") else item["token_id"] == win
+        retries = {}
+        if self._has_table(db, "lead_retry_shadows"):
+            for row in db.execute(f"SELECT payload FROM lead_retry_shadows WHERE run_id IN ({marks}){clause} ORDER BY recv_ts", eargs):
+                item = json.loads(row["payload"])
+                retries[item.get("market_id")] = item
+        won_by = self._winners(db, list(retries))
+        for item in retries.values():
+            win = won_by.get(item.get("market_id"))
+            item["won"] = None if win is None or not item.get("token_id") else item["token_id"] == win
         return {"signals": signals, "in_window": in_window, "skips": skips,
-                "orders": self._lead_order_rows(db, run_ids, start), "exits": list(exits.values())}
+                "orders": self._lead_order_rows(db, run_ids, start), "exits": list(exits.values()),
+                "retries": list(retries.values())}
 
     def lead_stats(self, run_id, *, range="run", official=None, now=None, base_shares=None):
         """GET /api/stats/lead. `official` is {(asset, roundId): {"pnl": ...}}
@@ -3088,8 +3133,12 @@ class Ledger:
         every = [o for o in every if o.get("stage") != "exit"]
         # The round's FAK is the order every figure below counts; a rest order
         # placed after its miss (stage "rest") is reported on its own.
-        orders = [o for o in every if o.get("stage") != "rest"]
+        orders = [o for o in every if o.get("stage") not in ("rest", "retry")]
         rests = [o for o in every if o.get("stage") == "rest"]
+        # Retry on a reverse signal (retryReverse): never a round's order, so the
+        # switch changes no order count or fill rate; its PnL is the account's
+        # and goes into the funnel's PnL below.
+        retried = [o for o in every if o.get("stage") == "retry"]
         runtime = json.loads(runtime_row["payload"]) if runtime_row else {}
         official = official or {}
 
@@ -3112,7 +3161,8 @@ class Ledger:
         filled = [o for o in orders if (o.get("filled_shares") or 0) > EPS_SHARES]
         settled = [o for o in filled if o["outcome"] in ("won", "lost")]
         won = [o for o in settled if o["outcome"] == "won"]
-        pnl_values = [pnl_of(o) for o in settled]
+        retry_settled = [o for o in retried if (o.get("filled_shares") or 0) > EPS_SHARES and o["outcome"] in ("won", "lost")]
+        pnl_values = [pnl_of(o) for o in settled + retry_settled]
         sources = {source for value, source in pnl_values if value is not None}
         funnel = {"signals": signals, "signals_in_window": in_window, "orders": len(orders),
                   "filled": len(filled), "fill_rate": _ratio(len(filled), len(orders)),
@@ -3120,9 +3170,10 @@ class Ledger:
                   "pnl_usd": _sum(value for value, _ in pnl_values),
                   "pnl_source": "official" if sources == {"official"} else "ledger" if sources == {"ledger"}
                   else "mixed" if sources else None,
-                  "fees_usd": _sum(o.get("fee_usd") for o in filled)}
+                  "fees_usd": _sum(o.get("fee_usd") for o in filled + [r for r in retried if (r.get("filled_shares") or 0) > EPS_SHARES])}
         # PnL per settled share: accounts with different share sizes compare on it.
-        funnel["settled_shares"] = _sum(o.get("filled_shares") for o in settled)
+        # The retry's shares with its PnL, so pnl_per_share divides like with like.
+        funnel["settled_shares"] = _sum(o.get("filled_shares") for o in settled + retry_settled)
         funnel["pnl_per_share"] = (round(funnel["pnl_usd"] / funnel["settled_shares"], 6)
                                    if funnel["pnl_usd"] is not None and funnel["settled_shares"] else None)
 
@@ -3307,10 +3358,43 @@ class Ledger:
                     value = pnl_of(order)[0]
                     if value is not None:
                         row["pnl_usd"] = round((row["pnl_usd"] or 0) + value, 6)
+        # Retry on a reverse signal. Live: the retries sent and what they made.
+        # Shadow (switch off): each in-range reverse signal ("off"), bought at
+        # its ask + the premium, held to the close (fill assumed, no fee): an
+        # upper bound. Out of range: the same, per skip, to check the window.
+        judged = [dict(item) for item in base.get("retries", [])]
+        retry_skips = {}
+        for item in judged:
+            if item.get("skip"):
+                retry_skips[item["skip"]] = retry_skips.get(item["skip"], 0) + 1
+        def _paper(item):
+            ask, premium = item.get("ask"), item.get("limit_premium")
+            shares = item.get("retry_shares") or item.get("config_shares")
+            if ask is None or item["won"] is None or premium is None or not shares:
+                return None
+            price = ask + premium
+            return shares * (1 - price) if item["won"] else -shares * price
+
+        def _paper_group(items):
+            done = [i for i in items if i["won"] is not None and i.get("ask") is not None]
+            return {"rounds": len(done), "won": sum(1 for i in done if i["won"]),
+                    "win_rate": _ratio(sum(1 for i in done if i["won"]), len(done)),
+                    "pnl_if_filled_usd": _sum(_paper(i) for i in done)}
+        retry_got = [o for o in retried if (o.get("filled_shares") or 0) > EPS_SHARES]
+        retry_won = sum(1 for o in retry_settled if o["outcome"] == "won")
+        retry_reverse = {"judged": len(judged), "skips": retry_skips,
+                         "live": {"sent": len(retried), "filled": len(retry_got),
+                                  "fill_rate": _ratio(len(retry_got), len(retried)),
+                                  "settled": len(retry_settled), "won": retry_won,
+                                  "win_rate": _ratio(retry_won, len(retry_settled)),
+                                  "pnl_usd": _sum(pnl_of(o)[0] for o in retry_settled)},
+                         "shadow": _paper_group([i for i in judged if i.get("skip") == "off"]),
+                         "out_of_range": {skip: _paper_group([i for i in judged if i.get("skip") == skip])
+                                          for skip in ("too_far", "past_line", "gate")}}
         return {"run_id": run_id, "range": range, "from": start, "to": now, "run_count": len(run_ids),
                 "funnel": funnel, "misses": misses, "late_by_ms": late_by, "latency": latency,
                 "by_source": {"rows": rows, "lines": lines}, "skips": skips, "by_hour": hours, "rest": rest, "gtc": gtc, "regime": regime,
-                "exit_first": exit_first, "edge_sizing": edge_sizing, "switches": switches}
+                "exit_first": exit_first, "edge_sizing": edge_sizing, "switches": switches, "retry_reverse": retry_reverse}
 
     def lead_orders_page(self, run_id, *, range="run", limit=200, before=None, official=None, now=None):
         """GET /api/orders/lead: lead orders newest first, with the round's
@@ -3371,7 +3455,7 @@ class Ledger:
                 # Hundreds of signals a day would bury the run log's errors;
                 # signals and lead orders are read on their own
                 # (kinds=["lead_signal"], lead_orders_page).
-                clause += " AND kind NOT IN ('lead_signal','lead_order','lead_exit_shadow')"
+                clause += " AND kind NOT IN ('lead_signal','lead_order','lead_exit_shadow','lead_retry_shadow')"
             if asset_id is not None:
                 asset_id = _query_asset(asset_id)
                 clause += " AND asset_id=?"

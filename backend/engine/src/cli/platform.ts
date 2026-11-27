@@ -11,7 +11,7 @@ import type { AssetId, CoreState, HardLimits, LeadVenue, MarketBookSnapshot, Mar
 import { PlatformJournal } from "../platform/journal.js";
 import { connectPolymarketPlatform, discoverMarket } from "../platform/polymarket.js";
 import { PlatformStore } from "../platform/store.js";
-import { createStrategy, normalizeBinanceLeadConfig, presignPrices, regimePause, type BinanceLeadConfig, type BinanceLeadState,
+import { createStrategy, heldBuy, normalizeBinanceLeadConfig, presignPrices, regimePause, type BinanceLeadConfig, type BinanceLeadState,
   type BinanceLeadStrategy, type LeadExitOrder, type LeadRound, type LeadStage } from "../strategies/binance-lead.js";
 
 /** The only built-in strategy; also its key in CoreState.strategyStates. */
@@ -747,6 +747,8 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   const askGoneMs = msOf(stage?.askGoneAtUnix);
   const rest = stage?.kind === "rest";
   const gtc = stage?.kind === "gtc";
+  // retryReverse: the buy on a reverse signal after the round's first missed.
+  const retry = stage?.kind === "retry";
   // rest_mode: what the round's config did after a miss ("live" placed a rest
   // order, "shadow" only recorded what one would have filled, "off" neither,
   // "gtc" the round's one GTC rested what did not match at once).
@@ -757,7 +759,7 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
   const sharesBy = (maker: boolean) => filled.filter(fill => fill.isMaker === maker).reduce((total, fill) => total + fill.shares, 0);
   // Shadow regime pause: would this round's signal have been skipped as wild.
   const regime = signal ? regimePause(signal) : { pause: false, reason: null };
-  return { stage: rest ? "rest" : gtc ? "gtc" : "fak", rest_mode: restMode,
+  return { stage: rest ? "rest" : gtc ? "gtc" : retry ? "retry" : "fak", rest_mode: restMode,
     signals300: signal?.signals300 ?? null, vol300_bp: signal?.vol300Bp ?? null,
     regime_pause: signal && (Number.isFinite(signal.signals300) || Number.isFinite(signal.vol300Bp)) ? regime.pause : null,
     // Size by edge (shadow while edgeSizing is off): the fair value and edge
@@ -765,8 +767,9 @@ export function leadOrderFields(round: Readonly<LeadRound> | undefined, stage: R
     fair: stage?.fair ?? null, edge: stage?.edge ?? null, edge_shares: stage?.edgeShares ?? null,
     edge_sizing: config ? config.edgeSizing : null,
     regime_reason: regime.reason,
-    taker_shares: gtc ? sharesBy(false) : null, maker_shares: gtc ? sharesBy(true) : null,
-    parent_client_order_id: rest && round ? round.stages[0]?.clientOrderId ?? null : null,
+    taker_shares: gtc || (retry && config?.entryOrder === "gtc") ? sharesBy(false) : null,
+    maker_shares: gtc || (retry && config?.entryOrder === "gtc") ? sharesBy(true) : null,
+    parent_client_order_id: (rest || retry) && round ? round.stages[0]?.clientOrderId ?? null : null,
     rest_shadow_fill_ms: rest ? null : msOf(stage?.restShadowFillAt),
     client_order_id: order?.clientOrderId ?? stage?.clientOrderId ?? null, order_id: order?.orderId ?? stage?.orderId ?? null,
     market_id: order?.marketId ?? round?.marketId ?? null, round_id: order?.roundId ?? round?.roundId ?? null,
@@ -800,7 +803,7 @@ export function leadExitOrderFields(round: Readonly<LeadRound>, exit: Readonly<L
   return { stage: "exit", side: "SELL", rest_mode: null,
     client_order_id: exit.clientOrderId, order_id: order?.orderId ?? exit.orderId ?? null,
     market_id: round.marketId, round_id: round.roundId, round_start: round.startsAt,
-    direction: round.stages[0]?.direction ?? null, token_id: exit.tokenId,
+    direction: heldBuy(round)?.direction ?? null, token_id: exit.tokenId,
     status: exit.status === "ABANDONED" ? "ABANDONED" : order?.status ?? exit.status,
     venue_status: order?.venueStatus ?? null, error: safeErrorMessage(order?.error ?? exit.error) ?? null,
     sec_since_open: first ? first.at - round.startsAt : null, bid_at_signal: first?.bid ?? null,
@@ -819,7 +822,7 @@ export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string,
   if (!stages.length) return undefined;
   const shares = stages.reduce((total, stage) => total + stage.filledShares, 0);
   return { market_id: round.marketId, round_id: round.roundId, round_start: round.startsAt,
-    direction: round.stages[0]!.direction, token_id: round.stages[0]!.tokenId, held_shares: shares,
+    direction: heldBuy(round)!.direction, token_id: heldBuy(round)!.tokenId, held_shares: shares,
     first_triggered: round.exitFirst !== undefined, first_ms: msOf(round.exitFirst?.at),
     first_sec_since_open: round.exitFirst ? round.exitFirst.at - round.startsAt : null,
     first_bid: round.exitFirst?.bid ?? null, first_shares: round.exitFirst?.shares ?? null,
@@ -828,6 +831,43 @@ export function leadExitShadowFields(round: Readonly<LeadRound>): Record<string,
     exit_status: round.exit?.status ?? null, exit_price: round.exit?.price ?? null,
     exit_shares: round.exit?.shares ?? null, exit_filled: round.exit?.filledShares ?? null,
     exit_client_order_id: round.exit?.clientOrderId ?? null, exit_order_id: round.exit?.orderId ?? null };
+}
+/** One `lead_retry_shadow` line per round with a judged reverse signal after
+ * a 0-share miss (retryReverse; key lead_retry_shadow:<marketId>), written at
+ * the round's end: where the reverse signal stood, the side's ask then, sent
+ * or why not, and what the retry got. token_id is the side the retry buys, so
+ * the console joins it with the round's winner. */
+export function leadRetryShadowFields(round: Readonly<LeadRound>): Record<string, unknown> | undefined {
+  const record = round.retryShadow;
+  if (!record) return undefined;
+  const retry = round.stages.find(stage => stage.kind === "retry");
+  return { market_id: round.marketId, round_id: round.roundId, round_start: round.startsAt,
+    first_direction: round.stages[0]?.direction ?? null, direction: record.direction,
+    token_id: record.direction === "UP" ? round.upTokenId : round.downTokenId,
+    at_ms: msOf(record.at), sec_since_open: record.at - round.startsAt, pre_bp: record.preBp, ask: record.ask,
+    sent: record.sent, skip: record.skip ?? null, reason: record.reason ?? null,
+    retry_bp: round.config.retryReverseBp, retry_on: round.config.retryReverse,
+    // What a shadow retry is scored at: the ask + this premium, this many shares.
+    limit_premium: round.config.limitPremium, config_shares: round.config.shares,
+    retry_status: retry ? (retry.status === "ABANDONED" ? "ABANDONED" : retry.status) : null,
+    retry_price: retry?.price ?? null, retry_shares: retry?.shares ?? null, retry_filled: retry?.filledShares ?? null,
+    retry_client_order_id: retry?.clientOrderId ?? null, retry_order_id: retry?.orderId ?? null };
+}
+/** Writes each round's lead_retry_shadow once, when the round has ended; only
+ * rounds still open when this run started (as the exit shadow log). */
+export function createLeadRetryShadowLog(rounds: () => readonly Readonly<LeadRound>[],
+  write: (fields: Record<string, unknown>, eventId: string) => void, startedAt: number) {
+  const written = new Set<string>();
+  return {
+    observe(now: number): void {
+      for (const round of rounds()) {
+        if (written.has(round.marketId) || round.endsAt <= startedAt || now < round.endsAt) continue;
+        written.add(round.marketId);
+        const fields = leadRetryShadowFields(round);
+        if (fields) write(fields, `lead_retry_shadow:${round.marketId}`);
+      }
+    },
+  };
 }
 export function createLeadExitShadowLog(rounds: () => readonly Readonly<LeadRound>[],
   write: (fields: Record<string, unknown>, eventId: string) => void, startedAt: number) {
@@ -1214,6 +1254,8 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         clientOrderId => lead.exitFor(clientOrderId));
       const exitLog = createLeadExitShadowLog(() => lead.roundList(),
         (fields, eventId) => journal?.write("lead_exit_shadow", { ...fields, engine_ts: Date.now() / 1000 }, eventId), Date.now() / 1000);
+      const retryLog = createLeadRetryShadowLog(() => lead.roundList(),
+        (fields, eventId) => journal?.write("lead_retry_shadow", { ...fields, engine_ts: Date.now() / 1000 }, eventId), Date.now() / 1000);
       const onEvent = lead.onEvent.bind(lead);
       lead.onEvent = (event, context) => {
         const actions = handleLead(event, context);
@@ -1221,6 +1263,7 @@ export async function runPlatformCli(argv: string[]): Promise<void> {
         try { orderLog.observe(event, context.now); } catch { /* Observability is outside execution. */ }
         if (event.kind === "lead" || event.kind === "timer") {
           try { exitLog.observe(context.now); } catch { /* Observability is outside execution. */ }
+          try { retryLog.observe(context.now); } catch { /* Observability is outside execution. */ }
         }
         return actions;
       };

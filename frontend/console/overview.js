@@ -23,6 +23,7 @@
     ["regimePause", "行情太乱就暂停", (v) => (v === true ? "开" : v === false ? "关" : "--")],
     ["edgeSizing", "按优势定股数", (v) => (v === true ? "开" : v === false ? "关" : "--")],
     ["exitOnReverse", "反向信号就卖出", (v) => (v === true ? "开" : v === false ? "关" : "--")],
+    ["retryReverse", "没买到后反向再试", (v) => (v === true ? "开" : v === false ? "关" : "--")],
     ["directVenues", "爱尔兰直连", (v) => (Array.isArray(v) ? (v.length ? v.map((x) => P.VENUES[x] || x).join("/") : "无") : "--")],
     ["dailyLossUsd", "每日亏损上限", (v) => (num(v) === null ? "不限" : fmt.usd(v))],
     ["ratchetStepUsd", "盈利保护每赚", (v) => (num(v) === null ? "不用" : fmt.usd(v))],

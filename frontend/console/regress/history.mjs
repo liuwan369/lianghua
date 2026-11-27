@@ -121,5 +121,32 @@ for (const piece of ["买入", "反向信号卖出", "信号时买一 0.89 · �
 }
 assert.ok(text(H.detail({ ...buy, edge: -0.05, edge_shares: 5, edge_sizing: true })).includes("优势 -0.050 · 已按 5 股"));
 
+// Retry on a reverse signal (2026-11-27): the missed first buy and the retry
+// are one round; the row shows the retry (what was bought), tagged, with its
+// PnL; the detail shows both.
+{
+  const first = order({ client_order_id: "f1", market_id: "0xq", stage: "gtc", direction: "UP", round_start: T0 - 90, recv_ts: T0 - 60,
+    ask_at_signal: 0.40, limit_price: 0.44, shares: 10, filled_shares: 0, status: "CANCELLED", outcome: "lost", pnl: null, would_have_won: false });
+  const retry = order({ client_order_id: "f1r", market_id: "0xq", stage: "retry", direction: "DOWN", round_start: T0 - 90, recv_ts: T0 - 30,
+    ask_at_signal: 0.31, limit_price: 0.35, shares: 10, filled_shares: 10, avg_fill_price: 0.35, status: "FILLED", outcome: "won", pnl: 6.5,
+    parent_client_order_id: "f1" });
+  const rows = H.groupRounds([retry, first]);
+  assert.equal(rows.length, 1, "first buy and retry are one round");
+  assert.equal(rows[0].retry.client_order_id, "f1r");
+  const shown = text(H.renderRows(rows));
+  for (const piece of ["反向再试", "跌 DOWN", "0.31 0.35", "10 / 10", "赢", "+$6.50"]) {
+    assert.ok(shown.includes(piece), `retry row: ${piece}: ${shown}`);
+  }
+  assert.equal(H.roundResult(rows[0]).text, "赢", "the round's result is the retry's");
+  const openRow = text(String(H.renderRows(rows, new Set(["0xq"]))).match(/<tr class="detail">[\s\S]*?<\/tr>/)[0]);
+  for (const piece of ["买入", "反向再试", "跟在 f1 后面"]) assert.ok(openRow.includes(piece), `detail: ${piece}: ${openRow}`);
+  // A retry that missed too: the round says it bought nothing.
+  const both = H.groupRounds([{ ...retry, filled_shares: 0, status: "CANCELLED", pnl: null, outcome: "won", would_have_won: true }, first]);
+  assert.equal(H.roundResult(both[0]).text, "没买到（买到会赢）", "the retry's would-have-won, the order the round last tried");
+  // A late fill on the first buy after the retry went out: both sides held; the row says so.
+  const late = text(H.renderRows(H.groupRounds([retry, { ...first, filled_shares: 3, avg_fill_price: 0.44 }])));
+  assert.ok(late.includes("两边都有：涨 3 股"), `both sides: ${late}`);
+}
+
 console.log("history OK");
 process.exit(0);

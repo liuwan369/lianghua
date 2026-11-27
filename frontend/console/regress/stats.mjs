@@ -52,6 +52,21 @@ for (const piece of ["记录的单 30 单", "会暂停 6 单", "占 20.0%", "信
   assert.ok(regime.includes(piece), `regime: ${piece}: ${regime}`);
 }
 assert.ok(text(S.renderRegime({ judged: 0 })).includes("还没有带行情记录的单"));
+// Retry on a reverse signal (2026-11-27): live and shadow apart, the window checked.
+{
+  const rr = text(S.renderRetry({ judged: 40, skips: { off: 12, too_far: 20, past_line: 6, gate: 2 },
+    live: { sent: 5, filled: 3, fill_rate: 0.6, settled: 3, won: 2, win_rate: 2 / 3, pnl_usd: 4.2 },
+    shadow: { rounds: 12, won: 8, win_rate: 8 / 12, pnl_if_filled_usd: 9.5 },
+    out_of_range: { too_far: { rounds: 20, won: 4, win_rate: 0.2, pnl_if_filled_usd: -3.1 },
+                    past_line: { rounds: 6, won: 3, win_rate: 0.5, pnl_if_filled_usd: -0.4 }, gate: { rounds: 2, won: 1 } } }));
+  for (const piece of ["再试过 5 单", "买到 3 单 · 60.0%", "赢 2 / 3 场", "+$4.20", "符合条件 12 场", "胜率 66.7%", "+$9.50",
+    "离开盘线太远 20 场", "20.0%", "-$3.10", "已过开盘线 6 场"]) {
+    assert.ok(rr.includes(piece), `retry: ${piece}: ${rr}`);
+  }
+  assert.ok(text(S.renderRetry({ judged: 0 })).includes("还没有记录"), "empty before the new version runs");
+  assert.ok(text(S.renderRetry(null)).includes("没有数据"));
+  assert.ok(text(S.renderAll({ retry_reverse: { judged: 0 } }).retry).includes("还没有记录"), "renderAll carries it");
+}
 
 // --- exit on the first reverse signal: shadow while off, the sells while on ---
 const first = text(S.renderExitFirst({ held_rounds: 12, settled: 11, triggered: 9, trigger_rate: 0.8, skips: { off: 5, no_bid: 1 },
