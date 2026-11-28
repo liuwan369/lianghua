@@ -368,7 +368,9 @@ const TERMINAL_SETTLEMENT_REASONS = new Set([
   "settlement_asset_identity_changed", "settlement_round_identity_changed", "settlement_token_identity_changed",
   "settlement_market_identity_changed", "settlement_market_token_mismatch_or_unsupported_protocol",
   "settlement_transaction_reverted", "settlement_receipt_balance_or_payout_mismatch",
-  "settlement_invalid_payout_vector", "neg_risk_redemption_not_supported_by_this_sender",
+  // settlement_invalid_payout_vector is not here (2026-11-28): a half-read
+  // vector is now pending, and a malformed one is better retried than dropped.
+  "neg_risk_redemption_not_supported_by_this_sender",
 ]);
 
 /** Distinguish durable failure/identity errors from market data that can appear later. */

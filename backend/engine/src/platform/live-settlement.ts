@@ -394,9 +394,16 @@ export async function createLiveSettlementAdapter(options: LiveSettlementOptions
       if (external === undefined) return result(request, "confirmed", "链上无该场持仓，无需赎回；未记录赎回收益", confirmed);
       return result(request, "confirmed", "持仓已由平台自动赎回，pUSD到账已由链上回执确认", confirmed);
     }
-    if (market.numerators.length !== 2 || market.numerators.some(value => value < 0n)
-      || market.numerators[0]! + market.numerators[1]! !== market.denominator) {
+    if (market.numerators.length !== 2 || market.numerators.some(value => value < 0n)) {
       return result(request, "unsupported", "settlement_invalid_payout_vector");
+    }
+    // Two non-negative numerators that do not add up to the denominator: the
+    // reads caught the resolution half-written across RPC nodes (live
+    // 2026-11-28, pm-b: 0 + 0 != 1 seconds after resolution; 1/1, 0 an hour
+    // later). Read again on the next pass, never give the round up: a winning
+    // round dropped here is never redeemed.
+    if (market.numerators[0]! + market.numerators[1]! !== market.denominator) {
+      return result(request, "pending", "官方结算结果还没读全，下一轮再读");
     }
     const expectedPayout = before.balances.reduce((sum, amount, i) => sum + amount * market.numerators[i]! / market.denominator, 0n);
     if (expectedPayout === 0n) {
@@ -574,10 +581,14 @@ async function createBackend(): Promise<LiveSettlementBackend> {
       }
       if (typeof row.negRisk !== "boolean") throw new UnsupportedSettlement("settlement_market_neg_risk_unknown");
       const condition = request.marketId as Hex;
+      // One block for all three reads: a load-balanced RPC can answer them from
+      // nodes at different heights, mixing a written denominator with a not yet
+      // written numerator.
+      const blockNumber = await client.getBlockNumber();
       const [denominator, first, second] = await Promise.all([
-        client.readContract({ address: CTF, abi: ctfAbi, functionName: "payoutDenominator", args: [condition] }),
-        client.readContract({ address: CTF, abi: ctfAbi, functionName: "payoutNumerators", args: [condition, 0n] }),
-        client.readContract({ address: CTF, abi: ctfAbi, functionName: "payoutNumerators", args: [condition, 1n] }),
+        client.readContract({ address: CTF, abi: ctfAbi, functionName: "payoutDenominator", args: [condition], blockNumber }),
+        client.readContract({ address: CTF, abi: ctfAbi, functionName: "payoutNumerators", args: [condition, 0n], blockNumber }),
+        client.readContract({ address: CTF, abi: ctfAbi, functionName: "payoutNumerators", args: [condition, 1n], blockNumber }),
       ]);
       return { tokenIds: ids as string[], negRisk: row.negRisk, denominator, numerators: [first, second] };
     },
