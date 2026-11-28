@@ -88,6 +88,13 @@ const boot = (files, apiBase, replies) => {
     status: { processRunning: true, status: "running" } })));
   assert.ok(!/<\/div>\s*,/.test(node.innerHTML), `no comma between cards: ${node.innerHTML.slice(0, 400)}`);
   assert.equal(node.innerHTML.split("account-card").length - 1, 3);
+  // A running engine whose account hit the day's stop: the card says so (2026-11-28).
+  const halted = text(O.card({ account_meta: { id: "2", label: "账户 2", color: "#fff", box: "pm-b" },
+    status: { processRunning: true, status: "running", risk: { halted: true, reason: "daily loss limit", dailyPnlUsd: -40.35 } } }));
+  assert.ok(halted.includes("今天已止损") && !halted.includes("运行中"), `halted card: ${halted}`);
+  const ok = text(O.card({ account_meta: { id: "1", label: "账户 1", color: "#fff", box: "pm-a" },
+    status: { processRunning: true, status: "running", risk: { halted: false } } }));
+  assert.ok(ok.includes("运行中"), `trading card: ${ok}`);
   assert.match(String(O.renderCards([1, 2, 3].map(() => ({ account_meta: { id: "1", label: "x", color: "#fff" }, status: {} })))),
     /class="cards accounts"/, "the account cards get their own grid: as many across as there are accounts");
 }

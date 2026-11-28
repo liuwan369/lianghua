@@ -75,6 +75,18 @@
     if (node.__html !== text) { node.__html = text; node.innerHTML = text; }
   };
 
+  // A running engine whose account stopped buying (core.ts risk.halted): the
+  // day's stop until tomorrow, or another hold (an order to reconcile, account
+  // recovery) until it clears. null while it trades.
+  const DAY_STOPS = new Set(["daily loss limit", "daily profit ratchet"]);
+  const haltOf = (status) => {
+    const risk = status?.risk;
+    if (status?.processRunning !== true || risk?.halted !== true) return null;
+    return DAY_STOPS.has(risk.reason)
+      ? { key: "day_stop", text: "今天已止损", note: "今天不再下单，北京时间明天 0 点自动恢复" }
+      : { key: "held", text: "暂停下单", note: `${label(risk.reason) || "账户暂不可交易"}，恢复后自动继续` };
+  };
+
   // --- formats ---
   const num = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
   const fmt = {
@@ -237,6 +249,6 @@
   // The current account's label ("账户 2"), for confirm dialogs; null on a one-account box.
   const state = { accounts: null };
   const accountLabel = () => currentAccount(state.accounts)?.label || null;
-  window.PolyPreview = Object.freeze({ config, request, api, html, esc, put, fmt, num, label, every, mount, shell, NAV, accountLabel,
+  window.PolyPreview = Object.freeze({ haltOf, config, request, api, html, esc, put, fmt, num, label, every, mount, shell, NAV, accountLabel,
     VENUES, LINES, DIRECTIONS, ORDER_STATUS, Raw });
 })();

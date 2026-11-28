@@ -56,14 +56,17 @@
 
   const card = (item) => {
     const s = item.status || {};
-    const state = s.processRunning === null ? "unreachable" : s.processRunning ? (s.status || "starting") : (s.status === "failed" ? "failed" : "stopped");
-    const tone = state === "running" ? "ok" : state === "paused" || state === "starting" ? "warn" : state === "unreachable" || state === "failed" ? "bad" : "";
+    const base = s.processRunning === null ? "unreachable" : s.processRunning ? (s.status || "starting") : (s.status === "failed" ? "failed" : "stopped");
+    const halt = base === "running" ? P.haltOf(s) : null;
+    const state = halt ? halt.key : base;
+    const tone = state === "running" ? "ok" : state === "paused" || state === "starting" || state === "held" ? "warn"
+      : state === "unreachable" || state === "failed" || state === "day_stop" ? "bad" : "";
     const today = item.today?.funnel || {};
     const cpu = item.health?.resources?.cpu || {};
     const balance = num(item.account?.collateral?.value);
     return html`<div class="card account-card" style="border-top:3px solid ${item.account_meta.color}">
       <span><i class="dot ${tone}"></i> ${item.account_meta.label} · ${item.account_meta.box || "--"}</span>
-      <strong>${state === "unreachable" ? "连不上引擎机" : STATE_TEXT[state] || state}</strong>
+      <strong>${state === "unreachable" ? "连不上引擎机" : halt ? halt.text : STATE_TEXT[state] || state}</strong>${halt ? html`<small class="${tone}">${halt.note}</small><br>` : ""}
       <small>今日 <b class="${fmt.tone(today.pnl_usd)}">${fmt.money(today.pnl_usd)}</b> · 下单 ${fmt.int(today.orders)} · 买到 ${fmt.int(today.filled)}</small><br>
       <small>余额 ${balance === null ? "--" : fmt.usd(balance)} · 行情 ${s.leadFeedHealthy === true ? "正常" : s.leadFeedHealthy === false ? "断了" : "--"} · 参数 r${fmt.int(s.configRevision)}</small><br>
       <small>引擎机 CPU ${num(cpu.percent) === null ? "--" : `${cpu.percent.toFixed(0)}%`}${num(cpu.steal_percent) === null ? "" : ` · 被抢 ${cpu.steal_percent.toFixed(1)}%`}</small><br>

@@ -9,6 +9,7 @@
   // --- run state and commands ---
   const STATES = {
     running: { text: "运行中", tone: "ok" }, paused: { text: "已暂停", tone: "warn" },
+    day_stop: { text: "今天已止损", tone: "bad" }, held: { text: "暂停下单", tone: "warn" },
     stopped: { text: "已停止", tone: "" }, failed: { text: "已停止（异常退出）", tone: "bad" },
     starting: { text: "启动中", tone: "warn" }, stopping: { text: "停止中", tone: "warn" },
     unknown: { text: "状态未知", tone: "" }, unreachable: { text: "连不上引擎机", tone: "bad" },
@@ -293,7 +294,9 @@
   const renderHeader = () => {
     const s = state.status;
     const key = runState(s, state.pendingStop);
-    const view = STATES[key];
+    // Running, but the account stopped buying: say so instead of 运行中.
+    const halt = key === "running" ? P.haltOf(s) : null;
+    const view = STATES[halt?.key ?? key];
     const config = state.config;
     const round = s?.currentRound;
     const number = roundNumber(num(s?.startedAt), num(round?.startsAt));
@@ -307,6 +310,7 @@
     for (const button of root.querySelectorAll("[data-cmd]")) button.disabled = state.busy || !can[button.dataset.cmd];
     $("[data-run-meta]").textContent = key === "unreachable"
       ? `${s?.agent?.mismatch || s?.agent?.error || "连不上引擎机"}；引擎机上的交易不受影响，风控照常。恢复连接前不能启停。`
+      : halt ? `${halt.note}；引擎在运行，启动于 ${fmt.dateTime(s.startedAt)}`
       : s?.startedAt && s.processRunning ? `启动于 ${fmt.dateTime(s.startedAt)}` : (s?.stopResult?.message || "");
   };
   const renderCards = () => {

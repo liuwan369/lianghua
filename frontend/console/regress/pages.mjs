@@ -104,6 +104,29 @@ const text = (markup) => markup.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").
   }
   assert.ok(!shown.includes("盈利保护"), "no ratchet set: not mentioned");
 }
+// The day's stop (2026-11-28): the engine runs but no longer buys. The header
+// says so, not 运行中 (the user saw 运行中 on a halted account).
+for (const [reason, words] of [["daily loss limit", "今天已止损"], ["daily profit ratchet", "今天已止损"]]) {
+  const saved = JSON.parse(JSON.stringify(REPLIES));
+  REPLIES["/api/runtime/status"].risk = { dailyPnlUsd: -40.35, dailyPeakPnlUsd: 7.9, halted: true, reason };
+  const page = boot("live.js");
+  await wait(50);
+  const head = text(page.node("[data-header-side]").innerHTML);
+  assert.ok(head.includes(words), `${reason}: header says ${words}: ${head}`);
+  assert.ok(!head.includes("运行中"), `${reason}: not 运行中: ${head}`);
+  assert.ok(text(page.node("[data-run-meta]").textContent).includes("明天"), "it says when trading comes back");
+  Object.assign(REPLIES, saved);
+}
+// Another halt (an order to reconcile): stopped buying too, with its own label.
+{
+  const saved = JSON.parse(JSON.stringify(REPLIES));
+  REPLIES["/api/runtime/status"].risk = { dailyPnlUsd: -3, halted: true, reason: "unknown order requires reconciliation" };
+  const page = boot("live.js");
+  await wait(50);
+  const head = text(page.node("[data-header-side]").innerHTML);
+  assert.ok(head.includes("暂停下单") && !head.includes("运行中"), head);
+  Object.assign(REPLIES, saved);
+}
 // The profit ratchet (2026-11-25): the stop line and the room left both follow
 // the day's peak. 20/10 with a 40 limit: peak +56 -> two steps -> line -20.
 {
